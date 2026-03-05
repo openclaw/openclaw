@@ -137,12 +137,12 @@ flowchart TD
 flowchart LR
     A[collaborate 도구] --> B[getOrCreateRouter]
     B --> C{Router 초기화됨?}
-    C -- No --> D[cfg.gateway.conversationSinks에서\n discord-conversation sink 읽기]
+    C -- No --> D[cfg.gateway.conversationSinks에서<br/>discord-conversation sink 읽기]
     D --> E[Router 싱글톤 생성]
     C -- Yes --> F[기존 Router 반환]
     E --> F
     F --> G[routeViaLLM 호출]
-    G --> H[RouteContext 구성\n- 에이전트 이름 resolveAgentIdentity\n- conversationId sorted agent pair\n- guild 채널 목록\n- 활성 스레드 목록]
+    G --> H[RouteContext 구성<br/>- 에이전트 이름 resolveAgentIdentity<br/>- conversationId sorted agent pair<br/>- guild 채널 목록<br/>- 활성 스레드 목록]
     H --> I[Claude 서브에이전트 호출]
     I --> J{결정}
     J -- 기존 스레드 재사용 --> K[threadId 반환]
@@ -191,8 +191,8 @@ sequenceDiagram
     TP->>TP: 참여자 등록 + a2a-retry 아웃바운드 멘션 추적
     DC->>MB: 메시지 이벤트 수신 (A의 모니터)
     DC->>DB: 메시지 이벤트 수신 (B의 모니터)
-    MB->>MB: A는 멘션 안 됨, 스레드 참여자 → OBSERVER\n(세션 히스토리에 기록만, LLM 없음)
-    DB->>DB: B는 @멘션 됨 → HANDLER\n(LLM 호출, 응답 생성)
+    MB->>MB: A는 멘션 안 됨, 스레드 참여자 → OBSERVER<br/>(세션 히스토리에 기록만, LLM 없음)
+    DB->>DB: B는 @멘션 됨 → HANDLER<br/>(LLM 호출, 응답 생성)
 ```
 
 ---
@@ -318,14 +318,14 @@ channels:
 ```mermaid
 flowchart LR
     subgraph v1 ["v1 - DM 기반"]
-        A1[Agent A] -- sessions_send\nDM 채널 --> B1[Agent B]
+        A1[Agent A] -- sessions_send<br/>DM 채널 --> B1[Agent B]
         B1 -- dm-retry 신뢰성 보장 --> A1
     end
 
     subgraph v2 ["v2 - Thread 기반"]
-        A2[Agent A] -- collaborate\n@멘션 --> T[Discord 스레드]
-        T -- Handler 경로\n@멘션 받음 --> B2[Agent B]
-        T -- Observer 경로\n히스토리만 기록 --> A2
+        A2[Agent A] -- collaborate<br/>@멘션 --> T[Discord 스레드]
+        T -- Handler 경로<br/>@멘션 받음 --> B2[Agent B]
+        T -- Observer 경로<br/>히스토리만 기록 --> A2
     end
 
     v1 -.->|마이그레이션| v2
@@ -353,9 +353,9 @@ flowchart TD
     START[Discord 메시지 수신] --> CHECK_THREAD{스레드 메시지?}
     CHECK_THREAD -- No --> IGNORE[일반 채널 처리]
     CHECK_THREAD -- Yes --> CHECK_MENTION{봇이 @멘션됨?}
-    CHECK_MENTION -- Yes --> HANDLER[HANDLER 경로\n- LLM 호출\n- 응답 생성\n- a2a-retry 인바운드 기록]
-    CHECK_MENTION -- No --> CHECK_PARTICIPANT{ThreadParticipantMap에\n봇 userId 등록됨?}
-    CHECK_PARTICIPANT -- Yes --> OBSERVER[OBSERVER 경로\n- 세션 히스토리에 메시지 기록\n- LLM 호출 없음\n- 비용 없음]
+    CHECK_MENTION -- Yes --> HANDLER[HANDLER 경로<br/>- LLM 호출<br/>- 응답 생성<br/>- a2a-retry 인바운드 기록]
+    CHECK_MENTION -- No --> CHECK_PARTICIPANT{ThreadParticipantMap에<br/>봇 userId 등록됨?}
+    CHECK_PARTICIPANT -- Yes --> OBSERVER[OBSERVER 경로<br/>- 세션 히스토리에 메시지 기록<br/>- LLM 호출 없음<br/>- 비용 없음]
     CHECK_PARTICIPANT -- No --> SKIP[무시 - 관련 없는 스레드]
 ```
 
