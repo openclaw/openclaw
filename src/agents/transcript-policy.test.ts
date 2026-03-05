@@ -38,4 +38,15 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.sanitizeToolCallIds).toBe(false);
   });
+
+  it("treats custom providers using openai-responses api as OpenAI transcripts", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "my-proxy",
+      modelId: "openai/gpt-5.2-pro",
+      modelApi: "openai-responses",
+    });
+    expect(policy.sanitizeMode).toBe("images-only");
+    expect(policy.sanitizeToolCallIds).toBe(false);
+    expect(policy.repairToolUseResultPairing).toBe(false);
+  });
 });
