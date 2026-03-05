@@ -87,11 +87,15 @@ export async function saveCronStore(
   if (previous !== null && !opts?.skipBackup) {
     try {
       await fs.promises.copyFile(storePath, `${storePath}.bak`);
+      // Defense in depth: keep cron store backups owner-only.
+      await fs.promises.chmod(`${storePath}.bak`, 0o600).catch(() => {});
     } catch {
       // best-effort
     }
   }
   await renameWithRetry(tmp, storePath);
+  // Ensure the active store file is owner-only (JSON can contain message content and delivery targets).
+  await fs.promises.chmod(storePath, 0o600).catch(() => {});
   serializedStoreCache.set(storePath, json);
 }
 

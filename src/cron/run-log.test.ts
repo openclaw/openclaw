@@ -92,6 +92,10 @@ describe("cron run log", () => {
       expect(lines.length).toBe(3);
       const last = JSON.parse(lines[2] ?? "{}") as { ts?: number };
       expect(last.ts).toBe(1009);
+
+      // Defense in depth: log files should be owner-only.
+      const stat = await fs.stat(logPath);
+      expect(stat.mode & 0o777).toBe(0o600);
     });
   });
 

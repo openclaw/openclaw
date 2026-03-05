@@ -145,6 +145,9 @@ export async function appendCronRunLog(
         maxBytes: opts?.maxBytes ?? DEFAULT_CRON_RUN_LOG_MAX_BYTES,
         keepLines: opts?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
       });
+      // Defense in depth: run logs can include summaries/errors that may contain sensitive content.
+      // Pruning can replace the file, so chmod after prune.
+      await fs.chmod(resolved, 0o600).catch(() => {});
     });
   writesByPath.set(resolved, next);
   try {

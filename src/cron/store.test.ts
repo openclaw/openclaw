@@ -78,6 +78,12 @@ describe("cron store", () => {
     const backupRaw = await fs.readFile(`${store.storePath}.bak`, "utf-8");
     expect(JSON.parse(currentRaw)).toEqual(second);
     expect(JSON.parse(backupRaw)).toEqual(first);
+
+    // Defense in depth: store and backup should be owner-only.
+    const currentStat = await fs.stat(store.storePath);
+    const backupStat = await fs.stat(`${store.storePath}.bak`);
+    expect(currentStat.mode & 0o777).toBe(0o600);
+    expect(backupStat.mode & 0o777).toBe(0o600);
   });
 });
 
