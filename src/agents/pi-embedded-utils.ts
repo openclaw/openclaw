@@ -333,7 +333,9 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!Array.isArray(message.content)) {
     return;
   }
-  const hasThinkingBlock = message.content.some((block) => block.type === "thinking");
+  const hasThinkingBlock = message.content.some(
+    (block) => block && typeof block === "object" && block.type === "thinking",
+  );
   if (hasThinkingBlock) {
     return;
   }
@@ -342,6 +344,10 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   let changed = false;
 
   for (const block of message.content) {
+    if (!block || typeof block !== "object" || !("type" in block)) {
+      next.push(block);
+      continue;
+    }
     if (block.type !== "text") {
       next.push(block);
       continue;
