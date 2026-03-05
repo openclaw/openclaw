@@ -7,6 +7,7 @@ import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 
 const MAX_CONTEXT_CHARS = 3000;
 const DEFAULT_POST_COMPACTION_SECTIONS = ["Session Startup", "Red Lines"];
+const LEGACY_POST_COMPACTION_SECTIONS = ["Every Session", "Safety"];
 
 function formatDateStamp(nowMs: number, timezone: string): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -66,7 +67,14 @@ export async function readPostCompactionContext(
     }
 
     const foundSectionNames: string[] = [];
-    const sections = extractSections(content, sectionNames, foundSectionNames);
+    let sections = extractSections(content, sectionNames, foundSectionNames);
+
+    // Fall back to legacy section names ("Every Session" / "Safety") when using
+    // defaults and the current headings aren't found — preserves compatibility
+    // with older AGENTS.md templates.
+    if (sections.length === 0 && !Array.isArray(configuredSections)) {
+      sections = extractSections(content, LEGACY_POST_COMPACTION_SECTIONS, foundSectionNames);
+    }
 
     if (sections.length === 0) {
       return null;
