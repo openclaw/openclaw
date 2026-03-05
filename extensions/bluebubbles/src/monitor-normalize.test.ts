@@ -36,6 +36,39 @@ describe("normalizeWebhookMessage", () => {
     expect(result).toBeNull();
   });
 
+  it("coalesces null text to empty string", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-null",
+        text: null,
+        handle: { address: "+15551234567" },
+        isGroup: false,
+        isFromMe: false,
+        chatGuid: "iMessage;-;+15551234567",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.text).toBe("");
+  });
+
+  it("coalesces undefined text to empty string", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-undef",
+        handle: { address: "+15551234567" },
+        isGroup: false,
+        isFromMe: false,
+        chatGuid: "iMessage;-;+15551234567",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.text).toBe("");
+  });
+
   it("accepts array-wrapped payload data", () => {
     const result = normalizeWebhookMessage({
       type: "new-message",

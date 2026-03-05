@@ -433,7 +433,7 @@ export async function processMessage(
   const groupFlag = resolveGroupFlagFromChatGuid(message.chatGuid);
   const isGroup = typeof groupFlag === "boolean" ? groupFlag : message.isGroup;
 
-  const text = message.text.trim();
+  const text = (message.text ?? "").trim();
   const attachments = message.attachments ?? [];
   const placeholder = buildMessagePlaceholder(message);
   // Check if text is a tapback pattern (e.g., 'Loved "hello"') and transform to emoji format
