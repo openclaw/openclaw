@@ -7,6 +7,7 @@ import type {
   LeaveEvent,
   PostbackEvent,
 } from "@line/bot-sdk";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -15,7 +16,6 @@ import {
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
 import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
-import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -441,6 +441,13 @@ function resolveLineGroupHistoryLimit(params: {
 async function handleMessageEvent(event: MessageEvent, context: LineHandlerContext): Promise<void> {
   const { cfg, account, runtime, mediaMaxBytes, processMessage } = context;
   const message = event.message;
+  let pendingHistoryToClear:
+    | {
+        historyMap: Map<string, HistoryEntry[]>;
+        historyKey: string;
+        limit: number;
+      }
+    | undefined;
 
   const decision = await shouldProcessLineEvent(event, context);
   if (!decision.allowed) {
@@ -519,23 +526,32 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         return;
       }
       if (historyMap && historyLimit > 0) {
-        messageContext.ctxPayload.Body = buildPendingHistoryContextFromMap({
+        const bodyWithPendingHistory = buildPendingHistoryContextFromMap({
           historyMap,
           historyKey,
           limit: historyLimit,
           currentMessage: messageContext.ctxPayload.Body ?? "",
           formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
         });
-        clearHistoryEntriesIfEnabled({
+        messageContext.ctxPayload.Body = bodyWithPendingHistory;
+        messageContext.ctxPayload.BodyForAgent = bodyWithPendingHistory;
+        pendingHistoryToClear = {
           historyMap,
           historyKey,
           limit: historyLimit,
-        });
+        };
       }
     }
   }
 
   await processMessage(messageContext);
+  if (pendingHistoryToClear) {
+    clearHistoryEntriesIfEnabled({
+      historyMap: pendingHistoryToClear.historyMap,
+      historyKey: pendingHistoryToClear.historyKey,
+      limit: pendingHistoryToClear.limit,
+    });
+  }
 }
 
 async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {

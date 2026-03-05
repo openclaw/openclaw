@@ -706,6 +706,7 @@ describe("handleLineWebhookEvents", () => {
       ctxPayload: {
         From: "line:group:group-1",
         Body: "@openclaw current",
+        BodyForAgent: "@openclaw current",
         RawBody: "@openclaw current",
       },
       replyToken: "reply-token",
@@ -754,7 +755,71 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
     const dispatched = processMessage.mock.calls[0]?.[0];
     expect(String(dispatched?.ctxPayload?.Body ?? "")).toContain(HISTORY_CONTEXT_MARKER);
+    expect(String(dispatched?.ctxPayload?.BodyForAgent ?? "")).toContain(HISTORY_CONTEXT_MARKER);
     expect(String(dispatched?.ctxPayload?.Body ?? "")).toContain("previous message");
     expect(groupHistories.get("line:group:group-1")).toEqual([]);
+  });
+
+  it("keeps pending LINE history when mentioned turn processing fails", async () => {
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    groupHistories.set("line:group:group-1", [{ sender: "user:old", body: "previous message" }]);
+    buildLineMessageContextMock.mockResolvedValueOnce({
+      ctxPayload: {
+        From: "line:group:group-1",
+        Body: "@openclaw current",
+        BodyForAgent: "@openclaw current",
+        RawBody: "@openclaw current",
+      },
+      replyToken: "reply-token",
+      route: { agentId: "default", sessionKey: "line:group:group-1" },
+      isGroup: true,
+      userId: "user-1",
+      groupId: "group-1",
+      accountId: "default",
+    });
+    const processMessage = vi.fn(async () => {
+      throw new Error("transient failure");
+    });
+    const event = {
+      type: "message",
+      message: { id: "m-mention-3", type: "text", text: "@openclaw current" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-1" },
+      mode: "active",
+      webhookEventId: "evt-mention-3",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await expect(
+      handleLineWebhookEvents([event], {
+        cfg: {
+          channels: {
+            line: {
+              groupPolicy: "open",
+              groups: { "group-1": { requireMention: true } },
+            },
+          },
+          messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+        },
+        account: {
+          accountId: "default",
+          enabled: true,
+          channelAccessToken: "token",
+          channelSecret: "secret",
+          tokenSource: "config",
+          config: { groupPolicy: "open", groups: { "group-1": { requireMention: true } } },
+        },
+        runtime: createRuntime(),
+        mediaMaxBytes: 1,
+        processMessage,
+        groupHistories,
+        groupHistoryLimit: 5,
+      }),
+    ).rejects.toThrow("transient failure");
+
+    const retained = groupHistories.get("line:group:group-1") ?? [];
+    expect(retained).toHaveLength(1);
+    expect(retained[0]?.body).toBe("previous message");
   });
 });
