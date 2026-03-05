@@ -74,6 +74,49 @@ export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSE
   return path.join(CONFIG_DIR, "browser", profileName, "user-data");
 }
 
+export function buildOpenClawChromeLaunchArgs(params: {
+  cdpPort: number;
+  userDataDir: string;
+  resolved: Pick<ResolvedBrowserConfig, "headless" | "noSandbox" | "extraArgs">;
+  platform?: NodeJS.Platform;
+}): string[] {
+  const args: string[] = [
+    `--remote-debugging-port=${params.cdpPort}`,
+    `--user-data-dir=${params.userDataDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-sync",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-features=Translate,MediaRouter",
+    "--disable-session-crashed-bubble",
+    "--hide-crash-restore-bubble",
+    "--password-store=basic",
+  ];
+
+  if (params.resolved.headless) {
+    // Best-effort; older Chromes may ignore.
+    args.push("--headless=new");
+    args.push("--disable-gpu");
+  }
+  if (params.resolved.noSandbox) {
+    args.push("--no-sandbox");
+    args.push("--disable-setuid-sandbox");
+  }
+  if ((params.platform ?? process.platform) === "linux") {
+    args.push("--disable-dev-shm-usage");
+  }
+
+  // Append user-configured extra arguments (e.g., window size, proxy settings).
+  if (params.resolved.extraArgs.length > 0) {
+    args.push(...params.resolved.extraArgs);
+  }
+
+  // Always open a blank tab to ensure a target exists.
+  args.push("about:blank");
+  return args;
+}
+
 function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
 }
@@ -239,43 +282,11 @@ export async function launchOpenClawChrome(
 
   // First launch to create preference files if missing, then decorate and relaunch.
   const spawnOnce = () => {
-    const args: string[] = [
-      `--remote-debugging-port=${profile.cdpPort}`,
-      `--user-data-dir=${userDataDir}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--disable-sync",
-      "--disable-background-networking",
-      "--disable-component-update",
-      "--disable-features=Translate,MediaRouter",
-      "--disable-session-crashed-bubble",
-      "--hide-crash-restore-bubble",
-      "--password-store=basic",
-    ];
-
-    if (resolved.headless) {
-      // Best-effort; older Chromes may ignore.
-      args.push("--headless=new");
-      args.push("--disable-gpu");
-    }
-    if (resolved.noSandbox) {
-      args.push("--no-sandbox");
-      args.push("--disable-setuid-sandbox");
-    }
-    if (process.platform === "linux") {
-      args.push("--disable-dev-shm-usage");
-    }
-
-    // Stealth: hide navigator.webdriver from automation detection (#80)
-    args.push("--disable-blink-features=AutomationControlled");
-
-    // Append user-configured extra arguments (e.g., stealth flags, window size)
-    if (resolved.extraArgs.length > 0) {
-      args.push(...resolved.extraArgs);
-    }
-
-    // Always open a blank tab to ensure a target exists.
-    args.push("about:blank");
+    const args = buildOpenClawChromeLaunchArgs({
+      cdpPort: profile.cdpPort,
+      userDataDir,
+      resolved,
+    });
 
     return spawn(exe.path, args, {
       stdio: "pipe",

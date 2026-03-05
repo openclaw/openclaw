@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
+  buildOpenClawChromeLaunchArgs,
   decorateOpenClawProfile,
   ensureProfileCleanExit,
   findChromeExecutableMac,
@@ -16,6 +17,7 @@ import {
   resolveBrowserExecutableForPlatform,
   stopOpenClawChrome,
 } from "./chrome.js";
+import type { ResolvedBrowserConfig } from "./config.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -256,6 +258,48 @@ describe("browser chrome helpers", () => {
     const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     expect(findChromeExecutableWindows()).toBeNull();
     exists.mockRestore();
+  });
+
+  it("builds launch args without unsupported AutomationControlled switch", () => {
+    const resolved = {
+      headless: false,
+      noSandbox: false,
+      extraArgs: [],
+    } satisfies Pick<ResolvedBrowserConfig, "headless" | "noSandbox" | "extraArgs">;
+
+    const args = buildOpenClawChromeLaunchArgs({
+      cdpPort: 9222,
+      userDataDir: "/tmp/openclaw-profile",
+      resolved,
+      platform: "darwin",
+    });
+
+    expect(args).toContain("--remote-debugging-port=9222");
+    expect(args).not.toContain("--disable-blink-features=AutomationControlled");
+  });
+
+  it("includes headless, sandbox, linux, and custom extra args when enabled", () => {
+    const resolved = {
+      headless: true,
+      noSandbox: true,
+      extraArgs: ["--window-size=1200,900", "--proxy-server=http://127.0.0.1:7890"],
+    } satisfies Pick<ResolvedBrowserConfig, "headless" | "noSandbox" | "extraArgs">;
+
+    const args = buildOpenClawChromeLaunchArgs({
+      cdpPort: 9333,
+      userDataDir: "/tmp/openclaw-profile",
+      resolved,
+      platform: "linux",
+    });
+
+    expect(args).toContain("--headless=new");
+    expect(args).toContain("--disable-gpu");
+    expect(args).toContain("--no-sandbox");
+    expect(args).toContain("--disable-setuid-sandbox");
+    expect(args).toContain("--disable-dev-shm-usage");
+    expect(args).toContain("--window-size=1200,900");
+    expect(args).toContain("--proxy-server=http://127.0.0.1:7890");
+    expect(args.at(-1)).toBe("about:blank");
   });
 
   it("resolves Windows executables without LOCALAPPDATA", () => {
