@@ -144,6 +144,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       acc?.prependContext && next.prependContext
         ? `${acc.prependContext}\n\n${next.prependContext}`
         : (next.prependContext ?? acc?.prependContext),
+    appendSystemPrompt:
+      acc?.appendSystemPrompt && next.appendSystemPrompt
+        ? `${acc.appendSystemPrompt}\n\n${next.appendSystemPrompt}`
+        : (next.appendSystemPrompt ?? acc?.appendSystemPrompt),
   });
 
   const mergeSubagentSpawningResult = (

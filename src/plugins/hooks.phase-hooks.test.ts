@@ -72,4 +72,42 @@ describe("phase hooks merger", () => {
     expect(result?.prependContext).toBe("context A\n\ncontext B");
     expect(result?.systemPrompt).toBe("system A");
   });
+
+  it("before_prompt_build concatenates appendSystemPrompt from multiple plugins", async () => {
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "plugin-a",
+      () => ({ appendSystemPrompt: "observation A" }),
+      10,
+    );
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "plugin-b",
+      () => ({ appendSystemPrompt: "observation B" }),
+      1,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.appendSystemPrompt).toBe("observation A\n\nobservation B");
+  });
+
+  it("before_prompt_build preserves appendSystemPrompt when only one plugin provides it", async () => {
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "plugin-a",
+      () => ({ prependContext: "some context", appendSystemPrompt: "appended" }),
+      10,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.appendSystemPrompt).toBe("appended");
+    expect(result?.prependContext).toBe("some context");
+  });
 });
