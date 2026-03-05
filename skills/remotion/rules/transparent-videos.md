@@ -99,4 +99,3 @@ const calculateMetadata: CalculateMetadataFunction<Props> = async ({ props }) =>
   height={1080}
   calculateMetadata={calculateMetadata}
 />;
-```
