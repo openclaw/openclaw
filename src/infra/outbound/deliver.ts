@@ -337,13 +337,9 @@ function createMessageSentEmitter(params: {
   sessionKeyForInternalHooks?: string;
   mirrorIsGroup?: boolean;
   mirrorGroupId?: string;
-}): { emitMessageSent: (event: MessageSentEvent) => void; hasMessageSentHooks: boolean } {
+}): { emitMessageSent: (event: MessageSentEvent) => void } {
   const hasMessageSentHooks = params.hookRunner?.hasHooks("message_sent") ?? false;
-  const canEmitInternalHook = Boolean(params.sessionKeyForInternalHooks);
   const emitMessageSent = (event: MessageSentEvent) => {
-    if (!hasMessageSentHooks && !canEmitInternalHook) {
-      return;
-    }
     const canonical = buildCanonicalSentMessageHookContext({
       to: params.to,
       content: event.content,
@@ -368,15 +364,16 @@ function createMessageSentEmitter(params: {
         },
       );
     }
-    if (!canEmitInternalHook) {
-      return;
-    }
+    // Fire internal hook for managed file hooks (registered via registerInternalHook).
+    // triggerInternalHook is a no-op when no handlers are registered, so this is always safe.
+    // When no session key is available (non-mirrored, non-session paths), we use an empty string;
+    // handlers can still access full channel/content context via event.context.
     fireAndForgetHook(
       triggerInternalHook(
         createInternalHookEvent(
           "message",
           "sent",
-          params.sessionKeyForInternalHooks!,
+          params.sessionKeyForInternalHooks ?? "",
           toInternalMessageSentContext(canonical),
         ),
       ),
@@ -386,7 +383,7 @@ function createMessageSentEmitter(params: {
       },
     );
   };
-  return { emitMessageSent, hasMessageSentHooks };
+  return { emitMessageSent };
 }
 
 async function applyMessageSendingHook(params: {
@@ -667,7 +664,7 @@ async function deliverOutboundPayloadsCore(
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;
   const mirrorGroupId = params.mirror?.groupId;
-  const { emitMessageSent, hasMessageSentHooks } = createMessageSentEmitter({
+  const { emitMessageSent } = createMessageSentEmitter({
     hookRunner,
     channel,
     to,
@@ -677,9 +674,9 @@ async function deliverOutboundPayloadsCore(
     mirrorGroupId,
   });
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
-  if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
-    log.warn(
-      "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
+  if (params.session?.agentId && !sessionKeyForInternalHooks) {
+    log.debug(
+      "deliverOutboundPayloads: session.agentId present without session key; message:sent internal hook will fire with empty sessionKey",
       {
         channel,
         to,

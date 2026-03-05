@@ -4,6 +4,12 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import { danger, logVerbose } from "../../globals.js";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  buildCanonicalSentMessageHookContext,
+  toInternalMessageSentContext,
+} from "../../hooks/message-hook-mappers.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { isGifMedia, kindFromMime } from "../../media/mime.js";
@@ -444,6 +450,8 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
+  /** Session key for internal message:sent hook dispatch (managed file hooks). */
+  sessionKey?: string;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
@@ -453,6 +461,36 @@ export async function deliverReplies(params: {
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
+  // Fire message:sent hooks (both plugin hooks and managed file hooks via internal hook system).
+  const emitMessageSent = (success: boolean, content: string, error?: string) => {
+    const canonical = buildCanonicalSentMessageHookContext({
+      to: params.chatId,
+      content,
+      success,
+      error,
+      channelId: "telegram",
+      accountId: params.accountId,
+      conversationId: params.chatId,
+    });
+    if (hasMessageSentHooks) {
+      void hookRunner?.runMessageSent(
+        { to: params.chatId, content, success, ...(error ? { error } : {}) },
+        { channelId: "telegram", accountId: params.accountId, conversationId: params.chatId },
+      );
+    }
+    // triggerInternalHook is a no-op if no handlers are registered.
+    fireAndForgetHook(
+      triggerInternalHook(
+        createInternalHookEvent(
+          "message",
+          "sent",
+          params.sessionKey ?? "",
+          toInternalMessageSentContext(canonical),
+        ),
+      ),
+      "deliverReplies: message:sent internal hook failed",
+    );
+  };
   const chunkText = buildChunkTextResolver({
     textLimit: params.textLimit,
     chunkMode: params.chunkMode ?? "length",
@@ -547,37 +585,14 @@ export async function deliverReplies(params: {
         });
       }
 
-      if (hasMessageSentHooks) {
-        const deliveredThisReply = progress.deliveredCount > deliveredCountBeforeReply;
-        void hookRunner?.runMessageSent(
-          {
-            to: params.chatId,
-            content: contentForSentHook,
-            success: deliveredThisReply,
-          },
-          {
-            channelId: "telegram",
-            accountId: params.accountId,
-            conversationId: params.chatId,
-          },
-        );
-      }
+      const deliveredThisReply = progress.deliveredCount > deliveredCountBeforeReply;
+      emitMessageSent(deliveredThisReply, contentForSentHook);
     } catch (error) {
-      if (hasMessageSentHooks) {
-        void hookRunner?.runMessageSent(
-          {
-            to: params.chatId,
-            content: contentForSentHook,
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-          },
-          {
-            channelId: "telegram",
-            accountId: params.accountId,
-            conversationId: params.chatId,
-          },
-        );
-      }
+      emitMessageSent(
+        false,
+        contentForSentHook,
+        error instanceof Error ? error.message : String(error),
+      );
       throw error;
     }
   }

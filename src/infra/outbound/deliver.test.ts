@@ -33,6 +33,7 @@ const queueMocks = vi.hoisted(() => ({
 }));
 const logMocks = vi.hoisted(() => ({
   warn: vi.fn(),
+  debug: vi.fn(),
 }));
 
 vi.mock("../../config/sessions.js", async () => {
@@ -62,7 +63,7 @@ vi.mock("../../logging/subsystem.js", () => ({
       warn: logMocks.warn,
       info: vi.fn(),
       error: vi.fn(),
-      debug: vi.fn(),
+      debug: logMocks.debug,
       child: vi.fn(() => makeLogger()),
     });
     return makeLogger();
@@ -203,6 +204,7 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.failDelivery.mockClear();
     queueMocks.failDelivery.mockResolvedValue(undefined);
     logMocks.warn.mockClear();
+    logMocks.debug.mockClear();
   });
 
   afterEach(() => {
@@ -689,11 +691,17 @@ describe("deliverOutboundPayloads", () => {
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
-  it("does not emit internal message:sent hook when neither mirror nor sessionKey is provided", async () => {
+  it("emits internal message:sent hook with empty sessionKey when neither mirror nor sessionKey is provided", async () => {
     await deliverSingleWhatsAppForHookTest();
 
-    expect(internalHookMocks.createInternalHookEvent).not.toHaveBeenCalled();
-    expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "sent",
+      "",
+      expectSuccessfulWhatsAppInternalHookPayload({ content: "hello", messageId: "w1" }),
+    );
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
   it("emits internal message:sent hook when sessionKey is provided without mirror", async () => {
@@ -709,7 +717,7 @@ describe("deliverOutboundPayloads", () => {
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
-  it("warns when session.agentId is set without a session key", async () => {
+  it("logs debug when session.agentId is set without a session key", async () => {
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
@@ -722,8 +730,8 @@ describe("deliverOutboundPayloads", () => {
       session: { agentId: "agent-main" },
     });
 
-    expect(logMocks.warn).toHaveBeenCalledWith(
-      "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
+    expect(logMocks.debug).toHaveBeenCalledWith(
+      "deliverOutboundPayloads: session.agentId present without session key; message:sent internal hook will fire with empty sessionKey",
       expect.objectContaining({ channel: "whatsapp", to: "+1555", agentId: "agent-main" }),
     );
   });

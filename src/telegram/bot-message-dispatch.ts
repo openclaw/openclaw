@@ -438,6 +438,7 @@ export const dispatchTelegramMessage = async ({
     chunkMode,
     linkPreview: telegramCfg.linkPreview,
     replyQuoteText,
+    sessionKey: ctxPayload.SessionKey,
   };
   const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPayload => {
     if (payload.text === text) {
