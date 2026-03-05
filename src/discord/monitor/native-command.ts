@@ -20,6 +20,7 @@ import {
 } from "../../acp/persistent-bindings.route.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { resolveCommandsAllowFromCheck } from "../../auto-reply/command-auth.js";
 import type {
   ChatCommandDefinition,
   CommandArgDefinition,
@@ -1434,6 +1435,20 @@ async function dispatchDiscordCommandInteraction(params: {
   }
   if (isGroupDm && discordConfig?.dm?.groupEnabled === false) {
     await respond("Discord group DMs are disabled.");
+    return;
+  }
+
+  // Check commands.allowFrom authorization (applies to both DM and guild commands).
+  // This must happen early — before the interaction is deferred — so that unauthorized
+  // users receive an immediate response instead of a silent timeout.
+  const commandsAllowFromResult = resolveCommandsAllowFromCheck({
+    cfg,
+    providerId: "discord",
+    accountId,
+    senderId: sender.id,
+  });
+  if (commandsAllowFromResult === false) {
+    await respond("You are not authorized to use this command.", { ephemeral: true });
     return;
   }
 

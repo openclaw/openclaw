@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { resolveCommandAuthorization } from "./command-auth.js";
+import { resolveCommandAuthorization, resolveCommandsAllowFromCheck } from "./command-auth.js";
 import { hasControlCommand, hasInlineCommandTokens } from "./command-detection.js";
 import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
@@ -456,6 +456,79 @@ describe("resolveCommandAuthorization", () => {
       });
 
       expect(deniedAuth.isAuthorizedSender).toBe(false);
+    });
+  });
+
+  describe("resolveCommandsAllowFromCheck", () => {
+    it("returns null when commands.allowFrom is not configured", () => {
+      const cfg = { channels: { discord: {} } } as OpenClawConfig;
+      const result = resolveCommandsAllowFromCheck({
+        cfg,
+        providerId: "discord",
+        accountId: null,
+        senderId: "123",
+      });
+      expect(result).toBeNull();
+    });
+
+    it("returns true for authorized sender in global list", () => {
+      const cfg = {
+        commands: { allowFrom: { "*": ["123"] } },
+      } as OpenClawConfig;
+      const result = resolveCommandsAllowFromCheck({
+        cfg,
+        providerId: "discord",
+        accountId: null,
+        senderId: "123",
+      });
+      expect(result).toBe(true);
+    });
+
+    it("returns false for unauthorized sender", () => {
+      const cfg = {
+        commands: { allowFrom: { "*": ["123"] } },
+      } as OpenClawConfig;
+      const result = resolveCommandsAllowFromCheck({
+        cfg,
+        providerId: "discord",
+        accountId: null,
+        senderId: "999",
+      });
+      expect(result).toBe(false);
+    });
+
+    it("returns true when wildcard is in list", () => {
+      const cfg = {
+        commands: { allowFrom: { "*": ["*"] } },
+      } as OpenClawConfig;
+      const result = resolveCommandsAllowFromCheck({
+        cfg,
+        providerId: "discord",
+        accountId: null,
+        senderId: "anyone",
+      });
+      expect(result).toBe(true);
+    });
+
+    it("uses provider-specific list over global", () => {
+      const cfg = {
+        commands: { allowFrom: { "*": ["globaluser"], discord: ["456"] } },
+      } as OpenClawConfig;
+      const globalResult = resolveCommandsAllowFromCheck({
+        cfg,
+        providerId: "discord",
+        accountId: null,
+        senderId: "globaluser",
+      });
+      expect(globalResult).toBe(false);
+
+      const discordResult = resolveCommandsAllowFromCheck({
+        cfg,
+        providerId: "discord",
+        accountId: null,
+        senderId: "456",
+      });
+      expect(discordResult).toBe(true);
     });
   });
 });
