@@ -37,6 +37,9 @@ const bars = data.map((item, i) => {
 Animate segments using stroke-dashoffset, starting from 12 o'clock:
 
 ```tsx
+import { interpolate, useCurrentFrame } from "remotion";
+
+const frame = useCurrentFrame();
 const progress = interpolate(frame, [0, 100], [0, 1]);
 const circumference = 2 * Math.PI * radius;
 const segmentLength = (value / total) * circumference;
@@ -77,7 +80,10 @@ const generateLinePath = (points: Point[]): string => {
 
 ```tsx
 import { evolvePath } from "@remotion/paths";
+import { interpolate, useCurrentFrame, useVideoConfig, Easing } from "remotion";
 
+const frame = useCurrentFrame();
+const { fps } = useVideoConfig();
 const path = "M 100 200 L 200 150 L 300 180 L 400 100";
 const progress = interpolate(frame, [0, 2 * fps], [0, 1], {
   extrapolateLeft: "clamp",
