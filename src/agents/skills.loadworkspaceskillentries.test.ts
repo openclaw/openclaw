@@ -88,11 +88,7 @@ describe("loadWorkspaceSkillEntries", () => {
     await fs.mkdir(managedDir, { recursive: true });
     await fs.writeFile(
       path.join(skillsDir, "SKILL.md"),
-      "---
-name: 12306
-description: test
----
-",
+      `---\nname: 12306\ndescription: test\n---\n`,
       "utf-8",
     );
 
