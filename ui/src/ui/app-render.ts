@@ -271,7 +271,7 @@ export function renderApp(state: AppViewState) {
         if (!createResult?.ok) {
           throw new Error("Failed to create agent");
         }
-        if (state.agentAddAuthMethod && (state.agentAddApiKey || state.agentAddUseEnvVar)) {
+        if (state.agentAddAuthMethod) {
           await state.client.request("agents.auth.set", {
             agentId: createResult.agentId,
             authChoice: state.agentAddAuthMethod,
