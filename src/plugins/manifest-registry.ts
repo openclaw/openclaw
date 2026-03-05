@@ -229,6 +229,21 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
+      // Different directories, same plugin ID.
+      // When the candidate has strictly higher origin precedence (config > workspace > global > bundled),
+      // silently replace the lower-precedence entry so user-installed plugins can shadow bundled
+      // channel plugins without producing spurious warnings. (#35884)
+      if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
+        records[existing.recordIndex] = buildRecord({
+          manifest,
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+          schemaCacheKey,
+          configSchema,
+        });
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        continue;
+      }
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,

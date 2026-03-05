@@ -834,7 +834,7 @@ describe("loadOpenClawPlugins", () => {
     expect(overridden?.origin).toBe("bundled");
   });
 
-  it("prefers bundled plugin over auto-discovered global duplicate ids", () => {
+  it("prefers user-installed (global) plugin over bundled plugin with same id (#35884)", () => {
     const bundledDir = makeTempDir();
     writePlugin({
       id: "feishu",
@@ -867,12 +867,12 @@ describe("loadOpenClawPlugins", () => {
         },
       });
 
+      // Global (user-installed) should take precedence over bundled without a warning.
+      // The origin precedence is: config > workspace > global > bundled.
       const entries = registry.plugins.filter((entry) => entry.id === "feishu");
-      const loaded = entries.find((entry) => entry.status === "loaded");
-      const overridden = entries.find((entry) => entry.status === "disabled");
-      expect(loaded?.origin).toBe("bundled");
-      expect(overridden?.origin).toBe("global");
-      expect(overridden?.error).toContain("overridden by bundled plugin");
+      expect(entries.length).toBe(1);
+      expect(entries[0]?.origin).toBe("global");
+      expect(entries[0]?.status).toBe("loaded");
     });
   });
 
