@@ -302,4 +302,67 @@ describe("resolveAllowAlwaysPatterns", () => {
       persistedPattern: echo,
     });
   });
+
+  it("persists script paths for bash script invocations (not inline command)", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const scriptPath = path.join(dir, "test-script.sh");
+    fs.writeFileSync(scriptPath, "#!/bin/bash\necho hello");
+    fs.chmodSync(scriptPath, 0o755);
+
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: `/bin/bash ${scriptPath}`,
+          argv: ["/bin/bash", scriptPath],
+          resolution: {
+            rawExecutable: "/bin/bash",
+            resolvedPath: "/bin/bash",
+            executableName: "bash",
+          },
+        },
+      ],
+      cwd: dir,
+      platform: process.platform,
+    });
+
+    // Should persist the script path, not the bash binary
+    expect(patterns).toContain(scriptPath);
+    expect(patterns).not.toContain("/bin/bash");
+  });
+
+  it("persists multiple script paths for bash with multiple arguments", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const script1 = path.join(dir, "script1.sh");
+    const script2 = path.join(dir, "script2.sh");
+    fs.writeFileSync(script1, "#!/bin/bash\necho 1");
+    fs.writeFileSync(script2, "#!/bin/bash\necho 2");
+    fs.chmodSync(script1, 0o755);
+    fs.chmodSync(script2, 0o755);
+
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: `/bin/bash ${script1} ${script2}`,
+          argv: ["/bin/bash", script1, script2],
+          resolution: {
+            rawExecutable: "/bin/bash",
+            resolvedPath: "/bin/bash",
+            executableName: "bash",
+          },
+        },
+      ],
+      cwd: dir,
+      platform: process.platform,
+    });
+
+    expect(patterns).toContain(script1);
+    expect(patterns).toContain(script2);
+    expect(patterns).not.toContain("/bin/bash");
+  });
 });

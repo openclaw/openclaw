@@ -382,6 +382,21 @@ function collectAllowAlwaysPatterns(params: {
   }
   const inlineCommand = extractShellWrapperInlineCommand(params.segment.argv);
   if (!inlineCommand) {
+    // For shell invocations like "bash scripts/save_crystal.sh" (script file, not inline command),
+    // add the script paths from argv as the patterns to persist, rather than the shell binary.
+    if (params.segment.argv.length > 1) {
+      // Skip argv[0] (the shell binary) and add script arguments
+      for (let i = 1; i < params.segment.argv.length; i++) {
+        const scriptArg = params.segment.argv[i];
+        // Skip flags (arguments starting with -)
+        if (scriptArg.startsWith("-")) {
+          continue;
+        }
+        // Resolve the script path relative to cwd
+        const scriptPath = path.resolve(params.cwd ?? ".", scriptArg);
+        params.out.add(scriptPath);
+      }
+    }
     return;
   }
   const nested = analyzeShellCommand({
