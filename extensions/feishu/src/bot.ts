@@ -450,24 +450,15 @@ function formatSubMessageContent(content: string, contentType: string): string {
   }
 }
 
-function checkBotMentioned(
-  event: FeishuMessageEvent,
-  botOpenId?: string,
-  botName?: string,
-): boolean {
+function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
   if (!botOpenId) return false;
   // Check for @all (@_all in Feishu) — treat as mentioning every bot
   const rawContent = event.message.content ?? "";
   if (rawContent.includes("@_all")) return true;
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
-    return mentions.some((m) => {
-      if (m.id.open_id !== botOpenId) return false;
-      // Guard against Feishu WS open_id remapping in multi-app groups:
-      // if botName is known and mention name differs, this is a false positive.
-      if (botName && m.name && m.name !== botName) return false;
-      return true;
-    });
+    // Rely on Feishu mention IDs; display names can vary by alias/context.
+    return mentions.some((m) => m.id.open_id === botOpenId);
   }
   // Post (rich text) messages may have empty message.mentions when they contain docs/paste
   if (event.message.message_type === "post") {
@@ -768,10 +759,10 @@ export function buildBroadcastSessionKey(
 export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
-  botName?: string,
+  _botName?: string,
 ): FeishuMessageContext {
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
-  const mentionedBot = checkBotMentioned(event, botOpenId, botName);
+  const mentionedBot = checkBotMentioned(event, botOpenId);
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
   // In p2p, the bot mention is a pure addressing prefix with no semantic value;
   // strip it so slash commands like @Bot /help still have a leading /.
