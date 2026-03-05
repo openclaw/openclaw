@@ -191,7 +191,35 @@ describe("resolveMedia getFile retry", () => {
     },
   );
 
-  it("does not catch errors from fetchRemoteMedia (only getFile is retried)", async () => {
+  it("retries fetchRemoteMedia once for transient download failures", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
+    fetchRemoteMedia
+      .mockRejectedValueOnce(
+        Object.assign(new Error("MediaFetchError: Failed to fetch media"), {
+          code: "fetch_failed",
+        }),
+      )
+      .mockResolvedValueOnce({
+        buffer: Buffer.from("audio"),
+        contentType: "audio/ogg",
+        fileName: "file_0.oga",
+      });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_0.oga",
+      contentType: "audio/ogg",
+    });
+
+    const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    await flushRetryTimers();
+    const result = await promise;
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(2);
+    expect(result).toEqual(
+      expect.objectContaining({ path: "/tmp/file_0.oga", placeholder: "<media:audio>" }),
+    );
+  });
+
+  it("does not retry non-recoverable fetchRemoteMedia errors", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
     fetchRemoteMedia.mockRejectedValueOnce(new Error("download failed"));
 
@@ -199,6 +227,7 @@ describe("resolveMedia getFile retry", () => {
       resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN),
     ).rejects.toThrow("download failed");
 
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
     expect(getFile).toHaveBeenCalledTimes(1);
   });
 

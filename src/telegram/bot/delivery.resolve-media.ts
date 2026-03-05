@@ -100,6 +100,12 @@ function resolveRequiredFetchImpl(proxyFetch?: typeof fetch): typeof fetch {
   return fetchImpl;
 }
 
+function isRetryableMediaDownloadError(err: unknown): boolean {
+  return (
+    typeof err === "object" && err !== null && (err as { code?: unknown }).code === "fetch_failed"
+  );
+}
+
 async function downloadAndSaveTelegramFile(params: {
   filePath: string;
   token: string;
@@ -108,13 +114,28 @@ async function downloadAndSaveTelegramFile(params: {
   telegramFileName?: string;
 }) {
   const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
-  const fetched = await fetchRemoteMedia({
-    url,
-    fetchImpl: params.fetchImpl,
-    filePathHint: params.filePath,
-    maxBytes: params.maxBytes,
-    ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
-  });
+  const fetched = await retryAsync(
+    async () =>
+      await fetchRemoteMedia({
+        url,
+        fetchImpl: params.fetchImpl,
+        filePathHint: params.filePath,
+        maxBytes: params.maxBytes,
+        ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
+      }),
+    {
+      attempts: 2,
+      minDelayMs: 500,
+      maxDelayMs: 1000,
+      jitter: 0.2,
+      label: "telegram:downloadFile",
+      shouldRetry: isRetryableMediaDownloadError,
+      onRetry: ({ attempt, maxAttempts }) =>
+        logVerbose(
+          `telegram: media download retry ${attempt}/${maxAttempts} for ${params.filePath}`,
+        ),
+    },
+  );
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
   return saveMediaBuffer(
     fetched.buffer,
