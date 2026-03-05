@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
@@ -7,17 +5,20 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
-import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import fs from "node:fs/promises";
+import os from "node:os";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { getMachineDisplayName } from "../../../infra/machine-name.js";
-import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
-import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
@@ -124,7 +125,6 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
@@ -1539,7 +1539,39 @@ export async function runEmbeddedAttempt(
             sessionManager.resetLeaf();
           }
           const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.replaceMessages(sessionContext.messages);
+          // Re-run the full sanitization pipeline on the rebuilt messages.
+          // buildSessionContext() returns raw messages from the session file which
+          // may contain orphaned tool_result blocks (from crashes, aborts, branch
+          // switches, etc.). Without re-sanitizing, these orphaned tool_results
+          // reach the API and trigger 400 errors:
+          //   "unexpected tool_use_id found in tool_result blocks"
+          const sanitizedOrphan = await sanitizeSessionHistory({
+            messages: sessionContext.messages,
+            modelApi: params.model.api,
+            modelId: params.modelId,
+            provider: params.provider,
+            allowedToolNames,
+            config: params.config,
+            sessionManager,
+            sessionId: params.sessionId,
+            policy: transcriptPolicy,
+          });
+          const orphanValidatedGemini = transcriptPolicy.validateGeminiTurns
+            ? validateGeminiTurns(sanitizedOrphan)
+            : sanitizedOrphan;
+          const orphanValidated = transcriptPolicy.validateAnthropicTurns
+            ? validateAnthropicTurns(orphanValidatedGemini)
+            : orphanValidatedGemini;
+          const orphanTruncated = limitHistoryTurns(
+            orphanValidated,
+            getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+          );
+          const orphanLimited = transcriptPolicy.repairToolUseResultPairing
+            ? sanitizeToolUseResultPairing(orphanTruncated)
+            : orphanTruncated;
+          // Always replace — even when empty — so the stale pre-repair
+          // transcript (which still contains the orphaned user turn) is cleared.
+          activeSession.agent.replaceMessages(orphanLimited);
           log.warn(
             `Removed orphaned user message to prevent consecutive user turns. ` +
               `runId=${params.runId} sessionId=${params.sessionId}`,
