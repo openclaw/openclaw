@@ -2,6 +2,7 @@ import {
   analyzeArgvCommand,
   evaluateExecAllowlist,
   evaluateShellAllowlist,
+  resolvePlannedSegmentArgv,
   resolveExecApprovals,
   type ExecAllowlistEntry,
   type ExecCommandSegment,
@@ -95,7 +96,7 @@ export function resolvePlannedAllowlistArgv(params: {
   ) {
     return undefined;
   }
-  const plannedAllowlistArgv = params.segments[0]?.resolution?.effectiveArgv;
+  const plannedAllowlistArgv = resolvePlannedSegmentArgv(params.segments[0]);
   return plannedAllowlistArgv && plannedAllowlistArgv.length > 0 ? plannedAllowlistArgv : null;
 }
 

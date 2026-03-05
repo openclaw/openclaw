@@ -131,20 +131,7 @@ class NotificationsHandler private constructor(
       put(
         "notifications",
         JsonArray(
-          snapshot.notifications.map { entry ->
-            buildJsonObject {
-              put("key", JsonPrimitive(entry.key))
-              put("packageName", JsonPrimitive(entry.packageName))
-              put("postTimeMs", JsonPrimitive(entry.postTimeMs))
-              put("isOngoing", JsonPrimitive(entry.isOngoing))
-              put("isClearable", JsonPrimitive(entry.isClearable))
-              entry.title?.let { put("title", JsonPrimitive(it)) }
-              entry.text?.let { put("text", JsonPrimitive(it)) }
-              entry.subText?.let { put("subText", JsonPrimitive(it)) }
-              entry.category?.let { put("category", JsonPrimitive(it)) }
-              entry.channelId?.let { put("channelId", JsonPrimitive(it)) }
-            }
-          },
+          snapshot.notifications.map { entry -> entry.toJsonObject() },
         ),
       )
     }.toString()

@@ -318,6 +318,17 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
     expect(handler.shouldHandle(createRequest({ sessionKey: `${"a".repeat(28)}!` }))).toBe(false);
   });
 
+  it("matches long session keys with tail-bounded regex checks", () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      sessionFilter: ["discord:tail$"],
+    });
+    expect(
+      handler.shouldHandle(createRequest({ sessionKey: `${"x".repeat(5000)}discord:tail` })),
+    ).toBe(true);
+  });
+
   it("filters by discord account when session store includes account", () => {
     writeStore({
       "agent:test-agent:discord:channel:999888777": {
