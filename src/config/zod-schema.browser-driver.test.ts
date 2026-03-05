@@ -10,10 +10,12 @@ describe("OpenClawSchema browser profile driver", () => {
             default: {
               cdpPort: 9222,
               driver: "openclaw",
+              color: "#1a2b3c",
             },
             legacy: {
               cdpPort: 9223,
               driver: "clawd",
+              color: "#3c2b1a",
             },
           },
         },
