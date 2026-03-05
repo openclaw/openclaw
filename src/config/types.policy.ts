@@ -15,6 +15,6 @@ export type PolicyGuardrailsConfig = {
   failClosed?: boolean;
   /** Require secure file ownership/permissions for policy artifacts. Default: true. */
   strictFilePermissions?: boolean;
-  /** Enforce non-decreasing policySerial values to prevent rollback. Default: true. */
+  /** Enforce non-decreasing policySerial/issuedAt values to prevent rollback. Default: true. */
   enforceMonotonicSerial?: boolean;
 };

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { canonicalizePolicyJson } from "./policy.canonical.js";
 import { signEd25519Payload } from "./policy.crypto.js";
 import { clearPolicyManagerCacheForTests, getPolicyManagerState } from "./policy.manager.js";
 
@@ -24,7 +25,10 @@ async function writeSignedPolicy(params: {
   privateKey: string;
 }): Promise<void> {
   const raw = JSON.stringify(params.payload);
-  const signature = signEd25519Payload({ payload: raw, privateKey: params.privateKey });
+  const signature = signEd25519Payload({
+    payload: canonicalizePolicyJson(params.payload),
+    privateKey: params.privateKey,
+  });
   await fs.writeFile(params.policyPath, raw, "utf8");
   await fs.writeFile(params.sigPath, `${signature}\n`, "utf8");
 }
@@ -118,6 +122,9 @@ describe("policy manager", () => {
     expect(state.lockdown).toBe(false);
     expect(state.verifiedKeyId).toBe("next");
     expect(state.lastAcceptedSerial).toBe(7);
+    const persistedRaw = await fs.readFile(statePath, "utf8");
+    const persisted = JSON.parse(persistedRaw) as Record<string, unknown>;
+    expect(persisted.keyId).toBe("next");
   });
 
   it("rejects rollback to a lower policySerial", async () => {
@@ -158,5 +165,72 @@ describe("policy manager", () => {
     expect(second.valid).toBe(false);
     expect(second.lockdown).toBe(true);
     expect(second.reason).toContain("policy rollback detected");
+  });
+
+  it("rejects an expired policy", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-policy-expired-"));
+    const policyPath = path.join(dir, "POLICY.json");
+    const sigPath = path.join(dir, "POLICY.sig");
+    const keys = generateRawBase64Keypair();
+    await writeSignedPolicy({
+      policyPath,
+      sigPath,
+      payload: { version: 1, policySerial: 1, expiresAt: "2000-01-01T00:00:00Z" },
+      privateKey: keys.privateKey,
+    });
+
+    const config: OpenClawConfig = {
+      policy: {
+        enabled: true,
+        failClosed: true,
+        policyPath,
+        sigPath,
+        publicKey: keys.publicKey,
+      },
+    };
+
+    const state = await getPolicyManagerState({ config, forceReload: true });
+    expect(state.valid).toBe(false);
+    expect(state.lockdown).toBe(true);
+    expect(state.reason).toContain("policy expired at");
+  });
+
+  it("rejects issuedAt rollback when policySerial is absent", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-policy-issuedat-"));
+    const policyPath = path.join(dir, "POLICY.json");
+    const sigPath = path.join(dir, "POLICY.sig");
+    const statePath = path.join(dir, "POLICY.state.json");
+    const keys = generateRawBase64Keypair();
+
+    const config: OpenClawConfig = {
+      policy: {
+        enabled: true,
+        failClosed: true,
+        policyPath,
+        sigPath,
+        statePath,
+        publicKey: keys.publicKey,
+      },
+    };
+
+    await writeSignedPolicy({
+      policyPath,
+      sigPath,
+      payload: { version: 1, issuedAt: "2026-03-05T10:00:00.000Z" },
+      privateKey: keys.privateKey,
+    });
+    const first = await getPolicyManagerState({ config, forceReload: true });
+    expect(first.valid).toBe(true);
+
+    await writeSignedPolicy({
+      policyPath,
+      sigPath,
+      payload: { version: 1, issuedAt: "2026-03-05T09:00:00.000Z" },
+      privateKey: keys.privateKey,
+    });
+    const second = await getPolicyManagerState({ config, forceReload: true });
+    expect(second.valid).toBe(false);
+    expect(second.lockdown).toBe(true);
+    expect(second.reason).toContain("policy rollback detected: issuedAt");
   });
 });

@@ -42,7 +42,8 @@ export type PolicyManagerState = {
 };
 
 type PersistedPolicyState = {
-  lastAcceptedSerial: number;
+  lastAcceptedSerial?: number;
+  lastAcceptedIssuedAt?: string;
   updatedAt: string;
   policyHash: string;
   keyId?: string;
@@ -136,6 +137,18 @@ function hashPolicyPayload(rawPolicy: string): string {
   return crypto.createHash("sha256").update(rawPolicy, "utf8").digest("hex");
 }
 
+function parsePolicyTimestamp(value: string | undefined): number | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const ts = Date.parse(trimmed);
+  if (!Number.isFinite(ts)) {
+    return null;
+  }
+  return ts;
+}
+
 async function readPersistedPolicyState(params: {
   statePath: string;
   strictFilePermissions: boolean;
@@ -168,12 +181,34 @@ async function readPersistedPolicyState(params: {
     return { state: null, error: "policy state file must be a JSON object" };
   }
   const obj = parsed as Record<string, unknown>;
-  if (
-    typeof obj.lastAcceptedSerial !== "number" ||
-    !Number.isInteger(obj.lastAcceptedSerial) ||
-    obj.lastAcceptedSerial < 0
-  ) {
-    return { state: null, error: "policy state file has invalid lastAcceptedSerial" };
+  let lastAcceptedSerial: number | undefined;
+  if (obj.lastAcceptedSerial != null) {
+    if (
+      typeof obj.lastAcceptedSerial !== "number" ||
+      !Number.isInteger(obj.lastAcceptedSerial) ||
+      obj.lastAcceptedSerial < 0
+    ) {
+      return { state: null, error: "policy state file has invalid lastAcceptedSerial" };
+    }
+    lastAcceptedSerial = obj.lastAcceptedSerial;
+  }
+
+  let lastAcceptedIssuedAt: string | undefined;
+  if (obj.lastAcceptedIssuedAt != null) {
+    if (typeof obj.lastAcceptedIssuedAt !== "string" || !obj.lastAcceptedIssuedAt.trim()) {
+      return { state: null, error: "policy state file has invalid lastAcceptedIssuedAt" };
+    }
+    lastAcceptedIssuedAt = obj.lastAcceptedIssuedAt.trim();
+    if (parsePolicyTimestamp(lastAcceptedIssuedAt) == null) {
+      return { state: null, error: "policy state file has invalid lastAcceptedIssuedAt" };
+    }
+  }
+
+  if (lastAcceptedSerial == null && !lastAcceptedIssuedAt) {
+    return {
+      state: null,
+      error: "policy state file must include lastAcceptedSerial or lastAcceptedIssuedAt",
+    };
   }
   if (typeof obj.updatedAt !== "string" || !obj.updatedAt.trim()) {
     return { state: null, error: "policy state file has invalid updatedAt" };
@@ -186,7 +221,8 @@ async function readPersistedPolicyState(params: {
   }
   return {
     state: {
-      lastAcceptedSerial: obj.lastAcceptedSerial,
+      ...(lastAcceptedSerial != null ? { lastAcceptedSerial } : {}),
+      ...(lastAcceptedIssuedAt ? { lastAcceptedIssuedAt } : {}),
       updatedAt: obj.updatedAt,
       policyHash: obj.policyHash,
       keyId: typeof obj.keyId === "string" ? obj.keyId : undefined,
@@ -335,6 +371,19 @@ async function computePolicyState(
   }
 
   const lastAcceptedSerial = persistedState.state?.lastAcceptedSerial;
+  const lastAcceptedIssuedAt = persistedState.state?.lastAcceptedIssuedAt;
+  const lastAcceptedIssuedAtTs = parsePolicyTimestamp(lastAcceptedIssuedAt);
+  const issuedAt = loaded.policy.issuedAt?.trim();
+  const issuedAtTs = parsePolicyTimestamp(issuedAt);
+  if (issuedAt && issuedAtTs == null) {
+    return {
+      ...baseState,
+      valid: false,
+      lockdown: config.failClosed,
+      reason: `policy issuedAt is invalid: ${loaded.policy.issuedAt}`,
+    };
+  }
+
   const hasLastAcceptedSerial =
     typeof lastAcceptedSerial === "number" && Number.isFinite(lastAcceptedSerial);
   if (config.enforceMonotonicSerial && hasLastAcceptedSerial) {
@@ -355,23 +404,58 @@ async function computePolicyState(
         reason: `policy rollback detected: policySerial ${loaded.policy.policySerial} < ${acceptedSerial}`,
       };
     }
+  } else if (config.enforceMonotonicSerial && lastAcceptedIssuedAtTs != null) {
+    if (loaded.policy.policySerial == null) {
+      if (!issuedAt) {
+        return {
+          ...baseState,
+          valid: false,
+          lockdown: config.failClosed,
+          reason:
+            "issuedAt is required after anti-rollback state is established without policySerial",
+        };
+      }
+      if (issuedAtTs != null && issuedAtTs < lastAcceptedIssuedAtTs) {
+        return {
+          ...baseState,
+          valid: false,
+          lockdown: config.failClosed,
+          reason: `policy rollback detected: issuedAt ${issuedAt} < ${lastAcceptedIssuedAt}`,
+        };
+      }
+    }
   }
 
   let nextAcceptedSerial =
     typeof lastAcceptedSerial === "number" && Number.isFinite(lastAcceptedSerial)
       ? lastAcceptedSerial
       : undefined;
-  if (config.enforceMonotonicSerial && loaded.policy.policySerial != null) {
-    const candidate = loaded.policy.policySerial;
-    if (nextAcceptedSerial == null || candidate > nextAcceptedSerial) {
-      nextAcceptedSerial = candidate;
+  let nextAcceptedIssuedAt = lastAcceptedIssuedAt;
+  let shouldPersistRollbackState = false;
+  if (config.enforceMonotonicSerial) {
+    if (loaded.policy.policySerial != null) {
+      const candidate = loaded.policy.policySerial;
+      if (nextAcceptedSerial == null || candidate > nextAcceptedSerial) {
+        nextAcceptedSerial = candidate;
+        shouldPersistRollbackState = true;
+      }
+    }
+    if (issuedAt && issuedAtTs != null) {
+      const currentAcceptedIssuedAtTs = parsePolicyTimestamp(nextAcceptedIssuedAt);
+      if (currentAcceptedIssuedAtTs == null || issuedAtTs > currentAcceptedIssuedAtTs) {
+        nextAcceptedIssuedAt = issuedAt;
+        shouldPersistRollbackState = true;
+      }
+    }
+    if (shouldPersistRollbackState) {
       const writeError = await writePersistedPolicyState({
         statePath: config.statePath,
         strictFilePermissions: config.strictFilePermissions,
         state: {
-          lastAcceptedSerial: candidate,
+          ...(nextAcceptedSerial != null ? { lastAcceptedSerial: nextAcceptedSerial } : {}),
+          ...(nextAcceptedIssuedAt ? { lastAcceptedIssuedAt: nextAcceptedIssuedAt } : {}),
           updatedAt: new Date().toISOString(),
-          policyHash: hashPolicyPayload(loaded.rawPolicy),
+          policyHash: hashPolicyPayload(loaded.canonicalPolicy),
           keyId: loaded.verifiedKeyId,
         },
       });

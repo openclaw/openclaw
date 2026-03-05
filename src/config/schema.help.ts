@@ -443,7 +443,7 @@ export const FIELD_HELP: Record<string, string> = {
   "policy.strictFilePermissions":
     "When true (default), require secure ownership and non-group/world-writable permissions for policy artifacts before they are trusted.",
   "policy.enforceMonotonicSerial":
-    "When true (default), enforce non-decreasing policySerial values and persist last accepted serial to block signed-policy rollback attacks.",
+    "When true (default), enforce non-decreasing policySerial values (or issuedAt when serial is absent) and persist anti-rollback state to block signed-policy rollback attacks.",
   "diagnostics.flags":
     'Enable targeted diagnostics logs by flag (e.g. ["telegram.http"]). Supports wildcards like "telegram.*" or "*".',
   "diagnostics.enabled":

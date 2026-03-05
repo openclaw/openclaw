@@ -49,11 +49,15 @@ Write your private key (base64 or PEM) to a file, then:
 openclaw policy sign --in ~/.openclaw/POLICY.json --out ~/.openclaw/POLICY.sig --private-key ~/.openclaw/policy-private.key
 ```
 
+`openclaw policy sign` canonicalizes policy JSON before signing (stable key ordering + Unicode NFC normalization). Use the CLI signer to avoid non-canonical signature mismatches.
+
 ## Verify
 
 ```bash
 openclaw policy verify --in ~/.openclaw/POLICY.json --sig ~/.openclaw/POLICY.sig --public-key "<base64-ed25519-public-key>"
 ```
+
+`openclaw policy verify` verifies the canonicalized policy payload. Detached signatures created from non-canonical payload bytes are rejected.
 
 ## Example Policy
 

@@ -122,6 +122,20 @@ describe("policy evaluate", () => {
     expect(decision.allow).toBe(true);
   });
 
+  it("normalizes mixed-case/whitespace gateway action forms before allowlist checks", () => {
+    const state = buildState({
+      version: 1,
+      tools: {
+        allow: ["gateway"],
+      },
+      configMutations: {
+        allow: [{ action: "config.patch" }],
+      },
+    });
+    const decision = evaluateToolCall("  GATEWAY ", { action: "  Config.Patch  " }, { state });
+    expect(decision.allow).toBe(true);
+  });
+
   it("blocks config.set when current policy is enabled and next config drops policy", () => {
     const state = buildState({
       version: 1,

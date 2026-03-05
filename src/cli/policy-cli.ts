@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
+import { canonicalizePolicyJson } from "../policy/policy.canonical.js";
 import { signEd25519Payload, verifyEd25519Signature } from "../policy/policy.crypto.js";
+import { SignedPolicySchema } from "../policy/policy.schema.js";
 import { defaultRuntime } from "../runtime.js";
 
 function trimOrThrow(value: unknown, label: string): string {
@@ -23,6 +25,23 @@ async function readKeyFile(keyPath: string): Promise<string> {
   return trimmed;
 }
 
+function parseAndCanonicalizePolicy(rawPolicy: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawPolicy);
+  } catch (err) {
+    throw new Error(`Policy JSON parse failed: ${String(err)}`);
+  }
+  const validated = SignedPolicySchema.safeParse(parsed);
+  if (!validated.success) {
+    const issueText = validated.error.issues
+      .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
+      .join("; ");
+    throw new Error(`Policy schema validation failed: ${issueText}`);
+  }
+  return canonicalizePolicyJson(validated.data);
+}
+
 export function registerPolicyCli(program: Command) {
   const policy = program.command("policy").description("Sign and verify signed policy guardrails");
 
@@ -37,7 +56,7 @@ export function registerPolicyCli(program: Command) {
       const outputPath = trimOrThrow(opts["out"], "--out");
       const privateKeyPath = trimOrThrow(opts["privateKey"], "--private-key");
 
-      const payload = await fs.readFile(inputPath, "utf8");
+      const payload = parseAndCanonicalizePolicy(await fs.readFile(inputPath, "utf8"));
       const privateKey = await readKeyFile(privateKeyPath);
       const signature = signEd25519Payload({ payload, privateKey });
       await fs.writeFile(outputPath, `${signature}\n`, "utf8");
@@ -55,7 +74,7 @@ export function registerPolicyCli(program: Command) {
       const sigPath = trimOrThrow(opts["sig"], "--sig");
       const publicKey = trimOrThrow(opts["publicKey"], "--public-key");
 
-      const payload = await fs.readFile(inputPath, "utf8");
+      const payload = parseAndCanonicalizePolicy(await fs.readFile(inputPath, "utf8"));
       const signature = (await fs.readFile(sigPath, "utf8")).trim();
       const valid = verifyEd25519Signature({
         payload,

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { canonicalizePolicyJson } from "./policy.canonical.js";
 import { signEd25519Payload } from "./policy.crypto.js";
 import { loadSignedPolicy } from "./policy.load.js";
 
@@ -21,9 +22,13 @@ async function writeSignedPolicy(params: {
   sigPath: string;
   payload: Record<string, unknown>;
   privateKey: string;
+  rawPolicy?: string;
+  signCanonical?: boolean;
 }): Promise<void> {
-  const raw = JSON.stringify(params.payload);
-  const signature = signEd25519Payload({ payload: raw, privateKey: params.privateKey });
+  const raw = params.rawPolicy ?? JSON.stringify(params.payload);
+  const signedPayload =
+    params.signCanonical === false ? raw : canonicalizePolicyJson(params.payload);
+  const signature = signEd25519Payload({ payload: signedPayload, privateKey: params.privateKey });
   await fs.writeFile(params.policyPath, raw, "utf8");
   await fs.writeFile(params.sigPath, `${signature}\n`, "utf8");
 }
@@ -114,6 +119,70 @@ describe("policy load", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe("POLICY_FILE_INSECURE");
+    }
+  });
+
+  it("accepts semantically equivalent policy JSON signed in canonical form", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-policy-load-canonical-"));
+    const policyPath = path.join(dir, "POLICY.json");
+    const sigPath = path.join(dir, "POLICY.sig");
+    const key = generateRawBase64Keypair();
+    const payload = {
+      version: 1,
+      policySerial: 2,
+      tools: {
+        allow: ["gateway"],
+      },
+    };
+    await writeSignedPolicy({
+      policyPath,
+      sigPath,
+      payload,
+      rawPolicy:
+        '{\n  "tools": { "allow": ["gateway"] },\n  "policySerial": 2,\n  "version": 1\n}\n',
+      privateKey: key.privateKey,
+    });
+
+    const result = await loadSignedPolicy({
+      policyPath,
+      sigPath,
+      publicKey: key.publicKey,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects signatures generated from non-canonical payload bytes", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-policy-load-legacy-"));
+    const policyPath = path.join(dir, "POLICY.json");
+    const sigPath = path.join(dir, "POLICY.sig");
+    const key = generateRawBase64Keypair();
+    const payload = {
+      version: 1,
+      policySerial: 3,
+      tools: {
+        allow: ["gateway"],
+      },
+    };
+    await writeSignedPolicy({
+      policyPath,
+      sigPath,
+      payload,
+      rawPolicy:
+        '{\n  "tools": { "allow": ["gateway"] },\n  "policySerial": 3,\n  "version": 1\n}\n',
+      privateKey: key.privateKey,
+      signCanonical: false,
+    });
+
+    const result = await loadSignedPolicy({
+      policyPath,
+      sigPath,
+      publicKey: key.publicKey,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("SIGNATURE_INVALID");
     }
   });
 });

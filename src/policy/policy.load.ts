@@ -1,6 +1,7 @@
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { canonicalizePolicyJson } from "./policy.canonical.js";
 import { verifyEd25519Signature } from "./policy.crypto.js";
 import { SignedPolicySchema, type SignedPolicy } from "./policy.schema.js";
 
@@ -31,6 +32,7 @@ export type PolicyLoadSuccess = {
   policyPath: string;
   sigPath: string;
   rawPolicy: string;
+  canonicalPolicy: string;
   verifiedKeyId?: string;
 };
 
@@ -345,6 +347,18 @@ export async function loadSignedPolicy(params: {
     );
   }
 
+  let canonicalPolicy: string;
+  try {
+    canonicalPolicy = canonicalizePolicyJson(validated.data);
+  } catch (err) {
+    return buildLoadError(
+      "POLICY_JSON_INVALID",
+      `Policy canonicalization failed: ${String(err)}`,
+      policyPath,
+      sigPath,
+    );
+  }
+
   const keyResolution = resolveVerificationKeys({
     policy: validated.data,
     publicKey: params.publicKey,
@@ -361,7 +375,7 @@ export async function loadSignedPolicy(params: {
   for (const key of keyResolution.keys) {
     if (
       verifyEd25519Signature({
-        payload: rawPolicy,
+        payload: canonicalPolicy,
         signatureBase64: signature,
         publicKey: key.publicKey,
       })
@@ -386,6 +400,7 @@ export async function loadSignedPolicy(params: {
     policyPath,
     sigPath,
     rawPolicy,
+    canonicalPolicy,
     verifiedKeyId,
   };
 }
