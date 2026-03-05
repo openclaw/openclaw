@@ -198,7 +198,13 @@ export class AcpGatewayAgent implements Agent {
         sessionId: session.key,
         cwd,
         title: session.displayName ?? session.label ?? session.key,
-        updatedAt: session.updatedAt ? new Date(session.updatedAt).toISOString() : undefined,
+        updatedAt: (() => {
+          if (session.updatedAt == null) {
+            return undefined;
+          }
+          const d = new Date(session.updatedAt);
+          return Number.isFinite(d.getTime()) ? d.toISOString() : undefined;
+        })(),
         _meta: {
           sessionKey: session.key,
           kind: session.kind,

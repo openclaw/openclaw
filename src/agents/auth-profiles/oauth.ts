@@ -119,7 +119,10 @@ function adoptNewerMainOAuthCredential(params: {
       log.info("adopted newer OAuth credentials from main agent", {
         profileId: params.profileId,
         agentDir: params.agentDir,
-        expires: new Date(mainCred.expires).toISOString(),
+        expires: (() => {
+          const d = new Date(mainCred.expires);
+          return Number.isFinite(d.getTime()) ? d.toISOString() : String(mainCred.expires);
+        })(),
       });
       return mainCred;
     }
@@ -421,7 +424,10 @@ export async function resolveApiKeyForProfile(
           log.info("inherited fresh OAuth credentials from main agent", {
             profileId,
             agentDir: params.agentDir,
-            expires: new Date(mainCred.expires).toISOString(),
+            expires: (() => {
+              const d = new Date(mainCred.expires);
+              return Number.isFinite(d.getTime()) ? d.toISOString() : String(mainCred.expires);
+            })(),
           });
           return buildOAuthProfileResult({
             provider: mainCred.provider,

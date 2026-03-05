@@ -748,6 +748,9 @@ export const usageHandlers: GatewayRequestHandlers = {
     // Format dates back to YYYY-MM-DD strings
     const formatDateStr = (ms: number) => {
       const d = new Date(ms);
+      if (!Number.isFinite(d.getTime())) {
+        return "Invalid";
+      }
       return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
     };
 
