@@ -450,11 +450,7 @@ function formatSubMessageContent(content: string, contentType: string): string {
   }
 }
 
-function checkBotMentioned(
-  event: FeishuMessageEvent,
-  botOpenId?: string,
-  botName?: string,
-): boolean {
+function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
   if (!botOpenId) return false;
   // Check for @all (@_all in Feishu) — treat as mentioning every bot
   const rawContent = event.message.content ?? "";
@@ -463,9 +459,9 @@ function checkBotMentioned(
   if (mentions.length > 0) {
     return mentions.some((m) => {
       if (m.id.open_id !== botOpenId) return false;
-      // Guard against Feishu WS open_id remapping in multi-app groups:
-      // if botName is known and mention name differs, this is a false positive.
-      if (botName && m.name && m.name !== botName) return false;
+      // Do not require exact display-name equality here.
+      // In group chats, Feishu mention names may vary by alias/app context,
+      // while open_id remains the stable identifier.
       return true;
     });
   }
@@ -768,10 +764,9 @@ export function buildBroadcastSessionKey(
 export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
-  botName?: string,
 ): FeishuMessageContext {
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
-  const mentionedBot = checkBotMentioned(event, botOpenId, botName);
+  const mentionedBot = checkBotMentioned(event, botOpenId);
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
   // In p2p, the bot mention is a pure addressing prefix with no semantic value;
   // strip it so slash commands like @Bot /help still have a leading /.
@@ -862,12 +857,11 @@ export async function handleFeishuMessage(params: {
   cfg: ClawdbotConfig;
   event: FeishuMessageEvent;
   botOpenId?: string;
-  botName?: string;
   runtime?: RuntimeEnv;
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;
 }): Promise<void> {
-  const { cfg, event, botOpenId, botName, runtime, chatHistories, accountId } = params;
+  const { cfg, event, botOpenId, runtime, chatHistories, accountId } = params;
 
   // Resolve account with merged config
   const account = resolveFeishuAccount({ cfg, accountId });
@@ -890,7 +884,7 @@ export async function handleFeishuMessage(params: {
     return;
   }
 
-  let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
+  let ctx = parseFeishuMessageEvent(event, botOpenId);
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
