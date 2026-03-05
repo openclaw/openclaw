@@ -76,12 +76,13 @@ function filterSkillEntries(
     const normalized = normalizeSkillFilter(skillFilter) ?? [];
     const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
     skillsLogger.debug(`Applying skill filter: ${label}`);
+    // Defensive: coerce name to string in case YAML parsed it as a number (e.g., name: 12306)
     filtered =
       normalized.length > 0
-        ? filtered.filter((entry) => normalized.includes(entry.skill.name))
+        ? filtered.filter((entry) => normalized.includes(String(entry.skill.name)))
         : [];
     skillsLogger.debug(
-      `After skill filter: ${filtered.map((entry) => entry.skill.name).join(", ") || "(none)"}`,
+      `After skill filter: ${filtered.map((entry) => String(entry.skill.name)).join(", ") || "(none)"}`,
     );
   }
   return filtered;
@@ -452,7 +453,7 @@ export function buildWorkspaceSkillSnapshot(
   return {
     prompt,
     skills: eligible.map((entry) => ({
-      name: entry.skill.name,
+      name: String(entry.skill.name),
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
@@ -622,12 +623,14 @@ export async function syncSkillsToWorkspace(params: {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
-        skillsLogger.warn(`Failed to resolve safe destination for ${entry.skill.name}: ${message}`);
+        skillsLogger.warn(
+          `Failed to resolve safe destination for ${String(entry.skill.name)}: ${message}`,
+        );
         continue;
       }
       if (!dest) {
         skillsLogger.warn(
-          `Failed to resolve safe destination for ${entry.skill.name}: invalid source directory name`,
+          `Failed to resolve safe destination for ${String(entry.skill.name)}: invalid source directory name`,
         );
         continue;
       }
@@ -638,7 +641,7 @@ export async function syncSkillsToWorkspace(params: {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
-        skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
+        skillsLogger.warn(`Failed to copy ${String(entry.skill.name)} to sandbox: ${message}`);
       }
     }
   });
@@ -678,7 +681,7 @@ export function buildWorkspaceSkillCommandSpecs(
 
   const specs: SkillCommandSpec[] = [];
   for (const entry of userInvocable) {
-    const rawName = entry.skill.name;
+    const rawName = String(entry.skill.name);
     const base = sanitizeSkillCommandName(rawName);
     if (base !== rawName) {
       debugSkillCommandOnce(
