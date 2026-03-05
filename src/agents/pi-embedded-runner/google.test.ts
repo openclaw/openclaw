@@ -42,6 +42,26 @@ describe("sanitizeToolsForGoogle", () => {
     expectFormatRemoved(sanitized, "additionalProperties");
   });
 
+  it("strips unsupported schema keywords for zai providers", () => {
+    const tool = createTool({
+      type: "object",
+      patternProperties: {
+        "^x-": { type: "string", format: "uuid" },
+      },
+      properties: {
+        foo: {
+          type: "string",
+          format: "uuid",
+        },
+      },
+    });
+    const [sanitized] = sanitizeToolsForGoogle({
+      tools: [tool],
+      provider: "zai",
+    });
+    expectFormatRemoved(sanitized, "patternProperties");
+  });
+
   it("returns original tools for non-google providers", () => {
     const tool = createTool({
       type: "object",
