@@ -15,6 +15,7 @@ import {
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
+import { loadModelCatalog, type ModelCatalogEntry } from "./model-catalog.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
@@ -99,6 +100,7 @@ export type SpawnSubagentResult = {
   mode?: SpawnSubagentMode;
   note?: string;
   modelApplied?: boolean;
+  modelWarning?: string;
   error?: string;
   attachments?: {
     count: number;
@@ -432,6 +434,7 @@ export async function spawnSubagentDirect(
     };
   }
 
+  let modelWarning: string | undefined;
   if (resolvedModel) {
     const modelPatchError = await patchChildSession({ model: resolvedModel });
     if (modelPatchError) {
@@ -442,6 +445,25 @@ export async function spawnSubagentDirect(
       };
     }
     modelApplied = true;
+
+    if (modelOverride) {
+      const { provider: mProvider, model: mModel } = splitModelRef(resolvedModel);
+      if (mProvider && mModel) {
+        try {
+          const catalog = await loadModelCatalog({ config: cfg });
+          const inCatalog = catalog.some(
+            (e: ModelCatalogEntry) =>
+              e.provider.toLowerCase() === mProvider.toLowerCase() &&
+              e.id.toLowerCase() === mModel.toLowerCase(),
+          );
+          if (!inCatalog) {
+            modelWarning = `Model "${resolvedModel}" was applied to the session but is not in the runtime model catalog. The agent may fall back to the default model at runtime.`;
+          }
+        } catch {
+          // Best-effort catalog check; do not block spawn on catalog load failure.
+        }
+      }
+    }
   }
   if (thinkingOverride !== undefined) {
     const thinkingPatchError = await patchChildSession({
@@ -875,6 +897,7 @@ export async function spawnSubagentDirect(
     mode: spawnMode,
     note,
     modelApplied: resolvedModel ? modelApplied : undefined,
+    modelWarning,
     attachments: attachmentsReceipt,
   };
 }
