@@ -26,7 +26,10 @@ const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
-const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
+const PERPLEXITY_API_BASE_URL = "https://api.perplexity.ai";
+const OPENROUTER_API_ENDPOINT = "https://openrouter.ai/api/v1";
+const OPENROUTER_PERPLEXITY_MODEL = "perplexity/sonar-pro";
+const OPENROUTER_KEY_PREFIX = "sk-or-";
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
@@ -189,9 +192,11 @@ type BraveSearchResponse = {
 
 type PerplexityConfig = {
   apiKey?: string;
+  baseUrl?: string;
+  model?: string;
 };
 
-type PerplexityApiKeySource = "config" | "perplexity_env" | "none";
+type PerplexityApiKeySource = "config" | "perplexity_env" | "openrouter_env" | "none";
 
 type GrokConfig = {
   apiKey?: string;
@@ -387,7 +392,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
     return {
       error: "missing_perplexity_api_key",
       message:
-        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
+        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
@@ -505,17 +510,80 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
   apiKey?: string;
   source: PerplexityApiKeySource;
 } {
-  const fromConfig = normalizeApiKey(perplexity?.apiKey);
+  const fromConfig = normalizeApiKey(resolveOpenRouterApiKey(perplexity?.apiKey));
   if (fromConfig) {
     return { apiKey: fromConfig, source: "config" };
   }
 
-  const fromEnvPerplexity = normalizeApiKey(process.env.PERPLEXITY_API_KEY);
+  const fromEnvPerplexity = normalizeApiKey(
+    resolveOpenRouterApiKey(process.env.PERPLEXITY_API_KEY),
+  );
   if (fromEnvPerplexity) {
     return { apiKey: fromEnvPerplexity, source: "perplexity_env" };
   }
 
+  const fromEnvOpenrouter = normalizeApiKey(
+    resolveOpenRouterApiKey(process.env.OPENROUTER_API_KEY),
+  );
+  if (fromEnvOpenrouter) {
+    return { apiKey: fromEnvOpenrouter, source: "openrouter_env" };
+  }
+
   return { apiKey: undefined, source: "none" };
+}
+
+function isOpenRouterApiKey(apiKey: string): boolean {
+  return apiKey.startsWith(OPENROUTER_KEY_PREFIX);
+}
+
+function resolveOpenRouterApiKey(value: unknown): string {
+  return normalizeSecretInput(value).replace(/^bearer\s+/i, "");
+}
+
+function normalizePerplexityBaseUrl(baseUrl?: string): string | undefined {
+  const fromConfig = normalizeSecretInput(baseUrl);
+  if (!fromConfig) {
+    return undefined;
+  }
+  return fromConfig
+    .trim()
+    .replace(/\/$/, "")
+    .replace(/\/search\/?$/i, "")
+    .replace(/\/chat\/completions\/?$/i, "");
+}
+
+function isOpenRouterPerplexityEndpoint(baseUrl: string): boolean {
+  try {
+    const normalized = new URL(baseUrl);
+    return normalized.hostname === "openrouter.ai" && normalized.pathname.startsWith("/api/v1");
+  } catch {
+    return /openrouter\.ai\/api\/v1/i.test(baseUrl);
+  }
+}
+
+function resolvePerplexityBaseUrl(
+  perplexity: PerplexityConfig,
+  source: PerplexityApiKeySource,
+  apiKey?: string,
+): string {
+  const configured = normalizePerplexityBaseUrl(perplexity.baseUrl);
+  if (configured) {
+    return configured;
+  }
+
+  const isOpenRouterMode =
+    source === "openrouter_env" || (typeof apiKey === "string" && isOpenRouterApiKey(apiKey));
+  return isOpenRouterMode ? OPENROUTER_API_ENDPOINT : PERPLEXITY_API_BASE_URL;
+}
+
+function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
+  const fromConfig =
+    perplexity && typeof perplexity.model === "string" ? perplexity.model.trim() : "";
+  return fromConfig || OPENROUTER_PERPLEXITY_MODEL;
+}
+
+function isOpenRouterPerplexityMode(baseUrl: string, apiKey: string): boolean {
+  return isOpenRouterPerplexityEndpoint(baseUrl) || isOpenRouterApiKey(apiKey);
 }
 
 function normalizeApiKey(key: unknown): string {
@@ -855,6 +923,14 @@ async function throwWebSearchApiError(res: Response, providerLabel: string): Pro
   throw new Error(`${providerLabel} API error (${res.status}): ${detail || res.statusText}`);
 }
 
+type PerplexitySearchResult = {
+  title: string;
+  url: string;
+  description: string;
+  published?: string;
+  siteName?: string;
+};
+
 async function runPerplexitySearchApi(params: {
   query: string;
   apiKey: string;
@@ -868,9 +944,16 @@ async function runPerplexitySearchApi(params: {
   searchBeforeDate?: string;
   maxTokens?: number;
   maxTokensPerPage?: number;
-}): Promise<
-  Array<{ title: string; url: string; description: string; published?: string; siteName?: string }>
-> {
+  baseUrl?: string;
+  model?: string;
+}): Promise<PerplexitySearchResult[]> {
+  const baseUrl = normalizePerplexityBaseUrl(params.baseUrl) ?? PERPLEXITY_API_BASE_URL;
+  const useOpenRouterMode = isOpenRouterPerplexityMode(baseUrl, params.apiKey);
+
+  if (useOpenRouterMode) {
+    return runPerplexityOpenRouterSearchApi(params, baseUrl);
+  }
+
   const body: Record<string, unknown> = {
     query: params.query,
     max_results: params.count,
@@ -903,7 +986,7 @@ async function runPerplexitySearchApi(params: {
 
   return withTrustedWebSearchEndpoint(
     {
-      url: PERPLEXITY_SEARCH_ENDPOINT,
+      url: `${baseUrl}/search`,
       timeoutSeconds: params.timeoutSeconds,
       init: {
         method: "POST",
@@ -911,6 +994,7 @@ async function runPerplexitySearchApi(params: {
           "Content-Type": "application/json",
           Accept: "application/json",
           Authorization: `Bearer ${params.apiKey}`,
+          "x-api-key": params.apiKey,
           "HTTP-Referer": "https://openclaw.ai",
           "X-Title": "OpenClaw Web Search",
         },
@@ -937,6 +1021,113 @@ async function runPerplexitySearchApi(params: {
           siteName: resolveSiteName(url) || undefined,
         };
       });
+    },
+  );
+}
+
+function extractOpenRouterCitations(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const values = value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => entry.length > 0);
+  return [...new Set(values)];
+}
+
+function extractPerplexityOpenRouterResponseText(data: Record<string, unknown>): string {
+  const choices = Array.isArray(data.choices) ? data.choices : [];
+  const firstChoice = choices[0] as Record<string, unknown> | undefined;
+  const message = firstChoice?.message;
+  if (message && typeof (message as Record<string, unknown>).content === "string") {
+    return ((message as Record<string, unknown>).content as string).trim();
+  }
+  return "Search completed but returned no text.";
+}
+
+function parseOpenRouterUrlsFromText(value: string, maxResults: number): string[] {
+  const urlRegex = /https?:\/\/[^\s"'`<>]+/g;
+  const urls = (value.match(urlRegex) ?? []).filter(Boolean).map((u) => u.replace(/[\])}]$/, ""));
+  const unique = [...new Set(urls)];
+  return maxResults > 0 ? unique.slice(0, maxResults) : unique;
+}
+
+async function runPerplexityOpenRouterSearchApi(
+  params: {
+    apiKey: string;
+    count: number;
+    timeoutSeconds: number;
+    query: string;
+    model?: string;
+  },
+  baseUrl: string,
+): Promise<PerplexitySearchResult[]> {
+  const body: Record<string, unknown> = {
+    model: params.model || OPENROUTER_PERPLEXITY_MODEL,
+    messages: [
+      {
+        role: "user",
+        content: `Search the web for: ${params.query}`,
+      },
+    ],
+    max_tokens: 2048,
+  };
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: `${baseUrl}/chat/completions`,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+          "x-api-key": params.apiKey,
+          "HTTP-Referer": "https://openclaw.ai",
+          "X-Title": "OpenClaw Web Search",
+        },
+        body: JSON.stringify(body),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "Perplexity Search");
+      }
+
+      const raw = (await res.json()) as Record<string, unknown>;
+      const text = extractPerplexityOpenRouterResponseText(raw);
+      const rawChoice = Array.isArray(raw.choices) ? raw.choices[0] : undefined;
+      const rawMessage =
+        rawChoice && typeof rawChoice === "object" && !Array.isArray(rawChoice)
+          ? (rawChoice as Record<string, unknown>).message
+          : undefined;
+      const rawCitations =
+        extractOpenRouterCitations(raw.citations) ??
+        extractOpenRouterCitations(
+          rawMessage && typeof rawMessage === "object" && !Array.isArray(rawMessage)
+            ? (rawMessage as Record<string, unknown>).citations
+            : undefined,
+        );
+      const urls =
+        rawCitations.length > 0 ? rawCitations : parseOpenRouterUrlsFromText(text, params.count);
+      const resultEntries =
+        urls.length > 0
+          ? urls.map((url) => ({
+              title: resolveSiteName(url) || "Search Result",
+              url,
+              description: wrapWebContent(text, "web_search"),
+            }))
+          : [
+              {
+                title: "Search Result",
+                url: "",
+                description: wrapWebContent(text, "web_search"),
+              },
+            ];
+      return resultEntries
+        .slice(0, params.count)
+        .map((entry) => ({ ...entry, description: entry.description || "No results" }));
     },
   );
 }
@@ -1169,6 +1360,8 @@ async function runWebSearch(params: {
   grokModel?: string;
   grokInlineCitations?: boolean;
   geminiModel?: string;
+  perplexityBaseUrl?: string;
+  perplexityModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
 }): Promise<Record<string, unknown>> {
@@ -1179,7 +1372,9 @@ async function runWebSearch(params: {
         ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
         : params.provider === "kimi"
           ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-          : "";
+          : params.provider === "perplexity"
+            ? `${params.perplexityBaseUrl || PERPLEXITY_API_BASE_URL}:${params.perplexityModel || OPENROUTER_PERPLEXITY_MODEL}`
+            : "";
   const cacheKey = normalizeCacheKey(
     `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
   );
@@ -1204,6 +1399,8 @@ async function runWebSearch(params: {
       searchBeforeDate: params.dateBefore ? isoToPerplexityDate(params.dateBefore) : undefined,
       maxTokens: params.maxTokens,
       maxTokensPerPage: params.maxTokensPerPage,
+      baseUrl: params.perplexityBaseUrl,
+      model: params.perplexityModel,
     });
 
     const payload = {
@@ -1421,6 +1618,12 @@ export function createWebSearchTool(options?: {
     execute: async (_toolCallId, args) => {
       const perplexityAuth =
         provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
+      const perplexityBaseUrl =
+        provider === "perplexity" && perplexityAuth?.apiKey
+          ? resolvePerplexityBaseUrl(perplexityConfig, perplexityAuth.source, perplexityAuth.apiKey)
+          : undefined;
+      const perplexityModel =
+        provider === "perplexity" ? resolvePerplexityModel(perplexityConfig) : undefined;
       const apiKey =
         provider === "perplexity"
           ? perplexityAuth?.apiKey
@@ -1594,6 +1797,8 @@ export function createWebSearchTool(options?: {
         grokModel: resolveGrokModel(grokConfig),
         grokInlineCitations: resolveGrokInlineCitations(grokConfig),
         geminiModel: resolveGeminiModel(geminiConfig),
+        perplexityBaseUrl,
+        perplexityModel,
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
       });
@@ -1619,5 +1824,8 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolvePerplexityModel,
+  resolvePerplexityBaseUrl,
+  resolvePerplexityApiKey,
   resolveRedirectUrl: resolveCitationRedirectUrl,
 } as const;

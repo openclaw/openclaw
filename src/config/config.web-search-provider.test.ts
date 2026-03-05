@@ -94,6 +94,11 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("perplexity");
   });
 
+  it("auto-detects perplexity when only OPENROUTER_API_KEY is set", () => {
+    process.env.OPENROUTER_API_KEY = "sk-or-test-key";
+    expect(resolveSearchProvider({})).toBe("perplexity");
+  });
+
   it("auto-detects grok when only XAI_API_KEY is set", () => {
     process.env.XAI_API_KEY = "test-xai-key";
     expect(resolveSearchProvider({})).toBe("grok");

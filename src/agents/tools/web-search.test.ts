@@ -15,6 +15,9 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolvePerplexityBaseUrl,
+  resolvePerplexityApiKey,
+  resolvePerplexityModel,
 } = __testing;
 
 describe("web_search brave language param normalization", () => {
@@ -269,5 +272,66 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("web_search perplexity config resolution", () => {
+  it("normalizes Bearer-prefixed config API key for Perplexity/OpenRouter", () => {
+    const configKey = resolvePerplexityApiKey({ apiKey: "Bearer sk-or-config-key" });
+    expect(configKey).toEqual({
+      apiKey: "sk-or-config-key",
+      source: "config",
+    });
+  });
+
+  it("normalizes Bearer-prefixed PERPLEXITY_API_KEY from env", () => {
+    withEnv({ PERPLEXITY_API_KEY: "Bearer pplx-env-key" }, () => {
+      const envKey = resolvePerplexityApiKey({});
+      expect(envKey).toEqual({
+        apiKey: "pplx-env-key",
+        source: "perplexity_env",
+      });
+    });
+  });
+
+  it("normalizes Bearer-prefixed OPENROUTER_API_KEY from env", () => {
+    withEnv({ OPENROUTER_API_KEY: "Bearer sk-or-env-key" }, () => {
+      const envKey = resolvePerplexityApiKey({});
+      expect(envKey).toEqual({
+        apiKey: "sk-or-env-key",
+        source: "openrouter_env",
+      });
+      expect(resolvePerplexityBaseUrl({}, envKey.source, envKey.apiKey)).toBe(
+        "https://openrouter.ai/api/v1",
+      );
+    });
+  });
+
+  it("defaults Perplexity base URL based on OpenRouter key", () => {
+    const keyInfo = resolvePerplexityApiKey({
+      apiKey: "sk-or-abc123",
+    });
+    expect(resolvePerplexityBaseUrl({}, keyInfo.source, keyInfo.apiKey)).toBe(
+      "https://openrouter.ai/api/v1",
+    );
+  });
+
+  it("defaults Perplexity base URL to direct endpoint when Perplexity key is set", () => {
+    const keyInfo = resolvePerplexityApiKey({
+      apiKey: "pplx-abc123",
+    });
+    expect(resolvePerplexityBaseUrl({}, keyInfo.source, keyInfo.apiKey)).toBe(
+      "https://api.perplexity.ai",
+    );
+  });
+
+  it("defaults Perplexity model to sonar-pro", () => {
+    expect(resolvePerplexityModel({})).toBe("perplexity/sonar-pro");
+  });
+
+  it("allows overriding Perplexity model in config", () => {
+    expect(resolvePerplexityModel({ model: "perplexity/sonar-reasoning" })).toBe(
+      "perplexity/sonar-reasoning",
+    );
   });
 });

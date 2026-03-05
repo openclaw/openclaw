@@ -15,7 +15,11 @@ function installMockFetch(payload: unknown) {
   return mockFetch;
 }
 
-function createPerplexitySearchTool(perplexityConfig?: { apiKey?: string }) {
+function createPerplexitySearchTool(perplexityConfig?: {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}) {
   return createWebSearchTool({
     config: {
       tools: {
@@ -288,6 +292,41 @@ describe("web_search perplexity Search API", () => {
       | Record<string, string>
       | undefined;
     expect(headers?.Authorization).toBe("Bearer pplx-config");
+  });
+
+  it("uses OpenRouter chat/completions when OPENROUTER_API_KEY is used", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "Bearer sk-or-test");
+    const mockFetch = installMockFetch({
+      choices: [
+        {
+          message: {
+            content: "Result from Perplexity via OpenRouter. See https://example.com/openrouter",
+          },
+        },
+      ],
+      citations: ["https://example.com/openrouter"],
+    });
+    const tool = createPerplexitySearchTool({
+      baseUrl: "https://openrouter.ai/api/v1",
+      model: "perplexity/sonar-pro",
+    });
+    const result = await tool?.execute?.("call-1", { query: "test" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(request?.method).toBe("POST");
+    const requestHeaders = request?.headers as Record<string, string> | undefined;
+    expect(requestHeaders?.Authorization).toBe("Bearer sk-or-test");
+    expect(requestHeaders?.["x-api-key"]).toBe("sk-or-test");
+    const body = parseFirstRequestBody(mockFetch);
+    expect(body.model).toBe("perplexity/sonar-pro");
+    expect(result?.details).toMatchObject({
+      provider: "perplexity",
+      results: expect.arrayContaining([
+        expect.objectContaining({ url: "https://example.com/openrouter" }),
+      ]),
+    });
   });
 
   it("passes freshness filter to Perplexity Search API", async () => {
