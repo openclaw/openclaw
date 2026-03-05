@@ -37,6 +37,7 @@ export type CanonicalInboundMessageHookContext = {
   originatingTo?: string;
   guildId?: string;
   channelName?: string;
+  channelData?: Record<string, unknown>;
   isGroup: boolean;
   groupId?: string;
 };
@@ -50,6 +51,7 @@ export type CanonicalSentMessageHookContext = {
   accountId?: string;
   conversationId?: string;
   messageId?: string;
+  metadata?: Record<string, unknown>;
   isGroup?: boolean;
   groupId?: string;
 };
