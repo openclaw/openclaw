@@ -18,14 +18,20 @@ export type AllowlistMatch<TSource extends string = AllowlistMatchSource> = {
 
 type CachedAllowListSet = {
   size: number;
+  signature: string;
+  set: Set<string>;
+};
+
+type CachedSimpleAllowFrom = {
+  normalized: string[];
+  size: number;
+  signature: string;
+  wildcard: boolean;
   set: Set<string>;
 };
 
 const ALLOWLIST_SET_CACHE = new WeakMap<string[], CachedAllowListSet>();
-const SIMPLE_ALLOWLIST_CACHE = new WeakMap<
-  Array<string | number>,
-  { normalized: string[]; size: number; wildcard: boolean; set: Set<string> }
->();
+const SIMPLE_ALLOWLIST_CACHE = new WeakMap<Array<string | number>, CachedSimpleAllowFrom>();
 
 export function formatAllowlistMatchMeta(
   match?: { matchKey?: string; matchSource?: string } | null,
@@ -81,32 +87,39 @@ export function resolveAllowlistMatchSimple(params: {
   return { allowed: false };
 }
 
+function buildArrayCacheSignature(values: ReadonlyArray<string | number>): string {
+  let signature = `${values.length}:`;
+  for (const value of values) {
+    const normalized = String(value);
+    signature += `${normalized.length}:${normalized};`;
+  }
+  return signature;
+}
+
 function resolveAllowListSet(allowList: string[]): Set<string> {
+  const signature = buildArrayCacheSignature(allowList);
   const cached = ALLOWLIST_SET_CACHE.get(allowList);
-  if (cached && cached.size === allowList.length) {
+  if (cached && cached.size === allowList.length && cached.signature === signature) {
     return cached.set;
   }
   const set = new Set(allowList);
-  ALLOWLIST_SET_CACHE.set(allowList, { size: allowList.length, set });
+  ALLOWLIST_SET_CACHE.set(allowList, { size: allowList.length, signature, set });
   return set;
 }
 
-function resolveSimpleAllowFrom(allowFrom: Array<string | number>): {
-  normalized: string[];
-  size: number;
-  wildcard: boolean;
-  set: Set<string>;
-} {
+function resolveSimpleAllowFrom(allowFrom: Array<string | number>): CachedSimpleAllowFrom {
+  const signature = buildArrayCacheSignature(allowFrom);
   const cached = SIMPLE_ALLOWLIST_CACHE.get(allowFrom);
-  if (cached && cached.size === allowFrom.length) {
+  if (cached && cached.size === allowFrom.length && cached.signature === signature) {
     return cached;
   }
 
   const normalized = allowFrom.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean);
   const set = new Set(normalized);
-  const built = {
+  const built: CachedSimpleAllowFrom = {
     normalized,
     size: allowFrom.length,
+    signature,
     wildcard: set.has("*"),
     set,
   };
