@@ -19,6 +19,7 @@ import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
@@ -165,6 +166,9 @@ export function createOpenClawTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,
       sandboxed: options?.sandboxed,
+    }),
+    createSessionsYieldTool({
+      sessionId: options?.sessionId,
     }),
     createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,
