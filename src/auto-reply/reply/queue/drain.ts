@@ -114,7 +114,12 @@ export function scheduleFollowupDrain(
             title: "[Queued messages while agent was busy]",
             items,
             summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
+            renderItem: (item, idx) => {
+              // If prompt is empty or whitespace-only, use a placeholder to avoid
+              // exposing raw metadata (sender_id, message_id, etc.) to the LLM.
+              const content = item.prompt?.trim() || "[message content unavailable]";
+              return `---\nQueued #${idx + 1}\n${content}`.trim();
+            },
           });
           await runFollowup({
             prompt,
