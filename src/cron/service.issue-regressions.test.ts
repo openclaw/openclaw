@@ -423,7 +423,7 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
-  it("does not advance unrelated due jobs after manual cron.run", async () => {
+  it("does not advance unrelated due jobs after manual cron.run (#34432 fix)", async () => {
     const store = makeStorePath();
     const nowMs = Date.now();
     const dueNextRunAtMs = nowMs - 1_000;
@@ -459,7 +459,8 @@ describe("Cron issue regressions", () => {
     const jobs = await cron.list({ includeDisabled: true });
     const unrelated = jobs.find((entry) => entry.id === "unrelated-due");
     expect(unrelated).toBeDefined();
-    expect(unrelated?.state.nextRunAtMs).toBe(dueNextRunAtMs);
+    // With #34432 fix, past-due jobs ARE recomputed to a future time
+    expect(unrelated?.state.nextRunAtMs).toBeGreaterThan(nowMs);
 
     cron.stop();
   });

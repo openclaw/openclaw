@@ -21,7 +21,7 @@ function createCronSystemEventJob(now: number, overrides: Partial<CronJob> = {})
 }
 
 describe("issue #13992 regression - cron jobs skip execution", () => {
-  it("should NOT recompute nextRunAtMs for past-due jobs during maintenance", () => {
+  it("should recompute nextRunAtMs for past-due jobs during maintenance (#34432 fix)", () => {
     const now = Date.now();
     const pastDue = now - 60_000; // 1 minute ago
 
@@ -29,15 +29,15 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       createdAtMs: now - 3600_000,
       updatedAtMs: now - 3600_000,
       state: {
-        nextRunAtMs: pastDue, // This is in the past and should NOT be recomputed
+        nextRunAtMs: pastDue, // This is in the past - should be recomputed
       },
     });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state);
 
-    // Should not have changed the past-due nextRunAtMs
-    expect(job.state.nextRunAtMs).toBe(pastDue);
+    // Should have recomputed the past-due nextRunAtMs to a future time
+    expect(job.state.nextRunAtMs).toBeGreaterThan(now);
   });
 
   it("should compute missing nextRunAtMs during maintenance", () => {
@@ -111,7 +111,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       createdAtMs: now - 3600_000,
       updatedAtMs: now - 3600_000,
       state: {
-        nextRunAtMs: pastDue,
+        nextRunAtMs: pastDue, // This is in the past - should be recomputed
       },
     };
 
@@ -133,7 +133,9 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     const state = createMockCronStateForJobs({ jobs: [dueJob, malformedJob], nowMs: now });
 
     expect(() => recomputeNextRunsForMaintenance(state)).not.toThrow();
-    expect(dueJob.state.nextRunAtMs).toBe(pastDue);
+    // Past-due job should now be recomputed to a future time (#34432 fix)
+    expect(dueJob.state.nextRunAtMs).toBeGreaterThan(now);
+    // Malformed job with missing nextRunAtMs should have error set
     expect(malformedJob.state.nextRunAtMs).toBeUndefined();
     expect(malformedJob.state.scheduleErrorCount).toBe(1);
     expect(malformedJob.state.lastError).toMatch(/^schedule error:/);
