@@ -32,32 +32,13 @@ const chatUserCache = new Map<string, ChatUserCacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Send a text message to Synology Chat via the incoming webhook.
- *
- * @param incomingUrl - Synology Chat incoming webhook URL
- * @param text - Message text to send
- * @param userId - Optional user ID to mention with @
- * @returns true if sent successfully
+ * Send an encoded body to Synology Chat with rate limiting and retry.
  */
-export async function sendMessage(
-  incomingUrl: string,
-  text: string,
-  userId?: string | number,
-  allowInsecureSsl = true,
+async function sendWithRetry(
+  url: string,
+  body: string,
+  allowInsecureSsl: boolean,
 ): Promise<boolean> {
-  // Synology Chat API requires user_ids (numeric) to specify the recipient
-  // The @mention is optional but user_ids is mandatory
-  const payloadObj: Record<string, any> = { text };
-  if (userId) {
-    // userId can be numeric ID or username - if numeric, add to user_ids
-    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
-    if (!isNaN(numericId)) {
-      payloadObj.user_ids = [numericId];
-    }
-  }
-  const payload = JSON.stringify(payloadObj);
-  const body = `payload=${encodeURIComponent(payload)}`;
-
   // Internal rate limit: min 500ms between sends
   const now = Date.now();
   const elapsed = now - lastSendTime;
@@ -71,7 +52,7 @@ export async function sendMessage(
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const ok = await doPost(incomingUrl, body, allowInsecureSsl);
+      const ok = await doPost(url, body, allowInsecureSsl);
       lastSendTime = Date.now();
       if (ok) return true;
     } catch {
@@ -84,6 +65,51 @@ export async function sendMessage(
   }
 
   return false;
+}
+
+/**
+ * Send a text message to Synology Chat via the incoming webhook (DM).
+ *
+ * @param incomingUrl - Synology Chat incoming webhook URL
+ * @param text - Message text to send
+ * @param userId - Optional user ID to mention with @
+ * @returns true if sent successfully
+ */
+export async function sendMessage(
+  incomingUrl: string,
+  text: string,
+  userId?: string | number,
+  allowInsecureSsl = true,
+): Promise<boolean> {
+  // Synology Chat API requires user_ids (numeric) to specify the recipient
+  const payloadObj: Record<string, any> = { text };
+  if (userId) {
+    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
+    if (!isNaN(numericId)) {
+      payloadObj.user_ids = [numericId];
+    }
+  }
+  const payload = JSON.stringify(payloadObj);
+  const body = `payload=${encodeURIComponent(payload)}`;
+  return sendWithRetry(incomingUrl, body, allowInsecureSsl);
+}
+
+/**
+ * Send a text message to a Synology Chat channel via its incoming webhook.
+ * Channel incoming webhooks don't support user_ids — the message appears as the bot.
+ *
+ * @param channelIncomingUrl - Channel-specific incoming webhook URL
+ * @param text - Message text to send
+ * @returns true if sent successfully
+ */
+export async function sendToChannel(
+  channelIncomingUrl: string,
+  text: string,
+  allowInsecureSsl = false,
+): Promise<boolean> {
+  const payload = JSON.stringify({ text });
+  const body = `payload=${encodeURIComponent(payload)}`;
+  return sendWithRetry(channelIncomingUrl, body, allowInsecureSsl);
 }
 
 /**
