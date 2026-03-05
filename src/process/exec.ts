@@ -116,16 +116,31 @@ export async function runCommandWithTimeout(
     cwd,
     env: resolvedEnv,
     windowsVerbatimArguments,
+    detached: process.platform !== "win32",
   });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const timer = setTimeout(() => {
-      if (typeof child.kill === "function") {
-        child.kill("SIGKILL");
+    let forceKillTimer: NodeJS.Timeout | undefined;
+    const killChild = (signal: NodeJS.Signals) => {
+      if (typeof child.kill !== "function") {
+        return;
       }
+      if (process.platform !== "win32" && typeof child.pid === "number") {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          // fall back to child.kill below
+        }
+      }
+      child.kill(signal);
+    };
+    const timer = setTimeout(() => {
+      killChild("SIGTERM");
+      forceKillTimer = setTimeout(() => killChild("SIGKILL"), 1500);
     }, timeoutMs);
 
     if (hasInput && child.stdin) {
@@ -145,6 +160,9 @@ export async function runCommandWithTimeout(
       }
       settled = true;
       clearTimeout(timer);
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
       reject(err);
     });
     child.on("close", (code, signal) => {
@@ -153,6 +171,9 @@ export async function runCommandWithTimeout(
       }
       settled = true;
       clearTimeout(timer);
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
       resolve({ stdout, stderr, code, signal, killed: child.killed });
     });
   });
