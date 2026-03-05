@@ -536,6 +536,11 @@ export async function monitorPumbleProvider(opts: MonitorPumbleOpts = {}): Promi
 
   // --- REST-only fallback (no SDK credentials) ---
   runtime.log?.(`pumble: SDK credentials missing, running in REST-only mode`);
+  opts.statusSink?.({
+    running: true,
+    connected: false,
+    lastError: "SDK credentials missing — inbound webhooks disabled (REST-only mode)",
+  });
 
   // Keep the monitor alive until aborted
   return new Promise<void>((resolve) => {

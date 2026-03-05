@@ -84,7 +84,9 @@ export async function sendMessagePumble(
   let sdkFiles: V1.FileToUpload[] | undefined;
   if (mediaUrl) {
     const isHttpUrl = /^https?:\/\//i.test(mediaUrl);
-    const isLocalFile = !isHttpUrl && mediaUrl.startsWith("/");
+    const isLocalFile =
+      !isHttpUrl &&
+      (mediaUrl.startsWith("/") || mediaUrl.startsWith("./") || mediaUrl.startsWith("../"));
     if (isHttpUrl || isLocalFile) {
       // Build SDK file payload for the bot client upload.
       let buffer: Buffer;

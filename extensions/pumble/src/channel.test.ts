@@ -180,6 +180,7 @@ describe("pumblePlugin", () => {
             enabled: true,
             appId: "test-app-id",
             appKey: "test-app-key",
+            botToken: "test-bot-token",
           },
         },
       };
@@ -333,6 +334,7 @@ describe("pumblePlugin", () => {
             enabled: true,
             appId: "test-id",
             appKey: "test-key",
+            botToken: "test-token",
           },
         },
       };

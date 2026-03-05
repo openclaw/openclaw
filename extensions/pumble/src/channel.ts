@@ -31,7 +31,7 @@ import { resolveSubagentLabelSuffix } from "./pumble/thread-bindings.lifecycle.j
 import { getPumbleRuntime } from "./runtime.js";
 
 function isAccountConfigured(account: ResolvedPumbleAccount): boolean {
-  return Boolean(account.appId && account.appKey);
+  return Boolean(account.appId && account.appKey && account.botToken);
 }
 
 const meta = {
