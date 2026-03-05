@@ -29,10 +29,61 @@ import {
 } from "./send/types.js";
 
 const MATRIX_TEXT_LIMIT = 4000;
+const MATRIX_LIMIT_EXCEEDED = "M_LIMIT_EXCEEDED";
+const MATRIX_SEND_RATE_LIMIT_RETRY_ATTEMPTS = 2;
+const MATRIX_SEND_RATE_LIMIT_RETRY_FALLBACK_MS = 1000;
 const getCore = () => getMatrixRuntime();
 
 export type { MatrixSendOpts, MatrixSendResult } from "./send/types.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
+
+function resolveMatrixRateLimitRetryAfterMs(err: unknown): number | null {
+  if (!err || typeof err !== "object") {
+    return null;
+  }
+  const payload = err as {
+    errcode?: unknown;
+    retry_after_ms?: unknown;
+    data?: { errcode?: unknown; retry_after_ms?: unknown };
+    body?: { errcode?: unknown; retry_after_ms?: unknown };
+  };
+  const errcode =
+    (typeof payload.errcode === "string" ? payload.errcode : undefined) ??
+    (typeof payload.data?.errcode === "string" ? payload.data.errcode : undefined) ??
+    (typeof payload.body?.errcode === "string" ? payload.body.errcode : undefined);
+  if (errcode !== MATRIX_LIMIT_EXCEEDED) {
+    return null;
+  }
+  const rawRetryAfterMs =
+    (typeof payload.retry_after_ms === "number" ? payload.retry_after_ms : undefined) ??
+    (typeof payload.data?.retry_after_ms === "number" ? payload.data.retry_after_ms : undefined) ??
+    (typeof payload.body?.retry_after_ms === "number" ? payload.body.retry_after_ms : undefined);
+  const normalized =
+    typeof rawRetryAfterMs === "number" && Number.isFinite(rawRetryAfterMs) && rawRetryAfterMs > 0
+      ? Math.floor(rawRetryAfterMs)
+      : MATRIX_SEND_RATE_LIMIT_RETRY_FALLBACK_MS;
+  return Math.min(normalized, 30_000);
+}
+
+async function sendMessageWithRateLimitRetry(params: {
+  client: MatrixClient;
+  roomId: string;
+  content: MatrixOutboundContent;
+}): Promise<string> {
+  for (let attempt = 1; attempt <= MATRIX_SEND_RATE_LIMIT_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await params.client.sendMessage(params.roomId, params.content);
+    } catch (err) {
+      const retryAfterMs = resolveMatrixRateLimitRetryAfterMs(err);
+      const canRetry = retryAfterMs !== null && attempt < MATRIX_SEND_RATE_LIMIT_RETRY_ATTEMPTS;
+      if (!canRetry) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
+    }
+  }
+  throw new Error("matrix send retry exhausted unexpectedly");
+}
 
 export async function sendMessageMatrix(
   to: string,
@@ -76,8 +127,7 @@ export async function sendMessageMatrix(
         : buildReplyRelation(opts.replyToId);
       const sendContent = async (content: MatrixOutboundContent) => {
         // @vector-im/matrix-bot-sdk uses sendMessage differently
-        const eventId = await client.sendMessage(roomId, content);
-        return eventId;
+        return await sendMessageWithRateLimitRetry({ client, roomId, content });
       };
 
       let lastMessageId = "";
