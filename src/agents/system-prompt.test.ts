@@ -190,6 +190,24 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("<final>...</final>");
   });
 
+  it("keeps runtime reasoning line stable across reasoning toggles", () => {
+    const promptOff = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningLevel: "off",
+    });
+    const promptOn = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningLevel: "on",
+    });
+
+    const runtimeLine =
+      "Reasoning: controlled by runtime setting (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.";
+    expect(promptOff).toContain(runtimeLine);
+    expect(promptOn).toContain(runtimeLine);
+    expect(promptOff).not.toContain("Reasoning: off (hidden unless on/stream)");
+    expect(promptOn).not.toContain("Reasoning: on (hidden unless on/stream)");
+  });
+
   it("includes a CLI quick reference section", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -599,7 +617,7 @@ describe("buildAgentSystemPrompt", () => {
       reasoningLevel: "off",
     });
 
-    expect(prompt).toContain("Reasoning: off");
+    expect(prompt).toContain("Reasoning: controlled by runtime setting");
     expect(prompt).toContain("/reasoning");
     expect(prompt).toContain("/status shows Reasoning");
   });

@@ -360,7 +360,6 @@ export function buildAgentSystemPrompt(params: {
         "<final>Hey there! What would you like to do next?</final>",
       ].join(" ")
     : undefined;
-  const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
@@ -678,7 +677,7 @@ export function buildAgentSystemPrompt(params: {
   lines.push(
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
-    `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
+    "Reasoning: controlled by runtime setting (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.",
   );
 
   return lines.filter(Boolean).join("\n");
