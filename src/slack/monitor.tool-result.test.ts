@@ -591,29 +591,14 @@ describe("monitorSlackProvider tool results", () => {
     expectSingleSendWithThread("111.222");
   });
 
-  it("ignores replyToId directive when replyToMode is off", async () => {
+  it("ignores replyToId directive when replyToMode is off for channel messages", async () => {
     replyMock.mockResolvedValue({ text: "forced reply", replyToId: "555" });
-    slackTestState.config = {
-      messages: {
-        responsePrefix: "PFX",
-        ackReaction: "👀",
-        ackReactionScope: "group-mentions",
-      },
-      channels: {
-        slack: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          dm: { enabled: true },
-          replyToMode: "off",
-        },
-      },
-    };
-
-    await runSlackMessageOnce(monitorSlackProvider, {
-      event: makeSlackMessageEvent({
-        ts: "789",
-      }),
+    setOpenChannelDirectMessages({
+      includeAckReactionConfig: true,
+      groupPolicy: "open",
+      replyToMode: "off",
     });
+    await runChannelMessageEvent("forced reply", { ts: "789" });
 
     expectSingleSendWithThread(undefined);
   });
@@ -787,12 +772,14 @@ describe("monitorSlackProvider tool results", () => {
     expect(ctx.ParentSessionKey).toBeUndefined();
   });
 
-  it("keeps replies in channel root when message is not threaded (replyToMode off)", async () => {
+  it("threads DM replies even when configured replyToMode is off", async () => {
     replyMock.mockResolvedValue({ text: "root reply" });
     setDirectMessageReplyMode("off");
     await runDirectMessageEvent("789");
 
-    expectSingleSendWithThread(undefined);
+    expectSingleSendWithThread("789");
+    const ctx = getFirstReplySessionCtx();
+    expect(ctx.SessionKey).toBe("agent:main:main:thread:789");
   });
 
   it("threads first reply when replyToMode is first and message is not threaded", async () => {
@@ -801,5 +788,21 @@ describe("monitorSlackProvider tool results", () => {
     await runDirectMessageEvent("789");
 
     expectSingleSendWithThread("789");
+  });
+
+  it("uses unique DM thread sessions per top-level message", async () => {
+    replyMock.mockResolvedValue({ text: "threaded reply" });
+    setDirectMessageReplyMode("off");
+    await runDirectMessageEvent("789");
+    await runDirectMessageEvent("790", { text: "new turn" });
+
+    expect(replyMock).toHaveBeenCalledTimes(2);
+    const firstCtx = (replyMock.mock.calls[0]?.[0] ?? {}) as { SessionKey?: string };
+    const secondCtx = (replyMock.mock.calls[1]?.[0] ?? {}) as { SessionKey?: string };
+    expect(firstCtx.SessionKey).toBe("agent:main:main:thread:789");
+    expect(secondCtx.SessionKey).toBe("agent:main:main:thread:790");
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "789" });
+    expect(sendMock.mock.calls[1][2]).toMatchObject({ threadTs: "790" });
   });
 });
