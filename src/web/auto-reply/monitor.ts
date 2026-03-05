@@ -1,3 +1,4 @@
+import { DisconnectReason } from "@whiskeysockets/baileys";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { resolveInboundDebounceMs } from "../../auto-reply/inbound-debounce.js";
 import { getReplyFromConfig } from "../../auto-reply/reply.js";
@@ -22,7 +23,7 @@ import {
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
+import { formatError, getStatusCode, getWebAuthAgeMs, readWebSelfId } from "../session.js";
 import { DEFAULT_WEB_MEDIA_BYTES } from "./constants.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
@@ -215,10 +216,48 @@ export async function monitorWebChannel(
       // retryable disconnect instead of crashing the reconnect loop.
       const errorStr = formatError(err);
 
+      // P1: Detect loggedOut status from connection-phase errors (e.g.
+      // Baileys throws with { output: { statusCode: DisconnectReason.loggedOut } }).
+      const errStatusCode = getStatusCode(err);
+      const isLoggedOut = errStatusCode === DisconnectReason.loggedOut;
+
+      if (isLoggedOut) {
+        status.connected = false;
+        status.lastEventAt = Date.now();
+        status.lastDisconnect = {
+          at: status.lastEventAt,
+          status: typeof errStatusCode === "number" ? errStatusCode : undefined,
+          error: errorStr,
+          loggedOut: true,
+        };
+        status.lastError = errorStr;
+        emitStatus();
+
+        runtime.error(
+          `WhatsApp session logged out. Run \`${formatCliCommand("openclaw channels login --channel web")}\` to relink.`,
+        );
+        break;
+      }
+
+      // P2: Respect single-run mode — don't retry when keepAlive is false.
+      if (!keepAlive) {
+        status.connected = false;
+        status.lastEventAt = Date.now();
+        status.lastDisconnect = {
+          at: status.lastEventAt,
+          status: undefined,
+          error: errorStr,
+          loggedOut: false,
+        };
+        status.lastError = errorStr;
+        emitStatus();
+        break;
+      }
+
       // If enough time has passed since the last connection-phase failure,
       // reset the counter so intermittent outages don't permanently escalate
       // the backoff (mirrors the "healthy stretch" reset for post-connect
-      // disconnects at line ~383).
+      // disconnects at line ~410).
       const now = Date.now();
       if (lastConnectionFailureAt > 0 && now - lastConnectionFailureAt > heartbeatSeconds * 1000) {
         reconnectAttempts = 0;
@@ -237,6 +276,28 @@ export async function monitorWebChannel(
       status.lastError = errorStr;
       status.reconnectAttempts = reconnectAttempts;
       emitStatus();
+
+      // P2: Enforce maxAttempts policy, consistent with post-connection handling.
+      if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
+        reconnectLogger.warn(
+          {
+            connectionId,
+            error: errorStr,
+            reconnectAttempts,
+            maxAttempts: reconnectPolicy.maxAttempts,
+          },
+          "web reconnect: max attempts reached during connection phase; continuing in degraded mode",
+        );
+        runtime.error(
+          `WhatsApp Web connect: max attempts reached (${reconnectAttempts}/${reconnectPolicy.maxAttempts}). Will keep retrying every ${heartbeatSeconds}s.`,
+        );
+        try {
+          await sleep(heartbeatSeconds * 1000, abortSignal);
+        } catch {
+          break;
+        }
+        continue;
+      }
 
       reconnectLogger.warn(
         { connectionId, error: errorStr, reconnectAttempts },

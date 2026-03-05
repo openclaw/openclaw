@@ -188,26 +188,134 @@ describe("web auto-reply", () => {
     }
   }, 15_000);
 
-  it("stops after hitting max reconnect attempts", { timeout: 60_000 }, async () => {
-    const closeResolvers: Array<() => void> = [];
+  it(
+    "enters degraded mode after hitting max reconnect attempts and keeps retrying",
+    { timeout: 60_000 },
+    async () => {
+      const closeResolvers: Array<(reason?: unknown) => void> = [];
+      const sleep = vi.fn(async () => {});
+      const listenerFactory = vi.fn(async () => {
+        let _resolve!: (reason?: unknown) => void;
+        const onClose = new Promise<unknown>((res) => {
+          _resolve = res;
+          closeResolvers.push(res);
+        });
+        return { close: vi.fn(), onClose };
+      });
+      const controller = new AbortController();
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      const run = monitorWebChannel(
+        false,
+        listenerFactory as never,
+        true,
+        async () => ({ text: "ok" }),
+        runtime as never,
+        controller.signal,
+        {
+          heartbeatSeconds: 1,
+          reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
+          sleep,
+        },
+      );
+
+      await Promise.resolve();
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+
+      // Close first connection — triggers reconnect attempt 1
+      closeResolvers.shift()?.();
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      expect(listenerFactory).toHaveBeenCalledTimes(2);
+
+      // Close second connection — triggers reconnect attempt 2 (= maxAttempts)
+      closeResolvers.shift()?.();
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("max attempts reached"));
+
+      // Monitor should continue in degraded mode (retry after heartbeat interval)
+      // — the third factory call proves it didn't stop.
+      expect(listenerFactory).toHaveBeenCalledTimes(3);
+
+      // Abort to cleanly stop the monitor.
+      controller.abort();
+      closeResolvers.shift()?.({ status: 499, isLoggedOut: false });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await run;
+    },
+  );
+
+  it("stops immediately when connection-phase error indicates loggedOut", async () => {
     const sleep = vi.fn(async () => {});
     const listenerFactory = vi.fn(async () => {
-      const onClose = new Promise<void>((res) => closeResolvers.push(res));
-      return { close: vi.fn(), onClose };
+      throw { output: { statusCode: 401 } }; // DisconnectReason.loggedOut = 401
     });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const { runtime, run } = startMonitorWebChannel({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+    });
 
+    await run;
+
+    expect(listenerFactory).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("logged out"));
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("does not retry connection-phase errors when keepAlive is false", async () => {
+    const sleep = vi.fn(async () => {});
+    const listenerFactory = vi.fn(async () => {
+      throw new Error("ENOTFOUND web.whatsapp.com");
+    });
+    const runtime = createRuntime();
+    const run = monitorWebChannel(
+      false,
+      listenerFactory as never,
+      false, // keepAlive = false
+      async () => ({ text: "ok" }),
+      runtime as never,
+      undefined,
+      {
+        heartbeatSeconds: 1,
+        reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+        sleep,
+      },
+    );
+
+    await run;
+
+    expect(listenerFactory).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("enforces maxAttempts for connection-phase errors", async () => {
+    let callCount = 0;
+    const sleep = vi.fn(async () => {});
+    const listenerFactory = vi.fn(async () => {
+      callCount += 1;
+      if (callCount <= 3) {
+        throw new Error("ENOTFOUND web.whatsapp.com");
+      }
+      // After degraded-mode retry, succeed
+      let _resolve!: (reason?: unknown) => void;
+      const onClose = new Promise<unknown>((res) => {
+        _resolve = res;
+      });
+      return { close: vi.fn(), onClose, signalClose: (r?: unknown) => _resolve(r) };
+    });
+    const controller = new AbortController();
+    const runtime = createRuntime();
     const run = monitorWebChannel(
       false,
       listenerFactory as never,
       true,
       async () => ({ text: "ok" }),
       runtime as never,
-      undefined,
+      controller.signal,
       {
         heartbeatSeconds: 1,
         reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
@@ -215,18 +323,15 @@ describe("web auto-reply", () => {
       },
     );
 
-    await Promise.resolve();
-    expect(listenerFactory).toHaveBeenCalledTimes(1);
+    // Let it run through connection-phase failures
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
-    closeResolvers.shift()?.();
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    expect(listenerFactory).toHaveBeenCalledTimes(2);
-
-    closeResolvers.shift()?.();
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    await run;
-
+    // Should have hit max attempts and entered degraded mode
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("max attempts reached"));
+
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await run;
   });
 
   it("processes inbound messages without batching and preserves timestamps", async () => {
