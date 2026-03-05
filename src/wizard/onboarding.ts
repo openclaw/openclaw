@@ -518,6 +518,7 @@ export async function runOnboardingWizard(
     const { setupSearch } = await import("../commands/onboard-search.js");
     nextConfig = await setupSearch(nextConfig, runtime, prompter, {
       quickstartDefaults: flow === "quickstart",
+      secretInputMode: opts.secretInputMode,
     });
   }
 

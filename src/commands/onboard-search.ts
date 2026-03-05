@@ -1,7 +1,14 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
+import {
+  DEFAULT_SECRET_PROVIDER_ALIAS,
+  type SecretInput,
+  type SecretRef,
+  hasConfiguredSecretInput,
+  normalizeSecretInputString,
+} from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { SecretInputMode } from "./onboard-types.js";
 
 export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi";
 
@@ -90,10 +97,34 @@ export function hasExistingKey(config: OpenClawConfig, provider: SearchProvider)
   return hasConfiguredSecretInput(rawKeyValue(config, provider));
 }
 
+/** Build an env-backed SecretRef for a search provider. */
+function buildSearchEnvRef(provider: SearchProvider): SecretRef {
+  const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === provider);
+  const envVar = entry?.envKeys[0];
+  if (!envVar) {
+    throw new Error(
+      `No env var mapping for search provider "${provider}" in secret-input-mode=ref.`,
+    );
+  }
+  return { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id: envVar };
+}
+
+/** Resolve a plaintext key into the appropriate SecretInput based on mode. */
+function resolveSearchSecretInput(
+  provider: SearchProvider,
+  key: string,
+  secretInputMode?: SecretInputMode,
+): SecretInput {
+  if (secretInputMode === "ref") {
+    return buildSearchEnvRef(provider);
+  }
+  return key;
+}
+
 export function applySearchKey(
   config: OpenClawConfig,
   provider: SearchProvider,
-  key: string,
+  key: SecretInput,
 ): OpenClawConfig {
   const search = { ...config.tools?.web?.search, provider, enabled: true };
   switch (provider) {
@@ -154,6 +185,7 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
 
 export type SetupSearchOptions = {
   quickstartDefaults?: boolean;
+  secretInputMode?: SecretInputMode;
 };
 
 export async function setupSearch(
@@ -233,7 +265,8 @@ export async function setupSearch(
 
   const key = keyInput?.trim() ?? "";
   if (key) {
-    return applySearchKey(config, choice, key);
+    const secretInput = resolveSearchSecretInput(choice, key, opts?.secretInputMode);
+    return applySearchKey(config, choice, secretInput);
   }
 
   if (existingKey) {

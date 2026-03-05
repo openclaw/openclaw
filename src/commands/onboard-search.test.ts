@@ -231,6 +231,50 @@ describe("setupSearch", () => {
     }
   });
 
+  it("stores env-backed SecretRef when secretInputMode=ref for perplexity", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "perplexity",
+      textValue: "pplx-test-key",
+    });
+    const result = await setupSearch(cfg, runtime, prompter, {
+      secretInputMode: "ref",
+    });
+    expect(result.tools?.web?.search?.provider).toBe("perplexity");
+    expect(result.tools?.web?.search?.perplexity?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "PERPLEXITY_API_KEY",
+    });
+  });
+
+  it("stores env-backed SecretRef when secretInputMode=ref for brave", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "brave",
+      textValue: "BSA-test-key",
+    });
+    const result = await setupSearch(cfg, runtime, prompter, {
+      secretInputMode: "ref",
+    });
+    expect(result.tools?.web?.search?.provider).toBe("brave");
+    expect(result.tools?.web?.search?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "BRAVE_API_KEY",
+    });
+  });
+
+  it("stores plaintext key when secretInputMode is unset", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "brave",
+      textValue: "BSA-plain",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.apiKey).toBe("BSA-plain");
+  });
+
   it("exports all 5 providers in SEARCH_PROVIDER_OPTIONS", () => {
     expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(5);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
