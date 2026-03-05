@@ -33,17 +33,48 @@ const defaultImportPiSdk = () => import("./pi-model-discovery.js");
 let importPiSdk = defaultImportPiSdk;
 
 const CODEX_PROVIDER = "openai-codex";
+const OPENAI_CODEX_GPT54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
+const OPENAI_CODEX_TEMPLATE_MODEL_IDS = [
+  OPENAI_CODEX_GPT53_MODEL_ID,
+  "gpt-5.2-codex",
+  "gpt-5.2",
+  "gpt-5.1-codex",
+] as const;
 const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
 
-function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
-  const hasSpark = models.some(
-    (entry) =>
-      entry.provider === CODEX_PROVIDER &&
-      entry.id.toLowerCase() === OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
+function hasOpenAICodexModel(models: ModelCatalogEntry[], modelId: string): boolean {
+  return models.some(
+    (entry) => entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === modelId,
   );
-  if (hasSpark) {
+}
+
+function findOpenAICodexTemplate(models: ModelCatalogEntry[]): ModelCatalogEntry | undefined {
+  for (const templateId of OPENAI_CODEX_TEMPLATE_MODEL_IDS) {
+    const match = models.find(
+      (entry) => entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === templateId,
+    );
+    if (match) {
+      return match;
+    }
+  }
+  return undefined;
+}
+
+function applyOpenAICodexCatalogFallbacks(models: ModelCatalogEntry[]): void {
+  if (!hasOpenAICodexModel(models, OPENAI_CODEX_GPT54_MODEL_ID)) {
+    const template = findOpenAICodexTemplate(models);
+    if (template) {
+      models.push({
+        ...template,
+        id: OPENAI_CODEX_GPT54_MODEL_ID,
+        name: OPENAI_CODEX_GPT54_MODEL_ID,
+      });
+    }
+  }
+
+  if (hasOpenAICodexModel(models, OPENAI_CODEX_GPT53_SPARK_MODEL_ID)) {
     return;
   }
 
@@ -218,7 +249,7 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
-      applyOpenAICodexSparkFallback(models);
+      applyOpenAICodexCatalogFallbacks(models);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.

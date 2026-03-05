@@ -235,6 +235,10 @@ describe("normalizeModelCompat", () => {
 });
 
 describe("isModernModelRef", () => {
+  it("treats gpt-5.4 as a modern openai-codex model", () => {
+    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4" })).toBe(true);
+  });
+
   it("excludes opencode minimax variants from modern selection", () => {
     expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
     expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
@@ -247,6 +251,49 @@ describe("isModernModelRef", () => {
 });
 
 describe("resolveForwardCompatModel", () => {
+  it("resolves openai-codex gpt-5.4 via codex templates", () => {
+    const registry = createRegistry({
+      "openai-codex/gpt-5.2-codex": {
+        ...createTemplateModel("openai-codex", "gpt-5.2-codex"),
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+      } as Model<Api>,
+    });
+    const model = resolveForwardCompatModel("openai-codex", "gpt-5.4", registry);
+    expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4" });
+  });
+
+  it("keeps unsupported openai-codex gpt-5 ids failing fast", () => {
+    const registry = createRegistry({
+      "openai-codex/gpt-5.2-codex": {
+        ...createTemplateModel("openai-codex", "gpt-5.2-codex"),
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+      } as Model<Api>,
+    });
+    const model = resolveForwardCompatModel("openai-codex", "gpt-5.0", registry);
+    expect(model).toBeUndefined();
+  });
+
+  it("resolves github-copilot gpt-5.4 only from provider templates", () => {
+    const registry = createRegistry({
+      "github-copilot/gpt-5.2-codex": {
+        ...createTemplateModel("github-copilot", "gpt-5.2-codex"),
+        api: "openai-codex-responses",
+        baseUrl: "https://api.githubcopilot.com",
+      } as Model<Api>,
+    });
+    const model = resolveForwardCompatModel("github-copilot", "gpt-5.4", registry);
+    expectResolvedForwardCompat(model, { provider: "github-copilot", id: "gpt-5.4" });
+    expect(model?.baseUrl).toBe("https://api.githubcopilot.com");
+  });
+
+  it("does not synthesize github-copilot gpt-5.4 without provider templates", () => {
+    const registry = createRegistry({});
+    const model = resolveForwardCompatModel("github-copilot", "gpt-5.4", registry);
+    expect(model).toBeUndefined();
+  });
+
   it("resolves anthropic opus 4.6 via 4.5 template", () => {
     const registry = createRegistry({
       "anthropic/claude-opus-4-5": createTemplateModel("anthropic", "claude-opus-4-5"),

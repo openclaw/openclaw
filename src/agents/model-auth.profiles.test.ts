@@ -157,7 +157,7 @@ describe("getApiKeyForModel", () => {
           } catch (err) {
             error = err;
           }
-          expect(String(error)).toContain("openai-codex/gpt-5.3-codex");
+          expect(String(error)).toContain("openai-codex/gpt-5.4");
         },
       );
     } finally {

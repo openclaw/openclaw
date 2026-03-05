@@ -278,13 +278,13 @@ describe("resolveModel", () => {
     expect(result.model?.reasoning).toBe(true);
   });
 
-  it("builds an openai-codex fallback for gpt-5.3-codex", () => {
+  it("builds an openai-codex fallback for gpt-5.4", () => {
     mockOpenAICodexTemplateModel();
 
-    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"));
+    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
   });
 
   it("builds an anthropic forward-compat fallback for claude-opus-4-6", () => {
@@ -389,7 +389,7 @@ describe("resolveModel", () => {
         providers: {
           "openai-codex": {
             baseUrl: "https://custom.example.com",
-            // No models array, or models without gpt-5.3-codex
+            // No models array, or models without gpt-5.4
           },
         },
       },
@@ -397,11 +397,11 @@ describe("resolveModel", () => {
 
     expectResolvedForwardCompatFallback({
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
+      id: "gpt-5.4",
       cfg,
       expectedModel: {
         api: "openai-codex-responses",
-        id: "gpt-5.3-codex",
+        id: "gpt-5.4",
         provider: "openai-codex",
       },
     });

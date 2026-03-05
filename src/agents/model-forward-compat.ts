@@ -4,8 +4,15 @@ import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { normalizeModelCompat } from "./model-compat.js";
 import { normalizeProviderId } from "./model-selection.js";
 
+const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
-const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
+const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
+const OPENAI_CODEX_TEMPLATE_MODEL_IDS = [
+  OPENAI_CODEX_GPT_53_MODEL_ID,
+  "gpt-5.2-codex",
+  "gpt-5.2",
+  "gpt-5.1-codex",
+] as const;
 
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
@@ -48,23 +55,60 @@ function cloneFirstTemplateModel(params: {
   return undefined;
 }
 
-const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+const OPENAI_CODEX_FORWARD_COMPAT = new Map<
+  string,
+  { allowSyntheticFallback: boolean; allowedIds: readonly string[] }
+>([
+  [
+    "openai-codex",
+    {
+      allowSyntheticFallback: true,
+      allowedIds: [
+        OPENAI_CODEX_GPT_54_MODEL_ID,
+        OPENAI_CODEX_GPT_53_MODEL_ID,
+        OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+      ],
+    },
+  ],
+  [
+    "github-copilot",
+    {
+      // Copilot can reuse provider-native templates, but must never fall back to the
+      // synthetic chatgpt.com transport or requests will be routed with the wrong token.
+      allowSyntheticFallback: false,
+      allowedIds: [
+        OPENAI_CODEX_GPT_54_MODEL_ID,
+        OPENAI_CODEX_GPT_53_MODEL_ID,
+        OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+      ],
+    },
+  ],
+]);
 
-function resolveOpenAICodexGpt53FallbackModel(
+function buildOpenAICodexTemplateIds(modelId: string): string[] {
+  const lower = modelId.toLowerCase();
+  const templateIds = [lower];
+  if (lower.endsWith("-spark")) {
+    templateIds.push(OPENAI_CODEX_GPT_53_SPARK_MODEL_ID);
+  }
+  templateIds.push(...OPENAI_CODEX_TEMPLATE_MODEL_IDS);
+  return templateIds;
+}
+
+function resolveOpenAICodexGpt5ForwardCompatModel(
   provider: string,
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   const normalizedProvider = normalizeProviderId(provider);
   const trimmedModelId = modelId.trim();
-  if (!CODEX_GPT53_ELIGIBLE_PROVIDERS.has(normalizedProvider)) {
-    return undefined;
-  }
-  if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_53_MODEL_ID) {
+  const lowerModelId = trimmedModelId.toLowerCase();
+  const forwardCompat = OPENAI_CODEX_FORWARD_COMPAT.get(normalizedProvider);
+  if (!forwardCompat?.allowedIds.includes(lowerModelId)) {
     return undefined;
   }
 
-  for (const templateId of OPENAI_CODEX_TEMPLATE_MODEL_IDS) {
+  for (const templateId of buildOpenAICodexTemplateIds(trimmedModelId)) {
     const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
     if (!template) {
       continue;
@@ -74,6 +118,10 @@ function resolveOpenAICodexGpt53FallbackModel(
       id: trimmedModelId,
       name: trimmedModelId,
     } as Model<Api>);
+  }
+
+  if (!forwardCompat.allowSyntheticFallback) {
+    return undefined;
   }
 
   return normalizeModelCompat({
@@ -248,7 +296,7 @@ export function resolveForwardCompatModel(
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   return (
-    resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
+    resolveOpenAICodexGpt5ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??

@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => {
   const printModelTable = vi.fn();
   return {
     loadConfig: vi.fn().mockReturnValue({
-      agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
+      agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
       models: { providers: {} },
     }),
     ensureAuthProfileStore: vi.fn().mockReturnValue({ version: 1, profiles: {}, order: {} }),
@@ -14,8 +14,8 @@ const mocks = vi.hoisted(() => {
     resolveConfiguredEntries: vi.fn().mockReturnValue({
       entries: [
         {
-          key: "openai-codex/gpt-5.3-codex",
-          ref: { provider: "openai-codex", model: "gpt-5.3-codex" },
+          key: "openai-codex/gpt-5.4",
+          ref: { provider: "openai-codex", model: "gpt-5.4" },
           tags: new Set(["configured"]),
           aliases: [],
         },
@@ -24,8 +24,8 @@ const mocks = vi.hoisted(() => {
     printModelTable,
     resolveForwardCompatModel: vi.fn().mockReturnValue({
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
-      name: "GPT-5.3 Codex",
+      id: "gpt-5.4",
+      name: "GPT-5.4",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       input: ["text"],
@@ -88,7 +88,7 @@ describe("modelsListCommand forward-compat", () => {
       missing: boolean;
     }>;
 
-    const codex = rows.find((r) => r.key === "openai-codex/gpt-5.3-codex");
+    const codex = rows.find((r) => r.key === "openai-codex/gpt-5.4");
     expect(codex).toBeTruthy();
     expect(codex?.missing).toBe(false);
     expect(codex?.tags).not.toContain("missing");
