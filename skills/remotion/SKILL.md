@@ -121,4 +121,3 @@ npx remotion add @remotion/captions
 # Fonts
 npx remotion add @remotion/google-fonts
 npx remotion add @remotion/fonts
-```
