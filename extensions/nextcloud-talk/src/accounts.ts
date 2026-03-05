@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 import {
-  listConfiguredAccountIds as listConfiguredAccountIdsFromSection,
-  resolveAccountWithDefaultFallback,
-} from "openclaw/plugin-sdk";
-import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
+import {
+  listConfiguredAccountIds as listConfiguredAccountIdsFromSection,
+  resolveAccountWithDefaultFallback,
+} from "openclaw/plugin-sdk/nextcloud-talk";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 

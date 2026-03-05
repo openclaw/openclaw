@@ -3,7 +3,7 @@ import type {
   OpenClawConfig,
   OutboundReplyPayload,
   RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/zalouser";
 import {
   createTypingCallbacks,
   createScopedPairingAccess,
@@ -17,7 +17,7 @@ import {
   sendMediaWithLeadingCaption,
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/zalouser";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
