@@ -223,6 +223,43 @@ OpenClaw 还可以通过本地 CDP 中继 + Chrome 扩展驱动**你现有的 Ch
 
 如果 Gateway 网关在其他地方运行，请在浏览器所在机器上运行节点主机，以便 Gateway 网关可以代理浏览器操作。
 
+### 通过 `--remote-debugging-port` 连接已运行的 Chrome（无需扩展）
+
+如果你希望 OpenClaw 直接控制一个已运行的 Chrome 实例（例如复用已登录会话），并且不想为每个标签页手动点击扩展按钮，可以让 Chrome 开启调试端口，然后把 OpenClaw 配置到该 CDP 地址。
+
+1. 启动 Chrome 并开启远程调试端口（macOS 示例）：
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.openclaw/browser/existing-chrome"
+```
+
+2. 在 `~/.openclaw/openclaw.json` 中添加 CDP 配置文件：
+
+```json5
+{
+  browser: {
+    attachOnly: true,
+    defaultProfile: "existing-chrome",
+    profiles: {
+      "existing-chrome": {
+        cdpUrl: "http://127.0.0.1:9222",
+        color: "#4285F4",
+      },
+    },
+  },
+}
+```
+
+3. 重启 Gateway 网关。
+
+注意：
+
+- `attachOnly: true` 表示 OpenClaw 不会再自行启动本地浏览器进程。
+- 如果你希望继续使用 `chrome` 这个配置名，也可以直接覆盖 `profiles.chrome.cdpUrl`。
+- 除非你有严格的网络隔离控制，否则请将调试端点保持在 loopback（`127.0.0.1`）。
+
 ### 沙箱会话
 
 如果智能体会话是沙箱隔离的，`browser` 工具可能默认为 `target="sandbox"`（沙箱浏览器）。
