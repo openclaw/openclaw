@@ -108,6 +108,41 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("retries once on tool-call JSON parse prompt errors and succeeds on next attempt", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: new Error(
+            "Expected ',' or '}' after property value in JSON at position 34 (line 1 column 35)",
+          ),
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("tool-call json parse error"));
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("does not retry more than once when tool-call JSON parse errors persist", async () => {
+    const parseError = new Error(
+      "Expected ',' or '}' after property value in JSON at position 34 (line 1 column 35)",
+    );
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: parseError }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: parseError }));
+
+    await expect(runEmbeddedPiAgent(baseParams)).rejects.toThrow(
+      "Expected ',' or '}' after property value in JSON",
+    );
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+  });
+
   it("returns error if compaction fails", async () => {
     const overflowError = makeOverflowError();
 
