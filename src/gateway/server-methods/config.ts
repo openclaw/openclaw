@@ -251,9 +251,13 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
  */
 function validateTailscaleBindCompat(config: OpenClawConfig): string | null {
   const tailscaleMode = config.gateway?.tailscale?.mode;
-  if (tailscaleMode !== "serve" && tailscaleMode !== "funnel") return null;
+  if (tailscaleMode !== "serve" && tailscaleMode !== "funnel") {
+    return null;
+  }
   const bind = config.gateway?.bind ?? "loopback";
-  if (bind === "loopback") return null;
+  if (bind === "loopback") {
+    return null;
+  }
   return `gateway.tailscale.mode="${tailscaleMode}" requires gateway.bind="loopback", but gateway.bind="${bind}". Change gateway.bind to "loopback" or set gateway.tailscale.mode to "off".`;
 }
 
