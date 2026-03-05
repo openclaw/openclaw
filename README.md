@@ -76,6 +76,8 @@ openclaw gateway --port 18789 --verbose
 
 # Manage the gateway daemon service
 openclaw gateway restart
+openclaw gateway stop
+openclaw gateway start
 
 # Send a message
 openclaw message send --to +1234567890 --message "Hello from OpenClaw"
