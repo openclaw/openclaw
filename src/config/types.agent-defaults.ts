@@ -292,33 +292,8 @@ export type AgentDefaultsConfig = {
   sandbox?: AgentSandboxConfig;
 };
 
-export type AgentCompactionMode = "default" | "safeguard" | "handover";
+export type AgentCompactionMode = "default" | "safeguard";
 export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
-
-export type AgentHandoverConfig = {
-  /** Path to contacts mapping file (phone → name). */
-  contactsFile?: string;
-  /** Path to write the handover document. */
-  outputFile?: string;
-  /** Path to the SOUL.md file for personality reference. */
-  soulFile?: string;
-  /** Owner's name (used in handover prompt). */
-  ownerName?: string;
-  /** AI assistant's name (used in handover prompt). */
-  aiName?: string;
-  /** Language for the handover document. */
-  language?: string;
-  /** Maximum lines for the handover document. */
-  maxLines?: number;
-  /** Keep vanilla summary as internal fallback alongside handover. */
-  preserveVanillaSummary?: boolean;
-  /**
-   * Override the model used for handover generation.
-   * Format: "provider/model" (e.g. "google/gemini-2.5-pro").
-   * If not set, uses the session's default model.
-   */
-  model?: string;
-};
 
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
@@ -337,8 +312,6 @@ export type AgentCompactionConfig = {
   identifierInstructions?: string;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
-  /** Handover configuration (used when mode is "handover"). */
-  handover?: AgentHandoverConfig;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
