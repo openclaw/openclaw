@@ -435,6 +435,14 @@ async function saveSessionStoreUnlocked(
             reason: "reset",
           });
         }
+      } else if (maintenance.pruneAfterMs > 0) {
+        // Always run cleanup for .deleted files even when no new archives were created
+        // This ensures old .deleted files don't accumulate indefinitely
+        await cleanupArchivedSessionTranscripts({
+          directories: [path.dirname(path.resolve(storePath))],
+          olderThanMs: maintenance.pruneAfterMs,
+          reason: "deleted",
+        });
       }
 
       // Rotate the on-disk file if it exceeds the size threshold.
