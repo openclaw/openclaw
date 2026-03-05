@@ -54,12 +54,6 @@ def _run_curl(url, payload, method='POST'):
             return {"status": "success"}
         return json.loads(output)
 
-        # 尝试解析 JSON
-        try:
-            return json.loads(output)
-        except json.JSONDecodeError:
-            return {"status": "raw_output", "data": output}
-
     except subprocess.CalledProcessError as e:
         return {"error": f"Curl command failed: {e.stderr}"}
     except Exception as e:
@@ -92,3 +86,4 @@ def delete_all_memories(user_id):
     url = f"{HOST}/v1/memories?user_id={user_id}"
     payload = {"user_id": str(user_id)}
     return _run_curl(url, payload=None, method='DELETE')
+
