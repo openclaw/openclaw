@@ -14,6 +14,7 @@ import {
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
+import { formatXHighModelHint } from "./thinking.js";
 
 async function writeSkill(params: { workspaceDir: string; name: string; description: string }) {
   const { workspaceDir, name, description } = params;
@@ -239,7 +240,7 @@ describe("directive behavior", () => {
 
       const unsupportedModelTexts = await runThinkingDirective(home, "openai/gpt-4.1-mini");
       expect(unsupportedModelTexts).toContain(
-        'Thinking level "xhigh" is only supported for openai/gpt-5.2, openai-codex/gpt-5.3-codex, openai-codex/gpt-5.3-codex-spark, openai-codex/gpt-5.2-codex, openai-codex/gpt-5.1-codex, github-copilot/gpt-5.2-codex or github-copilot/gpt-5.2.',
+        `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`,
       );
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
