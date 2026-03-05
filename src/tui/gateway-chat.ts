@@ -6,7 +6,7 @@ import {
   resolveExplicitGatewayAuth,
 } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
-import { GATEWAY_CLIENT_CAPS } from "../gateway/protocol/client-info.js";
+import { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES } from "../gateway/protocol/client-info.js";
 import {
   type HelloOk,
   PROTOCOL_VERSION,
@@ -14,7 +14,7 @@ import {
   type SessionsPatchResult,
   type SessionsPatchParams,
 } from "../gateway/protocol/index.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
@@ -128,7 +128,7 @@ export class GatewayChatClient {
       clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
       platform: process.platform,
-      mode: GATEWAY_CLIENT_MODES.UI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
       caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
       instanceId: randomUUID(),
       minProtocol: PROTOCOL_VERSION,
