@@ -1,17 +1,13 @@
 ---
-name: Agent Memory Management (by PolarDB)
-id: agent-memory-polardb
-description: A managed long-term memory service powered by Alibaba Cloud PolarDB. It leverages the Mem0 protocol to enable millisecond-level fact extraction, automatic updates, and cross-device synchronization. Features include automated fact extraction, semantic deduplication, and sub-millisecond cloud-based retrieval.
-author: PolarDB Team
-version: 1.0.0
+name: agent-memory-polardb
+description: Long-term memory management for agents using PolarDB and Mem0.
+allowed-tools:
+  - save_fact
+  - search_memories
+  - delete_all_memories
 metadata:
-  openclaw:
-    category: intelligence
-    emoji: "易"
-    tags: ["memory", "vector-db", "polardb", "mem0"]
-    requires:
-      - MEM0_HOST   # The endpoint URL (e.g., http://118.136.94.73:8080) obtained from the Alibaba Cloud PolarDB Console.
-      - MEM0_API_KEY  # API Key obtained from the Alibaba Cloud PolarDB Console.
+  category: memory
+  provider: polardb
 ---
 
 # Instructions
