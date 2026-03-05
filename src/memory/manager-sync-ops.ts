@@ -377,10 +377,7 @@ export abstract class MemoryManagerSyncOps {
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
     for (const entry of additionalPaths) {
       try {
-        const stat = fsSync.lstatSync(entry);
-        if (stat.isSymbolicLink()) {
-          continue;
-        }
+        const stat = fsSync.statSync(entry);
         if (stat.isDirectory()) {
           watchPaths.add(path.join(entry, "**", "*.md"));
           continue;
@@ -392,6 +389,9 @@ export abstract class MemoryManagerSyncOps {
         // Skip missing/unreadable additional paths.
       }
     }
+    // chokidar defaults to followSymlinks:true — symlinked dirs may fire duplicate
+    // events (once for the link path, once for the target). This is harmless because
+    // the handler only sets dirty=true and schedules a debounced sync.
     this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
       ignored: (watchPath) => shouldIgnoreMemoryWatchPath(String(watchPath)),

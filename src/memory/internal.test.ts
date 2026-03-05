@@ -87,7 +87,7 @@ describe("listMemoryFiles", () => {
     expect(files).toHaveLength(1);
   });
 
-  it("ignores symlinked files and directories", async () => {
+  it("follows symlinked files and directories", async () => {
     const tmpDir = getTmpDir();
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
     const extraDir = path.join(tmpDir, "extra");
@@ -119,8 +119,38 @@ describe("listMemoryFiles", () => {
     const files = await listMemoryFiles(tmpDir, [extraDir, linkDir]);
     expect(files.some((file) => file.endsWith("note.md"))).toBe(true);
     if (symlinksOk) {
-      expect(files.some((file) => file.endsWith("linked.md"))).toBe(false);
-      expect(files.some((file) => file.endsWith("nested.md"))).toBe(false);
+      expect(files.some((file) => file.endsWith("linked.md"))).toBe(true);
+      expect(files.some((file) => file.endsWith("nested.md"))).toBe(true);
+    }
+  });
+
+  it("terminates on circular symlinks without hanging", async () => {
+    const tmpDir = getTmpDir();
+    const memDir = path.join(tmpDir, "memory");
+    const subDir = path.join(memDir, "sub");
+    await fs.mkdir(subDir, { recursive: true });
+    await fs.writeFile(path.join(subDir, "note.md"), "# Note");
+
+    let symlinksOk = true;
+    try {
+      // sub/link -> memory (creates a cycle: memory/sub/link -> memory)
+      await fs.symlink(memDir, path.join(subDir, "link"), "dir");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        symlinksOk = false;
+      } else {
+        throw err;
+      }
+    }
+
+    // Must terminate (not hang) and still find the real file
+    const files = await listMemoryFiles(tmpDir);
+    expect(files.some((file) => file.endsWith("note.md"))).toBe(true);
+    if (symlinksOk) {
+      // Should not duplicate via the cycle
+      const noteFiles = files.filter((file) => file.endsWith("note.md"));
+      expect(noteFiles).toHaveLength(1);
     }
   });
 
