@@ -52,7 +52,15 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   }
 }
 
-export async function saveCronStore(storePath: string, store: CronStoreFile) {
+type SaveCronStoreOptions = {
+  skipBackup?: boolean;
+};
+
+export async function saveCronStore(
+  storePath: string,
+  store: CronStoreFile,
+  opts?: SaveCronStoreOptions,
+) {
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);
   const cached = serializedStoreCache.get(storePath);
