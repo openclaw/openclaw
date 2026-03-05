@@ -51,6 +51,20 @@ type ExecCall = [
   (err: Error | null, stdout: string, stderr: string) => void,
 ];
 
+function mockMissingNpmCli() {
+  const originalExistsSync = fs.existsSync.bind(fs);
+  return vi.spyOn(fs, "existsSync").mockImplementation((candidate: fs.PathLike) => {
+    const normalized = String(candidate).replaceAll("\\", "/").toLowerCase();
+    if (normalized.endsWith("/node_modules/npm/bin/npm-cli.js")) {
+      return false;
+    }
+    if (normalized.endsWith("/node_modules/npm/bin/npx-cli.js")) {
+      return false;
+    }
+    return originalExistsSync(candidate);
+  });
+}
+
 function expectCmdWrappedInvocation(params: {
   captured: SpawnCall | ExecCall | undefined;
   expectedComSpec: string;
@@ -92,7 +106,7 @@ describe("windows command wrapper behavior", () => {
 
   it("falls back to npm.cmd wrapper in runCommandWithTimeout when npm-cli.js is missing", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    const existsSpy = mockMissingNpmCli();
     const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
 
     spawnMock.mockImplementation(
@@ -136,7 +150,7 @@ describe("windows command wrapper behavior", () => {
 
   it("falls back to npm.cmd wrapper in runExec when npm-cli.js is missing", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    const existsSpy = mockMissingNpmCli();
     const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
 
     execFileMock.mockImplementation(
