@@ -95,9 +95,11 @@ export function evaluateChannelHealth(
   if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
     const upSince = snapshot.lastStartAt ?? 0;
     const upDuration = policy.now - upSince;
-    if (upDuration > policy.staleEventThresholdMs) {
-      const lastEvent = snapshot.lastEventAt ?? 0;
-      const eventAge = policy.now - lastEvent;
+    // Some channels do not emit passive heartbeat events while idle.
+    // Avoid false stale-socket restarts until we have observed at least
+    // one real event from the current connection lifecycle.
+    if (upDuration > policy.staleEventThresholdMs && snapshot.lastEventAt != null) {
+      const eventAge = policy.now - snapshot.lastEventAt;
       if (eventAge > policy.staleEventThresholdMs) {
         return { healthy: false, reason: "stale-socket" };
       }
