@@ -341,7 +341,13 @@ export function resolveCommandAuthorization(params: {
   const senderId = matchedSender ?? senderCandidates[0];
 
   const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
-  const senderIsOwner = Boolean(matchedSender);
+  // Check if sender is owner based on ownerList match
+  const senderIsOwnerFromList = Boolean(matchedSender);
+  // Also check if gateway client has admin scope (e.g., TUI, CLI, web UI with admin access)
+  const gatewayClientScopes = ctx.GatewayClientScopes ?? [];
+  const senderIsOwnerFromScopes = gatewayClientScopes.includes("operator.admin");
+  // Sender is owner if either condition is true
+  const senderIsOwner = senderIsOwnerFromList || senderIsOwnerFromScopes;
   const ownerAllowlistConfigured = ownerAllowAll || explicitOwners.length > 0;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
