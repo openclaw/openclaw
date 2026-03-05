@@ -282,7 +282,6 @@ export async function spawnSubagentDirect(
   });
   const hookRunner = getGlobalHookRunner();
   const cfg = loadConfig();
-  const gatewayTimeoutMs = SUBAGENT_SPAWN_GATEWAY_TIMEOUT_MS;
 
   // When agent omits runTimeoutSeconds, use the config default.
   // Falls back to 0 (no timeout) if config key is also unset,
@@ -408,7 +407,7 @@ export async function spawnSubagentDirect(
       await callGateway({
         method: "sessions.patch",
         params: { key: childSessionKey, ...patch },
-        timeoutMs: gatewayTimeoutMs,
+        timeoutMs: SUBAGENT_SPAWN_GATEWAY_TIMEOUT_MS,
       });
       return undefined;
     } catch (err) {
@@ -468,7 +467,7 @@ export async function spawnSubagentDirect(
         await callGateway({
           method: "sessions.delete",
           params: { key: childSessionKey, emitLifecycleHooks: false },
-          timeoutMs: gatewayTimeoutMs,
+          timeoutMs: SUBAGENT_SPAWN_GATEWAY_TIMEOUT_MS,
         });
       } catch {
         // Best-effort cleanup only.
@@ -576,7 +575,7 @@ export async function spawnSubagentDirect(
         label: label || undefined,
         ...spawnedMetadata,
       },
-      timeoutMs: gatewayTimeoutMs,
+      timeoutMs: SUBAGENT_SPAWN_GATEWAY_TIMEOUT_MS,
     });
     if (typeof response?.runId === "string" && response.runId) {
       childRunId = response.runId;
@@ -626,7 +625,7 @@ export async function spawnSubagentDirect(
             deleteTranscript: true,
             emitLifecycleHooks: !endedHookEmitted,
           },
-          timeoutMs: gatewayTimeoutMs,
+          timeoutMs: SUBAGENT_SPAWN_GATEWAY_TIMEOUT_MS,
         });
       } catch {
         // Best-effort only.
@@ -671,7 +670,7 @@ export async function spawnSubagentDirect(
       await callGateway({
         method: "sessions.delete",
         params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
-        timeoutMs: gatewayTimeoutMs,
+        timeoutMs: SUBAGENT_SPAWN_GATEWAY_TIMEOUT_MS,
       });
     } catch {
       // Best-effort cleanup only.
