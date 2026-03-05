@@ -1,4 +1,4 @@
-import type { AgentModelConfig } from "./types.agents-shared.js";
+import type { AgentModelConfig, FallbackStrategy } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
   primary?: string;
@@ -22,6 +22,17 @@ export function resolveAgentModelFallbackValues(model?: AgentModelConfig): strin
     return [];
   }
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];
+}
+
+export function resolveAgentModelFallbackStrategy(model?: AgentModelConfig): FallbackStrategy {
+  if (!model || typeof model !== "object") {
+    return "ordered";
+  }
+  const strategy = model.fallbackStrategy;
+  if (strategy === "cost" || strategy === "round-robin") {
+    return strategy;
+  }
+  return "ordered";
 }
 
 export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLike | undefined {

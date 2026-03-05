@@ -4,6 +4,9 @@ import type {
   SandboxPruneSettings,
 } from "./types.sandbox.js";
 
+/** Strategy for selecting fallback models when the primary fails. */
+export type FallbackStrategy = "ordered" | "cost" | "round-robin";
+
 export type AgentModelConfig =
   | string
   | {
@@ -11,6 +14,13 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /**
+       * Fallback strategy:
+       * - "ordered": try models in the listed order (default)
+       * - "cost": prefer cheapest available model first
+       * - "round-robin": distribute load across models; skip unavailable ones
+       */
+      fallbackStrategy?: FallbackStrategy;
     };
 
 export type AgentSandboxConfig = {

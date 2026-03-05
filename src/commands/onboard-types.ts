@@ -49,6 +49,7 @@ export type AuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "lmstudio"
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
@@ -56,6 +57,7 @@ export type AuthChoiceGroupId =
   | "anthropic"
   | "chutes"
   | "vllm"
+  | "lmstudio"
   | "google"
   | "copilot"
   | "openrouter"

@@ -7,6 +7,7 @@ import { applyAuthChoiceBytePlus } from "./auth-choice.apply.byteplus.js";
 import { applyAuthChoiceCopilotProxy } from "./auth-choice.apply.copilot-proxy.js";
 import { applyAuthChoiceGitHubCopilot } from "./auth-choice.apply.github-copilot.js";
 import { applyAuthChoiceGoogleGeminiCli } from "./auth-choice.apply.google-gemini-cli.js";
+import { applyAuthChoiceLmStudio } from "./auth-choice.apply.lmstudio.js";
 import { applyAuthChoiceMiniMax } from "./auth-choice.apply.minimax.js";
 import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
@@ -38,6 +39,7 @@ export async function applyAuthChoice(
   const handlers: Array<(p: ApplyAuthChoiceParams) => Promise<ApplyAuthChoiceResult | null>> = [
     applyAuthChoiceAnthropic,
     applyAuthChoiceVllm,
+    applyAuthChoiceLmStudio,
     applyAuthChoiceOpenAI,
     applyAuthChoiceOAuth,
     applyAuthChoiceApiProviders,

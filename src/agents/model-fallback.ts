@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
+  resolveAgentModelFallbackStrategy,
 } from "../config/model-input.js";
 import {
   ensureAuthProfileStore,
@@ -241,6 +242,68 @@ function resolveImageFallbackCandidates(params: {
   return candidates;
 }
 
+/** Resolve the total cost-per-token (input + output) for a model from the config providers. */
+function resolveModelCost(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  model: string,
+): number {
+  const providerConfig = cfg?.models?.providers?.[provider];
+  if (!providerConfig?.models) {
+    return Infinity;
+  }
+  const modelDef = providerConfig.models.find((m) => m.id === model);
+  if (!modelDef?.cost) {
+    return Infinity;
+  }
+  return modelDef.cost.input + modelDef.cost.output;
+}
+
+/** Round-robin counter for distributing load across models. */
+const roundRobinCounter = new Map<string, number>();
+
+function getNextRoundRobinIndex(key: string, total: number): number {
+  const current = roundRobinCounter.get(key) ?? 0;
+  const next = (current + 1) % total;
+  roundRobinCounter.set(key, next);
+  return current;
+}
+
+function applyCandidateStrategy(
+  candidates: ModelCandidate[],
+  cfg: OpenClawConfig | undefined,
+): ModelCandidate[] {
+  const strategy = resolveAgentModelFallbackStrategy(cfg?.agents?.defaults?.model);
+  if (candidates.length <= 1 || strategy === "ordered") {
+    return candidates;
+  }
+
+  if (strategy === "cost") {
+    // Sort by cost (cheapest first), keeping original order for same-cost models.
+    const withCost = candidates.map((c, index) => ({
+      candidate: c,
+      cost: resolveModelCost(cfg, c.provider, c.model),
+      originalIndex: index,
+    }));
+    withCost.sort((a, b) => {
+      if (a.cost !== b.cost) {
+        return a.cost - b.cost;
+      }
+      return a.originalIndex - b.originalIndex;
+    });
+    return withCost.map((w) => w.candidate);
+  }
+
+  if (strategy === "round-robin") {
+    // Rotate the candidate list so different models are tried first each time.
+    const key = candidates.map((c) => modelKey(c.provider, c.model)).join("|");
+    const startIndex = getNextRoundRobinIndex(key, candidates.length);
+    return [...candidates.slice(startIndex), ...candidates.slice(0, startIndex)];
+  }
+
+  return candidates;
+}
+
 function resolveFallbackCandidates(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -315,7 +378,8 @@ function resolveFallbackCandidates(params: {
     addExplicitCandidate({ provider: primary.provider, model: primary.model });
   }
 
-  return candidates;
+  // Apply fallback strategy (cost-based sorting, round-robin rotation, etc.)
+  return applyCandidateStrategy(candidates, params.cfg);
 }
 
 const lastProbeAttempt = new Map<string, number>();
