@@ -1,0 +1,235 @@
+/* ── Terminal Page ── */
+.terminal-page {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 140px);
+  min-height: 400px;
+}
+
+.terminal-entry__meta {
+  font-size: 11px;
+  padding: 2px 0;
+}
+
+.terminal-entry__meta--warn {
+  color: var(--text-warn, #ffa500);
+}
+
+.terminal-entry__meta--error {
+  color: var(--text-error, #ff6b6b);
+}
+
+.terminal-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px 0 0;
+}
+
+/* ── File Explorer ── */
+.terminal-files {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.fs-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.fs-path-bar {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-input, var(--bg-code, #222));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: monospace;
+  font-size: 13px;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+
+.fs-path-bar:focus-within {
+  border-color: var(--accent, #ff5c5c);
+}
+
+.fs-path-bar__label {
+  color: var(--text-muted);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.fs-path-bar__input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #ffffff;
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0;
+}
+
+.fs-path-bar__input::placeholder {
+  color: var(--text-muted, #71717a);
+  font-weight: 400;
+}
+
+.fs-path-bar__input:focus {
+  color: #ffffff;
+}
+
+.fs-list-container {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.fs-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.fs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.fs-table thead th {
+  text-align: left;
+  padding: 8px 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fs-entry {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.fs-entry:hover {
+  background: var(--bg-hover);
+}
+
+.fs-entry td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-faint, var(--border));
+}
+
+.fs-entry__icon {
+  width: 28px;
+  text-align: center;
+}
+
+.fs-entry__name {
+  font-family: monospace;
+  color: var(--text);
+}
+
+.fs-entry--dir .fs-entry__name {
+  font-weight: 600;
+  color: var(--accent, #6c9fff);
+}
+
+.fs-entry__type {
+  color: var(--text-muted);
+  font-size: 11px;
+  width: 80px;
+}
+
+/* ── File Viewer ── */
+.fs-file-viewer {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.fs-file-viewer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-code, #1a1a2e);
+  border-radius: 8px 8px 0 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.fs-file-viewer__path {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fs-file-viewer__loading {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.fs-file-viewer__content {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  background: var(--bg-code, #1a1a2e);
+  border-radius: 0 0 8px 8px;
+  color: var(--text-code, #e0e0e0);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  tab-size: 4;
+}
+
+/* ── PTY (xterm.js) ── */
+.terminal-pty {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.terminal-pty__xterm {
+  flex: 1;
+  min-height: 0;
+  padding: 4px;
+  background: #1a1a2e;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.terminal-pty__xterm .xterm {
+  height: 100%;
+}
+
+.terminal-pty__xterm .xterm-viewport {
+  border-radius: 8px;
+}
+
+.btn--danger {
+  background: var(--danger, #e74c3c);
+  color: #fff;
+  border-color: var(--danger, #e74c3c);
+}
+
+.btn--danger:hover {
+  background: color-mix(in srgb, var(--danger, #e74c3c) 85%, black);
+}

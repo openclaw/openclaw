@@ -58,6 +58,7 @@ import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
+import { PtyController } from "./controllers/terminal.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
@@ -375,6 +376,20 @@ export class OpenClawApp extends LitElement {
   @state() logsLimit = 500;
   @state() logsMaxBytes = 250_000;
   @state() logsAtBottom = true;
+
+  // File explorer state
+  @state() fsPath = "~";
+  @state() fsLoading = false;
+  @state() fsEntries: import("./controllers/files.ts").FsEntry[] = [];
+  @state() fsError: string | null = null;
+  @state() fsFileContent: string | null = null;
+  @state() fsFilePath: string | null = null;
+  @state() fsFileLoading = false;
+
+  // PTY state
+  ptyController = new PtyController();
+  @state() ptySpawned = false;
+  @state() ptyError: string | null = null;
 
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;

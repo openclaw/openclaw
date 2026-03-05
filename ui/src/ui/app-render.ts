@@ -52,6 +52,7 @@ import {
   saveExecApprovals,
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals.ts";
+import { loadFsDirectory, readFsFile, navigateFsUp } from "./controllers/files.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
@@ -74,6 +75,7 @@ import { renderConfig } from "./views/config.ts";
 import { renderCron } from "./views/cron.ts";
 import { renderDebug } from "./views/debug.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
+import { renderFiles } from "./views/files.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderInstances } from "./views/instances.ts";
 import { renderLogs } from "./views/logs.ts";
@@ -81,6 +83,7 @@ import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
 import { renderSessions } from "./views/sessions.ts";
 import { renderSkills } from "./views/skills.ts";
+import { renderTerminal } from "./views/terminal.ts";
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
@@ -1134,6 +1137,56 @@ export function renderApp(state: AppViewState) {
                 onCallParamsChange: (next) => (state.debugCallParams = next),
                 onRefresh: () => loadDebug(state),
                 onCall: () => callDebugMethod(state),
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "terminal"
+            ? renderTerminal({
+                connected: state.connected,
+                ptyController: state.ptyController,
+                ptySpawned: state.ptySpawned,
+                ptyError: state.ptyError,
+                onPtySpawn: () => {
+                  if (!state.client || !state.connected) {
+                    state.ptyError = "Not connected to gateway";
+                    return;
+                  }
+                  void state.ptyController.spawn(state.client).then(() => {
+                    state.ptySpawned = state.ptyController.spawned;
+                    state.ptyError = state.ptyController.error;
+                  });
+                },
+                onPtyKill: () => {
+                  void state.ptyController.kill().then(() => {
+                    state.ptySpawned = false;
+                    state.ptyError = null;
+                  });
+                },
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "files"
+            ? renderFiles({
+                connected: state.connected,
+                fsPath: state.fsPath,
+                fsLoading: state.fsLoading,
+                fsEntries: state.fsEntries,
+                fsError: state.fsError,
+                fsFileContent: state.fsFileContent,
+                fsFilePath: state.fsFilePath,
+                fsFileLoading: state.fsFileLoading,
+                onFsNavigate: (fsPath) => void loadFsDirectory(state, fsPath),
+                onFsUp: () => navigateFsUp(state),
+                onFsRefresh: () => void loadFsDirectory(state),
+                onFsFileOpen: (filePath) => void readFsFile(state, filePath),
+                onFsFileClose: () => {
+                  state.fsFileContent = null;
+                  state.fsFilePath = null;
+                },
               })
             : nothing
         }

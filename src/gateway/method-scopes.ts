@@ -123,6 +123,12 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "set-heartbeats",
     "system-event",
     "agents.files.set",
+    "fs.list",
+    "fs.read",
+    "pty.spawn",
+    "pty.input",
+    "pty.resize",
+    "pty.kill",
   ],
 };
 

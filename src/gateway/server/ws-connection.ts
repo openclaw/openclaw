@@ -10,6 +10,7 @@ import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { isLoopbackAddress } from "../net.js";
 import { getHandshakeTimeoutMs } from "../server-constants.js";
+import { cleanupPtyForConn } from "../server-methods/shell.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
@@ -205,6 +206,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       );
 
     socket.once("close", (code, reason) => {
+      cleanupPtyForConn(connId);
       const durationMs = Date.now() - openedAt;
       const logForwardedFor = sanitizeLogValue(forwardedFor);
       const logOrigin = sanitizeLogValue(requestOrigin);

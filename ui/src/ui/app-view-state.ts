@@ -4,7 +4,9 @@ import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { FsEntry } from "./controllers/files.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
+import type { PtyController } from "./controllers/terminal.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
@@ -189,6 +191,18 @@ export type AppViewState = {
   usageLogFilterTools: string[];
   usageLogFilterHasTools: boolean;
   usageLogFilterQuery: string;
+  // Terminal (PTY) state
+  ptyController: PtyController;
+  ptySpawned: boolean;
+  ptyError: string | null;
+  // File explorer state
+  fsPath: string;
+  fsLoading: boolean;
+  fsEntries: FsEntry[];
+  fsError: string | null;
+  fsFileContent: string | null;
+  fsFilePath: string | null;
+  fsFileLoading: boolean;
 } & Pick<
   CronState,
   | "cronLoading"

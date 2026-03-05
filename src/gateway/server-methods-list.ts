@@ -93,6 +93,14 @@ const BASE_METHODS = [
   "agent.identity.get",
   "agent.wait",
   "browser.request",
+  // Filesystem methods
+  "fs.list",
+  "fs.read",
+  // PTY methods
+  "pty.spawn",
+  "pty.input",
+  "pty.resize",
+  "pty.kill",
   // WebChat WebSocket-native chat methods
   "chat.history",
   "chat.abort",
@@ -123,5 +131,8 @@ export const GATEWAY_EVENTS = [
   "voicewake.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
+  // PTY events
+  "pty.data",
+  "pty.exit",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];
