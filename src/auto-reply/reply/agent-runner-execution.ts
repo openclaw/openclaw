@@ -645,11 +645,11 @@ export async function runAgentTurnWithFallback(params: {
     // not lost or delivered out of order.
     if (params.blockReplyPipeline) {
       await params.blockReplyPipeline.flush({ force: true });
-      params.blockReplyPipeline.stop();
     }
     if (params.pendingToolTasks.size > 0) {
       await Promise.allSettled(params.pendingToolTasks);
     }
+    params.blockReplyPipeline?.stop();
 
     if (isRateLimitErrorMessage(errMsg)) {
       return {
@@ -679,6 +679,16 @@ export async function runAgentTurnWithFallback(params: {
         },
       };
     }
+
+    // Catch-all: the embedded error object exists but carries no message.
+    // Still surface a user-visible notice instead of falling through to the
+    // success path with an empty response.
+    return {
+      kind: "final",
+      payload: {
+        text: "⚠️ Agent encountered an unknown error mid-turn. Please try again.",
+      },
+    };
   }
 
   return {
