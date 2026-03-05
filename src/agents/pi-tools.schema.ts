@@ -84,10 +84,25 @@ export function normalizeToolParameters(
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
 
+  const normalizedModelProvider = options?.modelProvider?.toLowerCase() ?? "";
+  const normalizedModelId = options?.modelId?.toLowerCase() ?? "";
+
+  function isGeminiProxyModel(): boolean {
+    if (normalizedModelProvider.includes("google") || normalizedModelProvider.includes("gemini")) {
+      return true;
+    }
+
+    // OpenRouter passes Gemini models through as "google/gemini-..." IDs.
+    if (normalizedModelProvider === "openrouter") {
+      return normalizedModelId.startsWith("google/gemini") || normalizedModelId.startsWith("google/gemini-");
+    }
+
+    return false;
+  }
+
   const isGeminiProvider =
-    options?.modelProvider?.toLowerCase().includes("google") ||
-    options?.modelProvider?.toLowerCase().includes("gemini");
-  const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
+    isGeminiProxyModel();
+  const isAnthropicProvider = normalizedModelProvider.includes("anthropic");
   const isXai = isXaiProvider(options?.modelProvider, options?.modelId);
 
   function applyProviderCleaning(s: unknown): unknown {
