@@ -160,12 +160,20 @@ export function contextLengthForModel(model: string): number {
 
 /**
  * Resolve ${ENV_VAR} references in string values.
+ * Only env vars with allowed prefixes are resolved (security guardrail).
  */
+const ALLOWED_ENV_VAR_PATTERN = /^(NEO4J_|OPENAI_|ANTHROPIC_|OLLAMA_|MEMORY_|OPENCLAW_)/i;
+
 function resolveEnvVars(value: string): string {
-  return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
-    const envValue = process.env[envVar];
+  return value.replace(/\$\{([^}]+)\}/g, (_, varName) => {
+    if (!ALLOWED_ENV_VAR_PATTERN.test(varName)) {
+      throw new Error(
+        `memory-neo4j config: resolveEnvVars blocked non-allowlisted env var: ${varName}`,
+      );
+    }
+    const envValue = process.env[varName];
     if (!envValue) {
-      throw new Error(`Environment variable ${envVar} is not set`);
+      throw new Error(`Environment variable ${varName} is not set`);
     }
     return envValue;
   });
@@ -452,6 +460,40 @@ export const memoryNeo4jConfigSchema = {
         ? Math.max(1, Math.floor(cdRaw.sleepScanBatchSize))
         : 50;
 
+    // Sec-3: ReDoS length guard — reject patterns > 200 chars before compilation
+    const autoCaptureSkipPatternRaw =
+      typeof cfg.autoCaptureSkipPattern === "string" && cfg.autoCaptureSkipPattern
+        ? cfg.autoCaptureSkipPattern
+        : undefined;
+    if (autoCaptureSkipPatternRaw && autoCaptureSkipPatternRaw.length > 200) {
+      throw new Error("memory-neo4j config: autoCaptureSkipPattern too long (max 200 chars)");
+    }
+    // Arc-7: Guard new RegExp() to prevent gateway crash on invalid pattern
+    let autoCaptureSkipPatternCompiled: RegExp | undefined;
+    try {
+      autoCaptureSkipPatternCompiled = autoCaptureSkipPatternRaw
+        ? new RegExp(autoCaptureSkipPatternRaw)
+        : undefined;
+    } catch (e) {
+      throw new Error(`memory-neo4j config: invalid autoCaptureSkipPattern regex — ${String(e)}`);
+    }
+
+    const autoRecallSkipPatternRaw =
+      typeof cfg.autoRecallSkipPattern === "string" && cfg.autoRecallSkipPattern
+        ? cfg.autoRecallSkipPattern
+        : undefined;
+    if (autoRecallSkipPatternRaw && autoRecallSkipPatternRaw.length > 200) {
+      throw new Error("memory-neo4j config: autoRecallSkipPattern too long (max 200 chars)");
+    }
+    let autoRecallSkipPatternCompiled: RegExp | undefined;
+    try {
+      autoRecallSkipPatternCompiled = autoRecallSkipPatternRaw
+        ? new RegExp(autoRecallSkipPatternRaw)
+        : undefined;
+    } catch (e) {
+      throw new Error(`memory-neo4j config: invalid autoRecallSkipPattern regex — ${String(e)}`);
+    }
+
     return {
       neo4j: {
         uri: neo4jUri,
@@ -467,16 +509,10 @@ export const memoryNeo4jConfigSchema = {
       extraction,
       autoCapture: cfg.autoCapture !== false,
       autoCaptureAssistant: cfg.autoCaptureAssistant === true, // off by default
-      autoCaptureSkipPattern:
-        typeof cfg.autoCaptureSkipPattern === "string" && cfg.autoCaptureSkipPattern
-          ? new RegExp(cfg.autoCaptureSkipPattern)
-          : undefined,
+      autoCaptureSkipPattern: autoCaptureSkipPatternCompiled,
       autoRecall: cfg.autoRecall !== false,
       autoRecallMinScore: parseAutoRecallMinScore(cfg.autoRecallMinScore),
-      autoRecallSkipPattern:
-        typeof cfg.autoRecallSkipPattern === "string" && cfg.autoRecallSkipPattern
-          ? new RegExp(cfg.autoRecallSkipPattern)
-          : undefined,
+      autoRecallSkipPattern: autoRecallSkipPatternCompiled,
       coreMemory: {
         enabled: coreMemoryEnabled,
         refreshAtContextPercent,
