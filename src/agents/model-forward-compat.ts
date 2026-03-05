@@ -24,6 +24,8 @@ const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
+const GEMINI_25_FLASH_LITE_MODEL_ID = "gemini-2.5-flash-lite";
+const GEMINI_25_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash"] as const;
 
 function cloneFirstTemplateModel(params: {
   normalizedProvider: string;
@@ -200,6 +202,27 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   });
 }
 
+function resolveGoogleGeminiCli25FlashLiteForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  if (normalizeProviderId(provider) !== "google-gemini-cli") {
+    return undefined;
+  }
+  const trimmed = modelId.trim();
+  if (trimmed.toLowerCase() !== GEMINI_25_FLASH_LITE_MODEL_ID) {
+    return undefined;
+  }
+
+  return cloneFirstTemplateModel({
+    normalizedProvider: "google-gemini-cli",
+    trimmedModelId: trimmed,
+    templateIds: [...GEMINI_25_FLASH_LITE_TEMPLATE_IDS],
+    modelRegistry,
+  });
+}
+
 // Z.ai's GLM-5 may not be present in pi-ai's built-in model catalog yet.
 // When a user configures zai/glm-5 without a models.json entry, clone glm-4.7 as a forward-compat fallback.
 function resolveZaiGlm5ForwardCompatModel(
@@ -252,6 +275,7 @@ export function resolveForwardCompatModel(
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveGoogleGeminiCli25FlashLiteForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry)
   );
 }

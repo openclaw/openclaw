@@ -35,6 +35,11 @@ let importPiSdk = defaultImportPiSdk;
 const CODEX_PROVIDER = "openai-codex";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
+const GOOGLE_GEMINI_CLI_PROVIDER = "google-gemini-cli";
+const GEMINI_2_0_DEPRECATED_PREFIX = "gemini-2.0";
+const GEMINI_20_FLASH_EXP_MODEL_ID = "gemini-2.0-flash-exp";
+const GEMINI_25_FLASH_MODEL_ID = "gemini-2.5-flash";
+const GEMINI_25_FLASH_LITE_MODEL_ID = "gemini-2.5-flash-lite";
 const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
 
 function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
@@ -59,6 +64,48 @@ function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
     ...baseModel,
     id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
     name: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
+  });
+}
+
+function applyGoogleGeminiCliCatalogFixups(models: ModelCatalogEntry[]): void {
+  // Most Gemini 2.0 CLI variants are deprecated and should not be surfaced in the catalog.
+  // Keep gemini-2.0-flash-exp because it is still supported and expected by users.
+  for (let i = models.length - 1; i >= 0; i -= 1) {
+    const entry = models[i];
+    if (!entry || entry.provider !== GOOGLE_GEMINI_CLI_PROVIDER) {
+      continue;
+    }
+    const normalizedId = entry.id.toLowerCase();
+    if (
+      normalizedId.startsWith(GEMINI_2_0_DEPRECATED_PREFIX) &&
+      normalizedId !== GEMINI_20_FLASH_EXP_MODEL_ID
+    ) {
+      models.splice(i, 1);
+    }
+  }
+
+  const hasFlashLite = models.some(
+    (entry) =>
+      entry.provider === GOOGLE_GEMINI_CLI_PROVIDER &&
+      entry.id.toLowerCase() === GEMINI_25_FLASH_LITE_MODEL_ID,
+  );
+  if (hasFlashLite) {
+    return;
+  }
+
+  const flashTemplate = models.find(
+    (entry) =>
+      entry.provider === GOOGLE_GEMINI_CLI_PROVIDER &&
+      entry.id.toLowerCase() === GEMINI_25_FLASH_MODEL_ID,
+  );
+  if (!flashTemplate) {
+    return;
+  }
+
+  models.push({
+    ...flashTemplate,
+    id: GEMINI_25_FLASH_LITE_MODEL_ID,
+    name: GEMINI_25_FLASH_LITE_MODEL_ID,
   });
 }
 
@@ -219,6 +266,7 @@ export async function loadModelCatalog(params?: {
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
       applyOpenAICodexSparkFallback(models);
+      applyGoogleGeminiCliCatalogFixups(models);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
