@@ -52,6 +52,17 @@ export function extractAssistantText(msg: AgentMessage): string {
  *
  * Returns the modified content string if the hook changed it,
  * or undefined if no modification was made (or hook blocked/failed).
+ *
+ * **Multi-turn visibility limitation:** In tool-loop runs with multiple
+ * assistant messages, only the *last* assistant message's content is passed
+ * to the hook. Earlier assistant turns in the conversation are not visible
+ * to the hook and cannot be modified. Blocking is reliable — it clears all
+ * assistant content and suppresses delivery. However, *modification* (e.g.
+ * PII redaction) only applies to the final assistant message; content from
+ * earlier tool-loop iterations will be delivered unredacted. Plugin authors
+ * targeting PII redaction across full multi-turn runs should use
+ * `after_llm_call` (which fires per-turn) rather than relying solely on
+ * `before_response_emit`.
  */
 export async function applyBeforeResponseEmitHook(
   params: ApplyBeforeResponseEmitParams,
