@@ -102,6 +102,9 @@ function applySkillConfigEnvOverrides(params: {
       if (!envKey || !envValue || process.env[envKey]) {
         continue;
       }
+      // Explicit per-skill env overrides are user opt-in and should be honored even when
+      // the key name looks sensitive (for example *_PASSWORD keyring helpers).
+      allowedSensitiveKeys.add(envKey);
       pendingOverrides[envKey] = envValue;
     }
   }

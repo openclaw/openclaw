@@ -263,6 +263,45 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
+  it("allows explicit sensitive env overrides from config", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "gog-env-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "gog-env-skill",
+      description: "Needs env",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["GOG_ACCOUNT", "GOG_KEYRING_PASSWORD"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          skills: {
+            entries: {
+              "gog-env-skill": {
+                env: {
+                  GOG_ACCOUNT: "example@gmail.com",
+                  GOG_KEYRING_PASSWORD: "top-secret",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        expect(process.env.GOG_ACCOUNT).toBe("example@gmail.com");
+        expect(process.env.GOG_KEYRING_PASSWORD).toBe("top-secret");
+      } finally {
+        restore();
+        expect(process.env.GOG_ACCOUNT).toBeUndefined();
+        expect(process.env.GOG_KEYRING_PASSWORD).toBeUndefined();
+      }
+    });
+  });
+
   it("applies env overrides from snapshots", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "env-skill");
