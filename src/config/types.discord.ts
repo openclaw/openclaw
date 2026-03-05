@@ -31,6 +31,8 @@ export type DiscordDmConfig = {
 
 export type DiscordGuildChannelConfig = {
   allow?: boolean;
+  /** If true, auto-create reply threads from inbound messages (default: false). */
+  autoThread?: boolean;
   requireMention?: boolean;
   /**
    * If true, drop messages that mention another user/role but not this one (not @everyone/@here).

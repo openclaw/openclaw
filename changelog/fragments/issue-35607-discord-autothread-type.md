@@ -1,0 +1,1 @@
+- Config/Discord: `DiscordGuildChannelConfig` now includes `autoThread`, matching schema/runtime behavior and removing local shadow typing in monitor allow-list resolution. Fixes #35607. Thanks @ingyukoh.

@@ -184,4 +184,25 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts channels.discord.guilds.*.channels.*.autoThread", () => {
+    const res = validateConfigObject({
+      channels: {
+        discord: {
+          guilds: {
+            "123456789": {
+              channels: {
+                general: {
+                  allow: true,
+                  autoThread: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

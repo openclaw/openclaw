@@ -6,6 +6,7 @@ import {
   resolveChannelMatchConfig,
   type ChannelMatchSource,
 } from "../../channels/channel-config.js";
+import type { DiscordGuildChannelConfig } from "../../config/types.js";
 import { formatDiscordUserTag } from "./format.js";
 
 export type DiscordAllowList = {
@@ -26,21 +27,7 @@ export type DiscordGuildEntryResolved = {
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: string[];
   roles?: string[];
-  channels?: Record<
-    string,
-    {
-      allow?: boolean;
-      requireMention?: boolean;
-      ignoreOtherMentions?: boolean;
-      skills?: string[];
-      enabled?: boolean;
-      users?: string[];
-      roles?: string[];
-      systemPrompt?: string;
-      includeThreadStarter?: boolean;
-      autoThread?: boolean;
-    }
-  >;
+  channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
 export type DiscordChannelConfigResolved = {
