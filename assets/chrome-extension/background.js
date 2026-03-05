@@ -492,26 +492,46 @@ async function attachTab(tabId, opts = {}) {
 
   tabs.set(tabId, { state: 'connected', sessionId, targetId, attachOrder })
   tabBySession.set(sessionId, tabId)
+
+  let attachedToRelay = false
+  if (!opts.skipAttachedEvent) {
+    try {
+      sendToRelay({
+        method: 'forwardCDPEvent',
+        params: {
+          method: 'Target.attachedToTarget',
+          params: {
+            sessionId,
+            targetInfo: { ...targetInfo, attached: true },
+            waitingForDebugger: false,
+          },
+        },
+      })
+      attachedToRelay = true
+    } catch (err) {
+      setBadge(tabId, 'connecting')
+      void chrome.action.setTitle({
+        tabId,
+        title: 'OpenClaw Browser Relay: attached, waiting for relay reconnect…',
+      })
+      console.warn(
+        'attached to tab, but relay forward failed',
+        err instanceof Error ? err.message : String(err),
+      )
+    }
+  }
+
+  if (opts.skipAttachedEvent || !attachedToRelay) {
+    await persistState()
+    return { sessionId, targetId }
+  }
+
+  setBadge(tabId, 'on')
   void chrome.action.setTitle({
     tabId,
     title: 'OpenClaw Browser Relay: attached (click to detach)',
   })
 
-  if (!opts.skipAttachedEvent) {
-    sendToRelay({
-      method: 'forwardCDPEvent',
-      params: {
-        method: 'Target.attachedToTarget',
-        params: {
-          sessionId,
-          targetInfo: { ...targetInfo, attached: true },
-          waitingForDebugger: false,
-        },
-      },
-    })
-  }
-
-  setBadge(tabId, 'on')
   await persistState()
 
   return { sessionId, targetId }
