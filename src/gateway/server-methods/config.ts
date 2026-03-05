@@ -243,6 +243,20 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
   });
 }
 
+/**
+ * Validate that gateway.tailscale.mode and gateway.bind are compatible.
+ * When tailscale mode is "serve" or "funnel", bind must be "loopback" (or unset,
+ * which defaults to "loopback"). Rejecting at config-write time prevents the
+ * gateway from entering an unrecoverable crash loop on next restart.
+ */
+function validateTailscaleBindCompat(config: OpenClawConfig): string | null {
+  const tailscaleMode = config.gateway?.tailscale?.mode;
+  if (tailscaleMode !== "serve" && tailscaleMode !== "funnel") return null;
+  const bind = config.gateway?.bind ?? "loopback";
+  if (bind === "loopback") return null;
+  return `gateway.tailscale.mode="${tailscaleMode}" requires gateway.bind="loopback", but gateway.bind="${bind}". Change gateway.bind to "loopback" or set gateway.tailscale.mode to "off".`;
+}
+
 export const configHandlers: GatewayRequestHandlers = {
   "config.get": async ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
@@ -268,6 +282,11 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const parsed = parseValidateConfigFromRawOrRespond(params, "config.set", snapshot, respond);
     if (!parsed) {
+      return;
+    }
+    const compatError = validateTailscaleBindCompat(parsed.config);
+    if (compatError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, compatError));
       return;
     }
     await writeConfigFile(parsed.config, writeOptions);
@@ -355,6 +374,11 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const patchCompatError = validateTailscaleBindCompat(validated.config);
+    if (patchCompatError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, patchCompatError));
+      return;
+    }
     const changedPaths = diffConfigPaths(snapshot.config, validated.config);
     const actor = resolveControlPlaneActor(client);
     context?.logGateway?.info(
@@ -413,6 +437,11 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const parsed = parseValidateConfigFromRawOrRespond(params, "config.apply", snapshot, respond);
     if (!parsed) {
+      return;
+    }
+    const applyCompatError = validateTailscaleBindCompat(parsed.config);
+    if (applyCompatError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, applyCompatError));
       return;
     }
     const changedPaths = diffConfigPaths(snapshot.config, parsed.config);
