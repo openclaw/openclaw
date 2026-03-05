@@ -21,6 +21,12 @@ export type AuthConfig = {
     /** Billing backoff cap (hours). Default: 24. */
     billingMaxHours?: number;
     /**
+     * Rate-limit cooldown sequence in milliseconds.
+     * Example: `[60000, 300000, 1500000, 3600000]` (1m, 5m, 25m, 60m).
+     * The last value is reused for subsequent failures.
+     */
+    rateLimitBackoffMs?: number[];
+    /**
      * Failure window for backoff counters (hours). If no failures occur within
      * this window, counters reset. Default: 24.
      */
