@@ -9,6 +9,32 @@ import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuSendResult } from "./types.js";
 
+/** Default HTTP-level timeout for Feishu API calls (ms). */
+const FEISHU_SEND_TIMEOUT_MS = 30_000;
+
+/**
+ * Race a promise against a timeout.  Prevents a hanging Feishu API call from
+ * permanently blocking the per-chat send queue (see #36412).
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number = FEISHU_SEND_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`Feishu API request timed out after ${ms}ms`)),
+      ms,
+    );
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
@@ -62,14 +88,16 @@ async function sendFallbackDirect(
   },
   errorPrefix: string,
 ): Promise<FeishuSendResult> {
-  const response = await client.im.message.create({
-    params: { receive_id_type: params.receiveIdType },
-    data: {
-      receive_id: params.receiveId,
-      content: params.content,
-      msg_type: params.msgType,
-    },
-  });
+  const response = await withTimeout(
+    client.im.message.create({
+      params: { receive_id_type: params.receiveIdType },
+      data: {
+        receive_id: params.receiveId,
+        content: params.content,
+        msg_type: params.msgType,
+      },
+    }),
+  );
   assertFeishuMessageApiSuccess(response, errorPrefix);
   return toFeishuSendResult(response, params.receiveId);
 }
@@ -175,9 +203,11 @@ export async function getMessageFeishu(params: {
   const client = createFeishuClient(account);
 
   try {
-    const response = (await client.im.message.get({
-      path: { message_id: messageId },
-    })) as {
+    const response = (await withTimeout(
+      client.im.message.get({
+        path: { message_id: messageId },
+      }),
+    )) as {
       code?: number;
       msg?: string;
       data?: {
@@ -299,14 +329,16 @@ export async function sendMessageFeishu(
   if (replyToMessageId) {
     let response: { code?: number; msg?: string; data?: { message_id?: string } };
     try {
-      response = await client.im.message.reply({
-        path: { message_id: replyToMessageId },
-        data: {
-          content,
-          msg_type: msgType,
-          ...(replyInThread ? { reply_in_thread: true } : {}),
-        },
-      });
+      response = await withTimeout(
+        client.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: {
+            content,
+            msg_type: msgType,
+            ...(replyInThread ? { reply_in_thread: true } : {}),
+          },
+        }),
+      );
     } catch (err) {
       if (!isWithdrawnReplyError(err)) {
         throw err;
@@ -343,14 +375,16 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   if (replyToMessageId) {
     let response: { code?: number; msg?: string; data?: { message_id?: string } };
     try {
-      response = await client.im.message.reply({
-        path: { message_id: replyToMessageId },
-        data: {
-          content,
-          msg_type: "interactive",
-          ...(replyInThread ? { reply_in_thread: true } : {}),
-        },
-      });
+      response = await withTimeout(
+        client.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: {
+            content,
+            msg_type: "interactive",
+            ...(replyInThread ? { reply_in_thread: true } : {}),
+          },
+        }),
+      );
     } catch (err) {
       if (!isWithdrawnReplyError(err)) {
         throw err;
@@ -382,10 +416,12 @@ export async function updateCardFeishu(params: {
   const client = createFeishuClient(account);
   const content = JSON.stringify(card);
 
-  const response = await client.im.message.patch({
-    path: { message_id: messageId },
-    data: { content },
-  });
+  const response = await withTimeout(
+    client.im.message.patch({
+      path: { message_id: messageId },
+      data: { content },
+    }),
+  );
 
   if (response.code !== 0) {
     throw new Error(`Feishu card update failed: ${response.msg || `code ${response.code}`}`);
@@ -463,13 +499,15 @@ export async function editMessageFeishu(params: {
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
-  const response = await client.im.message.update({
-    path: { message_id: messageId },
-    data: {
-      msg_type: msgType,
-      content,
-    },
-  });
+  const response = await withTimeout(
+    client.im.message.update({
+      path: { message_id: messageId },
+      data: {
+        msg_type: msgType,
+        content,
+      },
+    }),
+  );
 
   if (response.code !== 0) {
     throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
