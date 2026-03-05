@@ -143,7 +143,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
   let lastPartial = "";
-  let finalTextDelivered = false;
+  let lastFinalText: string | null = null;
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   type StreamTextUpdateMode = "snapshot" | "delta";
@@ -230,7 +230,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
-        finalTextDelivered = false;
+        lastFinalText = null;
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -246,7 +246,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               : [];
         const hasText = Boolean(text.trim());
         const hasMedia = mediaList.length > 0;
-        const skipTextForDuplicateFinal = info?.kind === "final" && hasText && finalTextDelivered;
+        // Suppress only exact duplicate final text payloads to avoid
+        // dropping legitimate multi-part final replies.
+        const skipTextForDuplicateFinal =
+          info?.kind === "final" && hasText && lastFinalText === text;
         const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
 
         if (!shouldDeliverText && !hasMedia) {
@@ -284,7 +287,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "final") {
               streamText = mergeStreamingText(streamText, text);
               await closeStreaming();
-              finalTextDelivered = true;
+              lastFinalText = text;
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
@@ -321,7 +324,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               first = false;
             }
             if (info?.kind === "final") {
-              finalTextDelivered = true;
+              lastFinalText = text;
             }
           } else {
             const converted = core.channel.text.convertMarkdownTables(text, tableMode);
@@ -342,7 +345,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               first = false;
             }
             if (info?.kind === "final") {
-              finalTextDelivered = true;
+              lastFinalText = text;
             }
           }
         }

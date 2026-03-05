@@ -261,7 +261,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\npartial answer\n```");
   });
 
-  it("skips duplicate final deliveries after streaming close", async () => {
+  it("delivers distinct final payloads after streaming close", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -273,9 +273,30 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "```md\n完整回复第一段\n```" }, { kind: "final" });
     await options.deliver({ text: "```md\n完整回复第一段 + 第二段\n```" }, { kind: "final" });
 
-    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances).toHaveLength(2);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n完整回复第一段\n```");
+    expect(streamingInstances[1].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[1].close).toHaveBeenCalledWith("```md\n完整回复第一段 + 第二段\n```");
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("skips exact duplicate final text after streaming close", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```md\n同一条回复\n```" }, { kind: "final" });
+    await options.deliver({ text: "```md\n同一条回复\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n同一条回复\n```");
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
