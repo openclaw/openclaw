@@ -106,14 +106,14 @@ export function openVerifiedFileSync(params: {
       return { ok: false, reason: "validation" };
     }
     if (usedNoFollowFallback) {
-      // Without O_NOFOLLOW support, re-check that the opened path node is still
-      // a regular file and still resolves to the same inode/device as the fd.
+      // Without O_NOFOLLOW support, re-check that the opened path node still
+      // matches the expected type and resolves to the same inode/device as fd.
       // This closes the obvious rename+symlink race on the fallback path.
       const postOpenPathStat = ioFs.lstatSync(realPath);
-      if (!postOpenPathStat.isFile()) {
+      if (!isAllowedType(postOpenPathStat, allowedType)) {
         return { ok: false, reason: "validation" };
       }
-      if (params.rejectHardlinks && postOpenPathStat.nlink > 1) {
+      if (params.rejectHardlinks && postOpenPathStat.isFile() && postOpenPathStat.nlink > 1) {
         return { ok: false, reason: "validation" };
       }
       if (!sameFileIdentity(postOpenPathStat, openedStat)) {

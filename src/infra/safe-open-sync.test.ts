@@ -235,4 +235,44 @@ describe("openVerifiedFileSync", () => {
       fs.closeSync(opened.fd);
     });
   });
+
+  it("accepts directories on O_NOFOLLOW fallback when allowedType is directory", () => {
+    withTempDir("openclaw-safe-open-", (root) => {
+      const targetDir = path.join(root, "nested");
+      fs.mkdirSync(targetDir, { recursive: true });
+      const noFollowFlag = 0x40000000;
+      let openCalls = 0;
+      const ioFs = {
+        ...fs,
+        constants: {
+          ...fs.constants,
+          O_NOFOLLOW: noFollowFlag,
+        },
+        openSync(targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode | null): number {
+          const numericFlags = typeof flags === "number" ? flags : Number.NaN;
+          openCalls += 1;
+          if (openCalls === 1) {
+            expect((numericFlags & noFollowFlag) !== 0).toBe(true);
+            throw createErrno("EINVAL");
+          }
+          expect(numericFlags).toBe(fs.constants.O_RDONLY);
+          return fs.openSync(targetPath, flags, mode);
+        },
+      };
+
+      const opened = openVerifiedFileSync({
+        filePath: targetDir,
+        allowedType: "directory",
+        rejectHardlinks: true,
+        ioFs,
+      });
+      expect(opened.ok).toBe(true);
+      expect(openCalls).toBe(2);
+      if (!opened.ok) {
+        return;
+      }
+      expect(opened.stat.isDirectory()).toBe(true);
+      fs.closeSync(opened.fd);
+    });
+  });
 });
