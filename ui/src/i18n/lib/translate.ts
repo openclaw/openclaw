@@ -22,6 +22,10 @@ class I18nManager {
   }
 
   private resolveInitialLocale(): Locale {
+    // In Node.js environment (e.g., vitest node mode), localStorage and navigator are not available
+    if (typeof localStorage === "undefined" || typeof navigator === "undefined") {
+      return DEFAULT_LOCALE;
+    }
     const saved = localStorage.getItem("openclaw.i18n.locale");
     if (isSupportedLocale(saved)) {
       return saved;
@@ -64,7 +68,10 @@ class I18nManager {
     }
 
     this.locale = locale;
-    localStorage.setItem("openclaw.i18n.locale", locale);
+    // In Node.js environment (e.g., vitest node mode), localStorage is not available
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("openclaw.i18n.locale", locale);
+    }
     this.notify();
   }
 
