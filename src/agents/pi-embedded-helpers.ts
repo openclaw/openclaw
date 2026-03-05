@@ -16,6 +16,7 @@ export {
   classifyFailoverReasonFromHttpStatus,
   formatRawAssistantErrorForUi,
   formatAssistantErrorText,
+  formatRateLimitOrOverloadedErrorCopy,
   getApiErrorPayloadFingerprint,
   isAuthAssistantError,
   isAuthErrorMessage,
@@ -40,6 +41,8 @@ export {
   isRateLimitErrorMessage,
   isTransientHttpError,
   isTimeoutErrorMessage,
+  OVERLOADED_ERROR_USER_MESSAGE,
+  RATE_LIMIT_ERROR_USER_MESSAGE,
   parseImageDimensionError,
   parseImageSizeError,
 } from "./pi-embedded-helpers/errors.js";

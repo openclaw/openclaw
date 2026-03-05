@@ -1,11 +1,18 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import type { TemplateContext } from "../templating.js";
+import type { VerboseLevel } from "../thinking.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { FollowupRun } from "./queue.js";
+import type { TypingSignaler } from "./typing-mode.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
+import { describeFailoverError } from "../../agents/failover-error.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
+  formatRateLimitOrOverloadedErrorCopy,
   isCompactionFailureError,
   isContextOverflowError,
   isLikelyContextOverflowError,
@@ -28,25 +35,20 @@ import {
 } from "../../utils/message-channel.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import type { TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
 import {
   HEARTBEAT_TOKEN,
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
 } from "../tokens.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
-import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
-import type { TypingSignaler } from "./typing-mode.js";
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -484,6 +486,18 @@ export async function runAgentTurnWithFallback(params: {
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
       const embeddedError = runResult.meta?.error;
+      const transientCopy = embeddedError
+        ? formatRateLimitOrOverloadedErrorCopy(embeddedError.message)
+        : undefined;
+      if (transientCopy) {
+        return {
+          kind: "final",
+          payload: {
+            text: transientCopy,
+            isError: true,
+          },
+        };
+      }
       if (
         embeddedError &&
         isContextOverflowError(embeddedError.message) &&
@@ -605,6 +619,22 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+
+      // Use the terminal cause (last attempt in the fallback chain) for classification
+      // to avoid hiding persistent errors (billing/auth) with transient summaries.
+      const terminalError = err instanceof Error && err.cause ? err.cause : err;
+      const terminalDesc = describeFailoverError(terminalError);
+      const transientCopy = formatRateLimitOrOverloadedErrorCopy(terminalDesc.message);
+      if (transientCopy) {
+        return {
+          kind: "final",
+          payload: {
+            text: transientCopy,
+            isError: true,
+          },
+        };
+      }
+
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
