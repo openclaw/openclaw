@@ -400,8 +400,27 @@ export const configHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "config.patch": async ({ params, respond }) => {
+  "config.patch": async ({ params, respond, client }) => {
+    // Initialize audit logger (VD-2)
+    const cfg = loadConfig();
+    const auditLogger = new AuditLogger(resolveAuditLogPath(cfg));
+    const deviceId = client?.connect?.device?.id;
+    const clientIp: string | undefined = undefined;
+
     if (!validateConfigPatchParams(params)) {
+      // Audit failed validation
+      await auditLogger
+        .log({
+          timestamp: new Date().toISOString(),
+          method: "config.patch",
+          deviceId,
+          clientIp,
+          params: { validation_error: true },
+          success: false,
+          error: `invalid params: ${formatValidationErrors(validateConfigPatchParams.errors)}`,
+        })
+        .catch(() => {});
+
       respond(
         false,
         undefined,
@@ -414,9 +433,34 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const snapshot = await readConfigFileSnapshot();
     if (!requireConfigBaseHash(params, snapshot, respond)) {
+      // Audit base hash failure
+      await auditLogger
+        .log({
+          timestamp: new Date().toISOString(),
+          method: "config.patch",
+          deviceId,
+          clientIp,
+          params: { base_hash_error: true },
+          success: false,
+          error: "base hash mismatch or missing",
+        })
+        .catch(() => {});
       return;
     }
     if (!snapshot.valid) {
+      // Audit invalid config
+      await auditLogger
+        .log({
+          timestamp: new Date().toISOString(),
+          method: "config.patch",
+          deviceId,
+          clientIp,
+          params: { invalid_config: true },
+          success: false,
+          error: "invalid config; fix before patching",
+        })
+        .catch(() => {});
+
       respond(
         false,
         undefined,
@@ -426,6 +470,19 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const rawValue = (params as { raw?: unknown }).raw;
     if (typeof rawValue !== "string") {
+      // Audit raw type error
+      await auditLogger
+        .log({
+          timestamp: new Date().toISOString(),
+          method: "config.patch",
+          deviceId,
+          clientIp,
+          params: { raw_type_error: true },
+          success: false,
+          error: "raw (string) required",
+        })
+        .catch(() => {});
+
       respond(
         false,
         undefined,
@@ -438,6 +495,19 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const parsedRes = parseConfigJson5(rawValue);
     if (!parsedRes.ok) {
+      // Audit parse error
+      await auditLogger
+        .log({
+          timestamp: new Date().toISOString(),
+          method: "config.patch",
+          deviceId,
+          clientIp,
+          params: { parse_error: true },
+          success: false,
+          error: parsedRes.error,
+        })
+        .catch(() => {});
+
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
       return;
     }
@@ -446,6 +516,19 @@ export const configHandlers: GatewayRequestHandlers = {
       typeof parsedRes.parsed !== "object" ||
       Array.isArray(parsedRes.parsed)
     ) {
+      // Audit object type error
+      await auditLogger
+        .log({
+          timestamp: new Date().toISOString(),
+          method: "config.patch",
+          deviceId,
+          clientIp,
+          params: { object_type_error: true },
+          success: false,
+          error: "config.patch raw must be an object",
+        })
+        .catch(() => {});
+
       respond(
         false,
         undefined,
@@ -458,6 +541,20 @@ export const configHandlers: GatewayRequestHandlers = {
     try {
       restoredMerge = restoreRedactedValues(merged, snapshot.config);
     } catch (err) {
+      // Audit restore error
+      const errorMsg = String(err instanceof Error ? err.message : err);
+      await auditLogger
+        .log({
+          timestamp: new Date().toISOString(),
+          method: "config.patch",
+          deviceId,
+          clientIp,
+          params: { restore_error: true },
+          success: false,
+          error: errorMsg,
+        })
+        .catch(() => {});
+
       respond(
         false,
         undefined,
@@ -469,6 +566,19 @@ export const configHandlers: GatewayRequestHandlers = {
     const resolved = migrated.next ?? restoredMerge;
     const validated = validateConfigObjectWithPlugins(resolved);
     if (!validated.ok) {
+      // Audit validation error
+      await auditLogger
+        .log({
+          timestamp: new Date().toISOString(),
+          method: "config.patch",
+          deviceId,
+          clientIp,
+          params: { validation_error: true, issues: validated.issues },
+          success: false,
+          error: "invalid config",
+        })
+        .catch(() => {});
+
       respond(
         false,
         undefined,
@@ -478,7 +588,49 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+
+    // VD-7: Enforce model allowlist (same as config.set)
+    const modelAllowlistError = checkModelAllowlist(validated.config);
+    if (modelAllowlistError) {
+      await auditLogger
+        .log({
+          timestamp: new Date().toISOString(),
+          method: "config.patch",
+          deviceId,
+          clientIp,
+          params: { model_allowlist_violation: true },
+          success: false,
+          error: modelAllowlistError,
+        })
+        .catch(() => {});
+
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, modelAllowlistError));
+      return;
+    }
+
+    // Capture previous config for audit trail
+    const previousConfig = snapshot.config;
+
     await writeConfigFile(validated.config);
+
+    // Audit successful config.patch (VD-2)
+    await auditLogger
+      .log({
+        timestamp: new Date().toISOString(),
+        method: "config.patch",
+        deviceId,
+        clientIp,
+        params: {
+          changed_keys: Object.keys(validated.config).filter(
+            (key) =>
+              JSON.stringify((validated.config as Record<string, unknown>)[key]) !==
+              JSON.stringify((previousConfig as Record<string, unknown> | undefined)?.[key]),
+          ),
+        },
+        previous: previousConfig ? redactConfigObject(previousConfig) : undefined,
+        success: true,
+      })
+      .catch(() => {});
 
     const sessionKey =
       typeof (params as { sessionKey?: unknown }).sessionKey === "string"
