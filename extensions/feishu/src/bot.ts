@@ -494,6 +494,17 @@ function normalizeMentions(
   return result;
 }
 
+function normalizeFeishuCommandProbeBody(text: string): string {
+  if (!text) {
+    return "";
+  }
+  return text
+    .replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ")
+    .replace(/(^|\s)@[^/\s]+(?=\s|$|\/)/gu, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * Parse media keys from message content based on message type.
  */
@@ -764,14 +775,12 @@ export function parseFeishuMessageEvent(
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
   const mentionedBot = checkBotMentioned(event, botOpenId);
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
-  // In p2p, the bot mention is a pure addressing prefix with no semantic value;
-  // strip it so slash commands like @Bot /help still have a leading /.
+  // Strip the bot's own mention so slash commands like @Bot /help retain
+  // the leading /. This applies in both p2p *and* group contexts — the
+  // mentionedBot flag already captures whether the bot was addressed, so
+  // keeping the mention tag in content only breaks command detection (#35994).
   // Non-bot mentions (e.g. mention-forward targets) are still normalized to <at> tags.
-  const content = normalizeMentions(
-    rawContent,
-    event.message.mentions,
-    event.message.chat_type === "p2p" ? botOpenId : undefined,
-  );
+  const content = normalizeMentions(rawContent, event.message.mentions, botOpenId);
   const senderOpenId = event.sender.sender_id.open_id?.trim();
   const senderUserId = event.sender.sender_id.user_id?.trim();
   const senderFallbackId = senderOpenId || senderUserId || "";
@@ -1071,8 +1080,9 @@ export async function handleFeishuMessage(params: {
       channel: "feishu",
       accountId: account.accountId,
     });
+    const commandProbeBody = isGroup ? normalizeFeishuCommandProbeBody(ctx.content) : ctx.content;
     const shouldComputeCommandAuthorized = core.channel.commands.shouldComputeCommandAuthorized(
-      ctx.content,
+      commandProbeBody,
       cfg,
     );
     const storeAllowFrom =
