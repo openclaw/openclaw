@@ -33,6 +33,7 @@ const NodeHostSchema = z
     browserProxy: z
       .object({
         enabled: z.boolean().optional(),
+            domain: z.string().optional(),
         allowProfiles: z.array(z.string()).optional(),
       })
       .strict()
@@ -52,6 +53,7 @@ const MemoryQmdPathSchema = z
 const MemoryQmdSessionSchema = z
   .object({
     enabled: z.boolean().optional(),
+            domain: z.string().optional(),
     exportDir: z.string().optional(),
     retentionDays: z.number().int().nonnegative().optional(),
   })
@@ -82,6 +84,7 @@ const MemoryQmdLimitsSchema = z
 const MemoryQmdMcporterSchema = z
   .object({
     enabled: z.boolean().optional(),
+            domain: z.string().optional(),
     serverName: z.string().optional(),
     startDaemon: z.boolean().optional(),
   })
@@ -140,6 +143,7 @@ const ResponsesEndpointUrlFetchShape = {
 const SkillEntrySchema = z
   .object({
     enabled: z.boolean().optional(),
+            domain: z.string().optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     env: z.record(z.string(), z.string()).optional(),
     config: z.record(z.string(), z.unknown()).optional(),
@@ -149,6 +153,7 @@ const SkillEntrySchema = z
 const PluginEntrySchema = z
   .object({
     enabled: z.boolean().optional(),
+            domain: z.string().optional(),
     config: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
@@ -182,6 +187,7 @@ export const OpenClawSchema = z
         shellEnv: z
           .object({
             enabled: z.boolean().optional(),
+            domain: z.string().optional(),
             timeoutMs: z.number().int().nonnegative().optional(),
           })
           .strict()
@@ -203,11 +209,13 @@ export const OpenClawSchema = z
     diagnostics: z
       .object({
         enabled: z.boolean().optional(),
+            domain: z.string().optional(),
         flags: z.array(z.string()).optional(),
         stuckSessionWarnMs: z.number().int().positive().optional(),
         otel: z
           .object({
             enabled: z.boolean().optional(),
+            domain: z.string().optional(),
             endpoint: z.string().optional(),
             protocol: z.union([z.literal("http/protobuf"), z.literal("grpc")]).optional(),
             headers: z.record(z.string(), z.string()).optional(),
@@ -223,6 +231,7 @@ export const OpenClawSchema = z
         cacheTrace: z
           .object({
             enabled: z.boolean().optional(),
+            domain: z.string().optional(),
             filePath: z.string().optional(),
             includeMessages: z.boolean().optional(),
             includePrompt: z.boolean().optional(),
@@ -267,6 +276,7 @@ export const OpenClawSchema = z
         auto: z
           .object({
             enabled: z.boolean().optional(),
+            domain: z.string().optional(),
             stableDelayHours: z.number().nonnegative().max(168).optional(),
             stableJitterHours: z.number().nonnegative().max(168).optional(),
             betaCheckIntervalHours: z.number().positive().max(24).optional(),
@@ -279,6 +289,7 @@ export const OpenClawSchema = z
     browser: z
       .object({
         enabled: z.boolean().optional(),
+            domain: z.string().optional(),
         evaluateEnabled: z.boolean().optional(),
         cdpUrl: z.string().optional(),
         remoteCdpTimeoutMs: z.number().int().nonnegative().optional(),
@@ -309,7 +320,7 @@ export const OpenClawSchema = z
               .object({
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
-                driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
+                driver: z.union([z.literal("clawd"), z.literal("openclaw"), z.literal("extension")]).optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
               })
@@ -367,9 +378,11 @@ export const OpenClawSchema = z
     acp: z
       .object({
         enabled: z.boolean().optional(),
+            domain: z.string().optional(),
         dispatch: z
           .object({
             enabled: z.boolean().optional(),
+            domain: z.string().optional(),
           })
           .strict()
           .optional(),
@@ -427,6 +440,7 @@ export const OpenClawSchema = z
     cron: z
       .object({
         enabled: z.boolean().optional(),
+            domain: z.string().optional(),
         store: z.string().optional(),
         maxConcurrentRuns: z.number().int().positive().optional(),
         retry: z
@@ -453,6 +467,7 @@ export const OpenClawSchema = z
         failureAlert: z
           .object({
             enabled: z.boolean().optional(),
+            domain: z.string().optional(),
             after: z.number().int().min(1).optional(),
             cooldownMs: z.number().int().min(0).optional(),
             mode: z.enum(["announce", "webhook"]).optional(),
@@ -499,6 +514,7 @@ export const OpenClawSchema = z
     hooks: z
       .object({
         enabled: z.boolean().optional(),
+            domain: z.string().optional(),
         path: z.string().optional(),
         token: z.string().optional().register(sensitive),
         defaultSessionKey: z.string().optional(),
@@ -517,6 +533,7 @@ export const OpenClawSchema = z
     web: z
       .object({
         enabled: z.boolean().optional(),
+            domain: z.string().optional(),
         heartbeatSeconds: z.number().int().positive().optional(),
         reconnect: z
           .object({
@@ -537,6 +554,7 @@ export const OpenClawSchema = z
         wideArea: z
           .object({
             enabled: z.boolean().optional(),
+            domain: z.string().optional(),
           })
           .strict()
           .optional(),
@@ -552,6 +570,7 @@ export const OpenClawSchema = z
     canvasHost: z
       .object({
         enabled: z.boolean().optional(),
+            domain: z.string().optional(),
         root: z.string().optional(),
         port: z.number().int().positive().optional(),
         liveReload: z.boolean().optional(),
@@ -601,6 +620,7 @@ export const OpenClawSchema = z
         controlUi: z
           .object({
             enabled: z.boolean().optional(),
+            domain: z.string().optional(),
             basePath: z.string().optional(),
             root: z.string().optional(),
             allowedOrigins: z.array(z.string()).optional(),
@@ -689,6 +709,7 @@ export const OpenClawSchema = z
         tls: z
           .object({
             enabled: z.boolean().optional(),
+            domain: z.string().optional(),
             autoGenerate: z.boolean().optional(),
             certPath: z.string().optional(),
             keyPath: z.string().optional(),
@@ -702,12 +723,14 @@ export const OpenClawSchema = z
                 chatCompletions: z
                   .object({
                     enabled: z.boolean().optional(),
+            domain: z.string().optional(),
                   })
                   .strict()
                   .optional(),
                 responses: z
                   .object({
                     enabled: z.boolean().optional(),
+            domain: z.string().optional(),
                     maxBodyBytes: z.number().int().positive().optional(),
                     maxUrlParts: z.number().int().nonnegative().optional(),
                     files: z
@@ -803,6 +826,7 @@ export const OpenClawSchema = z
     plugins: z
       .object({
         enabled: z.boolean().optional(),
+            domain: z.string().optional(),
         allow: z.array(z.string()).optional(),
         deny: z.array(z.string()).optional(),
         load: z
