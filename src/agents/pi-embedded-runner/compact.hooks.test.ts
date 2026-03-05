@@ -101,6 +101,7 @@ vi.mock("../session-file-repair.js", () => ({
 
 vi.mock("../session-write-lock.js", () => ({
   acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+  resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
 }));
 
 vi.mock("../bootstrap-files.js", () => ({
@@ -140,7 +141,7 @@ vi.mock("../transcript-policy.js", () => ({
 }));
 
 vi.mock("./extensions.js", () => ({
-  buildEmbeddedExtensionPaths: vi.fn(),
+  buildEmbeddedExtensionFactories: vi.fn(() => []),
 }));
 
 vi.mock("./history.js", () => ({
@@ -194,6 +195,12 @@ vi.mock("../pi-embedded-helpers.js", () => ({
   ensureSessionHeader: vi.fn(async () => {}),
   validateAnthropicTurns: vi.fn((m: unknown[]) => m),
   validateGeminiTurns: vi.fn((m: unknown[]) => m),
+}));
+
+vi.mock("../pi-project-settings.js", () => ({
+  createPreparedEmbeddedPiSettingsManager: vi.fn(() => ({
+    getGlobalSettings: vi.fn(() => ({})),
+  })),
 }));
 
 vi.mock("./sandbox-info.js", () => ({
