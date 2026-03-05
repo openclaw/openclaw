@@ -217,31 +217,44 @@ function normalizeAssistantUsageSnapshot(usage: unknown) {
   const totalTokens = normalized.total ?? input + output + cacheRead + cacheWrite;
   const cost = normalizeAssistantUsageCost(usage);
   return {
-    ...makeZeroUsageSnapshot(),
-    cost,
     input,
     output,
     cacheRead,
     cacheWrite,
     totalTokens,
+    ...(cost ? { cost } : {}),
   };
 }
 
-function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["cost"] {
+function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["cost"] | undefined {
   const base = makeZeroUsageSnapshot().cost;
   if (!usage || typeof usage !== "object") {
-    return base;
+    return undefined;
   }
   const rawCost = (usage as { cost?: unknown }).cost;
   if (!rawCost || typeof rawCost !== "object") {
-    return base;
+    return undefined;
   }
   const cost = rawCost as Record<string, unknown>;
-  const input = toFiniteCostNumber(cost.input) ?? base.input;
-  const output = toFiniteCostNumber(cost.output) ?? base.output;
-  const cacheRead = toFiniteCostNumber(cost.cacheRead) ?? base.cacheRead;
-  const cacheWrite = toFiniteCostNumber(cost.cacheWrite) ?? base.cacheWrite;
-  const total = toFiniteCostNumber(cost.total) ?? input + output + cacheRead + cacheWrite;
+  const inputRaw = toFiniteCostNumber(cost.input);
+  const outputRaw = toFiniteCostNumber(cost.output);
+  const cacheReadRaw = toFiniteCostNumber(cost.cacheRead);
+  const cacheWriteRaw = toFiniteCostNumber(cost.cacheWrite);
+  const totalRaw = toFiniteCostNumber(cost.total);
+  if (
+    inputRaw === undefined &&
+    outputRaw === undefined &&
+    cacheReadRaw === undefined &&
+    cacheWriteRaw === undefined &&
+    totalRaw === undefined
+  ) {
+    return undefined;
+  }
+  const input = inputRaw ?? base.input;
+  const output = outputRaw ?? base.output;
+  const cacheRead = cacheReadRaw ?? base.cacheRead;
+  const cacheWrite = cacheWriteRaw ?? base.cacheWrite;
+  const total = totalRaw ?? input + output + cacheRead + cacheWrite;
   return { input, output, cacheRead, cacheWrite, total };
 }
 
@@ -266,21 +279,24 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       message.usage && typeof message.usage === "object"
         ? (message.usage as { cost?: unknown }).cost
         : undefined;
+    const normalizedCost = normalizedUsage.cost;
     if (
       message.usage &&
       typeof message.usage === "object" &&
-      usageCost &&
-      typeof usageCost === "object" &&
       (message.usage as { input?: unknown }).input === normalizedUsage.input &&
       (message.usage as { output?: unknown }).output === normalizedUsage.output &&
       (message.usage as { cacheRead?: unknown }).cacheRead === normalizedUsage.cacheRead &&
       (message.usage as { cacheWrite?: unknown }).cacheWrite === normalizedUsage.cacheWrite &&
       (message.usage as { totalTokens?: unknown }).totalTokens === normalizedUsage.totalTokens &&
-      (usageCost as { input?: unknown }).input === normalizedUsage.cost.input &&
-      (usageCost as { output?: unknown }).output === normalizedUsage.cost.output &&
-      (usageCost as { cacheRead?: unknown }).cacheRead === normalizedUsage.cost.cacheRead &&
-      (usageCost as { cacheWrite?: unknown }).cacheWrite === normalizedUsage.cost.cacheWrite &&
-      (usageCost as { total?: unknown }).total === normalizedUsage.cost.total
+      ((normalizedCost &&
+        usageCost &&
+        typeof usageCost === "object" &&
+        (usageCost as { input?: unknown }).input === normalizedCost.input &&
+        (usageCost as { output?: unknown }).output === normalizedCost.output &&
+        (usageCost as { cacheRead?: unknown }).cacheRead === normalizedCost.cacheRead &&
+        (usageCost as { cacheWrite?: unknown }).cacheWrite === normalizedCost.cacheWrite &&
+        (usageCost as { total?: unknown }).total === normalizedCost.total) ||
+        (!normalizedCost && usageCost === undefined))
     ) {
       continue;
     }

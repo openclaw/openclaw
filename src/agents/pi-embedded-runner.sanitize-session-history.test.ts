@@ -370,7 +370,6 @@ describe("sanitizeSessionHistory", () => {
       | undefined;
 
     expect(assistant?.usage).toEqual({
-      ...makeZeroUsageSnapshot(),
       input: 0,
       output: 3,
       cacheRead: 9,
@@ -423,7 +422,7 @@ describe("sanitizeSessionHistory", () => {
     });
   });
 
-  it("adds missing usage cost even when token fields already match", async () => {
+  it("preserves unknown cost when token fields already match", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     const messages = castAgentMessages([
@@ -447,13 +446,13 @@ describe("sanitizeSessionHistory", () => {
       | undefined;
 
     expect(assistant?.usage).toEqual({
-      ...makeZeroUsageSnapshot(),
       input: 1,
       output: 2,
       cacheRead: 3,
       cacheWrite: 4,
       totalTokens: 10,
     });
+    expect((assistant?.usage as { cost?: unknown } | undefined)?.cost).toBeUndefined();
   });
 
   it("drops stale usage when compaction summary appears before kept assistant messages", async () => {
