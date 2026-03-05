@@ -21,6 +21,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
+import { VERSION } from "../version.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { isSecureWebSocketUrl } from "./net.js";
 import {
@@ -302,7 +303,7 @@ export class GatewayClient {
       client: {
         id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
         displayName: this.opts.clientDisplayName,
-        version: this.opts.clientVersion ?? "dev",
+        version: this.opts.clientVersion ?? VERSION,
         platform,
         deviceFamily: this.opts.deviceFamily,
         mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
