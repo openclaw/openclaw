@@ -496,11 +496,9 @@ export async function finalizeOnboardingWizard(
           "Web search is enabled, so your agent can look things up online when needed.",
           "",
           `Provider: ${label}`,
-          keySource,
+          ...(keySource ? [keySource] : []),
           "Docs: https://docs.openclaw.ai/tools/web",
-        ]
-          .filter(Boolean)
-          .join("\n"),
+        ].join("\n"),
         "Web search",
       );
     } else if (!hasKey) {
