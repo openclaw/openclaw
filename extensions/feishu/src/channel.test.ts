@@ -9,6 +9,24 @@ vi.mock("./probe.js", () => ({
 
 import { feishuPlugin } from "./channel.js";
 
+describe("feishuPlugin.mentions.stripPatterns", () => {
+  it("strips <at user_id> tag leaving only the command", () => {
+    // Regression test for #35994: group slash commands require the bot mention
+    // <at> tag to be stripped before command detection so @Bot /model → /model.
+    const patterns = feishuPlugin.mentions?.stripPatterns?.({ ctx: {} as any, cfg: {} as any });
+    expect(patterns).toBeDefined();
+    expect(patterns!.length).toBeGreaterThan(0);
+    const re = new RegExp(patterns![0], "gi");
+    expect('<at user_id="ou_bot">BotName</at> /model'.replace(re, " ").trim()).toBe("/model");
+  });
+
+  it("pattern does not strip unrelated text", () => {
+    const patterns = feishuPlugin.mentions?.stripPatterns?.({ ctx: {} as any, cfg: {} as any });
+    const re = new RegExp(patterns![0], "gi");
+    expect("hello world".replace(re, " ").trim()).toBe("hello world");
+  });
+});
+
 describe("feishuPlugin.status.probeAccount", () => {
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
