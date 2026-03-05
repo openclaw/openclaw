@@ -863,6 +863,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const routeAccountIdCandidate =
         entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
       const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
+      const wantsDelivery = p.deliver === true;
       const parsedSessionKey = parseAgentSessionKey(sessionKey);
       const sessionScopeParts = (parsedSessionKey?.rest ?? sessionKey).split(":").filter(Boolean);
       const sessionScopeHead = sessionScopeParts[0];
@@ -890,6 +891,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         (isChannelScopedSession || hasLegacyChannelPeerShape),
       );
       const hasDeliverableRoute =
+        wantsDelivery &&
         canInheritDeliverableRoute &&
         routeChannelCandidate &&
         routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
