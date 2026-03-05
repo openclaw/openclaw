@@ -25,8 +25,10 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
+import { createTelegramCurlFetch } from "./curl-fetch.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
+import { resolveTelegramForceCurlDecision } from "./network-config.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
@@ -125,9 +127,15 @@ function resolveTelegramClientOptions(
 ): ApiClientOptions | undefined {
   const proxyUrl = account.config.proxy?.trim();
   const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
-  const fetchImpl = resolveTelegramFetch(proxyFetch, {
+  const resolvedFetch = resolveTelegramFetch(proxyFetch, {
     network: account.config.network,
   });
+  const forceCurl = resolveTelegramForceCurlDecision({ network: account.config.network });
+  const fetchImpl = forceCurl.value
+    ? createTelegramCurlFetch({
+        proxyUrl,
+      })
+    : resolvedFetch;
   const timeoutSeconds =
     typeof account.config.timeoutSeconds === "number" &&
     Number.isFinite(account.config.timeoutSeconds)

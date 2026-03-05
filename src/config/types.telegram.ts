@@ -25,6 +25,8 @@ export type TelegramActionConfig = {
 export type TelegramNetworkConfig = {
   /** Override Node's autoSelectFamily behavior (true = enable, false = disable). */
   autoSelectFamily?: boolean;
+  /** Force Telegram outbound HTTP transport through curl. */
+  forceCurl?: boolean;
   /**
    * DNS result order for network requests ("ipv4first" | "verbatim").
    * Set to "ipv4first" to prioritize IPv4 addresses and work around IPv6 issues.

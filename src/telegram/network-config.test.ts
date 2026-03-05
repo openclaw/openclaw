@@ -3,6 +3,7 @@ import {
   resetTelegramNetworkConfigStateForTests,
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
+  resolveTelegramForceCurlDecision,
 } from "./network-config.js";
 
 // Mock isWSL2Sync at the top level
@@ -159,5 +160,43 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
   it("returns null when no dns decision applies", () => {
     const decision = resolveTelegramDnsResultOrderDecision({ nodeMajor: 20 });
     expect(decision).toEqual({ value: null });
+  });
+});
+
+describe("resolveTelegramForceCurlDecision", () => {
+  it("prefers env force over env disable", () => {
+    const decision = resolveTelegramForceCurlDecision({
+      env: {
+        OPENCLAW_TELEGRAM_FORCE_CURL: "1",
+        OPENCLAW_TELEGRAM_DISABLE_CURL: "1",
+      },
+    });
+    expect(decision).toEqual({
+      value: true,
+      source: "env:OPENCLAW_TELEGRAM_FORCE_CURL",
+    });
+  });
+
+  it("uses env disable when set", () => {
+    const decision = resolveTelegramForceCurlDecision({
+      env: { OPENCLAW_TELEGRAM_DISABLE_CURL: "1" },
+    });
+    expect(decision).toEqual({
+      value: false,
+      source: "env:OPENCLAW_TELEGRAM_DISABLE_CURL",
+    });
+  });
+
+  it("uses config when provided", () => {
+    const decision = resolveTelegramForceCurlDecision({
+      env: {},
+      network: { forceCurl: true },
+    });
+    expect(decision).toEqual({ value: true, source: "config" });
+  });
+
+  it("defaults to false when unset", () => {
+    const decision = resolveTelegramForceCurlDecision({ env: {} });
+    expect(decision).toEqual({ value: false, source: "default" });
   });
 });

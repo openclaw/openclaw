@@ -6,10 +6,22 @@ import { isWSL2Sync } from "../infra/wsl.js";
 export const TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV =
   "OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY";
 export const TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV = "OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY";
+export const TELEGRAM_FORCE_CURL_ENV = "OPENCLAW_TELEGRAM_FORCE_CURL";
+export const TELEGRAM_DISABLE_CURL_ENV = "OPENCLAW_TELEGRAM_DISABLE_CURL";
 export const TELEGRAM_DNS_RESULT_ORDER_ENV = "OPENCLAW_TELEGRAM_DNS_RESULT_ORDER";
 
 export type TelegramAutoSelectFamilyDecision = {
   value: boolean | null;
+  source?: string;
+};
+
+export type TelegramForceCurlDecision = {
+  value: boolean;
+  source: string;
+};
+
+export type TelegramDnsResultOrderDecision = {
+  value: string | null;
   source?: string;
 };
 
@@ -22,11 +34,6 @@ function isWSL2SyncCached(): boolean {
   wsl2SyncCache = isWSL2Sync();
   return wsl2SyncCache;
 }
-
-export type TelegramDnsResultOrderDecision = {
-  value: string | null;
-  source?: string;
-};
 
 export function resolveTelegramAutoSelectFamilyDecision(params?: {
   network?: TelegramNetworkConfig;
@@ -58,6 +65,23 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
   return { value: null };
 }
 
+export function resolveTelegramForceCurlDecision(params?: {
+  network?: TelegramNetworkConfig;
+  env?: NodeJS.ProcessEnv;
+}): TelegramForceCurlDecision {
+  const env = params?.env ?? process.env;
+  if (isTruthyEnvValue(env[TELEGRAM_FORCE_CURL_ENV])) {
+    return { value: true, source: `env:${TELEGRAM_FORCE_CURL_ENV}` };
+  }
+  if (isTruthyEnvValue(env[TELEGRAM_DISABLE_CURL_ENV])) {
+    return { value: false, source: `env:${TELEGRAM_DISABLE_CURL_ENV}` };
+  }
+  if (typeof params?.network?.forceCurl === "boolean") {
+    return { value: params.network.forceCurl, source: "config" };
+  }
+  return { value: false, source: "default" };
+}
+
 /**
  * Resolve DNS result order setting for Telegram network requests.
  * Some networks/ISPs have issues with IPv6 causing fetch failures.
@@ -79,13 +103,11 @@ export function resolveTelegramDnsResultOrderDecision(params?: {
       ? params.nodeMajor
       : Number(process.versions.node.split(".")[0]);
 
-  // Check environment variable
   const envValue = env[TELEGRAM_DNS_RESULT_ORDER_ENV]?.trim().toLowerCase();
   if (envValue === "ipv4first" || envValue === "verbatim") {
     return { value: envValue, source: `env:${TELEGRAM_DNS_RESULT_ORDER_ENV}` };
   }
 
-  // Check config
   const configValue = (params?.network as { dnsResultOrder?: string } | undefined)?.dnsResultOrder
     ?.trim()
     .toLowerCase();
@@ -93,7 +115,6 @@ export function resolveTelegramDnsResultOrderDecision(params?: {
     return { value: configValue, source: "config" };
   }
 
-  // Default to ipv4first on Node 22+ to avoid IPv6 issues
   if (Number.isFinite(nodeMajor) && nodeMajor >= 22) {
     return { value: "ipv4first", source: "default-node22" };
   }
