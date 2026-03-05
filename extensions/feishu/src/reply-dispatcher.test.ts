@@ -300,7 +300,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
-
   it("suppresses duplicate final text while still sending media", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
@@ -338,6 +337,40 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.objectContaining({
         mediaUrl: "https://example.com/a.png",
       }),
+    );
+  });
+
+  it("keeps distinct non-streaming final payloads", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "notice header" }, { kind: "final" });
+    await options.deliver({ text: "actual answer body" }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "notice header" }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "actual answer body" }),
     );
   });
 
