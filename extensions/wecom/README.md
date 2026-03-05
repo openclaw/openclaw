@@ -6,6 +6,165 @@
 
 ---
 
+<a id="english"></a>
+
+## English
+
+### Why This Plugin?
+
+Most WeCom plugins on the market are simple webhook forwarders. This plugin was forged in a **real enterprise production environment**, solving problems that other plugins ignore:
+
+| Problem | Other Plugins | This Plugin |
+|---------|--------------|-------------|
+| Message loss | Single-layer delivery, lost on failure | **4-layer fallback delivery**, 100% guaranteed |
+| User crosstalk | Shared global Agent | **Dynamic Agent routing**, per-user/per-group isolation |
+| Duplicate processing | Every message triggers AI | **2-second debounce merge**, saves API calls |
+| Text-only | No image/file support | **AES-256-CBC decryption** + image pipeline |
+| Single bot | One instance, one bot | **Multi-bot instances** + conflict detection |
+| Single mode | Bot mode only | **3 modes**: Bot + Agent + Webhook |
+
+### Core Features
+
+#### 3 Operating Modes
+
+- **AI Bot Mode** — JSON streaming callbacks for group/DM AI conversations
+- **Self-built Agent Mode** — XML callbacks for proactive messaging, file transfer, KF customer service
+- **Webhook Bot Mode** — Group notifications and alerts
+
+#### 4-Layer Message Delivery Fallback
+
+```
+Layer 1: Stream Channel (streaming reply, normal path)
+    ↓ fails
+Layer 2: response_url (one-time callback URL, valid 1 hour)
+    ↓ fails
+Layer 3: Webhook Bot / KF API (group notifications / customer service)
+    ↓ fails
+Layer 4: Agent API (application message API as last resort)
+```
+
+Each layer automatically degrades to the next on failure, ensuring 100% message delivery.
+
+#### Dynamic Agent Routing
+
+- DM auto-creates isolated Agent: `wecom-dm-{userId}`
+- Group auto-creates isolated Agent: `wecom-group-{chatId}`
+- Multi-account namespace isolation: `wecom-sales-dm-{userId}`
+- Complete user isolation, zero crosstalk
+
+#### Encrypted Media Handling
+
+- Automatic AES-256-CBC decryption of WeCom encrypted images
+- Local image queue + Agent API upload pipeline
+- Non-image files auto-routed via DM (group file → DM delivery + group notification)
+
+#### Multi-Bot Instance Management
+
+- Run multiple WeCom bots on a single OpenClaw instance
+- Automatic token/agentId conflict detection
+- Independent configuration and routing per bot
+
+#### Additional Features
+
+- **Workspace Templates**: Auto-bootstrap new Agents (AGENTS.md / BOOTSTRAP.md / CLAUDE.md)
+- **Command Allowlist**: `/new`, `/compact`, `/help`, `/status`
+- **Admin Users**: Bypass command restrictions
+- **Welcome Messages**: Auto-send on `enter_chat` events
+- **Memory Leak Prevention**: Auto-cleanup of expired streamMeta and responseUrl entries
+
+### Quick Start
+
+One command to install, works out of the box:
+
+```bash
+openclaw plugins install @openclaw/wecom
+```
+
+After installation, select **WeCom / 企业微信** in `openclaw onboard` wizard for interactive setup.
+
+#### Manual Configuration (optional)
+
+Skip the wizard and edit `~/.openclaw/openclaw.json` directly:
+
+```jsonc
+{
+  "channels": {
+    "wecom": {
+      "enabled": true,
+      // Get these from WeCom admin console
+      "token": "your-bot-token",
+      "encodingAesKey": "your-43-char-encoding-aes-key",
+      // Agent mode (optional — enables proactive messaging and file transfer)
+      "agent": {
+        "corpId": "your-corp-id",
+        "corpSecret": "your-corp-secret",
+        "agentId": 1000002
+      }
+    }
+  }
+}
+```
+
+> Dynamic agent routing, group chat, message debounce are **enabled by default** — no extra config needed.
+
+#### WeCom Admin Setup
+
+1. Log in to [WeCom Admin Console](https://work.weixin.qq.com/)
+2. Create an AI Bot or self-built application
+3. Set callback URL: `https://your-openclaw-domain/webhooks/wecom`
+4. Copy Token and EncodingAESKey to the config above
+5. Restart OpenClaw: `openclaw gateway restart`
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────┐
+│              OpenClaw Runtime                  │
+├──────────────────────────────────────────────┤
+│           @openclaw/wecom Plugin                │
+│                                               │
+│  ┌─────────┐  ┌─────────┐  ┌──────────────┐ │
+│  │ AI Bot  │  │  Agent   │  │ Webhook Bot  │ │
+│  │  Mode   │  │  Mode    │  │    Mode      │ │
+│  └────┬────┘  └────┬────┘  └──────┬───────┘ │
+│       │            │              │          │
+│  ┌────▼────────────▼──────────────▼───────┐  │
+│  │        4-Layer Delivery Engine          │  │
+│  │  Stream → response_url → Webhook → API │  │
+│  └────────────────────────────────────────┘  │
+│                                               │
+│  ┌──────────────┐  ┌───────────────────────┐ │
+│  │ Dynamic Agent│  │ Encrypted Media       │ │
+│  │   Routing    │  │   Pipeline            │ │
+│  └──────────────┘  └───────────────────────┘ │
+│                                               │
+│  ┌──────────────┐  ┌───────────────────────┐ │
+│  │  Multi-Bot   │  │ Message Debounce      │ │
+│  │  Manager     │  │   & Merge             │ │
+│  └──────────────┘  └───────────────────────┘ │
+└──────────────────────────────────────────────┘
+```
+
+### Configuration Reference
+
+| Config | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | boolean | `true` | Enable WeCom channel |
+| `token` | string | — | Bot Token |
+| `encodingAesKey` | string | — | 43-char encryption key |
+| `dynamicAgents.enabled` | boolean | `true` | Enable dynamic Agent routing |
+| `dm.createAgentOnFirstMessage` | boolean | `true` | Auto-create Agent per DM user |
+| `groupChat.enabled` | boolean | `true` | Enable group chat support |
+| `groupChat.requireMention` | boolean | `true` | Require @mention in groups |
+| `adminUsers` | string[] | `[]` | Admin user list |
+| `agent.corpId` | string | — | Enterprise Corp ID |
+| `agent.corpSecret` | string | — | Application Secret |
+| `agent.agentId` | number | — | Application Agent ID |
+| `webhooks` | object | — | Webhook Bot URL mapping |
+| `instances` | array | — | Multi-bot instance configs |
+
+---
+
 <a id="中文"></a>
 
 ## 中文
@@ -183,165 +342,6 @@ openclaw-wecom/
 | `agent.agentId` | number | — | 应用 Agent ID |
 | `webhooks` | object | — | Webhook Bot URL 映射 |
 | `instances` | array | — | 多 Bot 实例配置 |
-
----
-
-<a id="english"></a>
-
-## English
-
-### Why This Plugin?
-
-Most WeCom plugins on the market are simple webhook forwarders. This plugin was forged in a **real enterprise production environment**, solving problems that other plugins ignore:
-
-| Problem | Other Plugins | This Plugin |
-|---------|--------------|-------------|
-| Message loss | Single-layer delivery, lost on failure | **4-layer fallback delivery**, 100% guaranteed |
-| User crosstalk | Shared global Agent | **Dynamic Agent routing**, per-user/per-group isolation |
-| Duplicate processing | Every message triggers AI | **2-second debounce merge**, saves API calls |
-| Text-only | No image/file support | **AES-256-CBC decryption** + image pipeline |
-| Single bot | One instance, one bot | **Multi-bot instances** + conflict detection |
-| Single mode | Bot mode only | **3 modes**: Bot + Agent + Webhook |
-
-### Core Features
-
-#### 3 Operating Modes
-
-- **AI Bot Mode** — JSON streaming callbacks for group/DM AI conversations
-- **Self-built Agent Mode** — XML callbacks for proactive messaging, file transfer, KF customer service
-- **Webhook Bot Mode** — Group notifications and alerts
-
-#### 4-Layer Message Delivery Fallback
-
-```
-Layer 1: Stream Channel (streaming reply, normal path)
-    ↓ fails
-Layer 2: response_url (one-time callback URL, valid 1 hour)
-    ↓ fails
-Layer 3: Webhook Bot / KF API (group notifications / customer service)
-    ↓ fails
-Layer 4: Agent API (application message API as last resort)
-```
-
-Each layer automatically degrades to the next on failure, ensuring 100% message delivery.
-
-#### Dynamic Agent Routing
-
-- DM auto-creates isolated Agent: `wecom-dm-{userId}`
-- Group auto-creates isolated Agent: `wecom-group-{chatId}`
-- Multi-account namespace isolation: `wecom-sales-dm-{userId}`
-- Complete user isolation, zero crosstalk
-
-#### Encrypted Media Handling
-
-- Automatic AES-256-CBC decryption of WeCom encrypted images
-- Local image queue + Agent API upload pipeline
-- Non-image files auto-routed via DM (group file → DM delivery + group notification)
-
-#### Multi-Bot Instance Management
-
-- Run multiple WeCom bots on a single OpenClaw instance
-- Automatic token/agentId conflict detection
-- Independent configuration and routing per bot
-
-#### Additional Features
-
-- **Workspace Templates**: Auto-bootstrap new Agents (AGENTS.md / BOOTSTRAP.md / CLAUDE.md)
-- **Command Allowlist**: `/new`, `/compact`, `/help`, `/status`
-- **Admin Users**: Bypass command restrictions
-- **Welcome Messages**: Auto-send on `enter_chat` events
-- **Memory Leak Prevention**: Auto-cleanup of expired streamMeta and responseUrl entries
-
-### Quick Start
-
-One command to install, works out of the box:
-
-```bash
-openclaw plugins install @openclaw/wecom
-```
-
-After installation, select **WeCom / 企业微信** in `openclaw onboard` wizard for interactive setup.
-
-#### Manual Configuration (optional)
-
-Skip the wizard and edit `~/.openclaw/openclaw.json` directly:
-
-```jsonc
-{
-  "channels": {
-    "wecom": {
-      "enabled": true,
-      // Get these from WeCom admin console
-      "token": "your-bot-token",
-      "encodingAesKey": "your-43-char-encoding-aes-key",
-      // Agent mode (optional — enables proactive messaging and file transfer)
-      "agent": {
-        "corpId": "your-corp-id",
-        "corpSecret": "your-corp-secret",
-        "agentId": 1000002
-      }
-    }
-  }
-}
-```
-
-> Dynamic agent routing, group chat, message debounce are **enabled by default** — no extra config needed.
-
-#### WeCom Admin Setup
-
-1. Log in to [WeCom Admin Console](https://work.weixin.qq.com/)
-2. Create an AI Bot or self-built application
-3. Set callback URL: `https://your-openclaw-domain/webhooks/wecom`
-4. Copy Token and EncodingAESKey to the config above
-5. Restart OpenClaw: `openclaw gateway restart`
-
-### Architecture
-
-```
-┌──────────────────────────────────────────────┐
-│              OpenClaw Runtime                  │
-├──────────────────────────────────────────────┤
-│           @openclaw/wecom Plugin                │
-│                                               │
-│  ┌─────────┐  ┌─────────┐  ┌──────────────┐ │
-│  │ AI Bot  │  │  Agent   │  │ Webhook Bot  │ │
-│  │  Mode   │  │  Mode    │  │    Mode      │ │
-│  └────┬────┘  └────┬────┘  └──────┬───────┘ │
-│       │            │              │          │
-│  ┌────▼────────────▼──────────────▼───────┐  │
-│  │        4-Layer Delivery Engine          │  │
-│  │  Stream → response_url → Webhook → API │  │
-│  └────────────────────────────────────────┘  │
-│                                               │
-│  ┌──────────────┐  ┌───────────────────────┐ │
-│  │ Dynamic Agent│  │ Encrypted Media       │ │
-│  │   Routing    │  │   Pipeline            │ │
-│  └──────────────┘  └───────────────────────┘ │
-│                                               │
-│  ┌──────────────┐  ┌───────────────────────┐ │
-│  │  Multi-Bot   │  │ Message Debounce      │ │
-│  │  Manager     │  │   & Merge             │ │
-│  └──────────────┘  └───────────────────────┘ │
-└──────────────────────────────────────────────┘
-```
-
-### Configuration Reference
-
-| Config | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | boolean | `true` | Enable WeCom channel |
-| `token` | string | — | Bot Token |
-| `encodingAesKey` | string | — | 43-char encryption key |
-| `dynamicAgents.enabled` | boolean | `true` | Enable dynamic Agent routing |
-| `dm.createAgentOnFirstMessage` | boolean | `true` | Auto-create Agent per DM user |
-| `groupChat.enabled` | boolean | `true` | Enable group chat support |
-| `groupChat.requireMention` | boolean | `true` | Require @mention in groups |
-| `adminUsers` | string[] | `[]` | Admin user list |
-| `agent.corpId` | string | — | Enterprise Corp ID |
-| `agent.corpSecret` | string | — | Application Secret |
-| `agent.agentId` | number | — | Application Agent ID |
-| `webhooks` | object | — | Webhook Bot URL mapping |
-| `instances` | array | — | Multi-bot instance configs |
 
 ---
 
