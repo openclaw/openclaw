@@ -16,7 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Gateway/iMessage health monitor: use 4-hour stale-event threshold for iMessage (instead of fixed 30-minute default) to avoid false-positive restarts during normal idle periods, reducing unnecessary provider restarts from ~82 to ~11 per 48 hours for low-traffic channels. (#35072)
+- Gateway/iMessage: use 4-hour stale-event threshold (instead of 30-minute default) to avoid false-positive restarts during idle periods. (#35072)
 - Nodes/system.run approval hardening: use explicit argv-mutation signaling when regenerating prepared `rawCommand`, and cover the `system.run.prepare -> system.run` handoff so direct PATH-based `nodes.run` commands no longer fail with `rawCommand does not match command`. (#33137) thanks @Sid-Qin.
 - Models/custom provider headers: propagate `models.providers.<name>.headers` across inline, fallback, and registry-found model resolution so header-authenticated proxies consistently receive configured request headers. (#27490) thanks @Sid-Qin.
 - Ollama/custom provider headers: forward resolved model headers into native Ollama stream requests so header-authenticated Ollama proxies receive configured request headers. (#24337) thanks @echoVic.
