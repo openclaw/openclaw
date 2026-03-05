@@ -1262,6 +1262,154 @@ describe("Neo4jMemoryClient", () => {
   });
 
   // ------------------------------------------------------------------------
+  // findMemoriesByTaskId()
+  // ------------------------------------------------------------------------
+
+  describe("findMemoriesByTaskId", () => {
+    it("should return memories matching the given taskId", async () => {
+      mockSession.run.mockResolvedValue({
+        records: [
+          {
+            get: vi.fn((key) => {
+              const data: Record<string, unknown> = {
+                id: "m1",
+                text: "task memory",
+                category: "task",
+                importance: 0.7,
+              };
+              return data[key];
+            }),
+          },
+        ],
+      });
+
+      const result = await client.findMemoriesByTaskId("task-42");
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        id: "m1",
+        text: "task memory",
+        category: "task",
+        importance: 0.7,
+      });
+      expect(mockSession.run).toHaveBeenCalledWith(
+        expect.stringContaining("m.taskId = $taskId"),
+        expect.objectContaining({ taskId: "task-42" }),
+      );
+    });
+
+    it("should return empty array when no memories match", async () => {
+      mockSession.run.mockResolvedValue({ records: [] });
+
+      const result = await client.findMemoriesByTaskId("task-missing");
+
+      expect(result).toEqual([]);
+    });
+
+    it("should filter by agentId when provided", async () => {
+      mockSession.run.mockResolvedValue({ records: [] });
+
+      await client.findMemoriesByTaskId("task-99", "agent-1");
+
+      expect(mockSession.run).toHaveBeenCalledWith(
+        expect.stringContaining("m.agentId = $agentId"),
+        expect.objectContaining({ taskId: "task-99", agentId: "agent-1" }),
+      );
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // clearTaskIdFromMemories()
+  // ------------------------------------------------------------------------
+
+  describe("clearTaskIdFromMemories", () => {
+    it("should return the count of memories cleared", async () => {
+      mockSession.run.mockResolvedValue({
+        records: [{ get: vi.fn().mockReturnValue(3) }],
+      });
+
+      const result = await client.clearTaskIdFromMemories("task-42");
+
+      expect(result).toBe(3);
+      expect(mockSession.run).toHaveBeenCalledWith(
+        expect.stringContaining("m.taskId = null"),
+        expect.objectContaining({ taskId: "task-42" }),
+      );
+    });
+
+    it("should return 0 when no memories matched", async () => {
+      mockSession.run.mockResolvedValue({ records: [] });
+
+      const result = await client.clearTaskIdFromMemories("task-none");
+
+      expect(result).toBe(0);
+    });
+
+    it("should filter by agentId when provided", async () => {
+      mockSession.run.mockResolvedValue({
+        records: [{ get: vi.fn().mockReturnValue(1) }],
+      });
+
+      await client.clearTaskIdFromMemories("task-42", "agent-1");
+
+      expect(mockSession.run).toHaveBeenCalledWith(
+        expect.stringContaining("m.agentId = $agentId"),
+        expect.objectContaining({ taskId: "task-42", agentId: "agent-1" }),
+      );
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // searchMemoriesByKeywords()
+  // ------------------------------------------------------------------------
+
+  describe("searchMemoriesByKeywords", () => {
+    it("should return memories matching any of the keywords", async () => {
+      mockSession.run.mockResolvedValue({
+        records: [
+          {
+            get: vi.fn((key) => {
+              const data: Record<string, unknown> = {
+                id: "m1",
+                text: "TypeScript project",
+                category: "fact",
+              };
+              return data[key];
+            }),
+          },
+        ],
+      });
+
+      const result = await client.searchMemoriesByKeywords(["TypeScript", "project"]);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({ id: "m1", text: "TypeScript project", category: "fact" });
+      expect(mockSession.run).toHaveBeenCalledWith(
+        expect.stringContaining("db.index.fulltext.queryNodes"),
+        expect.objectContaining({ query: expect.stringContaining("TypeScript") }),
+      );
+    });
+
+    it("should return empty array when keywords is empty", async () => {
+      const result = await client.searchMemoriesByKeywords([]);
+
+      expect(result).toEqual([]);
+      expect(mockSession.run).not.toHaveBeenCalled();
+    });
+
+    it("should filter by agentId when provided", async () => {
+      mockSession.run.mockResolvedValue({ records: [] });
+
+      await client.searchMemoriesByKeywords(["graph"], 10, "agent-1");
+
+      expect(mockSession.run).toHaveBeenCalledWith(
+        expect.stringContaining("node.agentId = $agentId"),
+        expect.objectContaining({ agentId: "agent-1" }),
+      );
+    });
+  });
+
+  // ------------------------------------------------------------------------
   // Retrieval tracking
   // ------------------------------------------------------------------------
 

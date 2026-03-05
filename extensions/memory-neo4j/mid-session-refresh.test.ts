@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { _shouldRefreshForTest } from "./plugin-hooks.js";
 
 // ============================================================================
 // Config parsing for refreshAtContextPercent
@@ -108,34 +109,14 @@ describe("mid-session core memory refresh", () => {
 
     const MIN_TOKENS_SINCE_REFRESH = 10_000;
 
+    // Use the real exported function from plugin-hooks.ts so tests exercise the actual code path
     function shouldRefresh(params: {
       contextWindowTokens: number | undefined;
       estimatedUsedTokens: number | undefined;
       refreshThreshold: number;
       lastRefreshTokens: number;
     }): boolean {
-      const { contextWindowTokens, estimatedUsedTokens, refreshThreshold, lastRefreshTokens } =
-        params;
-
-      // Skip if context info not available
-      if (!contextWindowTokens || !estimatedUsedTokens) {
-        return false;
-      }
-
-      const usagePercent = (estimatedUsedTokens / contextWindowTokens) * 100;
-
-      // Only refresh if we've crossed the threshold
-      if (usagePercent < refreshThreshold) {
-        return false;
-      }
-
-      // Check if we've already refreshed recently
-      const tokensSinceRefresh = estimatedUsedTokens - lastRefreshTokens;
-      if (tokensSinceRefresh < MIN_TOKENS_SINCE_REFRESH) {
-        return false;
-      }
-
-      return true;
+      return _shouldRefreshForTest({ ...params, minTokensSinceRefresh: MIN_TOKENS_SINCE_REFRESH });
     }
 
     it("should trigger refresh when usage exceeds threshold and enough tokens accumulated", () => {
