@@ -313,6 +313,18 @@ importers:
         specifier: 1.58.2
         version: 1.58.2
 
+  extensions/dingtalk:
+    dependencies:
+      axios:
+        specifier: ^1.7.9
+        version: 1.13.5(debug@4.4.3)
+      dingtalk-stream:
+        specifier: ^2.1.4
+        version: 2.1.4
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+
   extensions/discord: {}
 
   extensions/feishu:
@@ -4136,6 +4148,9 @@ packages:
   diff@8.0.3:
     resolution: {integrity: sha512-qejHi7bcSD4hQAZE0tNAawRK1ZtafHDmMTMkrrIGgSLl7hTnQHmKCeB45xAcbfTqK2zowkM3j3bHt/4b/ARbYQ==}
     engines: {node: '>=0.3.1'}
+
+  dingtalk-stream@2.1.4:
+    resolution: {integrity: sha512-rgQbXLGWfASuB9onFcqXTnRSj4ZotimhBOnzrB4kS19AaU9lshXiuofs1GAYcKh5uzPWCAuEs3tMtiadTQWP4A==}
 
   discord-api-types@0.38.37:
     resolution: {integrity: sha512-Cv47jzY1jkGkh5sv0bfHYqGgKOWO1peOrGMkDFM4UmaGMOTgOW8QSexhvixa9sVOiz8MnVOBryWYyw/CEVhj7w==}
@@ -8205,7 +8220,7 @@ snapshots:
 
   '@larksuiteoapi/node-sdk@1.59.0':
     dependencies:
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
@@ -8221,7 +8236,7 @@ snapshots:
     dependencies:
       '@types/node': 24.11.0
     optionalDependencies:
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
     transitivePeerDependencies:
       - debug
 
@@ -8412,7 +8427,7 @@ snapshots:
       '@azure/core-auth': 1.10.1
       '@azure/msal-node': 5.0.5
       '@microsoft/agents-activity': 1.3.1
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       jsonwebtoken: 9.0.3
       jwks-rsa: 3.2.2
       object-path: 0.11.8
@@ -9338,7 +9353,7 @@ snapshots:
       '@slack/types': 2.20.0
       '@slack/web-api': 7.14.1
       '@types/express': 5.0.6
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       express: 5.2.1
       path-to-regexp: 8.3.0
       raw-body: 3.0.2
@@ -9384,7 +9399,7 @@ snapshots:
       '@slack/types': 2.20.0
       '@types/node': 25.3.5
       '@types/retry': 0.12.0
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       eventemitter3: 5.0.4
       form-data: 2.5.4
       is-electron: 2.2.2
@@ -10701,9 +10716,9 @@ snapshots:
 
   aws4@1.13.2: {}
 
-  axios@1.13.5:
+  axios@1.13.5(debug@4.4.3):
     dependencies:
-      follow-redirects: 1.15.11
+      follow-redirects: 1.15.11(debug@4.4.3)
       form-data: 2.5.4
       proxy-from-env: 1.1.0
     transitivePeerDependencies:
@@ -11060,6 +11075,16 @@ snapshots:
 
   diff@8.0.3: {}
 
+  dingtalk-stream@2.1.4:
+    dependencies:
+      axios: 1.13.5(debug@4.4.3)
+      debug: 4.4.3
+      ws: 8.19.0
+    transitivePeerDependencies:
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+
   discord-api-types@0.38.37: {}
 
   discord-api-types@0.38.40: {}
@@ -11401,7 +11426,9 @@ snapshots:
 
   flatbuffers@24.12.23: {}
 
-  follow-redirects@1.15.11: {}
+  follow-redirects@1.15.11(debug@4.4.3):
+    optionalDependencies:
+      debug: 4.4.3
 
   foreground-child@3.3.1:
     dependencies:
