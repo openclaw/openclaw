@@ -296,6 +296,21 @@ describe("normalizeModelCompat — supportsReasoningEffort guard (#33272)", () =
     expect(supportsReasoningEffort(normalized)).toBe(false);
   });
 
+  it("applies reasoning guard even when supportsDeveloperRole is already false", () => {
+    // Regression test: a user with compat: { supportsDeveloperRole: false }
+    // on a custom endpoint should still get supportsReasoningEffort defaulted
+    // to false — the early return must not bypass the reasoning guard.
+    const model = {
+      ...baseModel(),
+      provider: "custom-ollama",
+      baseUrl: "https://ollama.example.com/v1",
+      compat: { supportsDeveloperRole: false },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsReasoningEffort(normalized)).toBe(false);
+  });
+
   it("does not touch supportsReasoningEffort for models with empty baseUrl", () => {
     const model = {
       ...baseModel(),

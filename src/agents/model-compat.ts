@@ -75,7 +75,9 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   // whose baseUrl is not a known native OpenAI endpoint, unless the caller
   // has already pinned the value explicitly.
   const compat = model.compat ?? undefined;
-  if (compat?.supportsDeveloperRole === false) {
+  // Only skip when both compat properties are already handled — otherwise
+  // the reasoning guard below would be bypassed (#33272 regression).
+  if (compat?.supportsDeveloperRole === false && compat?.supportsReasoningEffort !== undefined) {
     return model;
   }
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
