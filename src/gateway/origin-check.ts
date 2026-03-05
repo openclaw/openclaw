@@ -66,6 +66,9 @@ export function checkBrowserOrigin(params: {
     .filter(Boolean);
   const allowlist = new Set(allowlistOrigins);
 
+  // Security: Wildcard "*" bypasses all origin checks, disabling CSRF protection.
+  // This is intended only for development/trusted environments.
+  // Consider explicitly listing origins instead when possible.
   if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
     return { ok: true, matchedBy: "allowlist" };
   }
