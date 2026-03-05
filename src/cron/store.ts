@@ -88,12 +88,12 @@ export async function saveCronStore(
   try {
     diskContent = await fs.promises.readFile(storePath, "utf-8");
   } catch {
-    // best-effort: 读取失败不影响保存
+    // best-effort: 任何读取错误都不影响保存（包括 ENOENT、EIO、权限问题等）
   }
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   await fs.promises.writeFile(tmp, json, "utf-8");
-  // 备份磁盘上的旧内容
-  if (diskContent !== null) {
+  // 备份磁盘上的旧内容（如果请求了备份）
+  if (diskContent !== null && !opts?.skipBackup) {
     try {
       await fs.promises.copyFile(storePath, `${storePath}.bak`);
     } catch {
