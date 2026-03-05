@@ -391,6 +391,93 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("renders sessionKey template for agent mapping", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          id: "session-key-test",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+          sessionKey: "hook:gmail:{{messages[0].subject}}",
+        },
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBe("hook:gmail:Hello");
+    }
+  });
+
+  it("renders sessionKey template for wake mapping", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          id: "wake-session-key",
+          match: { path: "gmail" },
+          action: "wake",
+          textTemplate: "Wake: {{messages[0].subject}}",
+          sessionKey: "hook:wake:{{messages[0].subject}}",
+        },
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "wake") {
+      expect(result.action.sessionKey).toBe("hook:wake:Hello");
+    }
+  });
+
+  it("sets sessionKey to undefined when not configured in mapping", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        createGmailAgentMapping({
+          id: "no-session-key",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+        }),
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBeUndefined();
+    }
+  });
+
+  it("sets sessionKey to undefined when template renders empty", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          id: "empty-session-key",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+          sessionKey: "{{missing_field}}",
+        },
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBeUndefined();
+    }
+  });
+
   it("agentId is undefined when not set", async () => {
     const result = await applyGmailMappings({
       mappings: [

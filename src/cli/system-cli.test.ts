@@ -58,6 +58,37 @@ describe("system-cli", () => {
     expect(runtimeLogs).toEqual([JSON.stringify({ id: "wake-1" }, null, 2)]);
   });
 
+  it("passes --session-key through to wake params", async () => {
+    await runCli(["system", "event", "--text", "hello", "--session-key", "discord:channel:123"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "wake",
+      expect.objectContaining({ text: "hello", sessionKey: "discord:channel:123" }),
+      { mode: "next-heartbeat", text: "hello", sessionKey: "discord:channel:123" },
+      { expectFinal: false },
+    );
+    expect(runtimeLogs).toEqual(["ok"]);
+  });
+
+  it("trims whitespace from --session-key", async () => {
+    await runCli(["system", "event", "--text", "hello", "--session-key", "  hook:abc  "]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "wake",
+      expect.any(Object),
+      { mode: "next-heartbeat", text: "hello", sessionKey: "hook:abc" },
+      { expectFinal: false },
+    );
+  });
+
+  it("omits sessionKey from params when not provided", async () => {
+    await runCli(["system", "event", "--text", "hello"]);
+
+    const params = callGatewayFromCli.mock.calls[0][2];
+    expect(params).toEqual({ mode: "next-heartbeat", text: "hello" });
+    expect("sessionKey" in params).toBe(false);
+  });
+
   it("handles invalid wake mode as runtime error", async () => {
     await runCli(["system", "event", "--text", "hello", "--mode", "later"]);
 

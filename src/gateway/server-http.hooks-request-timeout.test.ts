@@ -52,9 +52,10 @@ function createHandler(params?: {
   dispatchWakeHook?: HooksHandlerDeps["dispatchWakeHook"];
   dispatchAgentHook?: HooksHandlerDeps["dispatchAgentHook"];
   bindHost?: string;
+  hooksConfig?: ReturnType<typeof createHooksConfig>;
 }) {
   return createHooksRequestHandler({
-    getHooksConfig: () => createHooksConfig(),
+    getHooksConfig: () => params?.hooksConfig ?? createHooksConfig(),
     bindHost: params?.bindHost ?? "127.0.0.1",
     port: 18789,
     logHooks: {
@@ -64,10 +65,7 @@ function createHandler(params?: {
       error: vi.fn(),
     } as unknown as ReturnType<typeof createSubsystemLogger>,
     dispatchWakeHook:
-      params?.dispatchWakeHook ??
-      ((() => {
-        return;
-      }) as HooksHandlerDeps["dispatchWakeHook"]),
+      params?.dispatchWakeHook ?? ((() => ({ ok: true })) as HooksHandlerDeps["dispatchWakeHook"]),
     dispatchAgentHook:
       params?.dispatchAgentHook ?? ((() => "run-1") as HooksHandlerDeps["dispatchAgentHook"]),
   });
@@ -93,6 +91,45 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: false, error: "request body timeout" }));
     expect(dispatchWakeHook).not.toHaveBeenCalled();
     expect(dispatchAgentHook).not.toHaveBeenCalled();
+  });
+
+  test("returns 400 when wake dispatch fails without a sessionKey", async () => {
+    readJsonBodyMock.mockResolvedValue({ ok: true, value: { text: "Ping" } });
+    const dispatchWakeHook = vi.fn(() => ({ ok: false as const, error: "dispatch failed" }));
+    const handler = createHandler({ dispatchWakeHook });
+    const req = createRequest({ url: "/hooks/wake" });
+    const { res, end } = createResponse();
+
+    const handled = await handler(req, res);
+
+    expect(handled).toBe(true);
+    expect(dispatchWakeHook).toHaveBeenCalledWith({ text: "Ping", mode: "now" });
+    expect(res.statusCode).toBe(400);
+    expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: false, error: "dispatch failed" }));
+  });
+
+  test("returns 400 when mapped wake dispatch fails without a sessionKey", async () => {
+    readJsonBodyMock.mockResolvedValue({ ok: true, value: {} });
+    const dispatchWakeHook = vi.fn(() => ({ ok: false as const, error: "dispatch failed" }));
+    const hooksConfig = createHooksConfig();
+    hooksConfig.mappings = [
+      {
+        id: "mapped-wake",
+        action: "wake",
+        matchPath: "mapped-wake",
+        textTemplate: "Mapped ping",
+      },
+    ];
+    const handler = createHandler({ dispatchWakeHook, hooksConfig });
+    const req = createRequest({ url: "/hooks/mapped-wake" });
+    const { res, end } = createResponse();
+
+    const handled = await handler(req, res);
+
+    expect(handled).toBe(true);
+    expect(dispatchWakeHook).toHaveBeenCalledWith({ text: "Mapped ping", mode: "now" });
+    expect(res.statusCode).toBe(400);
+    expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: false, error: "dispatch failed" }));
   });
 
   test("shares hook auth rate-limit bucket across ipv4 and ipv4-mapped ipv6 forms", async () => {
