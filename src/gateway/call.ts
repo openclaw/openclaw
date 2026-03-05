@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   loadConfig,
@@ -291,6 +292,14 @@ function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewa
     remoteUrl,
     explicitAuth,
   };
+}
+
+export function resolveDeviceIdentityPathFromConfig(configPath?: string): string | undefined {
+  const trimmed = configPath?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return path.join(path.dirname(trimmed), "identity", "device.json");
 }
 
 function ensureRemoteModeUrlConfigured(context: ResolvedGatewayCallContext): void {
@@ -634,7 +643,9 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
-      deviceIdentity: loadOrCreateDeviceIdentity(),
+      deviceIdentity: loadOrCreateDeviceIdentity(
+        resolveDeviceIdentityPathFromConfig(params.connectionDetails.configPath),
+      ),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {
