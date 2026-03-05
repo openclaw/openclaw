@@ -414,10 +414,12 @@ async function readImageAsBase64(
 ): Promise<{ data: string; media_type: string } | null> {
   try {
     // Reject paths containing ".." components to prevent directory traversal.
-    const normalized = path.normalize(filePath);
-    if (normalized.includes("..")) {
+    // Check BEFORE normalization — normalize() resolves ".." in absolute paths,
+    // so a post-normalize check would always pass (e.g. /workspace/../etc/shadow → /etc/shadow).
+    if (filePath.includes("..")) {
       return null;
     }
+    const normalized = path.normalize(filePath);
     const ext = path.extname(normalized).toLowerCase();
     const mime = MIME_BY_EXT[ext];
     if (!mime) {

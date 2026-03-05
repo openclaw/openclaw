@@ -143,14 +143,11 @@ describe("readImageAsBase64", () => {
     });
   });
 
-  it("resolves normalized .. paths (defense-in-depth; extraction rejects relative)", async () => {
-    // path.normalize resolves ".." so the check is only defense-in-depth.
-    // The primary guard is extractMediaImagePaths which rejects non-absolute paths.
-    mockLstat.mockResolvedValue(fakeLstat(1024));
-    mockReadFile.mockResolvedValue(fakeImageBuffer());
+  it("rejects paths containing .. before normalization to prevent traversal", async () => {
+    // Check runs BEFORE path.normalize() so /tmp/../etc/shadow.png is rejected
+    // even though normalize() would resolve it to /etc/shadow.png.
     const result = await readImageAsBase64("/tmp/../etc/image.png");
-    // Normalized to /etc/image.png — proceeds normally.
-    expect(result).not.toBeNull();
+    expect(result).toBeNull();
   });
 
   it("returns null for symlinks", async () => {

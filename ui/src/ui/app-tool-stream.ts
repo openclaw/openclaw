@@ -1,3 +1,4 @@
+import { MEDIA_IMAGE_LINE_RE } from "../../../src/media/parse.js";
 import { truncateText } from "./format.ts";
 
 const TOOL_STREAM_LIMIT = 50;
@@ -474,7 +475,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
         if (
           (block.type === "text" &&
             typeof block.text === "string" &&
-            /^MEDIA:\s*`?.*\.(?:png|jpe?g|gif|webp)/im.test(block.text)) ||
+            MEDIA_IMAGE_LINE_RE.test(block.text)) ||
           (block.type === "image" && typeof block.data === "string")
         ) {
           host.chatRunHasMedia = true;
