@@ -409,6 +409,108 @@ export function registerFundTools(api: OpenClawPluginApi, deps: FundToolDeps): v
     },
     { names: ["fin_list_promotions_ready"] },
   );
+
+  // ── fin_lifecycle_scan ──
+
+  api.registerTool(
+    {
+      name: "fin_lifecycle_scan",
+      label: "Lifecycle Scan",
+      description:
+        "Scan all strategies for lifecycle actions: promotions ready, demotions needed, health alerts. Returns structured action list for autonomous decision-making.",
+      parameters: Type.Object({}),
+      async execute() {
+        const registry = getRegistry();
+        if (!registry) return json({ error: "Strategy registry not available" });
+
+        const records = registry.list() as Parameters<typeof manager.buildProfiles>[0];
+        const profiles = manager.buildProfiles(records);
+        const paper = getPaper();
+
+        const actions: Array<{
+          strategyId: string;
+          strategyName: string;
+          currentLevel: string;
+          action: string;
+          detail: string;
+          tool: string;
+        }> = [];
+
+        for (const profile of profiles) {
+          const record = records.find((r) => r.id === profile.strategyId);
+          if (!record) continue;
+
+          const check = manager.checkPromotion(profile);
+
+          // Promotion ready
+          if (check.eligible && check.targetLevel) {
+            actions.push({
+              strategyId: profile.strategyId,
+              strategyName: record.name,
+              currentLevel: record.level,
+              action: check.needsUserConfirmation ? "approve_promotion" : "promote",
+              detail: `Eligible for ${check.targetLevel}${check.needsUserConfirmation ? " (needs user confirmation)" : ""}`,
+              tool: check.needsUserConfirmation
+                ? "fin_fund_rebalance with confirmed_promotions"
+                : "fin_fund_rebalance",
+            });
+          }
+
+          // Needs backtest
+          if (record.level === "L1_BACKTEST" && !record.lastBacktest) {
+            actions.push({
+              strategyId: profile.strategyId,
+              strategyName: record.name,
+              currentLevel: record.level,
+              action: "run_backtest",
+              detail: "No backtest results yet — run backtest to evaluate",
+              tool: "fin_backtest_run",
+            });
+          }
+
+          // Health check for paper trading strategies
+          if (record.level === "L2_PAPER" && paper) {
+            const metrics = paper.getMetrics("default") as {
+              maxDrawdown?: number;
+              sharpe?: number;
+            } | null;
+            if (metrics?.maxDrawdown && metrics.maxDrawdown < -20) {
+              actions.push({
+                strategyId: profile.strategyId,
+                strategyName: record.name,
+                currentLevel: record.level,
+                action: "review_health",
+                detail: `Paper drawdown ${metrics.maxDrawdown.toFixed(1)}% — consider demotion`,
+                tool: "fin_fund_rebalance",
+              });
+            }
+          }
+        }
+
+        // Sort: approve_promotion first, then promote, then others
+        const priority: Record<string, number> = {
+          approve_promotion: 0,
+          promote: 1,
+          review_health: 2,
+          run_backtest: 3,
+        };
+        actions.sort((a, b) => (priority[a.action] ?? 9) - (priority[b.action] ?? 9));
+
+        const totalEquity = config.totalCapital ?? manager.getState().totalCapital;
+        const risk = manager.evaluateRisk(totalEquity);
+
+        return json({
+          actions,
+          summary: {
+            totalStrategies: records.length,
+            actionableCount: actions.length,
+            riskLevel: risk.riskLevel,
+          },
+        });
+      },
+    },
+    { names: ["fin_lifecycle_scan"] },
+  );
 }
 
 function getActionRecommendations(level: string): string[] {

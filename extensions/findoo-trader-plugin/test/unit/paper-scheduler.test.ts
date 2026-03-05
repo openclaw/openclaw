@@ -186,7 +186,7 @@ describe("PaperScheduler", () => {
     expect(result.signals).toBe(1);
     expect(deps.paperEngine.submitOrder).toHaveBeenCalledTimes(1);
     expect(deps.paperEngine.submitOrder).toHaveBeenCalledWith(
-      "default",
+      "acct-1",
       expect.objectContaining({
         symbol: "BTC/USDT",
         side: "buy",

@@ -11,6 +11,7 @@
  */
 
 import type { AgentEventSqliteStore } from "../core/agent-event-sqlite-store.js";
+import type { AgentWakeBridge } from "../core/agent-wake-bridge.js";
 
 // ── Thresholds (configurable defaults) ──
 
@@ -55,6 +56,7 @@ export class PaperHealthMonitor {
   private thresholds: HealthThresholds;
   private eventStore: AgentEventSqliteStore;
   private paperEngine: PaperEngineLike;
+  private wakeBridge?: AgentWakeBridge;
   /** Dedup: strategyId:conditionKey → last emit timestamp */
   private lastEmitted = new Map<string, number>();
 
@@ -62,10 +64,17 @@ export class PaperHealthMonitor {
     eventStore: AgentEventSqliteStore;
     paperEngine: PaperEngineLike;
     thresholds?: Partial<HealthThresholds>;
+    wakeBridge?: AgentWakeBridge;
   }) {
     this.eventStore = deps.eventStore;
     this.paperEngine = deps.paperEngine;
     this.thresholds = { ...DEFAULT_THRESHOLDS, ...deps.thresholds };
+    this.wakeBridge = deps.wakeBridge;
+  }
+
+  /** Late-bind the wake bridge (set after plugin registration). */
+  setWakeBridge(bridge: AgentWakeBridge): void {
+    this.wakeBridge = bridge;
   }
 
   /**
@@ -86,11 +95,18 @@ export class PaperHealthMonitor {
       if (state.initialCapital > 0) {
         const dd = ((state.initialCapital - state.equity) / state.initialCapital) * 100;
         if (dd >= this.thresholds.maxDrawdownPct) {
-          emitted += this.emit(acct.id, "drawdown", {
+          const n = this.emit(acct.id, "drawdown", {
             type: "alert_triggered",
             title: `Paper DD alert: ${acct.name ?? acct.id}`,
             detail: `Drawdown ${dd.toFixed(1)}% ≥ ${this.thresholds.maxDrawdownPct}% threshold. Equity: $${state.equity.toFixed(2)}, Initial: $${state.initialCapital.toFixed(2)}`,
           });
+          if (n > 0)
+            this.wakeBridge?.onHealthAlert({
+              accountId: acct.id,
+              condition: "drawdown",
+              value: dd,
+            });
+          emitted += n;
         }
       }
 
@@ -99,11 +115,18 @@ export class PaperHealthMonitor {
         const recent = snapshots.slice(-this.thresholds.maxConsecutiveLossDays);
         const allLoss = recent.every((s) => s.dailyPnl < 0);
         if (allLoss) {
-          emitted += this.emit(acct.id, "consecutive_loss", {
+          const n = this.emit(acct.id, "consecutive_loss", {
             type: "alert_triggered",
             title: `Paper consecutive loss: ${acct.name ?? acct.id}`,
             detail: `${recent.length} consecutive loss days. Recent PnL: ${recent.map((s) => `$${s.dailyPnl.toFixed(2)}`).join(", ")}`,
           });
+          if (n > 0)
+            this.wakeBridge?.onHealthAlert({
+              accountId: acct.id,
+              condition: "consecutive_loss",
+              value: recent.length,
+            });
+          emitted += n;
         }
       }
 
@@ -117,11 +140,18 @@ export class PaperHealthMonitor {
         const sharpe7d = stdDev > 0 ? (avgReturn / stdDev) * Math.sqrt(252) : 0;
 
         if (sharpe7d < this.thresholds.minSharpe7d) {
-          emitted += this.emit(acct.id, "low_sharpe", {
+          const n = this.emit(acct.id, "low_sharpe", {
             type: "alert_triggered",
             title: `Paper low Sharpe: ${acct.name ?? acct.id}`,
             detail: `7d Sharpe ${sharpe7d.toFixed(2)} < ${this.thresholds.minSharpe7d} threshold`,
           });
+          if (n > 0)
+            this.wakeBridge?.onHealthAlert({
+              accountId: acct.id,
+              condition: "low_sharpe",
+              value: sharpe7d,
+            });
+          emitted += n;
         }
       }
     }

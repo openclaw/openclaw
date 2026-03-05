@@ -1,4 +1,5 @@
 import type { AgentEventSqliteStore } from "../core/agent-event-sqlite-store.js";
+import type { AgentWakeBridge } from "../core/agent-wake-bridge.js";
 import type { StrategyDefinition } from "../shared/types.js";
 import type { BacktestEngine } from "../strategy/backtest-engine.js";
 import { createBollingerBands } from "../strategy/builtin-strategies/bollinger-bands.js";
@@ -23,6 +24,7 @@ export interface ColdStartDeps {
   backtestEngine: BacktestEngine;
   eventStore: AgentEventSqliteStore;
   dataProviderResolver: () => DataProviderLike | undefined;
+  wakeBridge?: AgentWakeBridge;
 }
 
 export class ColdStartSeeder {
@@ -72,7 +74,8 @@ export class ColdStartSeeder {
 
   /** Run backtests for all seed strategies. Failures are logged as events. */
   private async runSeedBacktests(): Promise<void> {
-    const { strategyRegistry, backtestEngine, eventStore, dataProviderResolver } = this.deps;
+    const { strategyRegistry, backtestEngine, eventStore, dataProviderResolver, wakeBridge } =
+      this.deps;
 
     const dataProvider = dataProviderResolver();
     if (!dataProvider) {
@@ -85,6 +88,9 @@ export class ColdStartSeeder {
       });
       return;
     }
+
+    let completed = 0;
+    let qualified = 0;
 
     for (const def of SEED_STRATEGIES) {
       try {
@@ -107,6 +113,8 @@ export class ColdStartSeeder {
           market: "crypto",
         });
         strategyRegistry.updateBacktest(def.id, result);
+        completed++;
+        if (result.sharpe > 0.5 && result.totalReturn > 0) qualified++;
       } catch (err) {
         eventStore.addEvent({
           type: "system",
@@ -115,6 +123,11 @@ export class ColdStartSeeder {
           status: "completed",
         });
       }
+    }
+
+    // Wake Agent to review backtest results and consider promotions
+    if (completed > 0) {
+      wakeBridge?.onSeedBacktestComplete({ completed, qualified });
     }
   }
 }

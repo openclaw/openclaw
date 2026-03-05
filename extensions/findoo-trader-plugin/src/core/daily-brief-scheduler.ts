@@ -1,4 +1,5 @@
 import type { DailyBrief } from "../types.js";
+import type { AgentWakeBridge } from "./agent-wake-bridge.js";
 
 type PaperEngineLike = {
   listAccounts(): Array<{ id: string; name: string; equity: number }>;
@@ -27,6 +28,7 @@ export type DailyBriefSchedulerConfig = {
   paperEngine?: PaperEngineLike;
   strategyRegistry?: StrategyRegistryLike;
   eventStore?: EventStoreLike;
+  wakeBridge?: AgentWakeBridge;
   intervalMs?: number; // default 86_400_000 (24h)
 };
 
@@ -143,6 +145,12 @@ export class DailyBriefScheduler {
     this.briefCount++;
     this.lastBriefAt = Date.now();
     this.lastBrief = brief;
+
+    // Wake Agent to deliver brief summary
+    this._deps.wakeBridge?.onDailyBriefReady({
+      totalPnl: dailyPnl,
+      strategyCount: strategyRegistry?.list().length ?? 0,
+    });
 
     return brief;
   }
