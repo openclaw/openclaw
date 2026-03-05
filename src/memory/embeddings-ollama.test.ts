@@ -71,4 +71,40 @@ describe("embeddings-ollama", () => {
       }),
     );
   });
+
+  it("fails fast when memory-search remote apiKey is an unresolved SecretRef", async () => {
+    await expect(
+      createOllamaEmbeddingProvider({
+        config: {} as OpenClawConfig,
+        provider: "ollama",
+        model: "nomic-embed-text",
+        fallback: "none",
+        remote: {
+          baseUrl: "http://127.0.0.1:11434",
+          apiKey: { source: "env", provider: "default", id: "OLLAMA_API_KEY" },
+        },
+      }),
+    ).rejects.toThrow(/agents\.\*\.memorySearch\.remote\.apiKey: unresolved SecretRef/i);
+  });
+
+  it("fails fast when models.providers.ollama.apiKey is an unresolved SecretRef", async () => {
+    await expect(
+      createOllamaEmbeddingProvider({
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://127.0.0.1:11434/v1",
+                apiKey: { source: "env", provider: "default", id: "OLLAMA_API_KEY" },
+                models: [],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        provider: "ollama",
+        model: "nomic-embed-text",
+        fallback: "none",
+      }),
+    ).rejects.toThrow(/models\.providers\.ollama\.apiKey: unresolved SecretRef/i);
+  });
 });

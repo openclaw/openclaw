@@ -1,9 +1,9 @@
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
+import { resolveMemorySecretInputString } from "./secret-input.js";
 
 export type OllamaEmbeddingClient = {
   baseUrl: string;
@@ -46,13 +46,17 @@ function resolveOllamaApiBase(configuredBaseUrl?: string): string {
 }
 
 function resolveOllamaApiKey(options: EmbeddingProviderOptions): string | undefined {
-  const remoteApiKey = options.remote?.apiKey?.trim();
+  const remoteApiKey = resolveMemorySecretInputString({
+    value: options.remote?.apiKey,
+    path: "agents.*.memorySearch.remote.apiKey",
+  });
   if (remoteApiKey) {
     return remoteApiKey;
   }
-  const providerApiKey = normalizeOptionalSecretInput(
-    options.config.models?.providers?.ollama?.apiKey,
-  );
+  const providerApiKey = resolveMemorySecretInputString({
+    value: options.config.models?.providers?.ollama?.apiKey,
+    path: "models.providers.ollama.apiKey",
+  });
   if (providerApiKey) {
     return providerApiKey;
   }
