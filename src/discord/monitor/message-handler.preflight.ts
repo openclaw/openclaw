@@ -1,4 +1,8 @@
 import { ChannelType, MessageType, type User } from "@buape/carbon";
+import {
+  ensureConfiguredAcpRouteReady,
+  resolveConfiguredAcpRoute,
+} from "../../acp/persistent-bindings.route.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
 import {
@@ -328,8 +332,9 @@ export async function preflightDiscordMessage(
   const memberRoleIds = Array.isArray(params.data.rawMember?.roles)
     ? params.data.rawMember.roles.map((roleId: string) => String(roleId))
     : [];
+  const freshCfg = loadConfig();
   const route = resolveAgentRoute({
-    cfg: loadConfig(),
+    cfg: freshCfg,
     channel: "discord",
     accountId: params.accountId,
     guildId: params.data.guild_id ?? undefined,
@@ -342,13 +347,27 @@ export async function preflightDiscordMessage(
     parentPeer: earlyThreadParentId ? { kind: "channel", id: earlyThreadParentId } : undefined,
   });
   let threadBinding: SessionBindingRecord | undefined;
-  if (earlyThreadChannel) {
-    threadBinding =
-      getSessionBindingService().resolveByConversation({
-        channel: "discord",
-        accountId: params.accountId,
-        conversationId: messageChannelId,
-      }) ?? undefined;
+  threadBinding =
+    getSessionBindingService().resolveByConversation({
+      channel: "discord",
+      accountId: params.accountId,
+      conversationId: messageChannelId,
+      parentConversationId: earlyThreadParentId,
+    }) ?? undefined;
+  const configuredRoute =
+    threadBinding == null
+      ? resolveConfiguredAcpRoute({
+          cfg: freshCfg,
+          route,
+          channel: "discord",
+          accountId: params.accountId,
+          conversationId: messageChannelId,
+          parentConversationId: earlyThreadParentId,
+        })
+      : null;
+  const configuredBinding = configuredRoute?.configuredBinding ?? null;
+  if (!threadBinding && configuredBinding) {
+    threadBinding = configuredBinding.record;
   }
   if (
     shouldIgnoreBoundThreadWebhookMessage({
@@ -368,8 +387,9 @@ export async function preflightDiscordMessage(
         ...route,
         sessionKey: boundSessionKey,
         agentId: boundAgentId ?? route.agentId,
+        matchedBy: "binding.channel" as const,
       }
-    : route;
+    : (configuredRoute?.route ?? route);
   const isBoundThreadSession = Boolean(boundSessionKey && earlyThreadChannel);
   if (
     isBoundThreadBotSystemMessage({
@@ -738,6 +758,18 @@ export async function preflightDiscordMessage(
     logDebug(`[discord-preflight] drop: empty content`);
     logVerbose(`discord: drop message ${message.id} (empty content)`);
     return null;
+  }
+  if (configuredBinding) {
+    const ensured = await ensureConfiguredAcpRouteReady({
+      cfg: freshCfg,
+      configuredBinding,
+    });
+    if (!ensured.ok) {
+      logVerbose(
+        `discord: configured ACP binding unavailable for channel ${configuredBinding.spec.conversationId}: ${ensured.error}`,
+      );
+      return null;
+    }
   }
 
   logDebug(
