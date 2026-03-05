@@ -268,7 +268,7 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  const systemPromptFileContent = readSystemPromptFile(agentCfg?.systemPromptFile) ?? "";
+  const systemPromptFileContent = readSystemPromptFile(agentCfg?.systemPromptFile);
   const extraSystemPromptParts = [
     systemPromptFileContent,
     inboundMetaPrompt,

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { logVerbose } from "../globals.js";
 
 /**
  * Read the contents of a systemPromptFile config value.
@@ -11,7 +12,8 @@ export function readSystemPromptFile(filePath: string | undefined): string | und
   try {
     const content = fs.readFileSync(filePath, "utf-8").trim();
     return content || undefined;
-  } catch {
+  } catch (err: unknown) {
+    logVerbose(`systemPromptFile: could not read "${filePath}": ${String(err)}`);
     return undefined;
   }
 }
