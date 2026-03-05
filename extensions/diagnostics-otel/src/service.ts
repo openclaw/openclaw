@@ -430,7 +430,17 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.tokens.cache_read": usage.cacheRead ?? 0,
           "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
           "openclaw.tokens.total": usage.total ?? 0,
+          // OpenTelemetry GenAI semantic conventions (recognized by Langfuse)
+          "gen_ai.request.model": evt.model ?? "unknown",
+          "gen_ai.system": evt.provider ?? "unknown",
+          "gen_ai.usage.input_tokens": usage.input ?? 0,
+          "gen_ai.usage.output_tokens": usage.output ?? 0,
+          // Langfuse-specific attributes
+          "langfuse.session.id": evt.sessionKey ?? "",
         };
+        if (evt.costUsd) {
+          spanAttrs["gen_ai.usage.cost"] = evt.costUsd;
+        }
 
         const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs);
         span.end();
@@ -512,6 +522,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       ) => {
         if (evt.sessionKey) {
           spanAttrs["openclaw.sessionKey"] = evt.sessionKey;
+          spanAttrs["langfuse.session.id"] = evt.sessionKey;
         }
         if (evt.sessionId) {
           spanAttrs["openclaw.sessionId"] = evt.sessionId;
