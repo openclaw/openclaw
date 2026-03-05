@@ -29,7 +29,7 @@ import {
   resolveAuthProfileOrder,
   type ResolvedProviderAuth,
 } from "../model-auth.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { normalizeProviderId, resolveThinkingDefault } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   formatBillingErrorMessage,
@@ -410,7 +410,14 @@ export async function runEmbeddedPiAgent(
           : [undefined];
       let profileIndex = 0;
 
-      const initialThinkLevel = params.thinkLevel ?? "off";
+      const initialThinkLevel =
+        params.thinkLevel ??
+        resolveThinkingDefault({
+          cfg: params.config ?? {},
+          provider,
+          model: modelId,
+          agentId: workspaceResolution.agentId,
+        });
       let thinkLevel = initialThinkLevel;
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;

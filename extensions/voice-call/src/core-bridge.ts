@@ -24,6 +24,7 @@ type CoreAgentDeps = {
     cfg: CoreConfig;
     provider?: string;
     model?: string;
+    agentId?: string;
   }) => string;
   runEmbeddedPiAgent: (params: {
     sessionId: string;

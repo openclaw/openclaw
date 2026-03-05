@@ -5,6 +5,7 @@ import {
   AgentSandboxSchema,
   AgentModelSchema,
   MemorySearchSchema,
+  ThinkLevelSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
@@ -123,17 +124,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
-    thinkingDefault: z
-      .union([
-        z.literal("off"),
-        z.literal("minimal"),
-        z.literal("low"),
-        z.literal("medium"),
-        z.literal("high"),
-        z.literal("xhigh"),
-        z.literal("adaptive"),
-      ])
-      .optional(),
+    thinkingDefault: ThinkLevelSchema.optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])

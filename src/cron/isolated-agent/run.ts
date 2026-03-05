@@ -121,6 +121,13 @@ export async function runCronIsolatedAgentTurn(params: {
     ? resolveAgentConfig(params.cfg, normalizedRequested)
     : undefined;
   const { model: overrideModel, ...agentOverrideRest } = agentConfigOverride ?? {};
+  // Do not let absent per-agent fields clear global defaults during merge.
+  // `Object.assign` would treat `{ field: undefined }` as an explicit override.
+  const agentOverrideDefaults = Object.fromEntries(
+    Object.entries(agentOverrideRest as Partial<AgentDefaultsConfig>).filter(
+      ([, value]) => value !== undefined,
+    ),
+  ) as Partial<AgentDefaultsConfig>;
   // Use the requested agentId even when there is no explicit agent config entry.
   // This ensures auth-profiles, workspace, and agentDir all resolve to the
   // correct per-agent paths (e.g. ~/.openclaw/agents/<agentId>/agent/).
@@ -128,7 +135,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const agentCfg: AgentDefaultsConfig = Object.assign(
     {},
     params.cfg.agents?.defaults,
-    agentOverrideRest as Partial<AgentDefaultsConfig>,
+    agentOverrideDefaults,
   );
   // Merge agent model override with defaults instead of replacing, so that
   // `fallbacks` from `agents.defaults.model` are preserved when the agent
@@ -315,6 +322,7 @@ export async function runCronIsolatedAgentTurn(params: {
       provider,
       model,
       catalog: await loadCatalog(),
+      agentId,
     });
   }
   if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {

@@ -95,7 +95,7 @@ export async function generateVoiceResponse(
   const model = slashIndex === -1 ? modelRef : modelRef.slice(slashIndex + 1);
 
   // Resolve thinking level
-  const thinkLevel = deps.resolveThinkingDefault({ cfg, provider, model });
+  const thinkLevel = deps.resolveThinkingDefault({ cfg, provider, model, agentId });
 
   // Resolve agent identity for personalized prompt
   const identity = deps.resolveAgentIdentity(cfg, agentId);

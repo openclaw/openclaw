@@ -679,6 +679,16 @@ export const MemorySearchSchema = z
   .strict()
   .optional();
 export { AgentModelSchema };
+export const ThinkLevelSchema = z.union([
+  z.literal("off"),
+  z.literal("minimal"),
+  z.literal("low"),
+  z.literal("medium"),
+  z.literal("high"),
+  z.literal("xhigh"),
+  z.literal("adaptive"),
+]);
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -687,6 +697,7 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
+    thinkingDefault: ThinkLevelSchema.optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),

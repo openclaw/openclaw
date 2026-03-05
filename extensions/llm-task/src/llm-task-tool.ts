@@ -198,6 +198,8 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           runId: `llm-task-${Date.now()}`,
           provider,
           model,
+          // used to defaulting from undefined -> "off" downstream prior to per-agent thinkingDefault
+          thinkLevel: "off",
           authProfileId,
           authProfileIdSource: authProfileId ? "user" : "auto",
           streamParams,
