@@ -111,7 +111,9 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     hasRootVersionAlias(process.argv)
   ) {
     const commit = resolveCommitHash();
-    console.log(commit ? `OpenClaw ${ctx.programVersion} (${commit})` : ctx.programVersion);
+    console.log(
+      commit ? `OpenClaw ${ctx.programVersion} (${commit})` : `OpenClaw ${ctx.programVersion}`,
+    );
     process.exit(0);
   }
 
