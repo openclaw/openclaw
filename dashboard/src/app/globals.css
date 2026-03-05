@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: oklch(0.585 0.233 264);
+  --color-primary-foreground: oklch(0.985 0 0);
+  --color-surface: oklch(0.145 0.014 285.82);
+  --color-surface-foreground: oklch(0.985 0 0);
+  --color-muted: oklch(0.21 0.014 285.82);
+  --color-muted-foreground: oklch(0.65 0 0);
+  --color-accent: oklch(0.21 0.014 285.82);
+  --color-accent-foreground: oklch(0.985 0 0);
+  --color-destructive: oklch(0.55 0.2 27);
+  --color-border: oklch(0.30 0.014 285.82);
+  --color-input: oklch(0.30 0.014 285.82);
+  --color-ring: oklch(0.585 0.233 264);
+  --color-background: oklch(0.10 0.014 285.82);
+  --color-foreground: oklch(0.985 0 0);
+  --color-card: oklch(0.145 0.014 285.82);
+  --color-card-foreground: oklch(0.985 0 0);
+  --color-popover: oklch(0.145 0.014 285.82);
+  --color-popover-foreground: oklch(0.985 0 0);
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    color-scheme: dark;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.14);
+  }
+}
+
+/* Glass card utility */
+.glass-card {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+}
+
+.glass-card-hover:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.10);
+}
+
+/* Status dot animation */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Nav fluid text */
+.nav-text {
+  font-size: clamp(0.45rem, 0.75vw, 0.6875rem);
+}
