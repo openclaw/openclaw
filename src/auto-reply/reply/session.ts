@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import {
+  buildTelegramTopicConversationId,
+  parseTelegramChatIdFromTarget,
+} from "../../acp/conversation-id.js";
+import { resolveConfiguredAcpBindingRecord } from "../../acp/persistent-bindings.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -24,10 +29,16 @@ import {
 } from "../../config/sessions.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
+import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  normalizeMainKey,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -61,6 +72,143 @@ export type SessionInitResult = {
   bodyStripped?: string;
   triggerBodyNormalized: string;
 };
+
+function normalizeSessionText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+    return `${value}`.trim();
+  }
+  return "";
+}
+
+function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
+  const sessionKey = normalizeSessionText(raw);
+  if (!sessionKey) {
+    return undefined;
+  }
+  const scoped = parseAgentSessionKey(sessionKey)?.rest ?? sessionKey.toLowerCase();
+  const match = scoped.match(/(?:^|:)channel:([^:]+)$/);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  return match[1];
+}
+
+function resolveAcpResetBindingContext(ctx: MsgContext): {
+  channel: string;
+  accountId: string;
+  conversationId: string;
+  parentConversationId?: string;
+} | null {
+  const channelRaw = normalizeSessionText(
+    ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
+  ).toLowerCase();
+  if (!channelRaw) {
+    return null;
+  }
+  const accountId = normalizeSessionText(ctx.AccountId) || "default";
+  const normalizedThreadId =
+    ctx.MessageThreadId != null ? normalizeSessionText(String(ctx.MessageThreadId)) : "";
+
+  if (channelRaw === "telegram") {
+    const parentConversationId =
+      parseTelegramChatIdFromTarget(ctx.OriginatingTo) ?? parseTelegramChatIdFromTarget(ctx.To);
+    let conversationId =
+      resolveConversationIdFromTargets({
+        threadId: normalizedThreadId || undefined,
+        targets: [ctx.OriginatingTo, ctx.To],
+      }) ?? "";
+    if (normalizedThreadId && parentConversationId) {
+      conversationId =
+        buildTelegramTopicConversationId({
+          chatId: parentConversationId,
+          topicId: normalizedThreadId,
+        }) ?? conversationId;
+    }
+    if (!conversationId) {
+      return null;
+    }
+    return {
+      channel: channelRaw,
+      accountId,
+      conversationId,
+      ...(parentConversationId ? { parentConversationId } : {}),
+    };
+  }
+
+  const conversationId = resolveConversationIdFromTargets({
+    threadId: normalizedThreadId || undefined,
+    targets: [ctx.OriginatingTo, ctx.To],
+  });
+  if (!conversationId) {
+    return null;
+  }
+  let parentConversationId: string | undefined;
+  if (channelRaw === "discord" && normalizedThreadId) {
+    const fromContext = normalizeSessionText(ctx.ThreadParentId);
+    if (fromContext && fromContext !== conversationId) {
+      parentConversationId = fromContext;
+    } else {
+      const fromParentSession = parseDiscordParentChannelFromSessionKey(ctx.ParentSessionKey);
+      if (fromParentSession && fromParentSession !== conversationId) {
+        parentConversationId = fromParentSession;
+      } else {
+        const fromTargets = resolveConversationIdFromTargets({
+          targets: [ctx.OriginatingTo, ctx.To],
+        });
+        if (fromTargets && fromTargets !== conversationId) {
+          parentConversationId = fromTargets;
+        }
+      }
+    }
+  }
+  return {
+    channel: channelRaw,
+    accountId,
+    conversationId,
+    ...(parentConversationId ? { parentConversationId } : {}),
+  };
+}
+
+function resolveBoundAcpSessionForReset(params: {
+  cfg: OpenClawConfig;
+  ctx: MsgContext;
+}): string | undefined {
+  const bindingContext = resolveAcpResetBindingContext(params.ctx);
+  if (!bindingContext) {
+    return undefined;
+  }
+
+  const serviceBinding = getSessionBindingService().resolveByConversation({
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    parentConversationId: bindingContext.parentConversationId,
+  });
+  const serviceSessionKey =
+    serviceBinding?.targetKind === "session" ? serviceBinding.targetSessionKey.trim() : "";
+  if (serviceSessionKey && isAcpSessionKey(serviceSessionKey)) {
+    return serviceSessionKey;
+  }
+
+  const configuredBinding = resolveConfiguredAcpBindingRecord({
+    cfg: params.cfg,
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    parentConversationId: bindingContext.parentConversationId,
+  });
+  const configuredSessionKey =
+    configuredBinding?.record.targetKind === "session"
+      ? configuredBinding.record.targetSessionKey.trim()
+      : "";
+  if (configuredSessionKey && isAcpSessionKey(configuredSessionKey)) {
+    return configuredSessionKey;
+  }
+  return undefined;
+}
 
 export async function initSessionState(params: {
   ctx: MsgContext;
@@ -140,7 +288,12 @@ export async function initSessionState(params: {
   const strippedForReset = isGroup
     ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId)
     : triggerBodyNormalized;
-  const shouldUseAcpInPlaceReset = isAcpSessionKey(sessionCtxForState.SessionKey);
+  const shouldUseAcpInPlaceReset = Boolean(
+    resolveBoundAcpSessionForReset({
+      cfg,
+      ctx: sessionCtxForState,
+    }),
+  );
 
   // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.

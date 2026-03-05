@@ -460,17 +460,17 @@ export const registerTelegramNativeCommands = ({
         logVerbose(
           `telegram native command: configured ACP binding unavailable for topic ${configuredBinding.spec.conversationId}: ${ensured.error}`,
         );
-        return null;
-      }
-      const configuredSessionKey = configuredBinding.record.targetSessionKey?.trim() ?? "";
-      if (configuredSessionKey) {
-        const boundAgentId = resolveAgentIdFromSessionKey(configuredSessionKey);
-        route = {
-          ...route,
-          sessionKey: configuredSessionKey,
-          agentId: boundAgentId || route.agentId,
-          matchedBy: "binding.channel",
-        };
+      } else {
+        const configuredSessionKey = configuredBinding.record.targetSessionKey?.trim() ?? "";
+        if (configuredSessionKey) {
+          const boundAgentId = resolveAgentIdFromSessionKey(configuredSessionKey);
+          route = {
+            ...route,
+            sessionKey: configuredSessionKey,
+            agentId: boundAgentId || route.agentId,
+            matchedBy: "binding.channel",
+          };
+        }
       }
     }
     const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
@@ -481,24 +481,6 @@ export const registerTelegramNativeCommands = ({
     });
     const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
     return { chatId, threadSpec, route, mediaLocalRoots, tableMode, chunkMode };
-  };
-  const sendBindingUnavailableReply = async (params: {
-    chatId: number;
-    threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
-  }) => {
-    const threadParams = buildTelegramThreadParams(params.threadSpec) ?? {};
-    await withTelegramApiErrorLogging({
-      operation: "sendMessage",
-      runtime,
-      fn: () =>
-        bot.api.sendMessage(
-          params.chatId,
-          "Configured ACP binding is unavailable right now. Please try again.",
-          {
-            ...threadParams,
-          },
-        ),
-    });
   };
   const sendCommandUnauthorizedReply = async (params: {
     chatId: number;
@@ -585,17 +567,6 @@ export const registerTelegramNativeCommands = ({
             isForum,
             resolvedThreadId,
           });
-          if (!runtimeContext) {
-            await sendBindingUnavailableReply({
-              chatId,
-              threadSpec: resolveTelegramThreadSpec({
-                isGroup,
-                isForum,
-                messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
-              }),
-            });
-            return;
-          }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           if (isSessionResetCommand && !commandAuthorized) {
             if (isAcpSessionKey(route.sessionKey)) {
@@ -827,17 +798,6 @@ export const registerTelegramNativeCommands = ({
             isForum,
             resolvedThreadId,
           });
-          if (!runtimeContext) {
-            await sendBindingUnavailableReply({
-              chatId,
-              threadSpec: resolveTelegramThreadSpec({
-                isGroup,
-                isForum,
-                messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
-              }),
-            });
-            return;
-          }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,

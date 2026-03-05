@@ -267,7 +267,8 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(boundSessionKey);
   });
 
-  it("replies with binding-unavailable when configured ACP topic binding cannot initialize", async () => {
+  it("falls back to default routing when configured ACP topic binding cannot initialize", async () => {
+    const boundSessionKey = "agent:codex:acp:binding:telegram:default:feedface";
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue({
       spec: {
         channel: "telegram",
@@ -279,7 +280,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       },
       record: {
         bindingId: "config:acp:telegram:default:-1001234567890:topic:42",
-        targetSessionKey: "agent:codex:acp:binding:telegram:default:feedface",
+        targetSessionKey: boundSessionKey,
         targetKind: "session",
         conversation: {
           channel: "telegram",
@@ -293,7 +294,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
     persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
       ok: false,
-      sessionKey: "agent:codex:acp:binding:telegram:default:feedface",
+      sessionKey: boundSessionKey,
       error: "gateway unavailable",
     });
 
@@ -304,11 +305,18 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
     await handler(buildStatusTopicCommandContext());
 
-    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledWith(
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandTargetSessionKey?: string } }]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBeTruthy();
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).not.toBe(boundSessionKey);
+    expect(sendMessage).not.toHaveBeenCalledWith(
       -1001234567890,
       "Configured ACP binding is unavailable right now. Please try again.",
-      expect.objectContaining({ message_thread_id: 42 }),
+      expect.anything(),
     );
   });
 

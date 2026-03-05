@@ -110,6 +110,43 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     expect(resolved?.record.conversation.conversationId).toBe("channel-parent-1");
   });
 
+  it("prefers direct discord thread binding over parent channel fallback", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "channel", id: "channel-parent-1" },
+          },
+        },
+        {
+          type: "acp",
+          agentId: "claude",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "channel", id: "thread-123" },
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-123",
+      parentConversationId: "channel-parent-1",
+    });
+
+    expect(resolved?.spec.conversationId).toBe("thread-123");
+    expect(resolved?.spec.agentId).toBe("claude");
+  });
+
   it("returns null when no top-level ACP binding matches the conversation", () => {
     const cfg = {
       ...baseCfg,
@@ -485,6 +522,37 @@ describe("resetAcpSessionInPlace", () => {
       expect.objectContaining({
         sessionKey,
         clearMeta: false,
+      }),
+    );
+  });
+
+  it("preserves harness agent ids during in-place reset even when not in agents.list", async () => {
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [{ id: "main" }, { id: "coding" }],
+      },
+    } satisfies OpenClawConfig;
+    const sessionKey = "agent:coding:acp:binding:discord:default:9373ab192b2317f4";
+    sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
+      acp: {
+        agent: "codex",
+        mode: "persistent",
+        backend: "acpx",
+      },
+    });
+
+    const result = await resetAcpSessionInPlace({
+      cfg,
+      sessionKey,
+      reason: "reset",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(managerMocks.initializeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        agent: "codex",
       }),
     );
   });

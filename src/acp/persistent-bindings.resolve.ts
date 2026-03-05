@@ -191,31 +191,45 @@ export function resolveConfiguredAcpBindingRecord(params: {
   }
 
   if (channel === "discord") {
-    const candidates = new Set(
-      [conversationId, parentConversationId].filter((value): value is string => Boolean(value)),
-    );
-    for (const binding of listAcpBindings(params.cfg)) {
-      if (normalizeBindingChannel(binding.match.channel) !== "discord") {
-        continue;
+    const bindings = listAcpBindings(params.cfg);
+    const resolveDiscordBindingForConversation = (
+      targetConversationId: string,
+    ): ResolvedConfiguredAcpBinding | null => {
+      for (const binding of bindings) {
+        if (normalizeBindingChannel(binding.match.channel) !== "discord") {
+          continue;
+        }
+        if (!matchesAccountId(binding.match.accountId, accountId)) {
+          continue;
+        }
+        const bindingConversationId = resolveBindingConversationId(binding);
+        if (!bindingConversationId || bindingConversationId !== targetConversationId) {
+          continue;
+        }
+        const spec = toConfiguredBindingSpec({
+          cfg: params.cfg,
+          channel: "discord",
+          accountId,
+          conversationId: targetConversationId,
+          binding,
+        });
+        return {
+          spec,
+          record: toConfiguredAcpBindingRecord(spec),
+        };
       }
-      if (!matchesAccountId(binding.match.accountId, accountId)) {
-        continue;
+      return null;
+    };
+
+    const directMatch = resolveDiscordBindingForConversation(conversationId);
+    if (directMatch) {
+      return directMatch;
+    }
+    if (parentConversationId && parentConversationId !== conversationId) {
+      const inheritedMatch = resolveDiscordBindingForConversation(parentConversationId);
+      if (inheritedMatch) {
+        return inheritedMatch;
       }
-      const targetConversationId = resolveBindingConversationId(binding);
-      if (!targetConversationId || !candidates.has(targetConversationId)) {
-        continue;
-      }
-      const spec = toConfiguredBindingSpec({
-        cfg: params.cfg,
-        channel: "discord",
-        accountId,
-        conversationId: targetConversationId,
-        binding,
-      });
-      return {
-        spec,
-        record: toConfiguredAcpBindingRecord(spec),
-      };
     }
     return null;
   }

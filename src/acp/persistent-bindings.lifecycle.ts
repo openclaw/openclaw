@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { logVerbose } from "../globals.js";
-import { pickFirstExistingAgentId } from "../routing/resolve-route.js";
 import { getAcpSessionManager } from "./control-plane/manager.js";
+import { resolveAcpAgentFromSessionKey } from "./control-plane/manager.utils.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "./persistent-bindings.resolve.js";
 import {
   buildConfiguredAcpSessionKey,
@@ -119,15 +119,15 @@ export async function resetAcpSessionInPlace(params: {
     };
   }
 
+  const configuredBinding = resolveConfiguredAcpBindingSpecBySessionKey({
+    cfg: params.cfg,
+    sessionKey,
+  });
   const meta = readAcpSessionEntry({
     cfg: params.cfg,
     sessionKey,
   })?.acp;
   if (!meta) {
-    const configuredBinding = resolveConfiguredAcpBindingSpecBySessionKey({
-      cfg: params.cfg,
-      sessionKey,
-    });
     if (configuredBinding) {
       const ensured = await ensureConfiguredAcpBindingSession({
         cfg: params.cfg,
@@ -148,7 +148,11 @@ export async function resetAcpSessionInPlace(params: {
   }
 
   const acpManager = getAcpSessionManager();
-  const agent = pickFirstExistingAgentId(params.cfg, meta.agent || "main");
+  const agent =
+    normalizeText(meta.agent) ??
+    configuredBinding?.acpAgentId ??
+    configuredBinding?.agentId ??
+    resolveAcpAgentFromSessionKey(sessionKey, "main");
   const mode = meta.mode === "oneshot" ? "oneshot" : "persistent";
   const runtimeOptions = { ...meta.runtimeOptions };
   const cwd = normalizeText(runtimeOptions.cwd ?? meta.cwd);
