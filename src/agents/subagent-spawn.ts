@@ -344,7 +344,8 @@ export async function spawnSubagentDirect(
   );
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
   if (targetAgentId !== requesterAgentId) {
-    const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+    const explicitAllowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents;
+    const allowAgents = explicitAllowAgents ?? [];
     const allowAny = allowAgents.some((value) => value.trim() === "*");
     const normalizedTargetId = targetAgentId.toLowerCase();
     const allowSet = new Set(
@@ -352,8 +353,22 @@ export async function spawnSubagentDirect(
         .filter((value) => value.trim() && value.trim() !== "*")
         .map((value) => normalizeAgentId(value).toLowerCase()),
     );
-    if (!allowAny && !allowSet.has(normalizedTargetId)) {
-      const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
+    const configuredSet = new Set(
+      (Array.isArray(cfg.agents?.list) ? cfg.agents.list : [])
+        .map((entry) => normalizeAgentId(entry.id).toLowerCase()),
+    );
+    const isAllowed = allowAny
+      ? true
+      : explicitAllowAgents === undefined
+        ? configuredSet.has(normalizedTargetId)
+        : allowSet.has(normalizedTargetId);
+    if (!isAllowed) {
+      const allowedText =
+        explicitAllowAgents === undefined
+          ? Array.from(configuredSet).join(", ") || "none"
+          : allowSet.size > 0
+            ? Array.from(allowSet).join(", ")
+            : "none";
       return {
         status: "forbidden",
         error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
