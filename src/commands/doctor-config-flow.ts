@@ -2072,9 +2072,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     pendingChanges = true;
     if (shouldRepair) {
       cfg = unknown.config;
-      note(lines, "Doctor changes");
+      // Use a clear title so users know these keys are being permanently removed.
+      note(`Removed unrecognised keys from config:\n${lines}`, "Doctor changes");
     } else {
-      note(lines, "Unknown config keys");
+      note(
+        `The following config keys are not recognised by the current schema and will be removed if you apply repairs:\n${lines}`,
+        "Unknown config keys",
+      );
       fixHints.push('Run "openclaw doctor --fix" to remove these keys.');
     }
   }
