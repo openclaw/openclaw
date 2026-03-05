@@ -258,7 +258,14 @@ export abstract class MemoryManagerSyncOps {
     const dir = path.dirname(dbPath);
     ensureDir(dir);
     const { DatabaseSync } = requireNodeSqlite();
-    return new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+    const db = new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+    try {
+      db.exec("PRAGMA journal_mode = WAL");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.debug(`memory sqlite WAL mode unavailable: ${message}`);
+    }
+    return db;
   }
 
   private seedEmbeddingCache(sourceDb: DatabaseSync): void {
