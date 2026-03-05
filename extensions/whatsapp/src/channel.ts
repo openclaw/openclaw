@@ -151,7 +151,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           return { actions: Array.from(actions) };
         },
         supportsAction: ({ action }) => action === "react",
-        handleAction: async ({ action, params, cfg, accountId }) => {
+        handleAction: async ({ action, params, cfg, accountId, requesterSenderId }) => {
           if (action !== "react") {
             throw new Error(`Action ${action} is not supported for provider ${WHATSAPP_CHANNEL}.`);
           }
@@ -169,7 +169,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
               messageId,
               emoji,
               remove,
-              participant: readStringParam(params, "participant"),
+              participant: readStringParam(params, "participant") ?? requesterSenderId ?? undefined,
               accountId: accountId ?? undefined,
               fromMe: typeof params.fromMe === "boolean" ? params.fromMe : undefined,
             },
