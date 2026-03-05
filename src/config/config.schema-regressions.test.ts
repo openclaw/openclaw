@@ -184,4 +184,20 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts telegram actions editMessage and createForumTopic", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          botToken: "12345:token",
+          actions: {
+            editMessage: true,
+            createForumTopic: true,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
