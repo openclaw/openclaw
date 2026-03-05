@@ -162,9 +162,10 @@ function mergeWithExistingProviderSecrets(params: {
     if (typeof existing.apiKey === "string" && existing.apiKey) {
       preserved.apiKey = existing.apiKey;
     }
-    if (typeof existing.baseUrl === "string" && existing.baseUrl) {
-      preserved.baseUrl = existing.baseUrl;
-    }
+    // Don't preserve baseUrl - it's user configuration, not a secret.
+    // Users should be able to update baseUrl in openclaw.json and have
+    // the new value take effect after restarting the gateway.
+    // See: #36353
     mergedProviders[key] = { ...newEntry, ...preserved };
   }
   return mergedProviders;
