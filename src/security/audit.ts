@@ -1326,12 +1326,12 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       checkId: "env.dangerous_vars_set",
       severity: "warn",
       title: highRiskSet.length + " high-risk environment variable(s) set",
-      detail:
-        "The following native-injection variables are set: " +
+        "The following native-injection or key-disclosure variables are set: " +
         highRiskSet.join(", ") +
         ". " +
-        "These can be used for arbitrary code injection if an attacker " +
-        "gains exec tool access (T-DISC-004).",
+        "Linker/runtime-injection vars (LD_PRELOAD, DYLD_INSERT_LIBRARIES, BASH_ENV, etc.) " +
+        "enable arbitrary code injection. SSLKEYLOGFILE logs TLS session keys and can " +
+        "expose decrypted traffic to an attacker with filesystem read access (T-DISC-004).",
       remediation:
         "Unset these variables unless intentionally configured. " +
         "If required, ensure they are in host-env-security-policy.json blocklist.",
