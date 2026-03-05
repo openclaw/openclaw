@@ -148,18 +148,36 @@ export function createGatewayReloadHandlers(params: {
             params.logChannels.error(
               `failed to hot reload groups for ${channelId}: ${String(err)}`,
             );
+            // Fallback: restart the channel (only if not already restarted in this reload)
+            if (
+              !plan.restartChannels.includes(channelId) &&
+              !isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) &&
+              !isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
+            ) {
+              await params.stopChannel(channelId);
+              await params.startChannel(channelId);
+            } else {
+              params.logChannels.info(
+                `skipping channel restart for ${channelId} (already restarted in this reload cycle)`,
+              );
+            }
           }
         } else {
           params.logChannels.info(
             `channel ${channelId} does not support group hot reload, falling back to restart`,
           );
-          // Fallback: restart the channel
+          // Fallback: restart the channel (only if not already restarted)
           if (
+            !plan.restartChannels.includes(channelId) &&
             !isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) &&
             !isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
           ) {
             await params.stopChannel(channelId);
             await params.startChannel(channelId);
+          } else {
+            params.logChannels.info(
+              `skipping channel restart for ${channelId} (already restarted in this reload cycle)`,
+            );
           }
         }
       }
