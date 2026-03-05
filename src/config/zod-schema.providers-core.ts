@@ -425,6 +425,7 @@ export const DiscordAccountSchema = z
     token: SecretInputSchema.optional().register(sensitive),
     proxy: z.string().optional(),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+    allowBotIds: z.array(z.string()).optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),

@@ -183,8 +183,13 @@ export async function preflightDiscordMessage(
 
   if (author.bot) {
     if (allowBotsMode === "off" && !sender.isPluralKit) {
-      logVerbose("discord: drop bot message (allowBots=false)");
-      return null;
+      const allowBotIds = params.discordConfig?.allowBotIds ?? [];
+      const isExplicitlyAllowedBot = allowBotIds.includes(author.id);
+      if (!isExplicitlyAllowedBot) {
+        logVerbose("discord: drop bot message (allowBots=false)");
+        return null;
+      }
+      logVerbose(`discord: allow explicitly listed bot ${author.id} (allowBotIds)`);
     }
   }
 

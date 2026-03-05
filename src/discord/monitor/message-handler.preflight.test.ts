@@ -822,6 +822,166 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
     expect(result?.wasMentioned).toBe(true);
   });
+
+  it("allows messages from explicitly listed bot IDs even when allowBots=false", async () => {
+    // Scenario: two agent bots share a Discord server.
+    // Bot B (agent-bot-b) mentions Bot A (openclaw-bot-a) to route a task.
+    // Without allowBotIds, allowBots=false drops all bot messages before they reach
+    // any mention-gating or routing logic. The fix lets explicitly listed bots through.
+    const channelId = "channel-multi-bot-allow";
+    const guildId = "guild-multi-bot-allow";
+    const allowedBotId = "agent-bot-b";
+    const primaryBotId = "openclaw-bot-a";
+    const client = {
+      fetchChannel: async (id: string) => {
+        if (id === channelId) {
+          return {
+            id: channelId,
+            type: ChannelType.GuildText,
+            name: "general",
+          };
+        }
+        return null;
+      },
+    } as unknown as import("@buape/carbon").Client;
+    // Bot B explicitly mentions Bot A so the message passes the default mention gate
+    // (requireMention=true when no guild config is set).
+    const message = {
+      id: "m-multi-bot-allow-1",
+      content: `<@${primaryBotId}> run the analysis`,
+      timestamp: new Date().toISOString(),
+      channelId,
+      attachments: [],
+      mentionedUsers: [{ id: primaryBotId }],
+      mentionedRoles: [],
+      mentionedEveryone: false,
+      author: {
+        id: allowedBotId,
+        bot: true,
+        username: "AgentBotB",
+      },
+    } as unknown as import("@buape/carbon").Message;
+
+    const result = await preflightDiscordMessage({
+      cfg: {
+        session: {
+          mainKey: "main",
+          scope: "per-sender",
+        },
+      } as import("../../config/config.js").OpenClawConfig,
+      discordConfig: {
+        allowBots: false,
+        allowBotIds: [allowedBotId],
+      } as unknown as NonNullable<
+        import("../../config/config.js").OpenClawConfig["channels"]
+      >["discord"],
+      accountId: "default",
+      token: "token",
+      runtime: {} as import("../../runtime.js").RuntimeEnv,
+      botUserId: primaryBotId,
+      guildHistories: new Map(),
+      historyLimit: 0,
+      mediaMaxBytes: 1_000_000,
+      textLimit: 2_000,
+      replyToMode: "all",
+      dmEnabled: true,
+      groupDmEnabled: true,
+      ackReactionScope: "direct",
+      groupPolicy: "open",
+      threadBindings: createNoopThreadBindingManager("default"),
+      data: {
+        channel_id: channelId,
+        guild_id: guildId,
+        guild: {
+          id: guildId,
+          name: "Multi-Bot Guild",
+        },
+        author: message.author,
+        message,
+      } as unknown as import("./listeners.js").DiscordMessageEvent,
+      client,
+    });
+
+    // Bot message from an explicitly allowlisted bot ID should reach the agent
+    // even when the global allowBots setting is false.
+    expect(result).not.toBeNull();
+  });
+
+  it("still drops bot messages when allowBots=false and bot ID is not in allowBotIds", async () => {
+    const channelId = "channel-multi-bot-deny";
+    const guildId = "guild-multi-bot-deny";
+    const primaryBotId = "openclaw-bot-a";
+    const client = {
+      fetchChannel: async (id: string) => {
+        if (id === channelId) {
+          return {
+            id: channelId,
+            type: ChannelType.GuildText,
+            name: "general",
+          };
+        }
+        return null;
+      },
+    } as unknown as import("@buape/carbon").Client;
+    const message = {
+      id: "m-multi-bot-deny-1",
+      content: `<@${primaryBotId}> do something`,
+      timestamp: new Date().toISOString(),
+      channelId,
+      attachments: [],
+      mentionedUsers: [{ id: primaryBotId }],
+      mentionedRoles: [],
+      mentionedEveryone: false,
+      author: {
+        id: "some-unknown-bot",
+        bot: true,
+        username: "UnknownBot",
+      },
+    } as unknown as import("@buape/carbon").Message;
+
+    const result = await preflightDiscordMessage({
+      cfg: {
+        session: {
+          mainKey: "main",
+          scope: "per-sender",
+        },
+      } as import("../../config/config.js").OpenClawConfig,
+      discordConfig: {
+        allowBots: false,
+        allowBotIds: ["agent-bot-b"],
+      } as unknown as NonNullable<
+        import("../../config/config.js").OpenClawConfig["channels"]
+      >["discord"],
+      accountId: "default",
+      token: "token",
+      runtime: {} as import("../../runtime.js").RuntimeEnv,
+      botUserId: primaryBotId,
+      guildHistories: new Map(),
+      historyLimit: 0,
+      mediaMaxBytes: 1_000_000,
+      textLimit: 2_000,
+      replyToMode: "all",
+      dmEnabled: true,
+      groupDmEnabled: true,
+      ackReactionScope: "direct",
+      groupPolicy: "open",
+      threadBindings: createNoopThreadBindingManager("default"),
+      data: {
+        channel_id: channelId,
+        guild_id: guildId,
+        guild: {
+          id: guildId,
+          name: "Multi-Bot Guild",
+        },
+        author: message.author,
+        message,
+      } as unknown as import("./listeners.js").DiscordMessageEvent,
+      client,
+    });
+
+    // Unknown bot (not in allowBotIds) should still be dropped with allowBots=false.
+    expect(result).toBeNull();
+  });
 });
 
 describe("shouldIgnoreBoundThreadWebhookMessage", () => {

@@ -225,6 +225,13 @@ export type DiscordAccountConfig = {
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
   /**
+   * Explicit allowlist of Discord bot user IDs whose messages should be processed
+   * even when `allowBots` is false. Useful when multiple agent bots share a server
+   * and need to communicate without enabling all bot messages globally.
+   * Self-echo protection (botUserId) still applies regardless of this list.
+   */
+  allowBotIds?: string[];
+  /**
    * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
    * Default behavior is ID-only matching.
    */
