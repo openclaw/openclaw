@@ -48,14 +48,15 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
 }
 
 export async function saveCronStore(storePath: string, store: CronStoreFile) {
-  await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.promises.mkdir(path.dirname(storePath), { recursive: true, mode: 0o700 });
   const { randomBytes } = await import("node:crypto");
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   const json = JSON.stringify(store, null, 2);
-  await fs.promises.writeFile(tmp, json, "utf-8");
+  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
   await fs.promises.rename(tmp, storePath);
   try {
     await fs.promises.copyFile(storePath, `${storePath}.bak`);
+    await fs.promises.chmod(`${storePath}.bak`, 0o600);
   } catch {
     // best-effort
   }

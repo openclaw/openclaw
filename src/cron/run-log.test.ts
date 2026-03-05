@@ -182,3 +182,25 @@ describe("cron run log", () => {
     });
   });
 });
+
+describe("appendCronRunLog permissions", () => {
+  it("creates runs directory with 700 permissions", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runlog-"));
+    const logPath = path.join(dir, "runs", "job-1.jsonl");
+    const entry: CronRunLogEntry = { ts: Date.now(), jobId: "job-1", action: "finished" };
+    await appendCronRunLog(logPath, entry);
+    const dirStat = await fs.stat(path.join(dir, "runs"));
+    expect((dirStat.mode & 0o777).toString(8)).toBe("700");
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("creates run log file with 600 permissions", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runlog-"));
+    const logPath = path.join(dir, "runs", "job-1.jsonl");
+    const entry: CronRunLogEntry = { ts: Date.now(), jobId: "job-1", action: "finished" };
+    await appendCronRunLog(logPath, entry);
+    const fileStat = await fs.stat(logPath);
+    expect((fileStat.mode & 0o777).toString(8)).toBe("600");
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+});

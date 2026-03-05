@@ -44,3 +44,31 @@ describe("cron store", () => {
     await store.cleanup();
   });
 });
+
+import { saveCronStore } from "./store.js";
+
+describe("saveCronStore permissions", () => {
+  it("creates cron directory with 700 permissions", async () => {
+    const store = await makeStorePath();
+    await saveCronStore(store.storePath, { version: 1, jobs: [] });
+    const dirStat = await fs.stat(store.dir);
+    expect((dirStat.mode & 0o777).toString(8)).toBe("700");
+    await store.cleanup();
+  });
+
+  it("creates jobs.json with 600 permissions", async () => {
+    const store = await makeStorePath();
+    await saveCronStore(store.storePath, { version: 1, jobs: [] });
+    const fileStat = await fs.stat(store.storePath);
+    expect((fileStat.mode & 0o777).toString(8)).toBe("600");
+    await store.cleanup();
+  });
+
+  it("creates jobs.json.bak with 600 permissions", async () => {
+    const store = await makeStorePath();
+    await saveCronStore(store.storePath, { version: 1, jobs: [] });
+    const bakStat = await fs.stat(`${store.storePath}.bak`);
+    expect((bakStat.mode & 0o777).toString(8)).toBe("600");
+    await store.cleanup();
+  });
+});
