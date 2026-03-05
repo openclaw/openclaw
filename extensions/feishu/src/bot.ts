@@ -995,9 +995,12 @@ export async function handleFeishuMessage(params: {
       return;
     }
     const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+    const rawGroupPolicy = feishuCfg?.groupPolicy as string | undefined;
+    const normalizedGroupPolicy =
+      rawGroupPolicy === "allowall" ? "open" : (feishuCfg?.groupPolicy ?? undefined);
     const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.feishu !== undefined,
-      groupPolicy: feishuCfg?.groupPolicy,
+      groupPolicy: normalizedGroupPolicy,
       defaultGroupPolicy,
     });
     warnMissingProviderGroupPolicyFallbackOnce({
