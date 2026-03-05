@@ -38,17 +38,22 @@ function isOwnerOnlyTool(tool: AnyAgentTool) {
   return tool.ownerOnly === true || isOwnerOnlyToolName(tool.name);
 }
 
-export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: boolean) {
-  const withGuard = tools.map((tool) => {
-    if (!isOwnerOnlyTool(tool)) {
-      return tool;
-    }
-    return wrapOwnerOnlyToolExecution(tool, senderIsOwner);
-  });
+export function applyOwnerOnlyToolPolicy(
+  tools: AnyAgentTool[],
+  senderIsOwner: boolean,
+  sandboxAllow?: string[],
+) {
+ 
+  const sandboxAllowSet = new Set(sandboxAllow?.map(normalizeToolName) ?? []);
+  const withGuard = tools.map((tool) =>
+    isOwnerOnlyTool(tool)
+      ? wrapOwnerOnlyToolExecution(tool, senderIsOwner || sandboxAllowSet.has(normalizeToolName(tool.name)))
+      : tool,
+  );
   if (senderIsOwner) {
     return withGuard;
   }
-  return withGuard.filter((tool) => !isOwnerOnlyTool(tool));
+  return withGuard.filter((tool) => !isOwnerOnlyTool(tool) || sandboxAllowSet.has(normalizeToolName(tool.name)));
 }
 
 export type ToolPolicyLike = {

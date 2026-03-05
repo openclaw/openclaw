@@ -482,7 +482,7 @@ export function createOpenClawCodingTools(options?: {
   ];
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-  const toolsByAuthorization = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
+  const toolsByAuthorization = applyOwnerOnlyToolPolicy(tools, senderIsOwner, sandbox?.tools?.allow);
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),

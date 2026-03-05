@@ -38,4 +38,24 @@ describe("owner-only tool gating", () => {
     expect(toolNames).not.toContain("cron");
     expect(toolNames).not.toContain("gateway");
   });
+
+  it("injects cron schema for non-owner when explicitly listed in sandbox tools.allow", () => {
+    const tools = createOpenClawCodingTools({
+      senderIsOwner: false,
+      sandbox: { enabled: true, tools: { allow: ["cron"], deny: [] }, docker: { image: "openclaw-sandbox:bookworm-slim", containerPrefix: "openclaw-sbx-" } },
+    });
+    const toolNames = tools.map((t) => t.name);
+    expect(toolNames).toContain("cron");
+    
+    expect(toolNames).not.toContain("gateway");
+    expect(toolNames).not.toContain("whatsapp_login");
+  });
+
+  it("does not inject cron for non-owner when sandbox tools.allow omits it", () => {
+    const tools = createOpenClawCodingTools({
+      senderIsOwner: false,
+      sandbox: { enabled: true, tools: { allow: ["read", "write"], deny: [] }, docker: { image: "openclaw-sandbox:bookworm-slim", containerPrefix: "openclaw-sbx-" } },
+    });
+    expect(tools.map((t) => t.name)).not.toContain("cron");
+  });
 });
