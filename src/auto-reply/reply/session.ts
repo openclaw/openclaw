@@ -23,11 +23,16 @@ import {
   resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
+  MAX_SESSION_HISTORY,
+  type SessionHistoryEntry,
   type SessionScope,
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
+import {
+  archiveSessionTranscripts,
+  resolveSessionEntryLabel,
+} from "../../gateway/session-utils.fs.js";
 import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -186,6 +191,25 @@ function resolveBoundAcpSessionForReset(params: {
   });
 }
 
+function buildUpdatedHistory(
+  entry: SessionEntry,
+  storePath: string | undefined,
+  agentId: string | undefined,
+): SessionHistoryEntry[] {
+  const prev: SessionHistoryEntry[] = entry.history ?? [];
+  const newEntry: SessionHistoryEntry = {
+    sessionId: entry.sessionId,
+    sessionFile: entry.sessionFile,
+    updatedAt: entry.updatedAt,
+    label: resolveSessionEntryLabel(entry, storePath, agentId),
+    systemSent: entry.systemSent,
+  };
+  return [newEntry, ...prev.filter((h) => h.sessionId !== newEntry.sessionId)].slice(
+    0,
+    MAX_SESSION_HISTORY,
+  );
+}
+
 export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -238,6 +262,7 @@ export async function initSessionState(params: {
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
   let persistedLabel: string | undefined;
+  let updatedHistory: SessionHistoryEntry[] | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
@@ -386,6 +411,12 @@ export async function initSessionState(params: {
       persistedModelOverride = entry.modelOverride;
       persistedProviderOverride = entry.providerOverride;
       persistedLabel = entry.label;
+      // Build updated history: prepend the session being archived, cap at MAX_SESSION_HISTORY.
+      updatedHistory = buildUpdatedHistory(entry, storePath, agentId);
+    } else if (entry) {
+      // Daily/idle timeout: session expired passively. Transcript stays on disk
+      // as-is (not archived), but record it in history so /resume can find it.
+      updatedHistory = buildUpdatedHistory(entry, storePath, agentId);
     }
   }
 
@@ -437,6 +468,7 @@ export async function initSessionState(params: {
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     label: persistedLabel ?? baseEntry?.label,
+    history: updatedHistory ?? baseEntry?.history,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,

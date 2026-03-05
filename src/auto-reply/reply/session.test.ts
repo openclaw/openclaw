@@ -2117,3 +2117,120 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.to).toBe("session:webchat-main");
   });
 });
+
+describe("initSessionState session history", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("appends expired session to history on daily reset", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-history-daily-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:hist1";
+    const expiredSessionId = "expired-daily-id";
+    const expiredSessionFile = path.join(root, `${expiredSessionId}.jsonl`);
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: expiredSessionId,
+        sessionFile: expiredSessionFile,
+        label: "old label",
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.history).toHaveLength(1);
+    expect(result.sessionEntry.history?.[0].sessionId).toBe(expiredSessionId);
+    expect(result.sessionEntry.history?.[0].label).toBe("old label");
+  });
+
+  it("appends expired session to history on idle timeout", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-history-idle-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:hist2";
+    const expiredSessionId = "expired-idle-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: expiredSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 0, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, reset: { mode: "daily", atHour: 4, idleMinutes: 30 } },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.history).toHaveLength(1);
+    expect(result.sessionEntry.history?.[0].sessionId).toBe(expiredSessionId);
+  });
+
+  it("appends session to history on explicit /new", async () => {
+    const root = await makeCaseDir("openclaw-history-new-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:dm:hist3";
+    const activeSessionId = "active-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: activeSessionId,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "/new", CommandBody: "/new", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.history).toHaveLength(1);
+    expect(result.sessionEntry.history?.[0].sessionId).toBe(activeSessionId);
+  });
+
+  it("does not duplicate an entry already in history", async () => {
+    const root = await makeCaseDir("openclaw-history-dedup-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:dm:hist4";
+    const sessionId = "active-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+        history: [{ sessionId, updatedAt: Date.now() - 1000 }],
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "/new", CommandBody: "/new", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.history).toHaveLength(1);
+    expect(result.sessionEntry.history?.[0].sessionId).toBe(sessionId);
+  });
+});
