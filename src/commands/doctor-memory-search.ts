@@ -113,11 +113,13 @@ export async function noteMemorySearchHealth(
     return;
   }
 
-  // provider === "auto": check all providers in resolution order
+  // provider === "auto": check all providers in resolution order.
+  // Bedrock is excluded because its auth check (AWS default credential chain)
+  // can return a false positive without real credentials being configured.
   if (hasLocalEmbeddings(resolved.local)) {
     return;
   }
-  for (const provider of ["openai", "gemini", "voyage", "mistral", "bedrock"] as const) {
+  for (const provider of ["openai", "gemini", "voyage", "mistral"] as const) {
     if (hasRemoteApiKey || (await hasApiKeyForProvider(provider, cfg, agentDir))) {
       return;
     }

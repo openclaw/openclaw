@@ -89,7 +89,7 @@ export async function createBedrockEmbeddingProvider(
     }
   } catch {
     throw new Error(
-      "Bedrock embedding provider could not resolve AWS credentials. " +
+      "No API key found for provider amazon-bedrock. " +
         "Set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, AWS_PROFILE, or run on an instance with an IAM role.",
     );
   }
