@@ -9,12 +9,13 @@
 ## Codex Orchestration
 
 - For coding tasks, launch Codex CLI with explicit model:
-  - `codex exec --model gpt-5.3-codex-spark ...`
+  - `bash pty:true elevated:true workdir:<repo-or-worktree> command:"codex exec --model gpt-5.3-codex-spark --yolo '<goal prompt>'"`
 - Run Codex in target repo/worktree context.
 - Track run outcome and post concise status updates.
 - Scheduler sends goal-level tasks, not micro-steps.
 - Good instruction shape: "Based on issue #N, fix and open upstream PR under repo rules."
 - Do not tell Codex how to do internal git/install/commit mechanics.
+- Do not use `-s workspace-write` for PR tasks; it may prevent worktree git metadata writes.
 
 ## AutoPR Guardrails
 
