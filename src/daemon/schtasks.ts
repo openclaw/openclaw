@@ -230,12 +230,23 @@ export async function installScheduledTask({
   await assertSchtasksAvailable();
   const scriptPath = resolveTaskScriptPath(env);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  const taskDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const sanitizedEnvironment = environment
+    ? Object.fromEntries(
+        Object.entries(environment).filter(
+          ([key]) => key.toUpperCase() !== "OPENCLAW_SERVICE_VERSION",
+        ),
+      )
+    : undefined;
+  const taskDescription = resolveGatewayServiceDescription({
+    env,
+    environment: sanitizedEnvironment,
+    description,
+  });
   const script = buildTaskScript({
     description: taskDescription,
     programArguments,
     workingDirectory,
-    environment,
+    environment: sanitizedEnvironment,
   });
   await fs.writeFile(scriptPath, script, "utf8");
 
