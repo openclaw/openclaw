@@ -9,6 +9,7 @@ import {
   isCompactionFailureError,
   isContextOverflowError,
   isFailoverErrorMessage,
+  mapStopReason,
   isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
   isTimeoutErrorMessage,
@@ -303,6 +304,17 @@ describe("isContextOverflowError", () => {
   });
 });
 
+describe("mapStopReason", () => {
+  it("maps model_context_window_exceeded to error", () => {
+    expect(mapStopReason("model_context_window_exceeded")).toBe("error");
+  });
+
+  it("passes through unknown stop reasons", () => {
+    expect(mapStopReason("toolUse")).toBe("toolUse");
+    expect(mapStopReason("stop")).toBe("stop");
+  });
+});
+
 describe("error classifiers", () => {
   it("ignore unrelated errors", () => {
     const checks: Array<{
@@ -389,6 +401,13 @@ describe("isLikelyContextOverflowError", () => {
     for (const sample of samples) {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
+  });
+});
+
+describe("isLikelyContextOverflowError stopReason fallback", () => {
+  it("treats model_context_window_exceeded as overflow", () => {
+    expect(isLikelyContextOverflowError("model_context_window_exceeded")).toBe(true);
+    expect(isContextOverflowError("model_context_window_exceeded")).toBe(true);
   });
 });
 

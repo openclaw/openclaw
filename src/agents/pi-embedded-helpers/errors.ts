@@ -25,6 +25,25 @@ export {
 
 const log = createSubsystemLogger("errors");
 
+const CONTEXT_OVERFLOW_ERROR_MESSAGE =
+  "Context overflow: prompt too large for the model. " +
+  "Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+
+const MODEL_CONTEXT_WINDOW_EXCEEDED_REASON = "model_context_window_exceeded";
+
+function normalizeStopReason(stopReason?: string | null): string {
+  const normalized = stopReason?.trim();
+  return normalized ? normalized : "stop";
+}
+
+export function mapStopReason(stopReason?: string | null): string {
+  const normalized = normalizeStopReason(stopReason);
+  if (normalized === MODEL_CONTEXT_WINDOW_EXCEEDED_REASON) {
+    return "error";
+  }
+  return normalized;
+}
+
 export function formatBillingErrorMessage(provider?: string, model?: string): string {
   const providerName = provider?.trim();
   const modelName = model?.trim();
@@ -70,11 +89,21 @@ function hasRateLimitTpmHint(raw: string): boolean {
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
 }
 
+function getStopReasonErrorText(stopReason?: string | null): string | undefined {
+  if (stopReason === MODEL_CONTEXT_WINDOW_EXCEEDED_REASON) {
+    return CONTEXT_OVERFLOW_ERROR_MESSAGE;
+  }
+  return undefined;
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
   const lower = errorMessage.toLowerCase();
+  if (lower.includes("model_context_window_exceeded")) {
+    return true;
+  }
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
   if (hasRateLimitTpmHint(errorMessage)) {
@@ -123,6 +152,9 @@ const RATE_LIMIT_HINT_RE =
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
+  }
+  if (errorMessage.toLowerCase().includes("model_context_window_exceeded")) {
+    return true;
   }
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
@@ -481,12 +513,17 @@ export function formatAssistantErrorText(
   msg: AssistantMessage,
   opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
 ): string | undefined {
+  const stopReason = mapStopReason(msg.stopReason);
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
-  if (msg.stopReason !== "error" && !raw) {
+  if (stopReason !== "error" && !raw) {
     return undefined;
   }
   if (!raw) {
+    const stopReasonText = getStopReasonErrorText(msg.stopReason);
+    if (stopReasonText) {
+      return stopReasonText;
+    }
     return "LLM request failed with an unknown error.";
   }
 
@@ -505,10 +542,7 @@ export function formatAssistantErrorText(
   }
 
   if (isContextOverflowError(raw)) {
-    return (
-      "Context overflow: prompt too large for the model. " +
-      "Try /reset (or /new) to start a fresh session, or use a larger-context model."
-    );
+    return CONTEXT_OVERFLOW_ERROR_MESSAGE;
   }
 
   if (isReasoningConstraintErrorMessage(raw)) {
@@ -589,10 +623,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
 
     if (shouldRewriteContextOverflowText(trimmed)) {
-      return (
-        "Context overflow: prompt too large for the model. " +
-        "Try /reset (or /new) to start a fresh session, or use a larger-context model."
-      );
+      return CONTEXT_OVERFLOW_ERROR_MESSAGE;
     }
 
     if (isBillingErrorMessage(trimmed)) {

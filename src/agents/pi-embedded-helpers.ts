@@ -12,6 +12,7 @@ export {
 export {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
+  mapStopReason,
   classifyFailoverReason,
   formatRawAssistantErrorForUi,
   formatAssistantErrorText,

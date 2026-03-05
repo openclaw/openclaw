@@ -276,6 +276,35 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("retries after successful compaction on assistant model_context_window_exceeded stopReason", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: null,
+          lastAssistant: {
+            stopReason:
+              "model_context_window_exceeded" as unknown as EmbeddedRunAttemptResult["lastAssistant"]["stopReason"],
+          } as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+    expect(result.meta.error).toBeUndefined();
+  });
+
   it("does not treat stale assistant overflow as current-attempt overflow when promptError is non-overflow", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
