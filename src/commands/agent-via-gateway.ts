@@ -196,6 +196,10 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     return await agentViaGatewayCommand(opts, runtime);
   } catch (err) {
     runtime.error?.(`Gateway agent failed; falling back to embedded: ${String(err)}`);
-    return await agentCommand(localOpts, runtime, deps);
+    try {
+      return await agentCommand(localOpts, runtime, deps);
+    } finally {
+      await stopBrowserControlService().catch(() => {});
+    }
   }
 }
