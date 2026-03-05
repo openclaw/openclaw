@@ -42,6 +42,7 @@ function expectEnvProxyAgentConstructorCall(params: { nth: number; autoSelectFam
     connect: {
       autoSelectFamily: params.autoSelectFamily,
       autoSelectFamilyAttemptTimeout: 300,
+      maxCachedSessions: 0,
     },
   });
 }
@@ -218,6 +219,21 @@ describe("resolveTelegramFetch", () => {
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
     expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
     expectEnvProxyAgentConstructorCall({ nth: 2, autoSelectFamily: false });
+  });
+
+  it("retries dns-based fetch failures once after TLS session reconnect race", async () => {
+    const raceErr = new TypeError("Cannot read properties of null (reading 'setSession')");
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new TypeError("fetch failed"), { cause: raceErr }))
+      .mockResolvedValueOnce({ ok: true } as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const resolved = resolveTelegramFetchOrThrow();
+
+    await resolved("https://api.telegram.org/file/botx/photos/file_tls.jpg");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("retries once with ipv4 fallback when fetch fails with network timeout/unreachable", async () => {

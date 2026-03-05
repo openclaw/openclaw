@@ -88,6 +88,7 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
             connect: {
               autoSelectFamily: autoSelectDecision.value,
               autoSelectFamilyAttemptTimeout: 300,
+              maxCachedSessions: 0,
             },
           }),
         );
@@ -165,6 +166,20 @@ function shouldRetryWithIpv4Fallback(err: unknown): boolean {
   return true;
 }
 
+function isTlsSessionReconnectRace(err: unknown): boolean {
+  const msg =
+    err && typeof err === "object" && "message" in err ? String(err.message).toLowerCase() : "";
+  const cause = err && typeof err === "object" ? (err as { cause?: unknown }).cause : undefined;
+  const causeMsg =
+    cause && typeof cause === "object" && "message" in cause
+      ? String(cause.message).toLowerCase()
+      : "";
+  return (
+    msg.includes("cannot read properties of null (reading 'setsession')") ||
+    causeMsg.includes("cannot read properties of null (reading 'setsession')")
+  );
+}
+
 function applyTelegramIpv4Fallback(): void {
   applyTelegramNetworkWorkarounds({
     autoSelectFamily: false,
@@ -192,6 +207,10 @@ export function resolveTelegramFetch(
     try {
       return await sourceFetch(input, init);
     } catch (err) {
+      if (isTlsSessionReconnectRace(err)) {
+        log.warn("fetch fallback: retrying once after TLS session reconnect race");
+        return sourceFetch(input, init);
+      }
       if (shouldRetryWithIpv4Fallback(err)) {
         applyTelegramIpv4Fallback();
         return sourceFetch(input, init);
