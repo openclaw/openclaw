@@ -180,10 +180,13 @@ describe("isTransientSqliteError", () => {
     expect(isTransientSqliteError(err)).toBe(true);
   });
 
-  it("returns true for SQLITE_IOERR", () => {
-    const err = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
-    expect(isTransientSqliteError(err)).toBe(true);
-  });
+  it.each(["SQLITE_IOERR", "SQLITE_IOERR_READ", "SQLITE_IOERR_WRITE", "SQLITE_IOERR_FSYNC"])(
+    "returns true for %s",
+    (code) => {
+      const err = Object.assign(new Error("disk I/O error"), { code });
+      expect(isTransientSqliteError(err)).toBe(true);
+    },
+  );
 
   it("returns true when SQLite error is nested in cause", () => {
     const cause = Object.assign(new Error("SQLITE_CANTOPEN"), { code: "SQLITE_CANTOPEN" });
