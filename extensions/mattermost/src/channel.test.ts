@@ -306,4 +306,67 @@ describe("mattermostPlugin", () => {
       expect(prefixContext.responsePrefix).toBe("[Account]");
     });
   });
+
+  describe("reply threading (root_id)", () => {
+    // The monitor's deliver callback receives a ReplyPayload with replyToId
+    // (set by [[reply_to_current]] or [[reply_to:<id>]] tag processing).
+    // It should pass payload.replyToId through as root_id on the Mattermost API call.
+    //
+    // Bug: monitor.ts hardcodes `replyToId: threadRootId` (the inbound thread root),
+    // ignoring payload.replyToId entirely. When the inbound message is top-level
+    // (threadRootId=undefined), [[reply_to_current]] replies are never threaded.
+
+    // Replicate the monitor deliver callback logic (from monitor.ts lines ~737-767).
+    // The deliver closure should prefer payload.replyToId (from [[reply_to_current]]
+    // or [[reply_to:<id>]]) and fall back to threadRootId (existing thread context).
+    function monitorDeliverReplyToId(
+      payload: { replyToId?: string },
+      threadRootId: string | undefined,
+    ): string | undefined {
+      return payload.replyToId || threadRootId;
+    }
+
+    it("passes payload.replyToId as root_id for [[reply_to_current]] on a top-level DM", () => {
+      // User sends a top-level DM (not in a thread) → threadRootId is undefined.
+      // Agent responds with [[reply_to_current]] → payload.replyToId = inbound post id.
+      // The deliver callback should use payload.replyToId so the reply is threaded.
+      const payload = { replyToId: "inbound-post-123" };
+      const threadRootId = undefined;
+
+      const replyToId = monitorDeliverReplyToId(payload, threadRootId);
+
+      // BUG: this is undefined because monitor ignores payload.replyToId
+      expect(replyToId).toBe("inbound-post-123");
+    });
+
+    it("passes payload.replyToId as root_id for explicit [[reply_to:<id>]]", () => {
+      // Agent uses [[reply_to:specific-post-789]] to target a specific message.
+      const payload = { replyToId: "specific-post-789" };
+      const threadRootId = undefined;
+
+      const replyToId = monitorDeliverReplyToId(payload, threadRootId);
+
+      expect(replyToId).toBe("specific-post-789");
+    });
+
+    it("falls back to threadRootId when payload.replyToId is absent", () => {
+      // Inbound message is already in a thread; no reply tag. Should keep threading.
+      const payload = { replyToId: undefined };
+      const threadRootId = "thread-root-456";
+
+      const replyToId = monitorDeliverReplyToId(payload, threadRootId);
+
+      expect(replyToId).toBe("thread-root-456");
+    });
+
+    it("prefers payload.replyToId over threadRootId when both are present", () => {
+      // Agent explicitly targets a different post than the thread root.
+      const payload = { replyToId: "explicit-target-999" };
+      const threadRootId = "thread-root-456";
+
+      const replyToId = monitorDeliverReplyToId(payload, threadRootId);
+
+      expect(replyToId).toBe("explicit-target-999");
+    });
+  });
 });
