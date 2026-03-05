@@ -16,6 +16,7 @@ type NodeInvokeCall = {
 let lastNodeInvokeCall: NodeInvokeCall | null = null;
 let lastApprovalRequestCall: { params?: Record<string, unknown> } | null = null;
 let nodeCommands: string[] | undefined = ["system.run", "system.run.prepare"];
+let prepareUnsupportedAtRuntime = false;
 
 const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
   if (opts.method === "node.list") {
@@ -37,7 +38,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
     lastNodeInvokeCall = opts;
     const command = opts.params?.command;
     if (command === "system.run.prepare") {
-      if (!nodeCommands?.includes("system.run.prepare")) {
+      if (prepareUnsupportedAtRuntime || !nodeCommands?.includes("system.run.prepare")) {
         throw new Error(
           'node command not allowed: the node (platform: macOS 26.2.0) does not support "system.run.prepare"',
         );
@@ -133,6 +134,7 @@ describe("nodes-cli coverage", () => {
     lastNodeInvokeCall = null;
     lastApprovalRequestCall = null;
     nodeCommands = ["system.run", "system.run.prepare"];
+    prepareUnsupportedAtRuntime = false;
   });
 
   it("invokes system.run with parsed params", async () => {
@@ -251,6 +253,38 @@ describe("nodes-cli coverage", () => {
     });
     const approval = getApprovalRequestCall();
     expect(approval?.params?.["commandArgv"]).toEqual(["echo", "hi"]);
+    expect(approval?.params?.["systemRunPlan"]).toEqual({
+      argv: ["echo", "hi"],
+      cwd: "/tmp",
+      rawCommand: null,
+      agentId: "main",
+      sessionKey: null,
+    });
+  });
+
+  it("falls back when runtime rejects system.run.prepare despite advertised support", async () => {
+    prepareUnsupportedAtRuntime = true;
+
+    const invoke = await runNodesCommand([
+      "nodes",
+      "run",
+      "--node",
+      "mac-1",
+      "--cwd",
+      "/tmp",
+      "echo",
+      "hi",
+    ]);
+
+    expect(invoke).toBeTruthy();
+    const invokeCalls = callGateway.mock.calls
+      .map((call) => call[0] as NodeInvokeCall)
+      .filter((call) => call.method === "node.invoke");
+    expect(invokeCalls.map((call) => call.params?.command)).toEqual([
+      "system.run.prepare",
+      "system.run",
+    ]);
+    const approval = getApprovalRequestCall();
     expect(approval?.params?.["systemRunPlan"]).toEqual({
       argv: ["echo", "hi"],
       cwd: "/tmp",

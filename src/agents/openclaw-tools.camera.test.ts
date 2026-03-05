@@ -473,6 +473,33 @@ describe("nodes run", () => {
       if (method === "node.invoke") {
         const command = (gatewayParams as { command?: string } | undefined)?.command;
         if (command === "system.run.prepare") {
+          throw new Error("system.run.prepare should not be called when command is not advertised");
+        }
+        if (command === "system.run") {
+          nodeInvokeCommands.push("system.run");
+          return {
+            payload: { stdout: "ok\n", stderr: "", exitCode: 0, success: true },
+          };
+        }
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes(BASE_RUN_INPUT);
+    expect(nodeInvokeCommands).toEqual(["system.run"]);
+    expectFirstTextContains(result, '"stdout": "ok\\n"');
+  });
+
+  it("falls back when runtime rejects system.run.prepare despite advertised support", async () => {
+    const nodeInvokeCommands: string[] = [];
+    callGateway.mockImplementation(async ({ method, params: gatewayParams }: GatewayCall) => {
+      if (method === "node.list") {
+        return mockNodeList({ commands: ["system.run", "system.run.prepare"] });
+      }
+      if (method === "node.invoke") {
+        const command = (gatewayParams as { command?: string } | undefined)?.command;
+        if (command === "system.run.prepare") {
+          nodeInvokeCommands.push("system.run.prepare");
           throw new Error(
             'node command not allowed: the node (platform: macOS 26.2.0) does not support "system.run.prepare"',
           );
@@ -488,7 +515,7 @@ describe("nodes run", () => {
     });
 
     const result = await executeNodes(BASE_RUN_INPUT);
-    expect(nodeInvokeCommands).toEqual(["system.run"]);
+    expect(nodeInvokeCommands).toEqual(["system.run.prepare", "system.run"]);
     expectFirstTextContains(result, '"stdout": "ok\\n"');
   });
 
