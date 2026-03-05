@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isAbortError, isTransientNetworkError } from "./unhandled-rejections.js";
+import {
+  isAbortError,
+  isTransientNetworkError,
+  isTransientUncaughtError,
+} from "./unhandled-rejections.js";
 
 describe("isAbortError", () => {
   it("returns true for error with name AbortError", () => {
@@ -155,5 +159,28 @@ describe("isTransientNetworkError", () => {
   it("returns false for AggregateError with only non-network errors", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
+  });
+});
+
+describe("isTransientUncaughtError", () => {
+  it("returns true for known undici tls setSession null-deref race", () => {
+    const error = new TypeError("Cannot read properties of null (reading 'setSession')");
+    error.stack = [
+      "TypeError: Cannot read properties of null (reading 'setSession')",
+      "    at TLSSocket.setSession (node:_tls_wrap:1132:16)",
+      "    at Client.connect (openclaw/node_modules/undici/lib/core/connect.js:70:20)",
+    ].join("\n");
+
+    expect(isTransientUncaughtError(error)).toBe(true);
+  });
+
+  it("returns false for unrelated null-deref errors", () => {
+    const error = new TypeError("Cannot read properties of null (reading 'setSession')");
+    error.stack = [
+      "TypeError: Cannot read properties of null (reading 'setSession')",
+      "    at doThing (/tmp/example.ts:10:1)",
+    ].join("\n");
+
+    expect(isTransientUncaughtError(error)).toBe(false);
   });
 });

@@ -180,6 +180,53 @@ export function isTransientNetworkError(err: unknown): boolean {
   return false;
 }
 
+function isKnownUndiciTlsSessionRace(err: unknown): boolean {
+  for (const candidate of collectErrorGraphCandidates(err, (current) => {
+    const nested: Array<unknown> = [
+      current.cause,
+      current.reason,
+      current.original,
+      current.error,
+      current.data,
+    ];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    return nested;
+  })) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+
+    const rawMessage = (candidate as { message?: unknown }).message;
+    const rawStack = (candidate as { stack?: unknown }).stack;
+    const message = typeof rawMessage === "string" ? rawMessage.toLowerCase() : "";
+    const stack = typeof rawStack === "string" ? rawStack.toLowerCase() : "";
+    if (!message) {
+      continue;
+    }
+
+    const hasSetSessionNullDeref =
+      message.includes("cannot read properties of null") &&
+      (message.includes("reading 'setsession'") || message.includes('reading "setsession"'));
+    if (!hasSetSessionNullDeref) {
+      continue;
+    }
+
+    const likelyUndiciTlsConnectPath =
+      stack.includes("node:_tls_wrap") && stack.includes("undici/lib/core/connect.js");
+    if (likelyUndiciTlsConnectPath) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function isTransientUncaughtError(err: unknown): boolean {
+  return isAbortError(err) || isTransientNetworkError(err) || isKnownUndiciTlsSessionRace(err);
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
