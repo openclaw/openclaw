@@ -526,6 +526,18 @@ const GRAPH_URL_EXPECTATION_CASES: GraphUrlExpectationCase[] = [
     },
     expectedPath: "/chats/19%3Achat%40thread.v2/messages/456",
   }),
+  withLabel(
+    "strips trailing double-quote from messageId (ngrok DM attachment regression, refs #35822)",
+    {
+      params: {
+        conversationType: "groupChat" as const,
+        conversationId: "19:chat@thread.v2",
+        // Bot Framework / ngrok can inject a stray trailing " into the messageId
+        messageId: '1772701673666"',
+      },
+      expectedPath: "/chats/19%3Achat%40thread.v2/messages/1772701673666",
+    },
+  ),
 ];
 
 type GraphFetchMockOptions = {

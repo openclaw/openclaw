@@ -59,7 +59,15 @@ export function buildMSTeamsGraphMessageUrls(params: {
   const conversationType = params.conversationType?.trim().toLowerCase() ?? "";
   const messageIdCandidates = new Set<string>();
   const pushCandidate = (value: string | null | undefined) => {
-    const trimmed = typeof value === "string" ? value.trim() : "";
+    // Strip surrounding double-quote characters that can appear in Bot Framework
+    // activity messageId fields when using ngrok tunnels (#35822).
+    const trimmed =
+      typeof value === "string"
+        ? value
+            .trim()
+            .replace(/^"+|"+$/g, "")
+            .trim()
+        : "";
     if (trimmed) {
       messageIdCandidates.add(trimmed);
     }
