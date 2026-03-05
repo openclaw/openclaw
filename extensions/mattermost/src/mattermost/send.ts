@@ -7,8 +7,8 @@ import {
   createMattermostPost,
   fetchMattermostChannelByName,
   fetchMattermostMe,
-  fetchMattermostMyTeams,
   fetchMattermostUserByUsername,
+  fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
   uploadMattermostFile,
   type MattermostUser,
@@ -22,6 +22,7 @@ export type MattermostSendOpts = {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   replyToId?: string;
+  props?: Record<string, unknown>;
 };
 
 export type MattermostSendResult = {
@@ -31,10 +32,12 @@ export type MattermostSendResult = {
 
 type MattermostTarget =
   | { kind: "channel"; id: string }
+  | { kind: "channel-name"; name: string }
   | { kind: "user"; id?: string; username?: string };
 
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
+const channelByNameCache = new Map<string, string>();
 
 const getCore = () => getMattermostRuntime();
 
@@ -52,7 +55,12 @@ function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
 
-function parseMattermostTarget(raw: string): MattermostTarget {
+/** Mattermost IDs are 26-character lowercase alphanumeric strings. */
+function isMattermostId(value: string): boolean {
+  return /^[a-z0-9]{26}$/.test(value);
+}
+
+export function parseMattermostTarget(raw: string): MattermostTarget {
   const trimmed = raw.trim();
   if (!trimmed) {
     throw new Error("Recipient is required for Mattermost sends");
@@ -62,6 +70,16 @@ function parseMattermostTarget(raw: string): MattermostTarget {
     const id = trimmed.slice("channel:".length).trim();
     if (!id) {
       throw new Error("Channel id is required for Mattermost sends");
+    }
+    if (id.startsWith("#")) {
+      const name = id.slice(1).trim();
+      if (!name) {
+        throw new Error("Channel name is required for Mattermost sends");
+      }
+      return { kind: "channel-name", name };
+    }
+    if (!isMattermostId(id)) {
+      return { kind: "channel-name", name: id };
     }
     return { kind: "channel", id };
   }
@@ -85,6 +103,16 @@ function parseMattermostTarget(raw: string): MattermostTarget {
       throw new Error("Username is required for Mattermost sends");
     }
     return { kind: "user", username };
+  }
+  if (trimmed.startsWith("#")) {
+    const name = trimmed.slice(1).trim();
+    if (!name) {
+      throw new Error("Channel name is required for Mattermost sends");
+    }
+    return { kind: "channel-name", name };
+  }
+  if (!isMattermostId(trimmed)) {
+    return { kind: "channel-name", name: trimmed };
   }
   return { kind: "channel", id: trimmed };
 }
@@ -118,67 +146,32 @@ async function resolveUserIdByUsername(params: {
   return user.id;
 }
 
-/**
- * Mattermost channel IDs are 26-character alphanumeric strings.
- * If the value doesn't match this pattern, treat it as a channel name
- * that needs to be resolved via the API.
- */
-/** @internal Exported for testing. */
-export function isMattermostId(value: string): boolean {
-  return /^[a-z0-9]{26}$/i.test(value);
-}
-
-/** TTL-bounded cache for resolved channel name → ID mappings. */
-const CHANNEL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const CHANNEL_CACHE_MAX_SIZE = 200;
-const channelNameCache = new Map<string, { id: string; expiresAt: number }>();
-
-/** Strip leading '#' or '~' and lowercase for consistent cache keys. */
-function normalizeChannelName(raw: string): string {
-  return raw.replace(/^[#~]/, "").toLowerCase();
-}
-
-async function resolveChannelNameToId(params: {
-  channelName: string;
+async function resolveChannelIdByName(params: {
   baseUrl: string;
   token: string;
+  name: string;
 }): Promise<string> {
-  const normalized = normalizeChannelName(params.channelName);
-  const key = `${cacheKey(params.baseUrl, params.token)}::channel::${normalized}`;
-  const cached = channelNameCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.id;
+  const { baseUrl, token, name } = params;
+  const key = `${cacheKey(baseUrl, token)}::channel::${name.toLowerCase()}`;
+  const cached = channelByNameCache.get(key);
+  if (cached) {
+    return cached;
   }
-  // Evict expired or enforce max size
-  if (channelNameCache.size >= CHANNEL_CACHE_MAX_SIZE) {
-    const now = Date.now();
-    for (const [k, v] of channelNameCache) {
-      if (v.expiresAt <= now || channelNameCache.size >= CHANNEL_CACHE_MAX_SIZE) {
-        channelNameCache.delete(k);
-      }
-    }
-  }
-  const client = createMattermostClient({ baseUrl: params.baseUrl, botToken: params.token });
-  const teams = await fetchMattermostMyTeams(client);
-  if (teams.length === 0) {
-    throw new Error(
-      `Cannot resolve channel name "${params.channelName}": bot is not a member of any team`,
-    );
-  }
+  const client = createMattermostClient({ baseUrl, botToken: token });
+  const me = await fetchMattermostMe(client);
+  const teams = await fetchMattermostUserTeams(client, me.id);
   for (const team of teams) {
     try {
-      const channel = await fetchMattermostChannelByName(client, team.id, normalized);
+      const channel = await fetchMattermostChannelByName(client, team.id, name);
       if (channel?.id) {
-        channelNameCache.set(key, { id: channel.id, expiresAt: Date.now() + CHANNEL_CACHE_TTL_MS });
+        channelByNameCache.set(key, channel.id);
         return channel.id;
       }
     } catch {
-      // Channel not found on this team, try next
+      // Channel not found in this team, try next
     }
   }
-  throw new Error(
-    `Cannot resolve channel name "${params.channelName}": channel not found in any of the bot's teams`,
-  );
+  throw new Error(`Mattermost channel "#${name}" not found in any team the bot belongs to`);
 }
 
 async function resolveTargetChannelId(params: {
@@ -187,14 +180,13 @@ async function resolveTargetChannelId(params: {
   token: string;
 }): Promise<string> {
   if (params.target.kind === "channel") {
-    if (isMattermostId(params.target.id)) {
-      return params.target.id;
-    }
-    // Channel name provided instead of ID — resolve via API
-    return resolveChannelNameToId({
-      channelName: params.target.id,
+    return params.target.id;
+  }
+  if (params.target.kind === "channel-name") {
+    return await resolveChannelIdByName({
       baseUrl: params.baseUrl,
       token: params.token,
+      name: params.target.name,
     });
   }
   const userId = params.target.id
@@ -294,6 +286,7 @@ export async function sendMessageMattermost(
     message,
     rootId: opts.replyToId,
     fileIds,
+    props: opts.props,
   });
 
   core.channel.activity.record({

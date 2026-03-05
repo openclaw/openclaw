@@ -207,6 +207,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Optional `channels.telegram.defaultAccount` overrides default account selection when it matches a configured account id.
 - In multi-account setups (2+ account ids), set an explicit default (`channels.telegram.defaultAccount` or `channels.telegram.accounts.default`) to avoid fallback routing; `openclaw doctor` warns when this is missing or invalid.
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).
+- Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for forum topics (use canonical `chatId:topic:topicId` in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#channel-specific-settings).
 - Telegram stream previews use `sendMessage` + `editMessageText` (works in direct and group chats).
 - Retry policy: see [Retry policy](/concepts/retry).
 
@@ -314,6 +315,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   - `idleHours`: Discord override for inactivity auto-unfocus in hours (`0` disables)
   - `maxAgeHours`: Discord override for hard max age in hours (`0` disables)
   - `spawnSubagentSessions`: opt-in switch for `sessions_spawn({ thread: true })` auto thread creation/binding
+- Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for channels and threads (use channel/thread id in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#channel-specific-settings).
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + TTS overrides.
 - `channels.discord.voice.daveEncryption` and `channels.discord.voice.decryptionFailureTolerance` pass through to `@discordjs/voice` DAVE options (`true` and `24` by default).
@@ -1271,6 +1273,15 @@ scripts/sandbox-browser-setup.sh   # optional browser image
         },
         groupChat: { mentionPatterns: ["@openclaw"] },
         sandbox: { mode: "off" },
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "codex",
+            backend: "acpx",
+            mode: "persistent",
+            cwd: "/workspace/openclaw",
+          },
+        },
         subagents: { allowAgents: ["*"] },
         tools: {
           profile: "coding",
@@ -1288,6 +1299,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
+- `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
@@ -1316,10 +1328,12 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 
 ### Binding match fields
 
+- `type` (optional): `route` for normal routing (missing type defaults to route), `acp` for persistent ACP conversation bindings.
 - `match.channel` (required)
 - `match.accountId` (optional; `*` = any account; omitted = default account)
 - `match.peer` (optional; `{ kind: direct|group|channel, id }`)
 - `match.guildId` / `match.teamId` (optional; channel-specific)
+- `acp` (optional; only for `type: "acp"`): `{ mode, label, cwd, backend }`
 
 **Deterministic match order:**
 
@@ -1331,6 +1345,8 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 6. Default agent
 
 Within each tier, the first matching `bindings` entry wins.
+
+For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`match.channel` + account + `match.peer.id`) and does not use the route binding tier order above.
 
 ### Per-agent access profiles
 

@@ -398,7 +398,7 @@ export type { ScopeTokenProvider } from "./fetch-auth.js";
 export { rawDataToString } from "../infra/ws.js";
 export { isWSLSync, isWSL2Sync, isWSLEnv } from "../infra/wsl.js";
 export { isTruthyEnvValue } from "../infra/env.js";
-export { resolveToolsBySender } from "../config/group-policy.js";
+export { resolveChannelGroupRequireMention, resolveToolsBySender } from "../config/group-policy.js";
 export {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,
