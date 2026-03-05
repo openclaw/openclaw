@@ -101,14 +101,13 @@ export type DingtalkRobotMessage = {
   isInAtList?: boolean;
 };
 
-// 解析后的钉钉消息上下文 / Parsed DingTalk message context
+// Parsed DingTalk message context
 export type DingtalkMessageContext = {
   conversationId: string;
   messageId: string;
   senderId: string;
   senderStaffId: string;
   senderNick: string;
-  // "1" = 单聊, "2" = 群聊 / "1" = direct, "2" = group
   conversationType: "1" | "2";
   mentionedBot: boolean;
   content: string;
@@ -118,6 +117,8 @@ export type DingtalkMessageContext = {
   robotCode: string;
   chatbotUserId: string;
   conversationTitle?: string;
+  // Download codes extracted from non-text messages for media retrieval
+  downloadCodes?: string[];
 };
 
 // 钉钉消息发送结果 / DingTalk message send result

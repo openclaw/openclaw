@@ -1,11 +1,13 @@
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/dingtalk";
 import {
+  buildAgentMediaPayload,
   createScopedPairingAccess,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/dingtalk";
 import { resolveDingtalkAccount } from "./accounts.js";
+import { downloadMessageFile } from "./media.js";
 import { createDingtalkReplyDispatcher } from "./reply-dispatcher.js";
 import { getDingtalkRuntime } from "./runtime.js";
 import { sendTextMessage } from "./send.js";
@@ -16,6 +18,7 @@ import type {
   DingtalkAudioContent,
   DingtalkRichTextContent,
   DingtalkFileContent,
+  DingtalkPictureContent,
   ResolvedDingtalkAccount,
   DingtalkConfig,
   DingtalkGroupConfig,
@@ -43,12 +46,14 @@ function resolveNonTextContent(
 function parseDingtalkMessageEvent(msg: DingtalkRobotMessage): DingtalkMessageContext {
   const contentType = msg.msgtype ?? "text";
   let content = "";
+  let downloadCodes: string[] | undefined;
 
   if (contentType === "text") {
     content = (msg.text?.content ?? "").trim();
   } else {
     const parsed = resolveNonTextContent(msg.content);
     content = buildNonTextContent(contentType, parsed);
+    downloadCodes = extractDownloadCodes(contentType, parsed);
   }
 
   const mentionedBot = msg.conversationType === "1" || msg.isInAtList === true;
@@ -68,7 +73,47 @@ function parseDingtalkMessageEvent(msg: DingtalkRobotMessage): DingtalkMessageCo
     robotCode: msg.robotCode,
     chatbotUserId: msg.chatbotUserId,
     conversationTitle: msg.conversationTitle,
+    downloadCodes,
   };
+}
+
+/**
+ * Extract all downloadCode / pictureDownloadCode values from parsed non-text content.
+ */
+function extractDownloadCodes(
+  msgtype: string,
+  parsed: DingtalkNonTextContent | undefined,
+): string[] | undefined {
+  if (!parsed) return undefined;
+  const codes: string[] = [];
+
+  switch (msgtype) {
+    case "picture": {
+      const pic = parsed as DingtalkPictureContent;
+      if (pic.pictureDownloadCode) codes.push(pic.pictureDownloadCode);
+      else if (pic.downloadCode) codes.push(pic.downloadCode);
+      break;
+    }
+    case "audio":
+    case "video":
+    case "file": {
+      const media = parsed as { downloadCode?: string };
+      if (media.downloadCode) codes.push(media.downloadCode);
+      break;
+    }
+    case "richText": {
+      const rich = parsed as DingtalkRichTextContent;
+      if (rich.richText) {
+        for (const seg of rich.richText) {
+          if (seg.pictureDownloadCode) codes.push(seg.pictureDownloadCode);
+          else if (seg.downloadCode) codes.push(seg.downloadCode);
+        }
+      }
+      break;
+    }
+  }
+
+  return codes.length > 0 ? codes : undefined;
 }
 
 /**
@@ -317,7 +362,10 @@ export async function handleDingtalkMessage(params: {
       })
     : undefined;
 
-  // --- 构建消息体并分发给 agent / Build message body and dispatch to agent ---
+  // --- Download media for non-text messages ---
+  const mediaPayload = await resolveDingtalkMedia({ account, ctx, log });
+
+  // --- Build message body and dispatch to agent ---
   const messageBody = buildMessageBody(ctx);
 
   const dingtalkFrom = `dingtalk:${ctx.senderStaffId}`;
@@ -362,6 +410,7 @@ export async function handleDingtalkMessage(params: {
     CommandAuthorized: commandAuthorized,
     OriginatingChannel: "dingtalk" as const,
     OriginatingTo: dingtalkTo,
+    ...mediaPayload,
   });
 
   const { dispatcher, replyOptions, markDispatchIdle } = createDingtalkReplyDispatcher({
@@ -384,6 +433,63 @@ export async function handleDingtalkMessage(params: {
         replyOptions,
       }),
   });
+}
+
+/**
+ * Download media files from DingTalk and save them for agent consumption.
+ * Uses the /v1.0/robot/messageFiles/download API to get a temporary download URL,
+ * then fetches the binary and saves via core.channel.media.saveMediaBuffer.
+ */
+async function resolveDingtalkMedia(params: {
+  account: ResolvedDingtalkAccount;
+  ctx: DingtalkMessageContext;
+  log: (msg: string) => void;
+}): Promise<ReturnType<typeof buildAgentMediaPayload>> {
+  const { account, ctx, log } = params;
+  const codes = ctx.downloadCodes;
+  if (!codes || codes.length === 0) return buildAgentMediaPayload([]);
+
+  const core = getDingtalkRuntime();
+  const mediaMaxBytes = 30 * 1024 * 1024;
+  const savedMedia: Array<{ path: string; contentType?: string | null }> = [];
+
+  for (const code of codes) {
+    try {
+      const { downloadUrl } = await downloadMessageFile({
+        account,
+        downloadCode: code,
+        robotCode: ctx.robotCode,
+      });
+
+      if (!downloadUrl) {
+        log(`dingtalk[${account.accountId}]: empty download URL for code ${code.slice(0, 20)}...`);
+        continue;
+      }
+
+      const fetched = await core.channel.media.fetchRemoteMedia(downloadUrl, {
+        maxBytes: mediaMaxBytes,
+      });
+
+      let contentType = fetched.contentType ?? undefined;
+      if (!contentType) {
+        contentType = await core.media.detectMime({ buffer: fetched.buffer });
+      }
+
+      const saved = await core.channel.media.saveMediaBuffer(
+        fetched.buffer,
+        contentType,
+        "inbound",
+        mediaMaxBytes,
+      );
+
+      savedMedia.push({ path: saved.path, contentType: saved.contentType });
+      log(`dingtalk[${account.accountId}]: downloaded media, saved to ${saved.path}`);
+    } catch (err) {
+      log(`dingtalk[${account.accountId}]: failed to download media: ${err}`);
+    }
+  }
+
+  return buildAgentMediaPayload(savedMedia);
 }
 
 /**
