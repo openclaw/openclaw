@@ -150,7 +150,7 @@ export function createGatewayReloadHandlers(params: {
             );
             // Fallback: restart the channel (only if not already restarted in this reload)
             if (
-              !plan.restartChannels.includes(channelId) &&
+              !plan.restartChannels.has(channelId) &&
               !isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) &&
               !isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
             ) {
@@ -168,7 +168,7 @@ export function createGatewayReloadHandlers(params: {
           );
           // Fallback: restart the channel (only if not already restarted)
           if (
-            !plan.restartChannels.includes(channelId) &&
+            !plan.restartChannels.has(channelId) &&
             !isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) &&
             !isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
           ) {
