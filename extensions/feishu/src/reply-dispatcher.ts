@@ -84,10 +84,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
 
   // Track whether the first message has been sent (for "auto" mode).
+  // The flag is only committed when the actual send path is determined
+  // (non-streaming text delivery or streaming.start success) to avoid
+  // a race where deliver() consumes the flag before the streaming card
+  // has a chance to read it.
   let firstMessageSent = false;
 
   /**
-   * Resolve whether this delivery should use reply or create, based on groupReplyMode.
+   * Peek at whether this delivery should use reply or create, based on groupReplyMode.
+   * Does NOT commit the firstMessageSent flag — call commitFirstMessageSent() after
+   * the message is actually sent.
    * Returns the effective replyToMessageId (undefined = use create, string = use reply).
    */
   const resolveEffectiveReplyTo = (): string | undefined => {
@@ -98,11 +104,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (firstMessageSent) {
         return undefined; // subsequent messages → create (standalone)
       }
-      firstMessageSent = true;
-      return sendReplyToMessageId; // first message → reply
+      return sendReplyToMessageId; // first message → reply (flag committed later)
     }
     // "reply" mode (default): always reply
     return sendReplyToMessageId;
+  };
+
+  /** Commit the firstMessageSent flag after the actual send succeeds. */
+  const commitFirstMessageSent = () => {
+    if (groupReplyMode === "auto") {
+      firstMessageSent = true;
+    }
   };
 
   /**
@@ -110,6 +122,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
    * For "create" mode: no reply context (standalone card, pre-2026.3.1 behavior).
    * For "auto" mode: first streaming card uses reply, subsequent don't.
    * For "reply" mode: always use reply context.
+   *
+   * Note: this peeks at the flag but does NOT commit it. The streaming start
+   * handler commits the flag after the card is successfully created.
    */
   const resolveStreamingReplyOptions = (): {
     replyToMessageId?: string;
@@ -122,9 +137,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (groupReplyMode === "auto" && firstMessageSent) {
       return {}; // subsequent cards → standalone
     }
-    if (groupReplyMode === "auto") {
-      firstMessageSent = true;
-    }
+    // "auto" first or "reply" mode — use reply context.
+    // Flag is committed after streaming.start() succeeds.
     return { replyToMessageId, replyInThread: effectiveReplyInThread, rootId };
   };
   const account = resolveFeishuAccount({ cfg, accountId });
@@ -250,6 +264,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       );
       try {
         await streaming.start(chatId, resolveReceiveIdType(chatId), resolveStreamingReplyOptions());
+        // Commit flag only after the streaming card is successfully created,
+        // so the flag is not consumed prematurely by deliver() calls that
+        // arrive before streaming.start() resolves.
+        commitFirstMessageSent();
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
         streaming = null;
@@ -365,16 +383,23 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               textChunkLimit,
               chunkMode,
             )) {
+              // In "auto" mode, only the first chunk replies; subsequent chunks
+              // use create to avoid topic-folding every chunk under the parent.
+              const chunkReplyTo = first ? deliveryReplyTo : (groupReplyMode === "auto" ? undefined : deliveryReplyTo);
+              const chunkReplyInThread = chunkReplyTo ? deliveryReplyInThread : undefined;
               await sendMarkdownCardFeishu({
                 cfg,
                 to: chatId,
                 text: chunk,
-                replyToMessageId: deliveryReplyTo,
-                replyInThread: deliveryReplyInThread,
+                replyToMessageId: chunkReplyTo,
+                replyInThread: chunkReplyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
               });
-              first = false;
+              if (first) {
+                commitFirstMessageSent();
+                first = false;
+              }
             }
             if (info?.kind === "final") {
               deliveredFinalTexts.add(text);
@@ -386,16 +411,23 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               textChunkLimit,
               chunkMode,
             )) {
+              // In "auto" mode, only the first chunk replies; subsequent chunks
+              // use create to avoid topic-folding every chunk under the parent.
+              const chunkReplyTo = first ? deliveryReplyTo : (groupReplyMode === "auto" ? undefined : deliveryReplyTo);
+              const chunkReplyInThread = chunkReplyTo ? deliveryReplyInThread : undefined;
               await sendMessageFeishu({
                 cfg,
                 to: chatId,
                 text: chunk,
-                replyToMessageId: deliveryReplyTo,
-                replyInThread: deliveryReplyInThread,
+                replyToMessageId: chunkReplyTo,
+                replyInThread: chunkReplyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
               });
-              first = false;
+              if (first) {
+                commitFirstMessageSent();
+                first = false;
+              }
             }
             if (info?.kind === "final") {
               deliveredFinalTexts.add(text);
@@ -404,15 +436,24 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
 
         if (hasMedia) {
+          let mediaFirst = true;
           for (const mediaUrl of mediaList) {
+            // When only media is sent (no text), the first media acts as
+            // the "first message" for auto mode.
+            const mediaReplyTo = mediaFirst ? deliveryReplyTo : (groupReplyMode === "auto" && !hasText ? undefined : deliveryReplyTo);
+            const mediaReplyInThread = mediaReplyTo ? deliveryReplyInThread : undefined;
             await sendMediaFeishu({
               cfg,
               to: chatId,
               mediaUrl,
-              replyToMessageId: deliveryReplyTo,
-              replyInThread: deliveryReplyInThread,
+              replyToMessageId: mediaReplyTo,
+              replyInThread: mediaReplyInThread,
               accountId,
             });
+            if (mediaFirst) {
+              commitFirstMessageSent();
+              mediaFirst = false;
+            }
           }
         }
       },
