@@ -266,11 +266,24 @@ export async function markAuthProfileUsed(params: {
   saveAuthProfileStore(store, agentDir);
 }
 
-export function calculateAuthProfileCooldownMs(errorCount: number): number {
+const DEFAULT_PROFILE_COOLDOWN_BASE_MS = 60 * 1000;
+const GOOGLE_GEMINI_OAUTH_COOLDOWN_BASE_MS = 10 * 1000;
+
+export function calculateAuthProfileCooldownMs(
+  errorCount: number,
+  options?: { reason?: AuthProfileFailureReason; providerId?: string },
+): number {
   const normalized = Math.max(1, errorCount);
+  const providerId = normalizeProviderId(options?.providerId ?? "");
+  const isGoogleGeminiCli = providerId === "google-gemini-cli";
+  const isOauthLikeFailure = options?.reason === "auth" || options?.reason === "timeout";
+  const baseMs =
+    isGoogleGeminiCli && isOauthLikeFailure
+      ? GOOGLE_GEMINI_OAUTH_COOLDOWN_BASE_MS
+      : DEFAULT_PROFILE_COOLDOWN_BASE_MS;
   return Math.min(
     60 * 60 * 1000, // 1 hour max
-    60 * 1000 * 5 ** Math.min(normalized - 1, 3),
+    baseMs * 5 ** Math.min(normalized - 1, 3),
   );
 }
 
@@ -390,6 +403,7 @@ function computeNextProfileUsageStats(params: {
   existing: ProfileUsageStats;
   now: number;
   reason: AuthProfileFailureReason;
+  providerId?: string;
   cfgResolved: ResolvedAuthCooldownConfig;
 }): ProfileUsageStats {
   const windowMs = params.cfgResolved.failureWindowMs;
@@ -426,7 +440,10 @@ function computeNextProfileUsageStats(params: {
     });
     updatedStats.disabledReason = params.reason;
   } else {
-    const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+    const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount, {
+      reason: params.reason,
+      providerId: params.providerId,
+    });
     // Keep active cooldown windows immutable so retries within the window
     // cannot push recovery further out.
     updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
@@ -475,6 +492,7 @@ export async function markAuthProfileFailure(params: {
           existing: existing ?? {},
           now,
           reason,
+          providerId: providerKey,
           cfgResolved,
         }),
       );
@@ -501,6 +519,7 @@ export async function markAuthProfileFailure(params: {
       existing: existing ?? {},
       now,
       reason,
+      providerId: providerKey,
       cfgResolved,
     }),
   );

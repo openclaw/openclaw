@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
+  calculateAuthProfileCooldownMs,
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
@@ -40,6 +41,27 @@ function expectProfileErrorStateCleared(
   expect(stats?.errorCount).toBe(0);
   expect(stats?.failureCounts).toBeUndefined();
 }
+
+describe("calculateAuthProfileCooldownMs", () => {
+  it("uses shorter first backoff for google-gemini-cli oauth-style failures", () => {
+    const googleTimeout = calculateAuthProfileCooldownMs(1, {
+      providerId: "google-gemini-cli",
+      reason: "timeout",
+    });
+    const googleAuth = calculateAuthProfileCooldownMs(1, {
+      providerId: "google-gemini-cli",
+      reason: "auth",
+    });
+    const defaultBackoff = calculateAuthProfileCooldownMs(1, {
+      providerId: "anthropic",
+      reason: "timeout",
+    });
+
+    expect(googleTimeout).toBe(10_000);
+    expect(googleAuth).toBe(10_000);
+    expect(defaultBackoff).toBe(60_000);
+  });
+});
 
 describe("resolveProfileUnusableUntil", () => {
   it("returns null when both values are missing or invalid", () => {
