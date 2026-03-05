@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -32,6 +34,8 @@ Env guards:
   AUTO_PR_NOTIFY_STRICT=1|0          (default: 1)
   AUTO_PR_GIT_USER_NAME=<name>       (default: OpenClaw SRE Bot)
   AUTO_PR_GIT_USER_EMAIL=<email>     (default: openclaw-sre-bot@morpho.dev)
+  AUTO_PR_TRACKING_LABEL=<label>     (default: openclaw-sre; empty disables)
+  AUTO_PR_LINEAR_TICKET_API=<path>   (default: ./linear-ticket-api.sh next to this script)
 EOF
 }
 
@@ -586,6 +590,104 @@ is_repo_allowlisted() {
   return 1
 }
 
+collect_linear_issue_refs() {
+  if [[ "$#" -eq 0 ]]; then
+    return 0
+  fi
+  {
+    printf '%s\n' "$@" | grep -Eoi '[A-Za-z][A-Za-z0-9]+-[0-9]+' || true
+  } \
+    | tr '[:lower:]' '[:upper:]' \
+    | awk 'NF > 0 && !seen[$0]++'
+}
+
+resolve_linear_issue_refs() {
+  local body_file="${1:-}"
+  shift || true
+  local -a refs=()
+  local line body_text
+  if [[ "$#" -gt 0 ]]; then
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      refs+=("$line")
+    done < <(collect_linear_issue_refs "$@")
+  fi
+  if [[ -n "$body_file" && -f "$body_file" ]]; then
+    body_text="$(cat "$body_file")"
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      refs+=("$line")
+    done < <(collect_linear_issue_refs "$body_text")
+  fi
+  if [[ "${#refs[@]}" -eq 0 ]]; then
+    return 0
+  fi
+  printf '%s\n' "${refs[@]}" | awk 'NF > 0 && !seen[$0]++'
+}
+
+apply_pr_tracking_label() {
+  local repo_slug="${1:-}"
+  local pr_ref="${2:-}"
+  local label="${3:-}"
+  local output status
+  local -a cmd
+
+  if [[ -z "$repo_slug" || -z "$pr_ref" || -z "$label" ]]; then
+    return 0
+  fi
+
+  cmd=(
+    gh pr edit "$pr_ref"
+    --repo "$repo_slug"
+    --add-label "$label"
+  )
+
+  set +e
+  output="$("${cmd[@]}" 2>&1)"
+  status=$?
+  set -e
+  if [[ "$status" -ne 0 ]] && printf '%s' "$output" | grep -Eqi '(401|403|bad credentials|authentication failed|requires authentication|expired)'; then
+    if declare -F refresh_auth_context >/dev/null 2>&1 && refresh_auth_context; then
+      set +e
+      output="$("${cmd[@]}" 2>&1)"
+      status=$?
+      set -e
+    fi
+  fi
+  if [[ "$status" -ne 0 ]]; then
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
+  return 0
+}
+
+apply_ticket_tracking_labels() {
+  local label="${1:-}"
+  shift || true
+  local api_cmd ticket_ref output
+
+  if [[ -z "$label" || "$#" -eq 0 ]]; then
+    return 0
+  fi
+
+  api_cmd="${AUTO_PR_LINEAR_TICKET_API:-${SCRIPT_DIR}/linear-ticket-api.sh}"
+  if [[ ! -x "$api_cmd" ]]; then
+    echo "missing executable Linear ticket API helper: $api_cmd" >&2
+    return 1
+  fi
+
+  for ticket_ref in "$@"; do
+    [[ -n "$ticket_ref" ]] || continue
+    if ! output="$("$api_cmd" issue ensure-label "$ticket_ref" "$label" 2>&1)"; then
+      printf '%s\n' "$output" >&2
+      echo "failed to ensure Linear label for ${ticket_ref}" >&2
+      return 1
+    fi
+    printf 'linear_ticket_label=%s\tlabel=%s\n' "$ticket_ref" "$label"
+  done
+  return 0
+}
+
 REPO_INPUT=""
 REPO_PATH=""
 TITLE=""
@@ -907,6 +1009,15 @@ EOF
   PR_BODY_FILE="$tmp_body"
 fi
 
+TRACKING_LABEL="${AUTO_PR_TRACKING_LABEL:-openclaw-sre}"
+LINEAR_ISSUE_REFS=()
+while IFS= read -r linear_ref; do
+  [[ -n "$linear_ref" ]] || continue
+  LINEAR_ISSUE_REFS+=("$linear_ref")
+done < <(
+  resolve_linear_issue_refs "$PR_BODY_FILE" "$TITLE_RAW" "$TITLE" "$COMMIT_MSG" "$HEAD_BRANCH"
+)
+
 pr_cmd=(
   gh pr create
   --repo "$REPO_SLUG"
@@ -945,6 +1056,19 @@ if [[ -z "$pr_url" ]]; then
   exit 1
 fi
 
+if [[ -n "$TRACKING_LABEL" ]]; then
+  if ! apply_pr_tracking_label "$REPO_SLUG" "$pr_url" "$TRACKING_LABEL"; then
+    echo "failed to add tracking label '${TRACKING_LABEL}' to PR: ${pr_url}" >&2
+    exit 1
+  fi
+  if [[ "${#LINEAR_ISSUE_REFS[@]}" -gt 0 ]]; then
+    if ! apply_ticket_tracking_labels "$TRACKING_LABEL" "${LINEAR_ISSUE_REFS[@]}"; then
+      echo "failed to add tracking label '${TRACKING_LABEL}' on linked Linear ticket(s)" >&2
+      exit 1
+    fi
+  fi
+fi
+
 send_slack_pr_notify "OpenClaw SRE auto-PR created. repo=${REPO_SLUG} branch=${HEAD_BRANCH} url=${pr_url}" || true
 
 printf 'repo=%s\n' "$REPO_SLUG"
@@ -953,3 +1077,4 @@ printf 'base=%s\n' "$BASE_BRANCH"
 printf 'branch=%s\n' "$HEAD_BRANCH"
 printf 'confidence=%s\n' "$CONFIDENCE"
 printf 'pr_url=%s\n' "$pr_url"
+printf 'tracking_label=%s\n' "${TRACKING_LABEL:-}"

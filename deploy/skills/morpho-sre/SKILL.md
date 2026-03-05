@@ -322,14 +322,9 @@ Use this flow only when:
 - confidence threshold (`AUTO_PR_MIN_CONFIDENCE`)
 - secret-pattern scan in staged diff before push
 - authenticated push + `gh pr create`
+- tracking label `openclaw-sre` on PR (`AUTO_PR_TRACKING_LABEL`)
+- tracking label `openclaw-sre` on linked Linear tickets detected from branch/title/commit/body
 - Slack DM warning to operator before PR creation (`AUTO_PR_NOTIFY_*`)
-
-After creating a PR, always run:
-
-```bash
-# keep Linear/PR linkage consistent + tracking label
-gh pr edit <pr-number> --add-label openclaw-sre
-```
 
 PR convention requirement:
 
