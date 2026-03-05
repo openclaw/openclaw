@@ -2,13 +2,25 @@ export async function readResponseWithLimit(
   res: Response,
   maxBytes: number,
   opts?: {
-    onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
+    onOverflow?: (params: {
+      size: number;
+      maxBytes: number;
+      res: Response;
+      cancelError?: unknown;
+    }) => Error;
   },
 ): Promise<Buffer> {
   const onOverflow =
     opts?.onOverflow ??
-    ((params: { size: number; maxBytes: number }) =>
-      new Error(`Content too large: ${params.size} bytes (limit: ${params.maxBytes} bytes)`));
+    ((params: { size: number; maxBytes: number; cancelError?: unknown }) => {
+      const message = `Content too large: ${params.size} bytes (limit: ${params.maxBytes} bytes)`;
+      if (!params.cancelError) {
+        return new Error(message);
+      }
+      return new Error(
+        `${message}; additionally failed to cancel response stream: ${String(params.cancelError)}`,
+      );
+    });
 
   const body = res.body;
   if (!body || typeof body.getReader !== "function") {
@@ -31,10 +43,13 @@ export async function readResponseWithLimit(
       if (value?.length) {
         total += value.length;
         if (total > maxBytes) {
+          let cancelError: unknown;
           try {
             await reader.cancel();
-          } catch {}
-          throw onOverflow({ size: total, maxBytes, res });
+          } catch (err) {
+            cancelError = err;
+          }
+          throw onOverflow({ size: total, maxBytes, res, cancelError });
         }
         chunks.push(value);
       }
