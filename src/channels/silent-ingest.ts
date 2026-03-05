@@ -27,7 +27,8 @@ function sanitizeIngestContent(value: string, maxLength: number): string {
   let stripped = "";
   for (const ch of value) {
     const code = ch.codePointAt(0) ?? 0;
-    const isDisallowedC0 = code <= 0x08 || code === 0x0b || code === 0x0c || (code >= 0x0e && code <= 0x1f);
+    const isDisallowedC0 =
+      code <= 0x08 || code === 0x0b || code === 0x0c || (code >= 0x0e && code <= 0x1f);
     const isDisallowedC1 = code >= 0x7f && code <= 0x9f;
     if (isDisallowedC0 || isDisallowedC1) {
       continue;

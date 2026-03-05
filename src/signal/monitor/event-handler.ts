@@ -684,6 +684,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               messageId: messageIdForHook,
               originatingChannel: "signal",
               originatingTo: ingestOriginatingTo,
+              senderId: senderRecipient,
               senderName: ingestSenderName,
             },
           },

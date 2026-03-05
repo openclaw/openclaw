@@ -75,6 +75,8 @@ export type SignalAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
+  chunkMode?: "length" | "newline";
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SignalReactionNotificationMode;
   /** Allowlist for reaction notifications when mode is allowlist. */
@@ -102,6 +104,8 @@ export type SignalAccountConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
 };
 
 export type SignalConfig = {
