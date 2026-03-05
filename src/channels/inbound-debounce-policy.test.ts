@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolveInboundDebounceMs } from "../auto-reply/inbound-debounce.js";
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
@@ -19,6 +20,85 @@ describe("shouldDebounceTextInbound", () => {
     expect(shouldDebounceTextInbound({ text: "hello there", cfg, allowDebounce: false })).toBe(
       false,
     );
+  });
+});
+
+describe("resolveInboundDebounceMs", () => {
+  it("respects override precedence: explicit > session > channel > base", () => {
+    const cfg = {
+      messages: {
+        inbound: {
+          debounceMs: 10,
+          byChannel: {
+            discord: 20,
+          },
+          bySessionId: {
+            "discord:default:c1": 30,
+          },
+        },
+      },
+    } as Parameters<typeof resolveInboundDebounceMs>[0]["cfg"];
+
+    expect(
+      resolveInboundDebounceMs({
+        cfg,
+        channel: "discord",
+        sessionId: "discord:default:c1",
+      }),
+    ).toBe(30);
+    expect(
+      resolveInboundDebounceMs({
+        cfg,
+        channel: "discord",
+        sessionId: "discord:default:c1",
+        overrideMs: 40,
+      }),
+    ).toBe(40);
+    expect(
+      resolveInboundDebounceMs({
+        cfg,
+        channel: "discord",
+        sessionId: "discord:default:c2",
+      }),
+    ).toBe(20);
+    expect(resolveInboundDebounceMs({ cfg, channel: "telegram" })).toBe(10);
+  });
+
+  it("uses longest matching session prefix and supports zero-valued overrides", () => {
+    const cfg = {
+      messages: {
+        inbound: {
+          debounceMs: 25,
+          bySessionId: {
+            "discord:default:": 12,
+            "discord:default:ch-": 8,
+            "discord:default:ch-1": 0,
+          },
+        },
+      },
+    } as Parameters<typeof resolveInboundDebounceMs>[0]["cfg"];
+
+    expect(
+      resolveInboundDebounceMs({
+        cfg,
+        channel: "discord",
+        sessionId: "discord:default:ch-1",
+      }),
+    ).toBe(0);
+    expect(
+      resolveInboundDebounceMs({
+        cfg,
+        channel: "discord",
+        sessionId: "discord:default:ch-2",
+      }),
+    ).toBe(8);
+    expect(
+      resolveInboundDebounceMs({
+        cfg,
+        channel: "discord",
+        sessionId: "discord:other:ch-2",
+      }),
+    ).toBe(25);
   });
 });
 
@@ -57,5 +137,36 @@ describe("createChannelInboundDebouncer", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("applies per-session overrides, including zero to disable debouncing", async () => {
+    const flushed: string[][] = [];
+    const cfg = {
+      messages: {
+        inbound: {
+          debounceMs: 30,
+          bySessionId: {
+            "discord:default:ch-1": 0,
+          },
+        },
+      },
+    } as Parameters<typeof createChannelInboundDebouncer<{ id: string }>>[0]["cfg"];
+
+    const { debounceMs, debouncer } = createChannelInboundDebouncer<{ id: string }>({
+      cfg,
+      channel: "discord",
+      sessionId: "discord:default:ch-1",
+      buildKey: (item) => item.id,
+      onFlush: async (items) => {
+        flushed.push(items.map((entry) => entry.id));
+      },
+    });
+
+    expect(debounceMs).toBe(0);
+
+    await debouncer.enqueue({ id: "a" });
+    await debouncer.enqueue({ id: "a" });
+
+    expect(flushed).toEqual([["a"], ["a"]]);
   });
 });

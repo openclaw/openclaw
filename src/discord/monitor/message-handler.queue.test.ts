@@ -83,6 +83,17 @@ function createMessageData(messageId: string, channelId = "ch-1") {
   };
 }
 
+function createTextMessageData(messageId: string, channelId = "ch-1") {
+  const data = createMessageData(messageId, channelId);
+  return {
+    ...data,
+    message: {
+      ...data.message,
+      attachments: [],
+    },
+  };
+}
+
 function createPreflightContext(channelId = "ch-1") {
   return {
     route: {
@@ -216,6 +227,39 @@ describe("createDiscordMessageHandler queue behavior", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("applies session-prefix debounce overrides so matching sessions can disable debounce", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: { channel_id: string } }) =>
+        createPreflightContext(params.data.channel_id),
+    );
+
+    const params = createHandlerParams();
+    params.cfg.messages = {
+      inbound: {
+        debounceMs: 40,
+        bySessionId: {
+          "discord:default:ch-": 0,
+        },
+      },
+    };
+
+    const handler = createDiscordMessageHandler(params);
+    await expect(
+      handler(createTextMessageData("m-1") as never, {} as never),
+    ).resolves.toBeUndefined();
+    await expect(
+      handler(createTextMessageData("m-2") as never, {} as never),
+    ).resolves.toBeUndefined();
+
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("refreshes run activity while active runs are in progress", async () => {
