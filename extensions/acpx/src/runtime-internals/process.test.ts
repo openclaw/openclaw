@@ -292,13 +292,13 @@ describe("spawnAndCollect", () => {
 });
 
 describe("killProcessTree", () => {
-  it("kills the entire process group on Unix", async () => {
+  it("kills the entire process group including grandchild on Unix", async () => {
     // Skip on Windows as process groups work differently
     if (process.platform === "win32") {
       return;
     }
 
-    // Spawn a parent that spawns a child, then test that both are killed
+    // Spawn a parent that spawns a grandchild and prints the grandchild PID
     const child = spawn(
       process.execPath,
       [
@@ -310,6 +310,8 @@ describe("killProcessTree", () => {
           detached: false,
           stdio: 'inherit'
         });
+        // Output the grandchild PID so we can verify it's killed
+        console.log('GRANDCHILD_PID:' + grandchild.pid);
         // Parent also waits forever
         setTimeout(() => {}, 60000);
         `,
@@ -321,8 +323,38 @@ describe("killProcessTree", () => {
       },
     );
 
-    // Wait a moment for the grandchild to spawn
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Collect stdout to get the grandchild PID
+    let stdout = "";
+    child.stdout?.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    // Wait for the grandchild PID to be printed
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (stdout.includes("GRANDCHILD_PID:")) {
+          resolve();
+        } else {
+          setTimeout(check, 10);
+        }
+      };
+      check();
+    });
+
+    // Parse the grandchild PID
+    const match = stdout.match(/GRANDCHILD_PID:(\d+)/);
+    expect(match).not.toBeNull();
+    const grandchildPid = parseInt(match![1], 10);
+
+    // Verify grandchild is running before we kill
+    let grandchildRunning = false;
+    try {
+      process.kill(grandchildPid, 0); // Signal 0 checks if process exists
+      grandchildRunning = true;
+    } catch {
+      grandchildRunning = false;
+    }
+    expect(grandchildRunning).toBe(true);
 
     // Import killProcessTree dynamically to test it
     const { killProcessTree } = await import("./process.js");
@@ -337,7 +369,20 @@ describe("killProcessTree", () => {
     });
 
     const exitCode = await exitPromise;
-    // Process was killed by signal, so exit code is null and signal is SIGTERM
+    // Process was killed by signal, so exit code is null
     expect(exitCode).toBeNull();
+
+    // Wait a moment for signals to propagate
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Verify grandchild is also killed - this is the key assertion
+    let grandchildStillRunning = false;
+    try {
+      process.kill(grandchildPid, 0);
+      grandchildStillRunning = true;
+    } catch {
+      grandchildStillRunning = false;
+    }
+    expect(grandchildStillRunning).toBe(false);
   });
 });
