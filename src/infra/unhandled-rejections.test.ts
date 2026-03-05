@@ -251,6 +251,16 @@ describe("isTlsSocketNullDeref", () => {
     expect(isTlsSocketNullDeref(err)).toBe(false);
   });
 
+  it("returns true when stack contains only node:_tls_wrap (no TLSSocket.setSession frame)", () => {
+    const err = new TypeError("Cannot read properties of null (reading 'setSession')");
+    err.stack = [
+      "TypeError: Cannot read properties of null (reading 'setSession')",
+      "    at Object.connect (node:_tls_wrap:1826:13)",
+      "    at Client.connect (undici/lib/core/connect.js:70:20)",
+    ].join("\n");
+    expect(isTlsSocketNullDeref(err)).toBe(true);
+  });
+
   it("returns false for TypeErrors unrelated to setSession", () => {
     const err = new TypeError("Cannot read properties of null (reading 'length')");
     err.stack = "TypeError\n    at TLSSocket.foo (node:_tls_wrap:10:1)";

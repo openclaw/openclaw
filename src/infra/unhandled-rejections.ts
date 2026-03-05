@@ -100,7 +100,7 @@ export function isTlsSocketNullDeref(err: unknown): boolean {
     return false;
   }
   const stack = err.stack ?? "";
-  return stack.includes("TLSSocket.setSession") || stack.includes("_tls_wrap");
+  return stack.includes("TLSSocket.setSession") || stack.includes("node:_tls_wrap");
 }
 
 function getErrorCause(err: unknown): unknown {
