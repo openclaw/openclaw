@@ -33,6 +33,7 @@ export function attachMediaRoutes(
   const mediaDir = getMediaDir();
 
   app.get("/media/:id", async (req, res) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
     const id = req.params.id;
     if (!isValidMediaId(id)) {
       res.status(400).send("invalid path");

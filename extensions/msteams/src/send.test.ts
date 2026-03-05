@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/msteams";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sendMessageMSTeams } from "./send.js";
 
@@ -11,7 +11,7 @@ const mockState = vi.hoisted(() => ({
   sendMSTeamsMessages: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk", () => ({
+vi.mock("openclaw/plugin-sdk/msteams", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 

@@ -1156,6 +1156,45 @@ description: test skill
     expect(finding?.severity).toBe("warn");
     expect(finding?.detail).toContain("system.*");
     expect(finding?.detail).toContain("system.runx");
+    expect(finding?.detail).toContain("did you mean");
+    expect(finding?.detail).toContain("system.run");
+  });
+
+  it("suggests prefix-matching commands for unknown denyCommands entries", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          denyCommands: ["system.run.prep"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("system.run.prep");
+    expect(finding?.detail).toContain("did you mean");
+    expect(finding?.detail).toContain("system.run.prepare");
+  });
+
+  it("keeps unknown denyCommands entries without suggestions when no close command exists", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          denyCommands: ["zzzzzzzzzzzzzz"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("zzzzzzzzzzzzzz");
+    expect(finding?.detail).not.toContain("did you mean");
   });
 
   it("scores dangerous gateway.nodes.allowCommands by exposure", async () => {
@@ -1956,6 +1995,51 @@ description: test skill
           }),
         ]),
       );
+    });
+  });
+
+  it("does not treat prototype properties as explicit Discord account config paths", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            dangerouslyAllowNameMatching: true,
+            allowFrom: ["Alice#1234"],
+            accounts: {},
+          },
+        },
+      };
+
+      const pluginWithProtoDefaultAccount: ChannelPlugin = {
+        ...discordPlugin,
+        config: {
+          ...discordPlugin.config,
+          listAccountIds: () => [],
+          defaultAccountId: () => "toString",
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [pluginWithProtoDefaultAccount],
+      });
+
+      const dangerousMatchingFinding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.dangerous_name_matching_enabled",
+      );
+      expect(dangerousMatchingFinding).toBeDefined();
+      expect(dangerousMatchingFinding?.title).not.toContain("(account: toString)");
+
+      const nameBasedFinding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+      );
+      expect(nameBasedFinding).toBeDefined();
+      expect(nameBasedFinding?.detail).toContain("channels.discord.allowFrom:Alice#1234");
+      expect(nameBasedFinding?.detail).not.toContain("channels.discord.accounts.toString");
     });
   });
 

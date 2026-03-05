@@ -187,6 +187,8 @@ export type TelegramTopicConfig = {
   systemPrompt?: string;
   /** If true, skip automatic voice-note transcription for mention detection in this topic. */
   disableAudioPreflight?: boolean;
+  /** Route this topic to a specific agent (overrides group-level and binding routing). */
+  agentId?: string;
 };
 
 export type TelegramGroupConfig = {
