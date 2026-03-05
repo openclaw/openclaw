@@ -227,6 +227,20 @@ describe("resolvePermissionRequest", () => {
     });
   });
 
+  it("auto-approves read when rawInput Windows-style path maps to WSL workdir", async () => {
+    await expectAutoAllowWithoutPrompt({
+      request: {
+        toolCall: {
+          toolCallId: "tool-read-inside-cwd-wsl-windows-path",
+          title: "read: ignored-by-raw-input",
+          status: "pending",
+          rawInput: { path: "C:\\openclaw-acp-cwd\\docs\\security.md" },
+        },
+      },
+      cwd: "/mnt/c/openclaw-acp-cwd",
+    });
+  });
+
   it("auto-approves read when rawInput file URL resolves inside cwd", async () => {
     await expectAutoAllowWithoutPrompt({
       request: {

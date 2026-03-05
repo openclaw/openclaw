@@ -144,19 +144,48 @@ function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefin
   if (!candidate) {
     return undefined;
   }
-  if (candidate.startsWith("file://")) {
+
+  const fileUrlPath = (() => {
+    if (!candidate.startsWith("file://")) {
+      return undefined;
+    }
     try {
-      const parsed = new URL(candidate);
-      candidate = decodeURIComponent(parsed.pathname || "");
+      return fileURLToPath(candidate);
     } catch {
       return undefined;
     }
+  })();
+  if (fileUrlPath !== undefined) {
+    candidate = fileUrlPath;
   }
-  if (candidate === "~") {
-    candidate = homedir();
-  } else if (candidate.startsWith("~/")) {
-    candidate = path.join(homedir(), candidate.slice(2));
+
+  if (candidate.startsWith("~")) {
+    if (candidate === "~") {
+      candidate = homedir();
+    } else if (candidate.startsWith("~/")) {
+      candidate = path.join(homedir(), candidate.slice(2));
+    }
   }
+  if (/^\/[a-zA-Z]:[\\/]/.test(candidate)) {
+    candidate = candidate.slice(1);
+  }
+
+  const windowsDriveMatch = /^[a-zA-Z]:[\\/](.*)/.exec(candidate);
+  if (!path.isAbsolute(candidate) && windowsDriveMatch && process.platform !== "win32") {
+    const mountMatch = /^\/mnt\/([a-zA-Z])(\/|$)/.exec(cwd);
+    const driveLetter = windowsDriveMatch[1]?.toLowerCase();
+    if (mountMatch && mountMatch[1]?.toLowerCase() === driveLetter) {
+      const afterDrive = windowsDriveMatch[2] ?? "";
+      candidate = `/mnt/${driveLetter}/${afterDrive.replaceAll("\\", "/").replace(/^[/\\]+/, "")}`;
+    } else {
+      candidate = path.win32.normalize(candidate);
+    }
+  }
+
+  if (candidate === "") {
+    return undefined;
+  }
+
   const absolute = path.isAbsolute(candidate)
     ? path.normalize(candidate)
     : path.resolve(cwd, candidate);
