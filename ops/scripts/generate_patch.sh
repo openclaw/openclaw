@@ -7,11 +7,27 @@ echo "[generate_patch] task: $TASK_FILE"
 
 goal=$(jq -r '.goal' "$TASK_FILE")
 
+# Load reviewer feedback if it exists
+REVIEWER_FEEDBACK=""
+if [[ -f reviewer_feedback.txt ]]; then
+  REVIEWER_FEEDBACK=$(cat reviewer_feedback.txt)
+  echo "[generate_patch] using reviewer feedback: $REVIEWER_FEEDBACK"
+fi
+
 echo "[generate_patch] collecting repository context..."
 
 REPO_CONTEXT=$(git ls-files | head -n 50 || true)
 
-FILE_SAMPLE=$(sed -n '1,200p' ops/scripts/task_runner.sh 2>/dev/null || true)
+FILE_SAMPLE=""
+
+for f in ops/scripts/task_runner.sh ops/scripts/generate_patch.sh ops/scripts/review_patch.sh; do
+  if [[ -f "$f" ]]; then
+    FILE_SAMPLE="$FILE_SAMPLE
+
+===== FILE: $f =====
+$(sed -n '1,200p' "$f")"
+  fi
+done
 
 echo "[generate_patch] goal: $goal"
 
@@ -30,7 +46,17 @@ $FILE_SAMPLE
 Task goal:
 $goal
 
-Generate a valid unified git patch.
+Previous reviewer feedback (if any):
+$REVIEWER_FEEDBACK
+
+Before generating the patch:
+
+1. Briefly think about which file and section must change.
+2. Identify the exact lines that should be modified.
+3. Then produce the final patch.
+
+Only output the final unified git patch.
+Do not output the reasoning or planning.
 
 Rules:
 - Output ONLY a valid unified git patch.

@@ -10,7 +10,10 @@ log() {
 }
 
 CURRENT_STEP=""
-trap 'log "ERROR exit=$? step=${CURRENT_STEP:-unknown}"' ERR
+CURRENT_TASK=""
+trap 'log "ERROR exit=$? step=${CURRENT_STEP:-unknown} task=${CURRENT_TASK:-none}"' ERR
+
+log "runner start pid=$$"
 
 TASK_DIR="ops/tasks"
 
@@ -24,18 +27,28 @@ log "reviewer model: $REVIEWER_MODEL"
 log "scanning for tasks..."
 
 for task in ${TASK_DIR}/task-*.json; do
+  CURRENT_TASK="$task"
   [ -e "$task" ] || continue
 
   status=$(jq -r '.status' "$task")
 
+  # Recover tasks stuck in "running"
+  if [[ "$status" == "running" ]]; then
+      log "detected stale running task: $task — resetting to pending"
+      tmp=$(mktemp)
+      jq '.status="pending"' "$task" > "$tmp" && mv "$tmp" "$task"
+      status="pending"
+  fi
+
   if [[ "$status" == "pending" ]]; then
-    log "executing $task"
+    log "executing $task status=$status"
 
     # mark task running
     CURRENT_STEP="mark_running"
     tmp=$(mktemp)
     jq '.status="running"' "$task" > "$tmp" && mv "$tmp" "$task"
     CURRENT_STEP=""
+    log "marked running $task"
 
     MAX_ATTEMPTS=3
 attempt=1
@@ -46,6 +59,7 @@ while (( attempt <= MAX_ATTEMPTS )); do
   CURRENT_STEP="generate_patch"
   bash ops/scripts/generate_patch.sh "$task"
   CURRENT_STEP=""
+  log "generate_patch exit=$?"
 
 if [[ ! -f patch.diff ]]; then
   log "patch generation failed"
@@ -76,6 +90,7 @@ if (( attempt > MAX_ATTEMPTS )); then
   tmp=$(mktemp)
   jq '.status="failed"' "$task" > "$tmp" && mv "$tmp" "$task"
   CURRENT_STEP=""
+  log "marked failed $task"
 
   continue
 fi
@@ -83,6 +98,7 @@ fi
     CURRENT_STEP="apply_patch"
     bash ops/scripts/apply_patch_commit.sh patch.diff
     CURRENT_STEP=""
+    log "apply_patch_commit exit=$?"
 
     rm -f patch.diff
 
@@ -90,6 +106,7 @@ fi
     CURRENT_STEP="run_gates"
     KEEP_TMP=1 bash ops/scripts/gate_archive.sh
     CURRENT_STEP=""
+    log "gate_archive exit=$?"
 
     # mark task complete
     CURRENT_STEP="mark_complete"
@@ -97,6 +114,8 @@ fi
     jq '.status="complete"' "$task" > "$tmp" && mv "$tmp" "$task"
     CURRENT_STEP=""
 
-    log "task complete"
+    log "task complete $task"
   fi
 done
+
+log "runner done pid=$$"

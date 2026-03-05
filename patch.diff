@@ -1,121 +1,84 @@
 diff --git a/ops/scripts/task_runner.sh b/ops/scripts/task_runner.sh
-index 3b71f3a..b4a2f1e 100755
+index b4a2f1e..7c8d1f2 100755
 --- a/ops/scripts/task_runner.sh
 +++ b/ops/scripts/task_runner.sh
-@@ -1,12 +1,27 @@
- #!/usr/bin/env bash
- set -euo pipefail
+@@ -8,9 +8,15 @@ log() {
+   printf '%s [task_runner] %s\n' "$(timestamp)" "$*"
+ }
  
-+timestamp() {
-+  date -u +"%Y-%m-%dT%H:%M:%SZ"
-+}
+ CURRENT_STEP=""
+-trap 'log "ERROR exit=$? step=${CURRENT_STEP:-unknown}"' ERR
++CURRENT_TASK=""
++trap 'log "ERROR exit=$? step=${CURRENT_STEP:-unknown} task=${CURRENT_TASK:-none}"' ERR
 +
-+log() {
-+  printf '%s [task_runner] %s\n' "$(timestamp)" "$*"
-+}
-+
-+CURRENT_STEP=""
-+trap 'log "ERROR exit=$? step=${CURRENT_STEP:-unknown}"' ERR
-+
++log "runner start pid=$$"
+ 
  TASK_DIR="ops/tasks"
- 
- TEAM_FILE="ops/strike_teams/alpha.json"
- 
- IMPLEMENTER_MODEL=$(jq -r '.roles[] | select(.id=="implementer") | .model' $TEAM_FILE)
- REVIEWER_MODEL=$(jq -r '.roles[] | select(.id=="reviewer") | .model' $TEAM_FILE)
- 
--echo "[task_runner] implementer model: $IMPLEMENTER_MODEL"
--echo "[task_runner] reviewer model: $REVIEWER_MODEL"
--echo "[task_runner] scanning for tasks..."
-+log "implementer model: $IMPLEMENTER_MODEL"
-+log "reviewer model: $REVIEWER_MODEL"
-+log "scanning for tasks..."
+@@ -24,6 +30,7 @@ log "reviewer model: $REVIEWER_MODEL"
+ log "scanning for tasks..."
  
  for task in ${TASK_DIR}/task-*.json; do
++  CURRENT_TASK="$task"
    [ -e "$task" ] || continue
-@@ -15,10 +30,12 @@ for task in ${TASK_DIR}/task-*.json; do
+ 
    status=$(jq -r '.status' "$task")
+@@ -38,7 +45,7 @@ for task in ${TASK_DIR}/task-*.json; do
+   fi
  
    if [[ "$status" == "pending" ]]; then
--    echo "[task_runner] executing $task"
-+    log "executing $task"
+-    log "executing $task"
++    log "executing $task status=$status"
  
      # mark task running
-+    CURRENT_STEP="mark_running"
+     CURRENT_STEP="mark_running"
+@@ -46,6 +53,7 @@ for task in ${TASK_DIR}/task-*.json; do
      tmp=$(mktemp)
      jq '.status="running"' "$task" > "$tmp" && mv "$tmp" "$task"
-+    CURRENT_STEP=""
+     CURRENT_STEP=""
++    log "marked running $task"
  
      MAX_ATTEMPTS=3
  attempt=1
-@@ -26,19 +43,23 @@ attempt=1
- 
- while (( attempt <= MAX_ATTEMPTS )); do
--  echo "[task_runner] patch attempt $attempt..."
-+  log "patch attempt $attempt..."
- 
-+  CURRENT_STEP="generate_patch"
+@@ -56,6 +64,7 @@ while (( attempt <= MAX_ATTEMPTS )); do
+   CURRENT_STEP="generate_patch"
    bash ops/scripts/generate_patch.sh "$task"
-+  CURRENT_STEP=""
+   CURRENT_STEP=""
++  log "generate_patch exit=$?"
  
  if [[ ! -f patch.diff ]]; then
--  echo "[task_runner] patch generation failed"
-+  log "patch generation failed"
-   ((attempt++))
-   continue
- fi
- 
--  echo "[task_runner] reviewing patch..."
-+  log "reviewing patch..."
- 
-+  CURRENT_STEP="review_patch"
-   if bash ops/scripts/review_patch.sh patch.diff; then
--    echo "[task_runner] patch approved"
-+    log "patch approved"
-+    CURRENT_STEP=""
-     break
-   fi
-+  CURRENT_STEP=""
- 
--  echo "[task_runner] patch rejected (attempt $attempt)"
-+  log "patch rejected (attempt $attempt)"
-   rm -f patch.diff
- 
-   ((attempt++))
-@@ -46,21 +67,27 @@ done
- 
- if (( attempt > MAX_ATTEMPTS )); then
--  echo "[task_runner] patch failed after $MAX_ATTEMPTS attempts"
-+  log "patch failed after $MAX_ATTEMPTS attempts"
- 
-+  CURRENT_STEP="mark_failed"
+   log "patch generation failed"
+@@ -94,6 +103,7 @@ if (( attempt > MAX_ATTEMPTS )); then
+   CURRENT_STEP="mark_failed"
    tmp=$(mktemp)
    jq '.status="failed"' "$task" > "$tmp" && mv "$tmp" "$task"
-+  CURRENT_STEP=""
+   CURRENT_STEP=""
++  log "marked failed $task"
  
    continue
  fi
--    echo "[task_runner] applying patch..."
-+    log "applying patch..."
-+    CURRENT_STEP="apply_patch"
+@@ -103,6 +113,7 @@ if (( attempt > MAX_ATTEMPTS )); then
+     CURRENT_STEP="apply_patch"
      bash ops/scripts/apply_patch_commit.sh patch.diff
-+    CURRENT_STEP=""
+     CURRENT_STEP=""
++    log "apply_patch_commit exit=$?"
  
      rm -f patch.diff
  
--    echo "[task_runner] running gate pipeline..."
-+    log "running gate pipeline..."
-+    CURRENT_STEP="run_gates"
+@@ -111,6 +122,7 @@ if (( attempt > MAX_ATTEMPTS )); then
+     CURRENT_STEP="run_gates"
      KEEP_TMP=1 bash ops/scripts/gate_archive.sh
-+    CURRENT_STEP=""
+     CURRENT_STEP=""
++    log "gate_archive exit=$?"
  
      # mark task complete
-+    CURRENT_STEP="mark_complete"
-     tmp=$(mktemp)
+     CURRENT_STEP="mark_complete"
+@@ -118,5 +130,7 @@ if (( attempt > MAX_ATTEMPTS )); then
      jq '.status="complete"' "$task" > "$tmp" && mv "$tmp" "$task"
-+    CURRENT_STEP=""
+     CURRENT_STEP=""
  
--    echo "[task_runner] task complete"
-+    log "task complete"
+-    log "task complete"
++    log "task complete $task"
    fi
  done
++
++log "runner done pid=$$"

@@ -18,18 +18,29 @@ REVIEW=$(openclaw-safe agent \
   --agent dir-architecture-01 \
   --timeout 120 \
   --thinking off \
-  --message "Review the following git patch for correctness and relevance. Reply only APPROVE or REJECT.
+  --message "Review the following git patch for correctness and relevance.
 
+Reply in ONE of these formats:
+
+APPROVE
+
+or
+
+REJECT: <brief explanation of what is wrong>
+
+Patch:
 $(cat "$PATCH_FILE")" \
   --json | jq -r '.result.payloads[0].text')
 
-echo "[review_patch] reviewer decision: $REVIEW"
+echo "[review_patch] reviewer response: $REVIEW"
 
-# Enforce reviewer decision
-if [[ "$REVIEW" != "APPROVE" ]]; then
-  echo "[review_patch] reviewer rejected patch"
-  exit 1
+if [[ "$REVIEW" == APPROVE* ]]; then
+  echo "[review_patch] reviewer approved patch"
+  exit 0
 fi
 
-echo "[review_patch] reviewer approved patch"
-exit 0
+echo "[review_patch] reviewer rejected patch"
+
+echo "$REVIEW" > reviewer_feedback.txt
+
+exit 1
