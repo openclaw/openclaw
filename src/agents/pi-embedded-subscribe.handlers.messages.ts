@@ -448,5 +448,7 @@ export function handleMessageEnd(
   ctx.state.lastStreamedAssistant = undefined;
   ctx.state.lastStreamedAssistantCleaned = undefined;
   ctx.state.reasoningStreamOpen = false;
-  ctx.state.pendingCrossTurnSeparator = shouldInsertCrossTurnSeparator;
+  // Use ||= to preserve the flag across duplicate message_end events.
+  // Once set to true by the first message_end, duplicate events won't reset it.
+  ctx.state.pendingCrossTurnSeparator ||= shouldInsertCrossTurnSeparator;
 }

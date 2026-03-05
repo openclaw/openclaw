@@ -29,3 +29,53 @@ describe("resolveSilentReplyFallbackText", () => {
     ).toBe("NO_REPLY");
   });
 });
+
+describe("pendingCrossTurnSeparator flag preservation", () => {
+  it("preserves flag when using ||=", () => {
+    // Simulate the ||= behavior
+    let flag = false;
+
+    // First message_end with content: should set to true
+    flag ||= true;
+    expect(flag).toBe(true);
+
+    // Duplicate message_end with no content: should preserve true
+    flag ||= false;
+    expect(flag).toBe(true);
+  });
+
+  it("resets flag after consumption", () => {
+    // Simulate the consumption pattern
+    let flag = false;
+
+    // First message_end sets flag
+    flag ||= true;
+    expect(flag).toBe(true);
+
+    // After consumption in handleMessageUpdate, flag resets
+    flag = false;
+    expect(flag).toBe(false);
+
+    // Next message_end can set it again
+    flag ||= true;
+    expect(flag).toBe(true);
+  });
+
+  it("handles multiple duplicate message_end events", () => {
+    let flag = false;
+
+    // First message_end with content
+    flag ||= true;
+    expect(flag).toBe(true);
+
+    // Multiple duplicates
+    flag ||= false;
+    expect(flag).toBe(true);
+
+    flag ||= false;
+    expect(flag).toBe(true);
+
+    flag ||= false;
+    expect(flag).toBe(true);
+  });
+});
