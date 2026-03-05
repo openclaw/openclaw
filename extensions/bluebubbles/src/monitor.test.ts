@@ -1177,6 +1177,140 @@ describe("BlueBubbles webhook monitor", () => {
         vi.useRealTimers();
       }
     });
+
+    it("handles null text in debounce combine without crashing", async () => {
+      vi.useFakeTimers();
+      try {
+        const account = createMockAccount({ dmPolicy: "open" });
+        const config: OpenClawConfig = {};
+        const core = createMockRuntime();
+
+        // oxlint-disable-next-line typescript/no-explicit-any
+        core.channel.debounce.createInboundDebouncer = vi.fn((params: any) => {
+          // oxlint-disable-next-line typescript/no-explicit-any
+          type Item = any;
+          const buckets = new Map<
+            string,
+            { items: Item[]; timer: ReturnType<typeof setTimeout> | null }
+          >();
+
+          const flush = async (key: string) => {
+            const bucket = buckets.get(key);
+            if (!bucket) {
+              return;
+            }
+            if (bucket.timer) {
+              clearTimeout(bucket.timer);
+              bucket.timer = null;
+            }
+            const items = bucket.items;
+            bucket.items = [];
+            if (items.length > 0) {
+              try {
+                await params.onFlush(items);
+              } catch (err) {
+                params.onError?.(err);
+                throw err;
+              }
+            }
+          };
+
+          return {
+            enqueue: async (item: Item) => {
+              if (params.shouldDebounce && !params.shouldDebounce(item)) {
+                await params.onFlush([item]);
+                return;
+              }
+
+              const key = params.buildKey(item);
+              const existing = buckets.get(key);
+              const bucket = existing ?? { items: [], timer: null };
+              bucket.items.push(item);
+              if (bucket.timer) {
+                clearTimeout(bucket.timer);
+              }
+              bucket.timer = setTimeout(async () => {
+                await flush(key);
+              }, params.debounceMs);
+              buckets.set(key, bucket);
+            },
+            flushKey: vi.fn(async (key: string) => {
+              await flush(key);
+            }),
+          };
+        }) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+
+        setBlueBubblesRuntime(core);
+
+        unregister = registerBlueBubblesWebhookTarget({
+          account,
+          config,
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        });
+
+        const messageId = "null-text-msg";
+        const chatGuid = "iMessage;-;+15559876543";
+
+        // First event: attachment-only message with null text (BlueBubbles sends
+        // text: null for certain message types like attachment-only or system events).
+        const payloadNullText = {
+          type: "new-message",
+          data: {
+            text: null,
+            handle: { address: "+15559876543" },
+            isGroup: false,
+            isFromMe: false,
+            guid: messageId,
+            chatGuid,
+            attachments: [
+              {
+                guid: "att-null",
+                mimeType: "image/png",
+                totalBytes: 2048,
+              },
+            ],
+            date: Date.now(),
+          },
+        };
+
+        // Second event: same messageId but with text.
+        const payloadWithText = {
+          type: "new-message",
+          data: {
+            text: "check this out",
+            handle: { address: "+15559876543" },
+            isGroup: false,
+            isFromMe: false,
+            guid: messageId,
+            chatGuid,
+            date: Date.now(),
+          },
+        };
+
+        await handleBlueBubblesWebhookRequest(
+          createMockRequest("POST", "/bluebubbles-webhook", payloadNullText),
+          createMockResponse(),
+        );
+
+        await vi.advanceTimersByTimeAsync(300);
+
+        await handleBlueBubblesWebhookRequest(
+          createMockRequest("POST", "/bluebubbles-webhook", payloadWithText),
+          createMockResponse(),
+        );
+
+        // After the debounce window, the flush should succeed (not crash).
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+        const callArgs = getFirstDispatchCall();
+        expect(callArgs.ctx.Body).toContain("check this out");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("reply metadata", () => {
