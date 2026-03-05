@@ -182,6 +182,14 @@ export async function listInflightAgentRuns(
   return Object.values(store.runs ?? {});
 }
 
+export async function clearInflightAgentRuns(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const storePath = resolveStorePath(env);
+  registerStorePath(storePath);
+  await withStoreLock(storePath, async () => {
+    await writeStoreToPath(storePath, { version: STORE_VERSION, runs: {} });
+  });
+}
+
 /**
  * Start a best-effort lifecycle listener to clean up persisted inflight runs.
  *

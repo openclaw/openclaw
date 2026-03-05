@@ -650,10 +650,16 @@ export const agentHandlers: GatewayRequestHandlers = {
     } as const;
 
     if (shouldPersistInflight) {
+      const persistableRunOpts = {
+        ...runOpts,
+        // Avoid persisting large base64 image payloads; resumed runs use a fresh
+        // continuation prompt and existing session transcript as context.
+        images: undefined,
+      };
       void addInflightAgentRun({
         runId,
         acceptedAt: accepted.acceptedAt,
-        opts: runOpts,
+        opts: persistableRunOpts,
       }).catch(() => {});
     }
 

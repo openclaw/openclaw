@@ -26,8 +26,7 @@ import type { DaemonLifecycleOptions } from "./types.js";
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
 
-async function resolveGatewayRestartPort() {
-  const service = resolveGatewayService();
+async function resolveGatewayRestartContext(service = resolveGatewayService()) {
   const command = await service.readCommand(process.env).catch(() => null);
   const serviceEnv = command?.environment ?? undefined;
   const mergedEnv = {
@@ -36,7 +35,8 @@ async function resolveGatewayRestartPort() {
   } as NodeJS.ProcessEnv;
 
   const portFromArgs = parsePortFromArgs(command?.programArguments);
-  return portFromArgs ?? resolveGatewayPort(loadConfig(), mergedEnv);
+  const port = portFromArgs ?? resolveGatewayPort(loadConfig(), mergedEnv);
+  return { port, mergedEnv };
 }
 
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
@@ -74,25 +74,42 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
-  const restartPort = await resolveGatewayRestartPort().catch(() =>
-    resolveGatewayPort(loadConfig(), process.env),
-  );
+  const restartCtx = await resolveGatewayRestartContext(service).catch(() => ({
+    port: resolveGatewayPort(loadConfig(), process.env),
+    mergedEnv: process.env,
+  }));
+  const restartPort = restartCtx.port;
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
 
-  // Best-effort: write a restart sentinel so the next gateway process can detect
-  // this restart as being triggered via the explicit restart command.
+  // Best-effort: if the service is loaded, write a restart sentinel so the next
+  // gateway process can detect this restart as being triggered via the explicit
+  // restart command. The sentinel must be written using the service environment
+  // (e.g. OPENCLAW_STATE_DIR) so the restarted daemon can read it on startup.
+  let loaded = false;
   try {
-    await writeRestartSentinel({
-      kind: "restart",
-      status: "ok",
-      ts: Date.now(),
-      message: null,
-      doctorHint: formatDoctorNonInteractiveHint(),
-      stats: { mode: "cli.gateway.restart", reason: "daemon restart" },
-    });
+    loaded = await service.isLoaded({ env: process.env });
   } catch {
-    // ignore: sentinel is best-effort
+    loaded = false;
+  }
+  if (loaded) {
+    try {
+      await writeRestartSentinel(
+        {
+          kind: "restart",
+          status: "ok",
+          ts: Date.now(),
+          message: null,
+          doctorHint: formatDoctorNonInteractiveHint(
+            restartCtx.mergedEnv as Record<string, string | undefined>,
+          ),
+          stats: { mode: "cli.gateway.restart", reason: "daemon restart" },
+        },
+        restartCtx.mergedEnv,
+      );
+    } catch {
+      // ignore: sentinel is best-effort
+    }
   }
 
   return await runServiceRestart({

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { type RestartSentinel, readRestartSentinel } from "../infra/restart-sentinel.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
+  clearInflightAgentRuns,
   ensureInflightAgentRunLifecycleCleanerStarted,
   listInflightAgentRuns,
   markInflightAgentRunResumed,
@@ -36,13 +37,17 @@ export async function maybeResumeInflightAgentRunsAfterRestart(params: {
   }
 
   const env = params.env ?? process.env;
-  const sentinel = params.sentinel ?? (await readRestartSentinel(env).catch(() => null));
-  if (!sentinel || sentinel.payload?.kind !== "restart") {
+  const active = params.getActiveRunCount?.() ?? 0;
+  if (active > 0) {
     return { resumed: 0, considered: 0, skipped: true };
   }
 
-  const active = params.getActiveRunCount?.() ?? 0;
-  if (active > 0) {
+  const sentinel = params.sentinel ?? (await readRestartSentinel(env).catch(() => null));
+  if (!sentinel || sentinel.payload?.kind !== "restart") {
+    // Best-effort: if the gateway started without an explicit restart sentinel,
+    // clear any leftover inflight records (e.g. after a hard crash) so they do
+    // not get resumed on a future unrelated restart.
+    await clearInflightAgentRuns(env).catch(() => {});
     return { resumed: 0, considered: 0, skipped: true };
   }
 

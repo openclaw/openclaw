@@ -515,7 +515,9 @@ export async function startGatewayServer(
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
-  ensureInflightAgentRunLifecycleCleanerStarted(process.env);
+  if (cfgAtStart.gateway?.restartRecovery?.resumeInflightAgentRuns === true) {
+    ensureInflightAgentRunLifecycleCleanerStarted(process.env);
+  }
   let canvasHostServer: CanvasHostServer | null = null;
   const gatewayTls = await loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls"));
   if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
@@ -886,7 +888,7 @@ export async function startGatewayServer(
     .then((result) => {
       if (!result.skipped && result.considered > 0) {
         log.info(
-          `restart recovery: resumed inflight agent runs resumed=${result.resumed} considered=${result.considered}`,
+          `restart recovery: inflight agent runs resumed=${result.resumed} considered=${result.considered}`,
         );
       }
     })
