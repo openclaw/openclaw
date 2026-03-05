@@ -68,8 +68,10 @@ fi
 BRANCH=$(git branch --show-current)
 log "Force-pushing ${BRANCH} to bitbucket and fork..."
 BB_OK=0; FK_OK=0
-git push --force-with-lease bitbucket "HEAD:${BRANCH}" 2>&1 && BB_OK=1 || warn "Could not push to bitbucket"
-git push --force-with-lease fork "HEAD:${BRANCH}" 2>&1 && FK_OK=1 || warn "Could not push to fork"
+# Bitbucket and fork are downstream mirrors — use --force (not --force-with-lease)
+# so stale remote-tracking refs don't block the push.
+git push --force bitbucket "HEAD:${BRANCH}" 2>&1 && BB_OK=1 || warn "Could not push to bitbucket"
+git push --force fork "HEAD:${BRANCH}" 2>&1 && FK_OK=1 || warn "Could not push to fork"
 if [ "$BB_OK" -eq 1 ] && [ "$FK_OK" -eq 1 ]; then
   ok "Pushed to both remotes"
 elif [ "$BB_OK" -eq 1 ] || [ "$FK_OK" -eq 1 ]; then
