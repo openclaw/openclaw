@@ -75,10 +75,16 @@ export function resolveLastToRaw(params: {
   persistedLastTo?: string;
   persistedLastChannel?: string;
   sessionKey?: string;
+  providerRaw?: string;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
   if (originatingChannel === INTERNAL_MESSAGE_CHANNEL && isMainSessionKey(params.sessionKey)) {
-    return params.originatingToRaw || params.toRaw;
+    const provider = params.providerRaw?.trim().toLowerCase();
+    const candidate = params.originatingToRaw || params.toRaw;
+    if (provider === "heartbeat" && candidate?.trim().toLowerCase() === "heartbeat") {
+      return params.persistedLastTo;
+    }
+    return candidate;
   }
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
@@ -94,7 +100,14 @@ export function resolveLastToRaw(params: {
     }
   }
 
-  return params.originatingToRaw || params.toRaw || params.persistedLastTo;
+  const candidate = params.originatingToRaw || params.toRaw || params.persistedLastTo;
+  const provider = params.providerRaw?.trim().toLowerCase();
+  const isHeartbeatPlaceholder =
+    provider === "heartbeat" && candidate?.trim().toLowerCase() === "heartbeat";
+  if (isHeartbeatPlaceholder) {
+    return params.persistedLastTo;
+  }
+  return candidate;
 }
 
 export function maybeRetireLegacyMainDeliveryRoute(params: {

@@ -258,6 +258,7 @@ export async function initSessionState(params: {
     persistedLastTo: baseEntry?.lastTo,
     persistedLastChannel: baseEntry?.lastChannel,
     sessionKey,
+    providerRaw: ctx.Provider,
   });
   const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
   // Only fall back to persisted threadId for thread sessions.  Non-thread

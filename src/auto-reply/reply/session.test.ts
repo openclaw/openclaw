@@ -1592,6 +1592,39 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.lastTo).toBe("session:handoff");
   });
 
+  it("does not persist heartbeat placeholder destination for internal turns", async () => {
+    const storePath = await createStorePath("ignore-heartbeat-placeholder-");
+    const sessionKey = "agent:main:main";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-heartbeat-placeholder-1",
+        updatedAt: Date.now(),
+        lastChannel: "feishu",
+        deliveryContext: {
+          channel: "feishu",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "heartbeat tick",
+        SessionKey: sessionKey,
+        OriginatingChannel: "webchat",
+        To: "heartbeat",
+        Provider: "heartbeat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("webchat");
+    expect(result.sessionEntry.lastTo).toBeUndefined();
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("webchat");
+    expect(result.sessionEntry.deliveryContext?.to).toBeUndefined();
+  });
+
   it("keeps webchat channel for webchat/main sessions", async () => {
     const storePath = await createStorePath("preserve-webchat-main-");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
