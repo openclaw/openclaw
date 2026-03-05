@@ -5,6 +5,7 @@ import { logVerbose } from "../../globals.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { fetchRemoteMedia, type FetchLike } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { escapeRegExp } from "../../utils.js";
 
 const DISCORD_CDN_HOSTNAMES = [
   "cdn.discordapp.com",
@@ -543,7 +544,7 @@ function resolveDiscordMentions(text: string, message: Message): string {
   let out = text;
   for (const user of mentions) {
     const label = user.globalName || user.username;
-    out = out.replace(new RegExp(`<@!?${user.id}>`, "g"), `@${label}`);
+    out = out.replace(new RegExp(`<@!?${escapeRegExp(user.id)}>`, "g"), `@${label}`);
   }
   return out;
 }

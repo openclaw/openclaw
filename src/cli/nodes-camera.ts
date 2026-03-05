@@ -79,7 +79,12 @@ export async function writeUrlToFile(
   url: string,
   opts: { expectedHost: string },
 ) {
-  const parsed = new URL(url);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`writeUrlToFile: invalid URL: ${url}`);
+  }
   if (parsed.protocol !== "https:") {
     throw new Error(`writeUrlToFile: only https URLs are allowed, got ${parsed.protocol}`);
   }

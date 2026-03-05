@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStorePath, updateSessionStore } from "../../config/sessions.js";
+import { escapeRegExp } from "../../utils.js";
 
 /**
  * Marks every session entry in the store whose key contains {@link threadId}
@@ -30,7 +31,7 @@ export async function closeDiscordThreadSessions(params: {
   // Session key shapes:
   //   agent:<agentId>:discord:channel:<threadId>
   //   agent:<agentId>:discord:channel:<parentId>:thread:<threadId>
-  const segmentRe = new RegExp(`:${normalizedThreadId}(?::|$)`, "i");
+  const segmentRe = new RegExp(`:${escapeRegExp(normalizedThreadId)}(?::|$)`, "i");
 
   function sessionKeyContainsThreadId(key: string): boolean {
     return segmentRe.test(key);

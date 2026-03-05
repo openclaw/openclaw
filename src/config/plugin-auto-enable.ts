@@ -12,7 +12,7 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
-import { isRecord } from "../utils.js";
+import { escapeRegExp, isRecord } from "../utils.js";
 import { hasAnyWhatsAppAuth } from "../web/accounts.js";
 import type { OpenClawConfig } from "./config.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
@@ -463,7 +463,7 @@ function formatAutoEnableChange(entry: PluginEnableChange): string {
   const channelId = normalizeChatChannelId(entry.pluginId);
   if (channelId) {
     const label = getChatChannelMeta(channelId).label;
-    reason = reason.replace(new RegExp(`^${channelId}\\b`, "i"), label);
+    reason = reason.replace(new RegExp(`^${escapeRegExp(channelId)}\\b`, "i"), label);
   }
   return `${reason}, enabled automatically.`;
 }

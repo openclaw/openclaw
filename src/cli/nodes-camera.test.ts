@@ -157,6 +157,14 @@ describe("nodes camera helpers", () => {
     ).rejects.toThrow(/must match node host/i);
   });
 
+  it("rejects invalid URL with descriptive error", async () => {
+    await expect(
+      writeUrlToFile("/tmp/ignored", "not a valid url", {
+        expectedHost: "198.51.100.42",
+      }),
+    ).rejects.toThrow(/invalid URL/i);
+  });
+
   it("rejects invalid url payload responses", async () => {
     const cases: Array<{
       name: string;
