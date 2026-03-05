@@ -165,7 +165,6 @@ describe("resolveAllowAlwaysPatterns", () => {
       allowlist: [],
       safeBins,
       cwd: dir,
-      env,
       platform: process.platform,
     });
     const persisted = resolveAllowAlwaysPatterns({
