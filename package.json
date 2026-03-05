@@ -394,6 +394,7 @@
     "@types/express": "^5.0.6",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^25.3.3",
+    "@types/pg": "^8.11.0",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260301.1",
@@ -410,7 +411,19 @@
   },
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
-    "node-llama-cpp": "3.16.2"
+    "node-llama-cpp": "3.16.2",
+    "pg": "^8.13.0"
+  },
+  "peerDependenciesMeta": {
+    "@napi-rs/canvas": {
+      "optional": true
+    },
+    "node-llama-cpp": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22.12.0"
