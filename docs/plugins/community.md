@@ -84,6 +84,20 @@ and files.
 openclaw plugins install @sliverp/qqbot
 ```
 
+### Stimm Voice
+
+Real-time voice conversations via a dual-agent architecture: one agent talks
+fast, one thinks deep — both collaborate in real-time. A Python voice agent
+handles low-latency speech; OpenClaw acts as supervisor for reasoning, tools,
+and long-context decisions.
+
+- **npm:** `openclaw-stimm-voice`
+- **repo:** [github.com/EtienneLescot/openclaw-stimm-voice](https://github.com/EtienneLescot/openclaw-stimm-voice)
+
+```bash
+openclaw plugins install openclaw-stimm-voice
+```
+
 ### wecom
 
 OpenClaw Enterprise WeCom Channel Plugin.
