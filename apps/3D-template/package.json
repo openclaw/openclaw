@@ -1,0 +1,24 @@
+{
+  "name": "@studio/3d-template",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "remotion studio",
+    "preview": "remotion preview",
+    "build": "remotion render src/index.ts Main out/3d-template.mp4",
+    "build:linked": "remotion render src/index.ts LinkedParticles out/linked.mp4",
+    "bundle": "remotion bundle src/index.ts --out out/web",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" remotion.config.ts"
+  },
+  "dependencies": {
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "remotion": "catalog:",
+    "three": "0.169.0",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@remotion/cli": "catalog:"
+  }
+}

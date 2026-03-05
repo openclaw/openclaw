@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-label="Template">
+  <defs>
+    <linearGradient id="templateGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f766e" />
+      <stop offset="100%" stop-color="#2563eb" />
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" fill="url(#templateGradient)" />
+  <circle cx="1120" cy="120" r="220" fill="rgba(255,255,255,0.08)" />
+  <circle cx="180" cy="620" r="280" fill="rgba(255,255,255,0.08)" />
+  <text x="82" y="516" fill="#f8fafc" font-size="84" font-family="Inter, system-ui, sans-serif" font-weight="700">Template</text>
+  <text x="86" y="586" fill="rgba(248,250,252,0.92)" font-size="36" font-family="Inter, system-ui, sans-serif">Remotion Forge 2D</text>
+</svg>

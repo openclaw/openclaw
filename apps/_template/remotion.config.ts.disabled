@@ -1,0 +1,86 @@
+/* __AUTO_PATCHED__ */
+var __RemotionConfig__=(function(){try{return require('@remotion/cli/config').Config||{};}catch(_){return{};}})();
+if(typeof __RemotionConfig__.overrideWebpackConfig!=='function'){__RemotionConfig__.overrideWebpackConfig=(c)=>c;}
+if(typeof __RemotionConfig__.setCodec!=='function'){__RemotionConfig__.setCodec=()=>{};}
+if(typeof __RemotionConfig__.setImageFormat!=='function'){__RemotionConfig__.setImageFormat=()=>{};}
+if(typeof __RemotionConfig__.setPublicDir!=='function'){__RemotionConfig__.setPublicDir=()=>{};}
+if(typeof __RemotionConfig__.setChromiumOpenGlRenderer!=='function'){__RemotionConfig__.setChromiumOpenGlRenderer=()=>{};}
+import path from "path";
+import fs from "fs";
+import type {WebpackConfiguration} from "remotion";
+import {Bundling} from "remotion";
+// ---- RemotionConfig (safe reference) ----
+const RemotionConfig = (() => {
+  try { return require('@remotion/cli/config').Config ?? {}; } catch (_) { return {}; }
+})();
+// フォールバック: メソッドが無ければ no-op を入れて落ちないように
+if (typeof RemotionConfig.overrideWebpackConfig !== 'function') RemotionConfig.overrideWebpackConfig = (c) => c;
+if (typeof RemotionConfig.setCodec !== 'function') RemotionConfig.setCodec = () => {};
+if (typeof RemotionConfig.setImageFormat !== 'function') RemotionConfig.setImageFormat = () => {};
+if (typeof RemotionConfig.setPublicDir !== 'function') RemotionConfig.setPublicDir = () => {};
+if (typeof RemotionConfig.setChromiumOpenGlRenderer !== 'function') RemotionConfig.setChromiumOpenGlRenderer = () => {};
+// ------------------------------------------
+// ---- Remotion Config Shim (CJS/ESM両対応 & 未定義でも安全) ----
+
+// ---- Guard: Ensure Config methods exist (no-op defaults) ----
+if (typeof (Config as any).overrideWebpackConfig !== 'function') {
+  (Config as any).overrideWebpackConfig = (current) => current;
+}
+if (typeof (Config as any).setCodec !== 'function') {
+  (Config as any).setCodec = () => {};
+}
+if (typeof (Config as any).setImageFormat !== 'function') {
+  (Config as any).setImageFormat = () => {};
+}
+if (typeof (Config as any).setPublicDir !== 'function') {
+  (Config as any).setPublicDir = () => {};
+}
+if (typeof (Config as any).setChromiumOpenGlRenderer !== 'function') {
+  (Config as any).setChromiumOpenGlRenderer = () => {};
+}
+// ---- End Guard ----
+let RealConfig;
+try {
+  // v4 以降の公式パス
+  ({ Config: RealConfig } = require('@remotion/cli/config'));
+} catch (_) {
+  try {
+    // 念のため旧来の場所も探す（存在しない場合は無視）
+    ({ Config: RealConfig } = require('remotion'));
+  } catch (_) {}
+}
+// RealConfig が無い/読み取れない場合でも落ちないよう no-op にする
+const Config = RealConfig ?? new Proxy({}, { get: () => () => {} });
+// ---- End Shim ----
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+
+const DIRNAME = __dirname;
+
+Bundling.overrideWebpackConfig((currentConfiguration) => {
+  const config: WebpackConfiguration = currentConfiguration as WebpackConfiguration;
+  const alias = (config.resolve?.alias ?? {}) as Record<string, string>;
+  try {
+    const packagesDir = path.resolve(DIRNAME, "../../packages");
+    const entries: Record<string, string> = {};
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, {withFileTypes: true})) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          const pkgJson = path.join(full, "package.json");
+          const srcPath = path.join(full, "src");
+          if (fs.existsSync(pkgJson) && fs.existsSync(srcPath)) {
+            try {
+              const pkg = JSON.parse(fs.readFileSync(pkgJson, "utf8"));
+              if (pkg.name) entries[pkg.name] = srcPath;
+            } catch {}
+          }
+          walk(full);
+        }
+      }
+    };
+    walk(packagesDir);
+    config.resolve = config.resolve ?? {};
+    config.resolve.alias = {...alias, ...entries};
+  } catch {}
+  return config;
+});

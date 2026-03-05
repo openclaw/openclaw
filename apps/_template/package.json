@@ -1,0 +1,21 @@
+{
+  "name": "@studio/{{name}}",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "remotion studio",
+    "preview": "remotion preview",
+    "build": "remotion render src/index.ts TemplateMain out/template-main.mp4",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" remotion.config.ts"
+  },
+  "dependencies": {
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "remotion": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@remotion/cli": "catalog:"
+  }
+}

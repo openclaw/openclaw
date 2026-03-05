@@ -1,0 +1,234 @@
+name: Version Check
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Run weekly on Monday at 9:00 UTC
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-remotion-versions:
+    name: Check Remotion Versions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check Remotion versions consistency
+        run: |
+          echo "Checking Remotion catalog versions..."
+
+          node - <<'NODE'
+          const fs = require('fs');
+
+          const workspaceYaml = fs.readFileSync('pnpm-workspace.yaml', 'utf8');
+
+          const remotionCoreMatch = workspaceYaml.match(/^\s*remotion:\s*([^\s#]+)\s*(?:#.*)?$/m);
+          if (!remotionCoreMatch) {
+            console.error('Could not find `remotion:` in pnpm-workspace.yaml.');
+            process.exit(1);
+          }
+          const remotionCore = remotionCoreMatch[1];
+
+          const remotionPackages = [];
+          for (const line of workspaceYaml.split(/\r?\n/)) {
+            const match = line.match(/^\s*['"]?(@remotion\/[^'"]+)['"]?\s*:\s*([^\s#]+)\s*(?:#.*)?$/);
+            if (match) remotionPackages.push({name: match[1], version: match[2]});
+          }
+
+          if (remotionPackages.length === 0) {
+            console.error('Could not find any `@remotion/*` entries in pnpm-workspace.yaml.');
+            process.exit(1);
+          }
+
+          const versions = new Set(remotionPackages.map((pkg) => pkg.version));
+          versions.add(remotionCore);
+          const uniqueVersions = Array.from(versions).sort();
+
+          console.log(`Found ${uniqueVersions.length} unique version(s):`);
+          console.log(uniqueVersions.join('\n'));
+
+          if (uniqueVersions.length > 1) {
+            console.log('');
+            console.log('⚠️  WARNING: Multiple Remotion versions detected in pnpm catalog!');
+            console.log('');
+            console.log(`remotion: ${remotionCore}`);
+            console.log('');
+            console.log('Packages by version:');
+
+            const byVersion = new Map();
+            for (const pkg of remotionPackages) {
+              if (!byVersion.has(pkg.version)) byVersion.set(pkg.version, []);
+              byVersion.get(pkg.version).push(pkg.name);
+            }
+
+            for (const [version, names] of Array.from(byVersion.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+              console.log('');
+              console.log(`Version ${version}:`);
+              for (const name of names.sort()) {
+                console.log(`  - ${name}`);
+              }
+            }
+
+            process.exit(1);
+          }
+
+          console.log('');
+          console.log(`✓ Remotion catalog is aligned: ${uniqueVersions[0]}`);
+          NODE
+
+      - name: Check for Remotion updates
+        id: check-updates
+        continue-on-error: true
+        run: |
+          echo "Checking for Remotion updates..."
+
+          current_version=$(node -e "const fs=require('fs');const y=fs.readFileSync('pnpm-workspace.yaml','utf8');const m=y.match(/^\\s*remotion:\\s*([^\\s#]+)\\s*(?:#.*)?$/m);if(!m) process.exit(1);process.stdout.write(m[1]);")
+          echo "Current version: $current_version"
+
+          latest_version=$(npm view remotion version)
+          echo "Latest version: $latest_version"
+
+          echo "current=$current_version" >> $GITHUB_OUTPUT
+          echo "latest=$latest_version" >> $GITHUB_OUTPUT
+
+          if [ "$current_version" != "$latest_version" ]; then
+            echo "update_available=true" >> $GITHUB_OUTPUT
+            echo ""
+            echo "📦 New Remotion version available: $latest_version (current: $current_version)"
+          else
+            echo "update_available=false" >> $GITHUB_OUTPUT
+            echo ""
+            echo "✓ You are using the latest Remotion version"
+          fi
+
+      - name: Create issue for outdated version
+        if: steps.check-updates.outputs.update_available == 'true' && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const current = '${{ steps.check-updates.outputs.current }}';
+            const latest = '${{ steps.check-updates.outputs.latest }}';
+            const targetTitle = `Update Remotion to ${latest}`;
+
+            // Find open Remotion dependency issues
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'dependencies,remotion'
+            });
+
+            const remotionIssues = issues.data.filter((issue) =>
+              issue.title.startsWith('Update Remotion to ')
+            );
+
+            const exactMatch = remotionIssues.find(
+              (issue) => issue.title === targetTitle
+            );
+
+            if (exactMatch) {
+              console.log('Issue for latest version already exists:', exactMatch.html_url);
+              return;
+            }
+
+            // Close stale automated issues before creating a new one.
+            for (const issue of remotionIssues) {
+              const labels = Array.isArray(issue.labels) ? issue.labels : [];
+              const automated = labels.some((label) => {
+                if (typeof label === 'string') return label === 'automated';
+                return label?.name === 'automated';
+              });
+
+              if (!automated) {
+                console.log(`Skipping non-automated issue #${issue.number}: ${issue.title}`);
+                continue;
+              }
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Closing as stale: a newer Remotion update target is available (${latest}).`
+              });
+
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed'
+              });
+
+              console.log(`Closed stale issue #${issue.number}: ${issue.title}`);
+            }
+
+            // Create a fresh issue for the latest version
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: targetTitle,
+              body: `## 📦 Remotion Update Available\n\n` +
+                    `A new version of Remotion is available.\n\n` +
+                    `- **Current version:** ${current}\n` +
+                    `- **Latest version:** ${latest}\n\n` +
+                    `### Update instructions\n\n` +
+                    `\`\`\`bash\n` +
+                    `# Update Remotion (pnpm catalog)\n` +
+                    `pnpm upgrade:remotion ${latest}\n\n` +
+                    `# Verify versions\n` +
+                    `pnpm remotion versions\n` +
+                    `\`\`\`\n\n` +
+                    `See [Remotion Changelog](https://github.com/remotion-dev/remotion/releases) for details.`,
+              labels: ['dependencies', 'remotion', 'automated']
+            });
+
+  check-dependencies:
+    name: Check Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check for outdated dependencies
+        run: |
+          echo "Checking for outdated dependencies..."
+          pnpm outdated || true
+
+      - name: Audit dependencies
+        run: |
+          echo "Auditing dependencies for security issues..."
+          pnpm audit --audit-level=moderate || true

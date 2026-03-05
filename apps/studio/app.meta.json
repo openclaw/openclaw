@@ -1,0 +1,8 @@
+{
+  "title": "Forge Studio Dashboard",
+  "description": "Next.js based control room for Remotion Forge projects.",
+  "tags": ["studio", "dashboard", "tooling", "remotion"],
+  "thumbnail": "public/thumbnail.svg",
+  "lastRendered": null,
+  "category": "tooling"
+}

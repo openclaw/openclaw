@@ -1,0 +1,8 @@
+{
+  "title": "Template",
+  "description": "Default starter template for Remotion projects.",
+  "tags": ["template", "starter", "2d", "remotion"],
+  "thumbnail": "public/thumbnail.svg",
+  "lastRendered": null,
+  "category": "template"
+}

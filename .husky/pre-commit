@@ -1,0 +1,1 @@
+pnpm lint-staged

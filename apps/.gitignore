@@ -1,0 +1,41 @@
+# Node & build caches
+node_modules/
+**/node_modules/
+**/.cache/
+**/.parcel-cache/
+**/.turbo/
+**/.next/
+**/dist/
+**/build/
+
+# Media assets (do not push)
+**/public/assets/audio/*.mp3
+**/public/assets/audio/*.wav
+**/public/assets/audio/*.flac
+**/public/assets/audio/*.m4a
+**/public/assets/audio/*.ogg
+**/public/assets/video/*.mp4
+**/public/assets/video/*.mov
+**/public/assets/video/*.webm
+**/public/assets/video/*.mkv
+**/public/assets/images/*.jpg
+**/public/assets/images/*.jpeg
+**/public/assets/images/*.png
+**/public/assets/images/*.gif
+**/public/assets/images/*.webp
+**/public/assets/images/*.svg
+
+# Binary caches accidentally committed
+**/*.pack
+
+# Keep folder structure placeholders
+!**/public/assets/**/.gitkeep
+
+# OS cruft
+.DS_Store
+
+three/build
+# Exported outputs (do not commit)
+**/out/
+# Remotion Studio runtime files
+**/.remotion-studio.*
