@@ -100,6 +100,7 @@ function resolveGatewayInstallEntrypointCandidates(root?: string): string[] {
     return [];
   }
   return [
+    path.join(root, "openclaw.mjs"),
     path.join(root, "dist", "entry.js"),
     path.join(root, "dist", "entry.mjs"),
     path.join(root, "dist", "index.js"),
