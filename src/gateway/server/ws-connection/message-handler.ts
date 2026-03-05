@@ -509,7 +509,8 @@ export function attachGatewayWsMessageHandler(params: {
             configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
           const originCheck = checkBrowserOrigin({
             requestHost,
-            requestForwardedHost,
+            // Only trust X-Forwarded-Host from trusted proxies
+            requestForwardedHost: remoteIsTrustedProxy ? requestForwardedHost : undefined,
             origin: requestOrigin,
             allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
             allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
