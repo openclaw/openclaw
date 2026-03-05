@@ -10,6 +10,7 @@ import {
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { buildKimiCodingProvider } from "./models-config.providers.js";
 import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
 installModelsConfigTestHooks();
@@ -230,6 +231,39 @@ describe("models-config", () => {
       });
       expect(parsed.providers.custom?.apiKey).toBe("CONFIG_KEY");
       expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    });
+  });
+
+  it("prefers explicit config baseUrl for kimi-coding in merge mode", async () => {
+    await withTempHome(async () => {
+      const kimiProvider = buildKimiCodingProvider();
+      await writeAgentModelsJson({
+        providers: {
+          "kimi-coding": {
+            ...kimiProvider,
+            baseUrl: "https://api.kimi.com",
+            apiKey: "AGENT_KEY",
+          },
+        },
+      });
+
+      await ensureOpenClawModelsJson({
+        models: {
+          mode: "merge",
+          providers: {
+            "kimi-coding": {
+              ...kimiProvider,
+              baseUrl: "https://api.kimi.com/coding",
+              apiKey: "CONFIG_KEY",
+            },
+          },
+        },
+      });
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string; baseUrl?: string }>;
+      }>();
+      expect(parsed.providers["kimi-coding"]?.baseUrl).toBe("https://api.kimi.com/coding");
     });
   });
 
