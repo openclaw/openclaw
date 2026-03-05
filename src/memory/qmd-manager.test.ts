@@ -1585,7 +1585,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("blocks non-markdown or symlink reads for qmd paths", async () => {
+  it("blocks non-markdown reads but allows symlinks for qmd paths", async () => {
     const { manager } = await createManager();
 
     const textPath = path.join(workspaceDir, "secret.txt");
@@ -1598,9 +1598,8 @@ describe("QmdMemoryManager", () => {
     await fs.writeFile(target, "ok", "utf-8");
     const link = path.join(workspaceDir, "link.md");
     await fs.symlink(target, link);
-    await expect(manager.readFile({ relPath: "qmd/workspace-main/link.md" })).rejects.toThrow(
-      "path required",
-    );
+    const result = await manager.readFile({ relPath: "qmd/workspace-main/link.md" });
+    expect(result.text).toBe("ok");
 
     await manager.close();
   });
