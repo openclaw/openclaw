@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - iMessage/cron completion announces: strip leaked inline reply tags (for example `[[reply_to:6100]]`) from user-visible completion text so announcement deliveries do not expose threading metadata. (#24600) Thanks @vincentkoc.
+- Gateway/chat.inject: create missing transcript file instead of returning "transcript file not found" when the session entry has a `transcriptPath` but the file does not exist on disk (e.g. ACP oneshot/run sessions). (#36170)
 - Hooks/message:sent internal hook: propagate the invoking agent session key through the outbound send context so `message:sent` internal hooks fire for direct agent responses — not just mirrored sessions. (#35557)
 - WhatsApp/allowFrom error clarity: replace misleading "requires target <E.164|group JID>" error with a clear "not listed in the configured WhatsApp allowFrom policy" message when a valid target is blocked by the allowFrom list, so users can distinguish format errors from policy rejections. (#35580)
 - Gateway/device pairing loopback: restore pre-regression pairing bypass for loopback-bound gateways (`gateway.bind = "loopback"`) so non-browser operator connections authenticated with the shared gateway credential skip device pairing, fixing Docker deployments where internal proxy layers can make `isLocalClient` false. (#35763)
