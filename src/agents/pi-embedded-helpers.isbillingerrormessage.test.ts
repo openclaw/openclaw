@@ -269,6 +269,17 @@ describe("isContextOverflowError", () => {
     }
   });
 
+  it("matches Anthropic model_context_window_exceeded stop reason", () => {
+    const samples = [
+      "Unhandled stop reason: model_context_window_exceeded",
+      "model_context_window_exceeded",
+      "stop reason: model_context_window_exceeded",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
   it("matches Chinese context overflow error messages from proxy providers", () => {
     const samples = [
       "上下文过长",
@@ -353,6 +364,12 @@ describe("isLikelyContextOverflowError", () => {
     for (const sample of samples) {
       expect(isLikelyContextOverflowError(sample)).toBe(true);
     }
+  });
+
+  it("matches Anthropic model_context_window_exceeded via Pi SDK", () => {
+    expect(
+      isLikelyContextOverflowError("Unhandled stop reason: model_context_window_exceeded"),
+    ).toBe(true);
   });
 
   it("excludes context window too small errors", () => {

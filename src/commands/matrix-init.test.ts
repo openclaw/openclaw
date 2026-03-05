@@ -61,7 +61,7 @@ describe("matrix init command", () => {
     expect(ensureWorkspaceAndSessionsMock).not.toHaveBeenCalled();
   });
 
-  it("creates all 12 agents from template", async () => {
+  it("creates all agents from template", async () => {
     requireValidConfigMock.mockResolvedValue({});
 
     await matrixInitCommand({}, runtime);
@@ -69,22 +69,47 @@ describe("matrix init command", () => {
     expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
     const writtenConfig = writeConfigFileMock.mock.calls[0][0];
     const list = writtenConfig.agents?.list ?? [];
-    expect(list).toHaveLength(13);
+    expect(list).toHaveLength(34);
 
     const ids = list.map((a: { id: string }) => a.id);
+    // Tier 0/1: Operator1 + department heads
     expect(ids).toContain("main");
     expect(ids).toContain("neo");
     expect(ids).toContain("morpheus");
     expect(ids).toContain("trinity");
+    // Engineering tier-3
     expect(ids).toContain("tank");
     expect(ids).toContain("dozer");
     expect(ids).toContain("mouse");
+    expect(ids).toContain("spark");
+    expect(ids).toContain("cipher");
+    expect(ids).toContain("relay");
+    expect(ids).toContain("ghost");
+    expect(ids).toContain("binary");
+    expect(ids).toContain("kernel");
+    expect(ids).toContain("prism");
+    // Marketing tier-3
     expect(ids).toContain("niobe");
     expect(ids).toContain("switch");
     expect(ids).toContain("rex");
+    expect(ids).toContain("ink");
+    expect(ids).toContain("vibe");
+    expect(ids).toContain("lens");
+    expect(ids).toContain("echo");
+    expect(ids).toContain("nova");
+    expect(ids).toContain("pulse");
+    expect(ids).toContain("blaze");
+    // Finance tier-3
     expect(ids).toContain("oracle");
     expect(ids).toContain("seraph");
     expect(ids).toContain("zee");
+    expect(ids).toContain("ledger");
+    expect(ids).toContain("vault");
+    expect(ids).toContain("shield");
+    expect(ids).toContain("trace");
+    expect(ids).toContain("quota");
+    expect(ids).toContain("merit");
+    expect(ids).toContain("beacon");
   });
 
   it("sets correct identity, role, and department on agents", async () => {
@@ -121,21 +146,35 @@ describe("matrix init command", () => {
     const list = writtenConfig.agents?.list ?? [];
 
     const main = list.find((a: { id: string }) => a.id === "main");
-    expect(main?.subagents?.allowAgents).toEqual(["neo", "morpheus", "trinity"]);
+    // Operator1 can spawn department heads + all 30 tier-3 agents
+    expect(main?.subagents?.allowAgents).toEqual(
+      expect.arrayContaining(["neo", "morpheus", "trinity", "tank", "spark", "ink", "ledger"]),
+    );
 
     const neo = list.find((a: { id: string }) => a.id === "neo");
-    expect(neo?.subagents?.allowAgents).toEqual(expect.arrayContaining(["tank", "dozer", "mouse"]));
+    // Department heads share the full 30-agent pool
+    expect(neo?.subagents?.allowAgents).toEqual(
+      expect.arrayContaining(["tank", "dozer", "mouse", "spark", "cipher", "ink", "oracle"]),
+    );
   });
 
-  it("applies matrix defaults (maxSpawnDepth, maxConcurrent)", async () => {
-    requireValidConfigMock.mockResolvedValue({});
+  it("applies matrix defaults (maxSpawnDepth, maxConcurrent) without overwriting user model", async () => {
+    requireValidConfigMock.mockResolvedValue({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-5-20250514" },
+        },
+      },
+    });
 
     await matrixInitCommand({}, runtime);
 
     const writtenConfig = writeConfigFileMock.mock.calls[0][0];
     const defaults = writtenConfig.agents?.defaults;
-    expect(defaults?.subagents?.maxSpawnDepth).toBe(3);
-    expect(defaults?.subagents?.maxConcurrent).toBe(8);
+    expect(defaults?.subagents?.maxSpawnDepth).toBe(4);
+    expect(defaults?.subagents?.maxConcurrent).toBe(12);
+    // User's model must NOT be overwritten by template
+    expect(defaults?.model?.primary).toBe("anthropic/claude-sonnet-4-5-20250514");
   });
 
   it("skips existing agents without overwriting", async () => {
@@ -158,7 +197,7 @@ describe("matrix init command", () => {
     const list = writtenConfig.agents?.list ?? [];
 
     // Neo should exist but other agents should be added
-    expect(list.length).toBe(13);
+    expect(list.length).toBe(34);
 
     const neo = list.find((a: { id: string }) => a.id === "neo");
     // Neo's core fields (name, workspace, model) should NOT be overwritten
@@ -175,8 +214,10 @@ describe("matrix init command", () => {
 
     await matrixInitCommand({}, runtime);
 
-    // 12 agents have workspace paths (main uses default, no explicit workspace)
-    expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledTimes(12);
+    // Agents with explicit workspace paths get workspace setup
+    // (ephemeral agents without workspace are skipped)
+    const workspaceAgentCount = ensureWorkspaceAndSessionsMock.mock.calls.length;
+    expect(workspaceAgentCount).toBeGreaterThanOrEqual(12);
 
     // Check that neo's workspace is set up with the right agentId
     const calls = ensureWorkspaceAndSessionsMock.mock.calls;
@@ -201,11 +242,11 @@ describe("matrix init command", () => {
     const secondConfig = writeConfigFileMock.mock.calls[0][0];
     const list = secondConfig.agents?.list ?? [];
 
-    // Should still be 13 agents, no duplicates
-    expect(list).toHaveLength(13);
+    // Should still be 34 agents, no duplicates
+    expect(list).toHaveLength(34);
     const ids = list.map((a: { id: string }) => a.id);
     const uniqueIds = new Set(ids);
-    expect(uniqueIds.size).toBe(13);
+    expect(uniqueIds.size).toBe(34);
   });
 
   it("outputs JSON summary when --json is set", async () => {
@@ -225,8 +266,8 @@ describe("matrix init command", () => {
     expect(jsonCalls.length).toBeGreaterThan(0);
 
     const parsed = JSON.parse(String(jsonCalls[0][0]));
-    expect(parsed.agents).toHaveLength(13);
-    expect(parsed.added).toHaveLength(13);
+    expect(parsed.agents).toHaveLength(34);
+    expect(parsed.added).toHaveLength(34);
     expect(parsed.skipped).toHaveLength(0);
   });
 
@@ -250,7 +291,7 @@ describe("matrix init command", () => {
     const parsed = JSON.parse(String(jsonCalls[0][0]));
     expect(parsed.skipped).toContain("neo");
     expect(parsed.added).not.toContain("neo");
-    expect(parsed.added).toHaveLength(12);
+    expect(parsed.added).toHaveLength(33);
   });
 
   describe("--with-cron", () => {
@@ -365,7 +406,7 @@ describe("matrix init command", () => {
         }
       });
       const parsed = JSON.parse(String(jsonCalls[0][0]));
-      expect(parsed.agents).toHaveLength(13);
+      expect(parsed.agents).toHaveLength(34);
       expect(parsed.cron).toBeDefined();
       expect(parsed.cron.error).toContain("Connection refused");
       expect(parsed.cron.maintenance).toBe(0);

@@ -94,13 +94,17 @@ function applyMatrixDefaults(
   templateDefaults: Record<string, unknown>,
 ): OpenClawConfig {
   const existing = cfg.agents?.defaults ?? {};
+  // Exclude model/models from template defaults — agents inherit the user's
+  // configured model (set during openclaw init/setup), not the template's
+  // hardcoded example values.
+  const { model: _model, models: _models, ...operationalDefaults } = templateDefaults;
   const merged = {
     ...existing,
-    ...templateDefaults,
+    ...operationalDefaults,
     // Deep-merge subagents
     subagents: {
       ...(existing.subagents as Record<string, unknown> | undefined),
-      ...(templateDefaults.subagents as Record<string, unknown> | undefined),
+      ...(operationalDefaults.subagents as Record<string, unknown> | undefined),
     },
   };
   return {
