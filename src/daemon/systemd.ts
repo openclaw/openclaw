@@ -173,6 +173,8 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
     normalized.includes("static") ||
     normalized.includes("indirect") ||
     normalized.includes("masked") ||
+    normalized.includes("generated") ||
+    normalized.includes("transient") ||
     normalized.includes("not-found") ||
     normalized.includes("could not be found") ||
     normalized.includes("failed to get unit file state")
