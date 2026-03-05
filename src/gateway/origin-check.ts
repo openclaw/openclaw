@@ -86,10 +86,7 @@ export function checkBrowserOrigin(params: {
   }
 
   const directRequestHost = normalizeHostToMatchUrlHost(params.requestHost);
-  if (
-    params.allowHostHeaderOriginFallback === true &&
-    parsedOrigin.host === directRequestHost
-  ) {
+  if (params.allowHostHeaderOriginFallback === true && parsedOrigin.host === directRequestHost) {
     return { ok: true, matchedBy: "host-header-fallback" };
   }
 
