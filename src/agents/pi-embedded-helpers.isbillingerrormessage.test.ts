@@ -483,9 +483,7 @@ describe("classifyFailoverReason", () => {
     expect(
       classifyFailoverReason("model_cooldown: All credentials for model gpt-5 are cooling down"),
     ).toBe("rate_limit");
-    expect(classifyFailoverReason("all credentials for model x are cooling down")).toBe(
-      "rate_limit",
-    );
+    expect(classifyFailoverReason("all credentials for model x are cooling down")).toBeNull();
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',

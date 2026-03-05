@@ -3,8 +3,10 @@ type ErrorPattern = RegExp | string;
 const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests|429/,
+    // Keep the explicit internal marker used by auth-profile fallback routing.
+    // Do not match generic "cooling down" text, which can appear in unrelated
+    // provider or runtime errors and causes false global rate-limit warnings.
     "model_cooldown",
-    "cooling down",
     "exceeded your current quota",
     "resource has been exhausted",
     "quota exceeded",
