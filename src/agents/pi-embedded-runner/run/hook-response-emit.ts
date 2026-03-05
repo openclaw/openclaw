@@ -174,7 +174,10 @@ export function getRunScopedMessages(
   }
   let assistantsSeen = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "assistant" && "content" in messages[i]) {
+    // Only count text-bearing assistant messages — tool-call-only messages
+    // have content (array with tool_use blocks) but no text. assistantTextCount
+    // is derived from streamed text entries, so we must match that filter.
+    if (messages[i].role === "assistant" && extractAssistantText(messages[i]).length > 0) {
       assistantsSeen++;
       if (assistantsSeen >= assistantTextCount) {
         return messages.slice(i);
