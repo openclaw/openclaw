@@ -274,6 +274,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
           messageId,
           emoji,
           remove,
+          // Fallback to requesterSenderId (the sender who triggered this agent turn).
+          // Correct when reacting to the requester's own message (the common case).
+          // For reactions to other participants' messages the model must supply participant explicitly.
           participant: readStringParam(params, "participant") ?? requesterSenderId ?? undefined,
           accountId: accountId ?? undefined,
           fromMe: typeof params.fromMe === "boolean" ? params.fromMe : undefined,
