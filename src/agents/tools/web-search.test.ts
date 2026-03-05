@@ -217,6 +217,33 @@ describe("web_search grok response parsing", () => {
     expect(result.text).toBe("direct output text");
     expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
   });
+
+  it("handles malformed output entries (null, undefined, non-objects)", () => {
+    const result = extractGrokContent({
+      output: [null, { type: "message", content: [null, { type: "output_text", text: "ok" }] }],
+    } as Parameters<typeof extractGrokContent>[0]);
+    expect(result.text).toBe("ok");
+    expect(result.annotationCitations).toEqual([]);
+  });
+
+  it("handles malformed annotation entries", () => {
+    const result = extractGrokContent({
+      output: [
+        {
+          type: "message",
+          content: [
+            {
+              type: "output_text",
+              text: "with bad annotations",
+              annotations: [null, { type: "url_citation", url: "https://example.com/valid" }],
+            },
+          ],
+        },
+      ],
+    } as Parameters<typeof extractGrokContent>[0]);
+    expect(result.text).toBe("with bad annotations");
+    expect(result.annotationCitations).toEqual(["https://example.com/valid"]);
+  });
 });
 
 describe("web_search kimi config resolution", () => {

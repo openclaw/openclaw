@@ -283,11 +283,25 @@ function extractGrokContent(data: GrokSearchResponse): {
 } {
   // xAI Responses API format: find the message output with text content
   for (const output of data.output ?? []) {
+    // Skip malformed entries
+    if (!output || typeof output !== "object") {
+      continue;
+    }
     if (output.type === "message") {
       for (const block of output.content ?? []) {
+        // Skip malformed content blocks
+        if (!block || typeof block !== "object") {
+          continue;
+        }
         if (block.type === "output_text" && typeof block.text === "string" && block.text) {
           const urls = (block.annotations ?? [])
-            .filter((a) => a.type === "url_citation" && typeof a.url === "string")
+            .filter(
+              (a) =>
+                a &&
+                typeof a === "object" &&
+                a.type === "url_citation" &&
+                typeof a.url === "string",
+            )
             .map((a) => a.url as string);
           return { text: block.text, annotationCitations: [...new Set(urls)] };
         }
@@ -305,7 +319,8 @@ function extractGrokContent(data: GrokSearchResponse): {
         "annotations" in output && Array.isArray(output.annotations) ? output.annotations : [];
       const urls = rawAnnotations
         .filter(
-          (a: Record<string, unknown>) => a.type === "url_citation" && typeof a.url === "string",
+          (a: Record<string, unknown>) =>
+            a && typeof a === "object" && a.type === "url_citation" && typeof a.url === "string",
         )
         .map((a: Record<string, unknown>) => a.url as string);
       return { text: output.text, annotationCitations: [...new Set(urls)] };
