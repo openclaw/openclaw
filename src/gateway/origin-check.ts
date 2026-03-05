@@ -41,8 +41,13 @@ export function checkBrowserOrigin(params: {
   const allowlist = new Set(
     (params.allowedOrigins ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean),
   );
-  // SECURITY: Removed wildcard "*" support (CWE-346) - explicit origins only
+  // SECURITY: Wildcard "*" restricted to local clients only (CWE-346 fix)
+  // Prevents remote clients from bypassing origin validation with wildcard
+  const isLocalClient = params.isLocalClient === true;
   if (allowlist.has(parsedOrigin.origin)) {
+    return { ok: true, matchedBy: "allowlist" };
+  }
+  if (allowlist.has("*") && isLocalClient) {
     return { ok: true, matchedBy: "allowlist" };
   }
 
