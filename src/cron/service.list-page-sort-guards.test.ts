@@ -51,3 +51,39 @@ describe("cron listPage sort guards", () => {
     expect(page.jobs).toHaveLength(2);
   });
 });
+
+describe("cron listPage descending tie-breaker", () => {
+  it("uses id descending when names tie in desc order", async () => {
+    const jobs = [
+      createBaseJob({ id: "job-a", name: "same", updatedAtMs: 1, state: { nextRunAtMs: 1 } }),
+      createBaseJob({ id: "job-b", name: "same", updatedAtMs: 1, state: { nextRunAtMs: 1 } }),
+    ];
+    const state = createMockCronStateForJobs({ jobs });
+
+    const page = await listPage(state, { sortBy: "name", sortDir: "desc" });
+    expect(page.jobs.map((job) => job.id)).toEqual(["job-b", "job-a"]);
+  });
+
+  it("uses id descending when updatedAtMs ties in desc order", async () => {
+    const jobs = [
+      createBaseJob({ id: "job-a", name: "alpha", updatedAtMs: 42 }),
+      createBaseJob({ id: "job-b", name: "beta", updatedAtMs: 42 }),
+    ];
+    const state = createMockCronStateForJobs({ jobs });
+
+    const page = await listPage(state, { sortBy: "updatedAtMs", sortDir: "desc" });
+    expect(page.jobs.map((job) => job.id)).toEqual(["job-b", "job-a"]);
+  });
+
+  it("uses id descending when nextRunAtMs ties in desc order", async () => {
+    const nextRunAtMs = Date.parse("2026-02-27T15:30:00.000Z");
+    const jobs = [
+      createBaseJob({ id: "job-a", name: "alpha", state: { nextRunAtMs } }),
+      createBaseJob({ id: "job-b", name: "beta", state: { nextRunAtMs } }),
+    ];
+    const state = createMockCronStateForJobs({ jobs });
+
+    const page = await listPage(state, { sortBy: "nextRunAtMs", sortDir: "desc" });
+    expect(page.jobs.map((job) => job.id)).toEqual(["job-b", "job-a"]);
+  });
+});

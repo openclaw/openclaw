@@ -187,7 +187,7 @@ function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir)
     }
     const aId = typeof a.id === "string" ? a.id : "";
     const bId = typeof b.id === "string" ? b.id : "";
-    return aId.localeCompare(bId);
+    return aId.localeCompare(bId) * dir;
   });
 }
 
