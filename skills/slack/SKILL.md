@@ -142,3 +142,53 @@ Message context lines include `slack message id` and `channel` fields you can re
 
 - React with ✅ to mark completed tasks.
 - Pin key decisions or weekly status updates.
+
+---
+
+## Message Formatting
+
+### ⚠️ Links — Always use `<URL|display text>` format
+
+**Never use bare URLs in Slack messages.** Bare URLs trigger Slack's unfurl preview, which expands
+the link into a large card and clutters the channel.
+
+✅ **Correct:**
+
+```
+Check out <https://example.com|the docs> for details.
+```
+
+❌ **Wrong (triggers unfurl):**
+
+```
+Check out https://example.com for details.
+```
+
+| Scenario | Format |
+| -------- | ------ |
+| Normal link | `<https://example.com\|Display text>` |
+| No good label available | `<https://example.com\|→>` or `<https://example.com\|link>` |
+| Multiple sources / news items | Every URL must use `<URL\|text>` — no exceptions |
+
+**Example:**
+
+```
+1️⃣ *Kraken gets Fed payment account* — first crypto exchange on the Fed payment rail.
+<https://decrypt.co/359913/kraken-secures-access|→ Decrypt>
+```
+
+### Slack Markdown
+
+Slack uses its own simplified markdown:
+
+| Style | Syntax | Example |
+| ----- | ------ | ------- |
+| Bold | `*text*` | `*important*` |
+| Italic | `_text_` | `_note_` |
+| Code (inline) | `` `code` `` | `` `git push` `` |
+| Code block | ` ```code``` ` | multi-line snippets |
+| Strikethrough | `~text~` | `~deprecated~` |
+| Quote | `>text` | block quote |
+
+> **Note:** Standard Markdown headings (`# ## ###`) are **not** supported in Slack.
+> Use `*Bold text*` as a heading substitute.
