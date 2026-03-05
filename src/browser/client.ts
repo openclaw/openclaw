@@ -118,19 +118,25 @@ export async function browserProfiles(baseUrl?: string): Promise<ProfileStatus[]
   return res.profiles ?? [];
 }
 
-export async function browserStart(baseUrl?: string, opts?: { profile?: string }): Promise<void> {
+export async function browserStart(
+  baseUrl?: string,
+  opts?: { profile?: string; timeoutMs?: number },
+): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
     method: "POST",
-    timeoutMs: 15000,
+    timeoutMs: opts?.timeoutMs ?? 30000,
   });
 }
 
-export async function browserStop(baseUrl?: string, opts?: { profile?: string }): Promise<void> {
+export async function browserStop(
+  baseUrl?: string,
+  opts?: { profile?: string; timeoutMs?: number },
+): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/stop${q}`), {
     method: "POST",
-    timeoutMs: 15000,
+    timeoutMs: opts?.timeoutMs ?? 30000,
   });
 }
 
@@ -216,14 +222,14 @@ export async function browserTabs(
 export async function browserOpenTab(
   baseUrl: string | undefined,
   url: string,
-  opts?: { profile?: string },
+  opts?: { profile?: string; timeoutMs?: number },
 ): Promise<BrowserTab> {
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserTab>(withBaseUrl(baseUrl, `/tabs/open${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
-    timeoutMs: 15000,
+    timeoutMs: opts?.timeoutMs ?? 30000,
   });
 }
 

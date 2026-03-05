@@ -5,7 +5,7 @@
  * Filters tools based on user's effective access level.
  */
 
-import type { AnyAgentTool } from "../tools/common.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
 import {
   TOOL_ACCESS_LEVELS,
   DEFAULT_TOOL_ACCESS_LEVEL,

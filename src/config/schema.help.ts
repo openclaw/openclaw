@@ -262,6 +262,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Timeout in milliseconds for connecting to a remote CDP endpoint before failing the browser attach attempt. Increase for high-latency tunnels, or lower for faster failure detection.",
   "browser.remoteCdpHandshakeTimeoutMs":
     "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
+  "browser.startTimeoutMs":
+    "Timeout in milliseconds for browser control service start/stop operations (default: 30000). Increase for slower systems where Chrome takes >15s to initialize, or decrease for faster failure detection.",
   "discovery.mdns.mode":
     'mDNS broadcast mode ("minimal" default, "full" includes cliPath/sshPort, "off" disables mDNS).',
   discovery:

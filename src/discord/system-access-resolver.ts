@@ -16,6 +16,8 @@ import type {
 } from "./system-access-types.js";
 import { isGrantExpired } from "./system-access-types.js";
 
+export type { ResolvedSystemAccess };
+
 /**
  * Resolve the effective system access level for a Discord user
  */
