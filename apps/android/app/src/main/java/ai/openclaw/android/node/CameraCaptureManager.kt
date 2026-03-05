@@ -33,10 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.Executor
@@ -101,7 +98,7 @@ class CameraCaptureManager(private val context: Context) {
     withContext(Dispatchers.Main) {
       ensureCameraPermission()
       val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
-      val params = parseParamsObject(paramsJson)
+      val params = parseJsonParamsObject(paramsJson)
       val facing = parseFacing(params) ?: "front"
       val quality = (parseQuality(params) ?: 0.95).coerceIn(0.1, 1.0)
       val maxWidth = parseMaxWidth(params) ?: 1600
@@ -167,7 +164,7 @@ class CameraCaptureManager(private val context: Context) {
     withContext(Dispatchers.Main) {
       ensureCameraPermission()
       val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
-      val params = parseParamsObject(paramsJson)
+      val params = parseJsonParamsObject(paramsJson)
       val facing = parseFacing(params) ?: "front"
       val durationMs = (parseDurationMs(params) ?: 3_000).coerceIn(200, 60_000)
       val includeAudio = parseIncludeAudio(params) ?: true
@@ -293,20 +290,8 @@ class CameraCaptureManager(private val context: Context) {
     return rotated
   }
 
-  private fun parseParamsObject(paramsJson: String?): JsonObject? {
-    if (paramsJson.isNullOrBlank()) return null
-    return try {
-      Json.parseToJsonElement(paramsJson).asObjectOrNull()
-    } catch (_: Throwable) {
-      null
-    }
-  }
-
-  private fun readPrimitive(params: JsonObject?, key: String): JsonPrimitive? =
-    params?.get(key) as? JsonPrimitive
-
   private fun parseFacing(params: JsonObject?): String? {
-    val value = readPrimitive(params, "facing")?.contentOrNull?.trim()?.lowercase() ?: return null
+    val value = parseJsonString(params, "facing")?.trim()?.lowercase() ?: return null
     return when (value) {
       "front", "back" -> value
       else -> null
@@ -314,31 +299,21 @@ class CameraCaptureManager(private val context: Context) {
   }
 
   private fun parseQuality(params: JsonObject?): Double? =
-    readPrimitive(params, "quality")?.contentOrNull?.toDoubleOrNull()
+    parseJsonDouble(params, "quality")
 
   private fun parseMaxWidth(params: JsonObject?): Int? =
-    readPrimitive(params, "maxWidth")
-      ?.contentOrNull
-      ?.toIntOrNull()
+    parseJsonInt(params, "maxWidth")
       ?.takeIf { it > 0 }
 
   private fun parseDurationMs(params: JsonObject?): Int? =
-    readPrimitive(params, "durationMs")?.contentOrNull?.toIntOrNull()
+    parseJsonInt(params, "durationMs")
 
   private fun parseDeviceId(params: JsonObject?): String? =
-    readPrimitive(params, "deviceId")
-      ?.contentOrNull
+    parseJsonString(params, "deviceId")
       ?.trim()
       ?.takeIf { it.isNotEmpty() }
 
-  private fun parseIncludeAudio(params: JsonObject?): Boolean? {
-    val value = readPrimitive(params, "includeAudio")?.contentOrNull?.trim()?.lowercase()
-    return when (value) {
-      "true" -> true
-      "false" -> false
-      else -> null
-    }
-  }
+  private fun parseIncludeAudio(params: JsonObject?): Boolean? = parseJsonBooleanFlag(params, "includeAudio")
 
   private fun Context.mainExecutor(): Executor = ContextCompat.getMainExecutor(this)
 
@@ -359,6 +334,7 @@ class CameraCaptureManager(private val context: Context) {
       .build()
   }
 
+  @SuppressLint("UnsafeOptInUsageError")
   private fun cameraDeviceInfoOrNull(info: CameraInfo): CameraDeviceInfo? {
     val cameraId = cameraIdOrNull(info) ?: return null
     val lensFacing =
@@ -389,6 +365,7 @@ class CameraCaptureManager(private val context: Context) {
     )
   }
 
+  @SuppressLint("UnsafeOptInUsageError")
   private fun cameraIdOrNull(info: CameraInfo): String? =
     runCatching { Camera2CameraInfo.from(info).cameraId }.getOrNull()
 }

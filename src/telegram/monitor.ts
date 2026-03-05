@@ -270,6 +270,13 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           });
         return stopPromise;
       };
+      const stopBot = () => {
+        return Promise.resolve(bot.stop())
+          .then(() => undefined)
+          .catch(() => {
+            // Bot may already be stopped by runner stop/abort paths.
+          });
+      };
       const stopOnAbort = () => {
         if (opts.abortSignal?.aborted) {
           void stopRunner();
@@ -309,6 +316,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       } finally {
         opts.abortSignal?.removeEventListener("abort", stopOnAbort);
         await stopRunner();
+        await stopBot();
       }
     };
 

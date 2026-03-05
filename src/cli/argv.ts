@@ -1,29 +1,18 @@
 import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
+import {
+  consumeRootOptionToken,
+  FLAG_TERMINATOR,
+  isValueToken,
+} from "../infra/cli-root-options.js";
 
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
-const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
-const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
-const FLAG_TERMINATOR = "--";
 
 export function hasHelpOrVersion(argv: string[]): boolean {
   return (
     argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) || hasRootVersionAlias(argv)
   );
-}
-
-function isValueToken(arg: string | undefined): boolean {
-  if (!arg) {
-    return false;
-  }
-  if (arg === FLAG_TERMINATOR) {
-    return false;
-  }
-  if (!arg.startsWith("-")) {
-    return true;
-  }
-  return /^-\d+(?:\.\d+)?$/.test(arg);
 }
 
 function parsePositiveInt(value: string): number | undefined {
@@ -62,17 +51,9 @@ export function hasRootVersionAlias(argv: string[]): boolean {
       hasAlias = true;
       continue;
     }
-    if (ROOT_BOOLEAN_FLAGS.has(arg)) {
-      continue;
-    }
-    if (arg.startsWith("--profile=")) {
-      continue;
-    }
-    if (ROOT_VALUE_FLAGS.has(arg)) {
-      const next = args[i + 1];
-      if (isValueToken(next)) {
-        i += 1;
-      }
+    const consumed = consumeRootOptionToken(args, i);
+    if (consumed > 0) {
+      i += consumed - 1;
       continue;
     }
     if (arg.startsWith("-")) {
@@ -81,6 +62,47 @@ export function hasRootVersionAlias(argv: string[]): boolean {
     return false;
   }
   return hasAlias;
+}
+
+export function isRootVersionInvocation(argv: string[]): boolean {
+  return isRootInvocationForFlags(argv, VERSION_FLAGS, { includeVersionAlias: true });
+}
+
+function isRootInvocationForFlags(
+  argv: string[],
+  targetFlags: Set<string>,
+  options?: { includeVersionAlias?: boolean },
+): boolean {
+  const args = argv.slice(2);
+  let hasTarget = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg) {
+      continue;
+    }
+    if (arg === FLAG_TERMINATOR) {
+      break;
+    }
+    if (
+      targetFlags.has(arg) ||
+      (options?.includeVersionAlias === true && arg === ROOT_VERSION_ALIAS_FLAG)
+    ) {
+      hasTarget = true;
+      continue;
+    }
+    const consumed = consumeRootOptionToken(args, i);
+    if (consumed > 0) {
+      i += consumed - 1;
+      continue;
+    }
+    // Unknown flags and subcommand-scoped help/version should fall back to Commander.
+    return false;
+  }
+  return hasTarget;
+}
+
+export function isRootHelpInvocation(argv: string[]): boolean {
+  return isRootInvocationForFlags(argv, HELP_FLAGS);
 }
 
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
@@ -121,6 +143,18 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
 }
 
 export function getCommandPath(argv: string[], depth = 2): string[] {
+  return getCommandPathInternal(argv, depth, { skipRootOptions: false });
+}
+
+export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {
+  return getCommandPathInternal(argv, depth, { skipRootOptions: true });
+}
+
+function getCommandPathInternal(
+  argv: string[],
+  depth: number,
+  opts: { skipRootOptions: boolean },
+): string[] {
   const args = argv.slice(2);
   const path: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
@@ -130,6 +164,13 @@ export function getCommandPath(argv: string[], depth = 2): string[] {
     }
     if (arg === "--") {
       break;
+    }
+    if (opts.skipRootOptions) {
+      const consumed = consumeRootOptionToken(args, i);
+      if (consumed > 0) {
+        i += consumed - 1;
+        continue;
+      }
     }
     if (arg.startsWith("-")) {
       continue;
@@ -143,8 +184,93 @@ export function getCommandPath(argv: string[], depth = 2): string[] {
 }
 
 export function getPrimaryCommand(argv: string[]): string | null {
-  const [primary] = getCommandPath(argv, 1);
+  const [primary] = getCommandPathWithRootOptions(argv, 1);
   return primary ?? null;
+}
+
+type CommandPositionalsParseOptions = {
+  commandPath: ReadonlyArray<string>;
+  booleanFlags?: ReadonlyArray<string>;
+  valueFlags?: ReadonlyArray<string>;
+};
+
+function consumeKnownOptionToken(
+  args: ReadonlyArray<string>,
+  index: number,
+  booleanFlags: ReadonlySet<string>,
+  valueFlags: ReadonlySet<string>,
+): number {
+  const arg = args[index];
+  if (!arg || arg === FLAG_TERMINATOR || !arg.startsWith("-")) {
+    return 0;
+  }
+
+  const equalsIndex = arg.indexOf("=");
+  const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
+
+  if (booleanFlags.has(flag)) {
+    return equalsIndex === -1 ? 1 : 0;
+  }
+
+  if (!valueFlags.has(flag)) {
+    return 0;
+  }
+
+  if (equalsIndex !== -1) {
+    const value = arg.slice(equalsIndex + 1).trim();
+    return value ? 1 : 0;
+  }
+
+  return isValueToken(args[index + 1]) ? 2 : 0;
+}
+
+export function getCommandPositionalsWithRootOptions(
+  argv: string[],
+  options: CommandPositionalsParseOptions,
+): string[] | null {
+  const args = argv.slice(2);
+  const commandPath = options.commandPath;
+  const booleanFlags = new Set(options.booleanFlags ?? []);
+  const valueFlags = new Set(options.valueFlags ?? []);
+  const positionals: string[] = [];
+  let commandIndex = 0;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+
+    const rootConsumed = consumeRootOptionToken(args, i);
+    if (rootConsumed > 0) {
+      i += rootConsumed - 1;
+      continue;
+    }
+
+    if (arg.startsWith("-")) {
+      const optionConsumed = consumeKnownOptionToken(args, i, booleanFlags, valueFlags);
+      if (optionConsumed === 0) {
+        return null;
+      }
+      i += optionConsumed - 1;
+      continue;
+    }
+
+    if (commandIndex < commandPath.length) {
+      if (arg !== commandPath[commandIndex]) {
+        return null;
+      }
+      commandIndex += 1;
+      continue;
+    }
+
+    positionals.push(arg);
+  }
+
+  if (commandIndex < commandPath.length) {
+    return null;
+  }
+  return positionals;
 }
 
 export function buildParseArgv(params: {
