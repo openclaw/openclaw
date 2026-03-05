@@ -5,27 +5,36 @@
 
   // ==========================================================================
   // 插件配置
+  // 注意：插件配置必须放在 plugins.entries 下
   // ==========================================================================
   "plugins": {
-    // 启用安全模型锁定插件
-    "security-model-lock": {
-      // 是否启用插件（默认：true）
-      "enabled": true,
+    "entries": {
+      // 启用安全模型锁定插件
+      "security-model-lock": {
+        // 是否启用插件（默认：true）
+        "enabled": true,
 
-      // 敏感工具列表 - 当这些工具被调用时会触发安全模型锁定
-      // 默认包含 "weather"，可根据需要添加其他工具
-      "sensitiveTools": ["weather"],
+        // 插件具体配置
+        "config": {
+          // 敏感 Skill 列表 - 当 LLM 读取这些 skill 的 SKILL.md 文件时会触发锁定
+          // 插件会检测 read 工具的 file_path 参数
+          "sensitiveSkills": ["weather"],
 
-      // 安全模型配置 - 当敏感工具被调用时会自动切换到此模型
-      "secureModel": {
-        // Provider 可以是：ollama, openai, anthropic, local 等
-        "provider": "ollama",
-        // Model 是该 provider 下的具体模型名称
-        "model": "llama3.3:8b"
-      },
+          // 安全模型配置 - 当敏感 skill 被调用时会自动切换到此模型
+          "secureModel": {
+            // Provider 可以是：ollama, openai, anthropic, local 等
+            "provider": "ollama",
+            // Model 是该 provider 下的具体模型名称
+            "model": "llama3.3:8b"
+          },
 
-      // 可选：自定义锁定提示消息
-      "lockNotice": "检测到敏感工具调用，已切换到安全模型。会话已锁定，无法切换回其他模型。"
+          // 可选：自定义锁定提示消息
+          "lockNotice": "检测到敏感 skill 调用，已切换到安全模型。请重新发送消息。",
+
+          // 可选：Skills 目录路径（默认自动检测当前目录和~/.openclaw/skills）
+          "skillsDir": "/path/to/your/skills"
+        }
+      }
     }
   },
 

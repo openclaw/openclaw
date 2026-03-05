@@ -1,7 +1,7 @@
 {
   "id": "security-model-lock",
   "name": "Security Model Lock",
-  "description": "Automatically switch to a secure model when sensitive tools (like weather) are called, and lock the session to prevent switching back.",
+  "description": "Automatically switch to a secure model when sensitive skill files are read via the read tool, and lock the session to prevent switching back.",
   "version": "1.0.0",
   "configSchema": {
     "type": "object",
@@ -12,18 +12,18 @@
         "description": "Enable or disable the plugin",
         "default": true
       },
-      "sensitiveTools": {
+      "sensitiveSkills": {
         "type": "array",
         "items": {
           "type": "string"
         },
-        "description": "List of tool names that should trigger the secure model lock",
+        "description": "List of sensitive skill names (matches SKILL.md name field). When LLM reads a skill file, the session will be locked.",
         "default": ["weather"],
-        "examples": [["weather", "execute_command", "access_database"]]
+        "examples": [["weather", "notion", "slack"]]
       },
       "secureModel": {
         "type": "object",
-        "description": "The secure model to switch to when a sensitive tool is called",
+        "description": "The secure model to switch to when a sensitive skill file is read",
         "properties": {
           "provider": {
             "type": "string",
@@ -41,7 +41,12 @@
       "lockNotice": {
         "type": "string",
         "description": "Custom notice message when lock is triggered",
-        "default": "检测到敏感工具调用，已切换到安全模型。会话已锁定，无法切换回其他模型。"
+        "default": "检测到敏感 skill 调用，已切换到安全模型。会话已锁定，无法切换回其他模型。"
+      },
+      "skillsDir": {
+        "type": "string",
+        "description": "Custom skills directory path (default: auto-detect from cwd and ~/.openclaw/skills)",
+        "examples": ["/path/to/skills", "C:\\\\Users\\\\user\\\\skills"]
       }
     }
   }
