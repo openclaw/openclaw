@@ -657,3 +657,53 @@ export function extractShellWrapperCommand(
 ): ShellWrapperCommand {
   return extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0);
 }
+
+/**
+ * For a POSIX shell invocation that directly runs a script file
+ * (e.g. `bash scripts/foo.sh`, `sh -xe setup.sh`), returns the script file
+ * argument ("scripts/foo.sh", "setup.sh"). Returns null when:
+ * - argv[0] is not a POSIX shell (e.g. `ls`)
+ * - the invocation uses an inline -c command (e.g. `bash -c "echo hi"`)
+ * - no positional script argument can be found
+ */
+export function extractPosixShellScriptArg(argv: string[]): string | null {
+  const base0 = normalizeExecutableToken(argv[0]?.trim() ?? "");
+  if (!POSIX_SHELL_WRAPPER_CANONICAL.has(base0)) {
+    return null;
+  }
+  let i = 1;
+  while (i < argv.length) {
+    const token = argv[i].trim();
+    if (!token) {
+      i += 1;
+      continue;
+    }
+    // Explicit end-of-options: the next argument is the script file.
+    if (token === "--") {
+      const next = argv[i + 1]?.trim();
+      return next || null;
+    }
+    const lower = token.toLowerCase();
+    // -c (or combined flag like -xc / -lc) means an inline command follows,
+    // not a script file.
+    if (POSIX_INLINE_COMMAND_FLAGS.has(lower)) {
+      return null;
+    }
+    if (/^-[a-z]*c/i.test(token)) {
+      return null;
+    }
+    // -o / +o take an option-name value; skip both tokens.
+    if (token === "-o" || token === "+o" || token === "-O") {
+      i += 2;
+      continue;
+    }
+    // Any other single-letter option flag (e.g. -e -x -u -n -v): skip.
+    if (/^[-+][a-zA-Z]+$/.test(token)) {
+      i += 1;
+      continue;
+    }
+    // First non-flag token is the script file.
+    return token;
+  }
+  return null;
+}

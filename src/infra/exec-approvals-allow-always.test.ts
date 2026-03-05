@@ -302,4 +302,166 @@ describe("resolveAllowAlwaysPatterns", () => {
       persistedPattern: echo,
     });
   });
+
+  it("persists the script file path for shell+script invocations (bash scripts/foo.sh)", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    // Create a shell script file
+    const scriptPath = path.join(dir, "scripts", "save_crystal.sh");
+    fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
+    fs.writeFileSync(scriptPath, "#!/bin/bash\necho ok");
+    fs.chmodSync(scriptPath, 0o755);
+
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "bash scripts/save_crystal.sh",
+          argv: ["bash", "scripts/save_crystal.sh"],
+          resolution: {
+            rawExecutable: "bash",
+            resolvedPath: "/bin/bash",
+            executableName: "bash",
+          },
+        },
+      ],
+      cwd: dir,
+      env: process.env,
+      platform: process.platform,
+    });
+    expect(patterns).toEqual([scriptPath]);
+  });
+
+  it("persists the script path when shell flags precede the script (sh -xe setup.sh)", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const scriptPath = path.join(dir, "setup.sh");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho ok");
+    fs.chmodSync(scriptPath, 0o755);
+
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "sh -xe setup.sh",
+          argv: ["sh", "-xe", "setup.sh"],
+          resolution: {
+            rawExecutable: "sh",
+            resolvedPath: "/bin/sh",
+            executableName: "sh",
+          },
+        },
+      ],
+      cwd: dir,
+      env: process.env,
+      platform: process.platform,
+    });
+    expect(patterns).toEqual([scriptPath]);
+  });
+
+  it("does NOT persist script path when shell uses -c inline command (not a script file)", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "echo");
+    const env = makePathEnv(dir);
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "bash -c 'echo hello'",
+          argv: ["bash", "-c", "echo hello"],
+          resolution: {
+            rawExecutable: "bash",
+            resolvedPath: "/bin/bash",
+            executableName: "bash",
+          },
+        },
+      ],
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    // Inline -c command: inner executable (echo) is persisted, not the script
+    expect(patterns).not.toContain("/bin/bash");
+  });
+});
+
+describe("evaluateShellAllowlist with shell+script allowlist entries", () => {
+  it("satisfies allowlist when script path matches a stored entry (bash scripts/foo.sh)", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const scriptPath = path.join(dir, "scripts", "save_crystal.sh");
+    fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
+    fs.writeFileSync(scriptPath, "#!/bin/bash\necho ok");
+    fs.chmodSync(scriptPath, 0o755);
+
+    const safeBins = resolveSafeBins(undefined);
+    const result = evaluateShellAllowlist({
+      command: "bash scripts/save_crystal.sh",
+      allowlist: [{ id: "test-id", pattern: scriptPath }],
+      safeBins,
+      cwd: dir,
+      env: process.env,
+      platform: process.platform,
+    });
+    expect(result.allowlistSatisfied).toBe(true);
+  });
+
+  it("round-trips allow-always for bash+script: persisted pattern satisfies the next run", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const scriptPath = path.join(dir, "scripts", "backup.sh");
+    fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
+    fs.writeFileSync(scriptPath, "#!/bin/bash\necho ok");
+    fs.chmodSync(scriptPath, 0o755);
+
+    const safeBins = resolveSafeBins(undefined);
+    const command = "bash scripts/backup.sh";
+
+    // First run: no allowlist → not satisfied
+    const first = evaluateShellAllowlist({
+      command,
+      allowlist: [],
+      safeBins,
+      cwd: dir,
+      env: process.env,
+      platform: process.platform,
+    });
+    expect(first.allowlistSatisfied).toBe(false);
+
+    // Simulate "Always allow": persist the patterns
+    const persisted = resolveAllowAlwaysPatterns({
+      segments: first.segments,
+      cwd: dir,
+      env: process.env,
+      platform: process.platform,
+    });
+    expect(persisted).toEqual([scriptPath]);
+
+    // Second run: allowlist contains the script path → satisfied, no re-prompt
+    const second = evaluateShellAllowlist({
+      command,
+      allowlist: persisted.map((p) => ({ id: "saved", pattern: p })),
+      safeBins,
+      cwd: dir,
+      env: process.env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(true);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: second.analysisOk,
+        allowlistSatisfied: second.allowlistSatisfied,
+      }),
+    ).toBe(false);
+  });
 });

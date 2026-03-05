@@ -19,6 +19,7 @@ import {
 } from "./exec-safe-bin-policy.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 import {
+  extractPosixShellScriptArg,
   extractShellWrapperInlineCommand,
   isDispatchWrapperExecutable,
   isShellWrapperExecutable,
@@ -221,7 +222,23 @@ function evaluateSegments(
       candidatePath && segment.resolution
         ? { ...segment.resolution, resolvedPath: candidatePath }
         : segment.resolution;
-    const match = matchAllowlist(params.allowlist, candidateResolution);
+    let match = matchAllowlist(params.allowlist, candidateResolution);
+    // For shell+script invocations (e.g. `bash scripts/foo.sh`), "Always allow"
+    // persists the resolved script path rather than the shell binary.
+    // If the shell executable itself is not in the allowlist, check the script.
+    if (!match) {
+      const scriptArg = extractPosixShellScriptArg(segment.argv);
+      if (scriptArg) {
+        const scriptPath = resolveShellScriptFilePath(scriptArg, params.cwd);
+        if (scriptPath) {
+          match = matchAllowlist(params.allowlist, {
+            rawExecutable: scriptArg,
+            executableName: path.basename(scriptArg),
+            resolvedPath: scriptPath,
+          });
+        }
+      }
+    }
     if (match) {
       matches.push(match);
     }
@@ -327,6 +344,32 @@ function isDispatchWrapperSegment(segment: ExecCommandSegment): boolean {
   return hasSegmentExecutableMatch(segment, isDispatchWrapperExecutable);
 }
 
+/**
+ * Resolves the absolute path for a shell script file argument.
+ * Unlike resolveAllowlistCandidatePath, this also handles bare file names
+ * without a path separator (e.g. `bash foo.sh` runs foo.sh from the cwd).
+ */
+function resolveShellScriptFilePath(
+  scriptArg: string,
+  cwd: string | undefined,
+): string | undefined {
+  const trimmed = scriptArg.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // Try the standard candidate-path resolution first (handles ~ and paths with separators).
+  const candidate = resolveAllowlistCandidatePath(
+    { rawExecutable: trimmed, executableName: path.basename(trimmed) },
+    cwd,
+  );
+  if (candidate) {
+    return candidate;
+  }
+  // resolveAllowlistCandidatePath skips bare names (no path separator),
+  // but for `bash foo.sh` the script is still relative to the cwd.
+  return path.resolve(cwd ?? process.cwd(), trimmed);
+}
+
 function collectAllowAlwaysPatterns(params: {
   segment: ExecCommandSegment;
   cwd?: string;
@@ -382,6 +425,16 @@ function collectAllowAlwaysPatterns(params: {
   }
   const inlineCommand = extractShellWrapperInlineCommand(params.segment.argv);
   if (!inlineCommand) {
+    // Shell invoked with a script file (e.g. `bash scripts/foo.sh`).
+    // Resolve and persist the script path so "Always allow" survives
+    // across invocations without re-prompting each time.
+    const scriptArg = extractPosixShellScriptArg(params.segment.argv);
+    if (scriptArg) {
+      const scriptPath = resolveShellScriptFilePath(scriptArg, params.cwd);
+      if (scriptPath) {
+        params.out.add(scriptPath);
+      }
+    }
     return;
   }
   const nested = analyzeShellCommand({
