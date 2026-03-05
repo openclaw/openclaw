@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
-import { coerceFiniteScheduleNumber, computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
+import {
+  coerceFiniteScheduleNumber,
+  computeNextRunAtMs,
+  computePreviousRunAtMs,
+} from "../schedule.js";
 import {
   normalizeCronStaggerMs,
   resolveCronStaggerMs,
@@ -110,10 +114,6 @@ function computeStaggeredCronPreviousRunAtMs(job: CronJob, nowMs: number) {
     cursorMs = Math.max(0, basePrevious - 1_000);
   }
   return undefined;
-}
-
-function isFiniteTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
 }
 
 function resolveEveryAnchorMs(params: {
