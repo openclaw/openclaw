@@ -295,10 +295,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
+    channelContext: {
+      channelId: "slack",
+      accountId: route.accountId,
+      conversationId: prepared.replyTarget,
+    },
     deliver: async (payload) => {
       if (useStreaming) {
         await deliverWithStreaming(payload);
-        return;
+        return true;
       }
 
       const mediaCount = payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
@@ -324,7 +329,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             ts: draftMessageId,
             text: normalizeSlackOutboundText(finalText.trim()),
           });
-          return;
+          return true;
         } catch (err) {
           logVerbose(
             `slack: preview final edit failed; falling back to standard send (${String(err)})`,
@@ -351,6 +356,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
 
       await deliverNormally(payload);
+      return true;
     },
     onError: (err, info) => {
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
