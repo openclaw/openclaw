@@ -226,6 +226,21 @@ describe("checkBrowserOrigin", () => {
       }
     });
 
+    it("accepts forwarded-host with explicit HTTP port 80 (nginx $host:$server_port)", () => {
+      // Greptile fix: X-Forwarded-Host with explicit :80 port should work for HTTP
+      const result = checkBrowserOrigin({
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.ts.net:80",
+        origin: "http://gateway.ts.net",
+        allowedOrigins: [],
+        allowHostHeaderOriginFallback: true,
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.matchedBy).toBe("host-header-fallback");
+      }
+    });
+
     it("accepts forwarded-host with non-standard port", () => {
       const result = checkBrowserOrigin({
         requestHost: "127.0.0.1:18789",

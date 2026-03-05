@@ -35,8 +35,8 @@ function normalizeHostToMatchUrlHost(host: string | undefined): string | undefin
   // (new URL("gateway.tailnet.ts.net:443") treats hostname as scheme, returning empty host)
   // Instead, strip default HTTPS port (:443) directly
   if (!normalized.includes("://") && /^[a-zA-Z0-9.-]+:\d+$/.test(normalized)) {
-    // It's a bare host:port - strip :443 if present (common for HTTPS gateways)
-    return normalized.replace(/:443$/, "").toLowerCase();
+    // Strip default ports (:443 for HTTPS, :80 for HTTP) to match URL.host behavior
+    return normalized.replace(/:(443|80)$/, "").toLowerCase();
   }
   // Use URL parsing for full URLs with scheme
   try {
