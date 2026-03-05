@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ImageContent, TextContent, ToolResultMessage } from "@mariozechner/pi-ai";
+import type { TextContent, ToolResultMessage } from "@mariozechner/pi-ai";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { EffectiveContextPruningSettings } from "./settings.js";
 import { makeToolPrunablePredicate } from "./tools.js";
@@ -13,11 +13,22 @@ function asText(text: string): TextContent {
   return { type: "text", text };
 }
 
-function collectTextSegments(content: ReadonlyArray<TextContent | ImageContent>): string[] {
+function readBlockType(block: unknown): string | undefined {
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+  const type = (block as { type?: unknown }).type;
+  return typeof type === "string" ? type : undefined;
+}
+
+function collectTextSegments(content: ReadonlyArray<unknown>): string[] {
   const parts: string[] = [];
   for (const block of content) {
-    if (block.type === "text") {
-      parts.push(block.text);
+    if (readBlockType(block) === "text") {
+      const text = (block as { text?: unknown }).text;
+      if (typeof text === "string") {
+        parts.push(text);
+      }
     }
   }
   return parts;
@@ -87,22 +98,27 @@ function takeTailFromJoinedText(parts: string[], maxChars: number): string {
   return out.join("");
 }
 
-function hasImageBlocks(content: ReadonlyArray<TextContent | ImageContent>): boolean {
+function hasImageBlocks(content: ReadonlyArray<unknown>): boolean {
   for (const block of content) {
-    if (block.type === "image") {
+    if (readBlockType(block) === "image") {
       return true;
     }
   }
   return false;
 }
 
-function estimateTextAndImageChars(content: ReadonlyArray<TextContent | ImageContent>): number {
+function estimateTextAndImageChars(content: ReadonlyArray<unknown>): number {
   let chars = 0;
   for (const block of content) {
-    if (block.type === "text") {
-      chars += block.text.length;
+    const blockType = readBlockType(block);
+    if (blockType === "text") {
+      const text = (block as { text?: unknown }).text;
+      if (typeof text === "string") {
+        chars += text.length;
+      }
+      continue;
     }
-    if (block.type === "image") {
+    if (blockType === "image") {
       chars += IMAGE_CHAR_ESTIMATE;
     }
   }
@@ -115,21 +131,33 @@ function estimateMessageChars(message: AgentMessage): number {
     if (typeof content === "string") {
       return content.length;
     }
-    return estimateTextAndImageChars(content);
+    return estimateTextAndImageChars(Array.isArray(content) ? content : []);
   }
 
   if (message.role === "assistant") {
     let chars = 0;
-    for (const b of message.content) {
-      if (b.type === "text") {
-        chars += b.text.length;
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) {
+      return chars;
+    }
+    for (const b of content) {
+      const blockType = readBlockType(b);
+      if (blockType === "text") {
+        const text = (b as { text?: unknown }).text;
+        if (typeof text === "string") {
+          chars += text.length;
+        }
       }
-      if (b.type === "thinking") {
-        chars += b.thinking.length;
+      if (blockType === "thinking") {
+        const thinking = (b as { thinking?: unknown }).thinking;
+        if (typeof thinking === "string") {
+          chars += thinking.length;
+        }
       }
-      if (b.type === "toolCall") {
+      if (blockType === "toolCall") {
+        const argumentsValue = (b as { arguments?: unknown }).arguments;
         try {
-          chars += JSON.stringify(b.arguments ?? {}).length;
+          chars += JSON.stringify(argumentsValue ?? {}).length;
         } catch {
           chars += 128;
         }
@@ -139,7 +167,11 @@ function estimateMessageChars(message: AgentMessage): number {
   }
 
   if (message.role === "toolResult") {
-    return estimateTextAndImageChars(message.content);
+    const content = (message as { content?: unknown }).content;
+    if (typeof content === "string") {
+      return content.length;
+    }
+    return estimateTextAndImageChars(Array.isArray(content) ? content : []);
   }
 
   return 256;
