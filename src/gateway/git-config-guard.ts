@@ -29,7 +29,7 @@ export function checkConfigInGitRepo(configDir: string): void {
   if (gitRoot) {
     console.warn(
       `[security] WARNING: OpenClaw config directory is inside a git repo (${gitRoot}).` +
-      ` Tokens in openclaw.json may be committed. Add .openclaw/ to .gitignore.`
+        ` Tokens in openclaw.json may be committed. Add .openclaw/ to .gitignore.`,
     );
   }
 }
