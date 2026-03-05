@@ -402,7 +402,7 @@ describe("runCronIsolatedAgentTurn", () => {
         workspaceDir?: string;
         sessionFile?: string;
       };
-      expect(call?.sessionKey).toBe("agent:ops:cron:job-ops");
+      expect(call?.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
       expect(call?.workspaceDir).toBe(opsWorkspace);
       expect(call?.sessionFile).toContain(path.join("agents", "ops"));
     });
@@ -628,12 +628,18 @@ describe("runCronIsolatedAgentTurn", () => {
       const first = (await runPingTurn()).res;
 
       const second = (await runPingTurn()).res;
+      const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
+      const firstCall = calls[0]?.[0] as { sessionKey?: string } | undefined;
+      const secondCall = calls.at(-1)?.[0] as { sessionKey?: string } | undefined;
 
       expect(first.sessionId).toBeDefined();
       expect(second.sessionId).toBeDefined();
       expect(second.sessionId).not.toBe(first.sessionId);
       expect(first.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
       expect(second.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+      expect(firstCall?.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+      expect(secondCall?.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+      expect(secondCall?.sessionKey).not.toBe(firstCall?.sessionKey);
       expect(second.sessionKey).not.toBe(first.sessionKey);
     });
   });

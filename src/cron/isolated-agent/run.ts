@@ -478,7 +478,7 @@ export async function runCronIsolatedAgentTurn(params: {
             : getCliSessionId(cronSession.sessionEntry, providerOverride);
           const result = await runCliAgent({
             sessionId: cronSession.sessionEntry.sessionId,
-            sessionKey: agentSessionKey,
+            sessionKey: runSessionKey,
             agentId,
             sessionFile,
             workspaceDir,
@@ -500,7 +500,7 @@ export async function runCronIsolatedAgentTurn(params: {
         }
         const result = await runEmbeddedPiAgent({
           sessionId: cronSession.sessionEntry.sessionId,
-          sessionKey: agentSessionKey,
+          sessionKey: runSessionKey,
           agentId,
           trigger: "cron",
           messageChannel,
