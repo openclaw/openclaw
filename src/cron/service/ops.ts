@@ -398,13 +398,18 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       return;
     }
 
-    const shouldDelete = applyJobResult(state, job, {
-      status: coreResult.status,
-      error: coreResult.error,
-      delivered: coreResult.delivered,
-      startedAt,
-      endedAt,
-    });
+    const shouldDelete = applyJobResult(
+      state,
+      job,
+      {
+        status: coreResult.status,
+        error: coreResult.error,
+        delivered: coreResult.delivered,
+        startedAt,
+        endedAt,
+      },
+      { preserveSchedule: mode === "force" },
+    );
 
     emit(state, {
       jobId: job.id,
