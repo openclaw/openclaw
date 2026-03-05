@@ -1,3 +1,4 @@
+import { logWarn } from "../logger.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
 import {
@@ -88,7 +89,8 @@ export async function emitSubagentEndedHookOnce(params: {
     params.entry.endedHookEmittedAt = Date.now();
     params.persist();
     return true;
-  } catch {
+  } catch (err) {
+    logWarn(`[subagents] failed to emit subagent_ended hook for run ${runId}: ${String(err)}`);
     return false;
   } finally {
     params.inFlightRunIds.delete(runId);

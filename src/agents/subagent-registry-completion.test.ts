@@ -7,8 +7,16 @@ const lifecycleMocks = vi.hoisted(() => ({
   runSubagentEnded: vi.fn(async () => {}),
 }));
 
+const loggerMocks = vi.hoisted(() => ({
+  logWarn: vi.fn(),
+}));
+
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => lifecycleMocks.getGlobalHookRunner(),
+}));
+
+vi.mock("../logger.js", () => ({
+  logWarn: (...args: unknown[]) => loggerMocks.logWarn(...args),
 }));
 
 import { emitSubagentEndedHookOnce } from "./subagent-registry-completion.js";
@@ -44,6 +52,7 @@ describe("emitSubagentEndedHookOnce", () => {
   beforeEach(() => {
     lifecycleMocks.getGlobalHookRunner.mockClear();
     lifecycleMocks.runSubagentEnded.mockClear();
+    loggerMocks.logWarn.mockClear();
   });
 
   it("records ended hook marker even when no subagent_ended hooks are registered", async () => {
@@ -122,5 +131,9 @@ describe("emitSubagentEndedHookOnce", () => {
     expect(params.persist).not.toHaveBeenCalled();
     expect(inFlightRunIds.has(entry.runId)).toBe(false);
     expect(entry.endedHookEmittedAt).toBeUndefined();
+    expect(loggerMocks.logWarn).toHaveBeenCalledTimes(1);
+    expect(loggerMocks.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to emit subagent_ended hook for run run-1: Error: boom"),
+    );
   });
 });
