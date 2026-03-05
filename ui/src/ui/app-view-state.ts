@@ -44,6 +44,7 @@ export type AppViewState = {
   theme: ThemeMode;
   themeResolved: "light" | "dark";
   hello: GatewayHelloOk | null;
+  serverVersion: string | null;
   lastError: string | null;
   lastErrorCode: string | null;
   eventLog: EventLogEntry[];

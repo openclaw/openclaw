@@ -142,6 +142,7 @@ export function renderApp(state: AppViewState) {
   const openClawVersion =
     (typeof state.hello?.server?.version === "string" && state.hello.server.version.trim()) ||
     state.updateAvailable?.currentVersion ||
+    state.serverVersion?.trim() ||
     t("common.na");
   const availableUpdate =
     state.updateAvailable &&
