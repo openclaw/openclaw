@@ -75,6 +75,13 @@ export function evaluateMissingDeviceIdentity(params: {
   authOk: boolean;
   hasSharedAuth: boolean;
   isLocalClient: boolean;
+  /**
+   * True when the raw socket remote address is a loopback address (e.g. 127.0.0.1 or ::1).
+   * Used to allow allowInsecureAuth for Control UI connections that arrive through a local
+   * reverse proxy (nginx/caddy on the same host) where isLocalClient is false because the
+   * proxy adds X-Forwarded-For headers but is not listed in gateway.trustedProxies.
+   */
+  isLoopbackRemote?: boolean;
 }): MissingDeviceIdentityDecision {
   if (params.hasDeviceIdentity) {
     return { kind: "allow" };
@@ -88,7 +95,11 @@ export function evaluateMissingDeviceIdentity(params: {
     // (needed for device identity) is unavailable in insecure HTTP contexts.
     // Remote connections are still rejected to preserve the MitM protection
     // that the security fix (#20684) intended.
-    if (!params.controlUiAuthPolicy.allowInsecureAuthConfigured || !params.isLocalClient) {
+    // isLoopbackRemote also allows the bypass when the connection arrives through a
+    // local reverse proxy (e.g. nginx on 127.0.0.1) where isLocalClient would be false
+    // because proxy headers are present but trustedProxies is not configured.
+    const isEffectivelyLocal = params.isLocalClient || params.isLoopbackRemote === true;
+    if (!params.controlUiAuthPolicy.allowInsecureAuthConfigured || !isEffectivelyLocal) {
       return { kind: "reject-control-ui-insecure-auth" };
     }
   }

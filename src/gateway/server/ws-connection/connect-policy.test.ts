@@ -239,3 +239,47 @@ describe("ws connect policy", () => {
     }
   });
 });
+
+// Issue #20524: allowInsecureAuth should allow loopback-proxy connections
+// (isLocalClient=false when nginx/caddy proxies to gateway, but remoteAddr is loopback)
+test("allowInsecureAuth with loopback proxy (isLocalClient=false, isLoopbackRemote=true) should allow", () => {
+  const policy = resolveControlUiAuthPolicy({
+    isControlUi: true,
+    controlUiConfig: { allowInsecureAuth: true, dangerouslyDisableDeviceAuth: false },
+    deviceRaw: null,
+  });
+
+  // Control UI behind a loopback proxy (e.g. nginx on 127.0.0.1):
+  // isLocalClient=false (proxy headers present + proxy not in trustedProxies)
+  // but remote socket IS loopback -> should allow when allowInsecureAuth is set
+  expect(
+    evaluateMissingDeviceIdentity({
+      hasDeviceIdentity: false,
+      role: "operator",
+      isControlUi: true,
+      controlUiAuthPolicy: policy,
+      trustedProxyAuthOk: false,
+      sharedAuthOk: true,
+      authOk: true,
+      hasSharedAuth: true,
+      isLocalClient: false,
+      isLoopbackRemote: true,
+    }).kind,
+  ).toBe("allow");
+
+  // Remote proxy (non-loopback) must still be rejected even with allowInsecureAuth
+  expect(
+    evaluateMissingDeviceIdentity({
+      hasDeviceIdentity: false,
+      role: "operator",
+      isControlUi: true,
+      controlUiAuthPolicy: policy,
+      trustedProxyAuthOk: false,
+      sharedAuthOk: true,
+      authOk: true,
+      hasSharedAuth: true,
+      isLocalClient: false,
+      isLoopbackRemote: false,
+    }).kind,
+  ).toBe("reject-control-ui-insecure-auth");
+});

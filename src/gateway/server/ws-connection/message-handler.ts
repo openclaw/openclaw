@@ -625,6 +625,7 @@ export function attachGatewayWsMessageHandler(params: {
             authOk,
             hasSharedAuth,
             isLocalClient,
+            isLoopbackRemote: isLoopbackAddress(remoteAddr ?? ""),
           });
           if (decision.kind === "allow") {
             return true;
