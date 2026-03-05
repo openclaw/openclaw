@@ -17,14 +17,14 @@ export function isFileMissingError(
 export async function statRegularFile(absPath: string): Promise<RegularFileStatResult> {
   let stat: Stats;
   try {
-    stat = await fs.lstat(absPath);
+    stat = await fs.stat(absPath);
   } catch (err) {
     if (isFileMissingError(err)) {
       return { missing: true };
     }
     throw err;
   }
-  if (stat.isSymbolicLink() || !stat.isFile()) {
+  if (!stat.isFile()) {
     throw new Error("path required");
   }
   return { missing: false, stat };

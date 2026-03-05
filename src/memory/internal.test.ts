@@ -119,8 +119,8 @@ describe("listMemoryFiles", () => {
     const files = await listMemoryFiles(tmpDir, [extraDir, linkDir]);
     expect(files.some((file) => file.endsWith("note.md"))).toBe(true);
     if (symlinksOk) {
-      expect(files.some((file) => file.endsWith("linked.md"))).toBe(false);
-      expect(files.some((file) => file.endsWith("nested.md"))).toBe(false);
+      expect(files.some((file) => file.endsWith("linked.md"))).toBe(true);
+      expect(files.some((file) => file.endsWith("nested.md"))).toBe(true);
     }
   });
 
