@@ -1079,11 +1079,15 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
 
     const topAllowFrom = account.allowFrom as Array<string | number> | undefined;
     const nestedAllowFrom = dm?.allowFrom as Array<string | number> | undefined;
-    // If the parent already satisfies the wildcard requirement, skip account-level repair.
-    const parentTopAllowFrom = parent?.allowFrom as Array<string | number> | undefined;
-    const parentNestedAllowFrom = parentDm?.allowFrom as Array<string | number> | undefined;
-    if (hasWildcard(parentTopAllowFrom) || hasWildcard(parentNestedAllowFrom)) {
-      return;
+    // If the account has no local allowFrom override, check whether the parent
+    // already satisfies the wildcard requirement (runtime inherits parent values).
+    const hasLocalAllowFrom = Array.isArray(topAllowFrom) || Array.isArray(nestedAllowFrom);
+    if (!hasLocalAllowFrom) {
+      const parentTopAllowFrom = parent?.allowFrom as Array<string | number> | undefined;
+      const parentNestedAllowFrom = parentDm?.allowFrom as Array<string | number> | undefined;
+      if (hasWildcard(parentTopAllowFrom) || hasWildcard(parentNestedAllowFrom)) {
+        return;
+      }
     }
 
     if (mode === "nestedOnly") {
@@ -1272,17 +1276,18 @@ async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise
 
     const topAllowFrom = params.account.allowFrom as Array<string | number> | undefined;
     const nestedAllowFrom = dm?.allowFrom as Array<string | number> | undefined;
-    // Also check parent's allowFrom — if the parent already has entries,
-    // the account inherits them at runtime and recovery is unnecessary.
-    const parentTopAllowFrom = params.parent?.allowFrom as Array<string | number> | undefined;
-    const parentNestedAllowFrom = parentDm?.allowFrom as Array<string | number> | undefined;
-    if (
-      hasAllowFromEntries(topAllowFrom) ||
-      hasAllowFromEntries(nestedAllowFrom) ||
-      hasAllowFromEntries(parentTopAllowFrom) ||
-      hasAllowFromEntries(parentNestedAllowFrom)
-    ) {
+    if (hasAllowFromEntries(topAllowFrom) || hasAllowFromEntries(nestedAllowFrom)) {
       return;
+    }
+    // If the account has no local allowFrom, check whether the parent already
+    // has entries — at runtime, the account inherits them and recovery is unnecessary.
+    const hasLocalAllowFrom = Array.isArray(topAllowFrom) || Array.isArray(nestedAllowFrom);
+    if (!hasLocalAllowFrom) {
+      const parentTopAllowFrom = params.parent?.allowFrom as Array<string | number> | undefined;
+      const parentNestedAllowFrom = parentDm?.allowFrom as Array<string | number> | undefined;
+      if (hasAllowFromEntries(parentTopAllowFrom) || hasAllowFromEntries(parentNestedAllowFrom)) {
+        return;
+      }
     }
 
     const normalizedChannelId = (normalizeChatChannelId(params.channelName) ?? params.channelName)
