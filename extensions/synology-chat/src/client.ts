@@ -7,6 +7,7 @@ import * as http from "node:http";
 import * as https from "node:https";
 
 const MIN_SEND_INTERVAL_MS = 500;
+const MAX_TEXT_CHUNK_CHARS = 1800;
 let lastSendTime = 0;
 
 /**
@@ -23,45 +24,57 @@ export async function sendMessage(
   userId?: string | number,
   allowInsecureSsl = true,
 ): Promise<boolean> {
-  // Synology Chat API requires user_ids (numeric) to specify the recipient
-  // The @mention is optional but user_ids is mandatory
-  const payloadObj: Record<string, any> = { text };
-  if (userId) {
-    // userId can be numeric ID or username - if numeric, add to user_ids
-    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
-    if (!isNaN(numericId)) {
-      payloadObj.user_ids = [numericId];
+  const chunks = splitTextForSynology(text);
+
+  for (const chunk of chunks) {
+    // Synology Chat API requires user_ids (numeric) to specify the recipient
+    // The @mention is optional but user_ids is mandatory
+    const payloadObj: Record<string, any> = { text: chunk };
+    if (userId) {
+      // userId can be numeric ID or username - if numeric, add to user_ids
+      const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
+      if (!isNaN(numericId)) {
+        payloadObj.user_ids = [numericId];
+      }
     }
-  }
-  const payload = JSON.stringify(payloadObj);
-  const body = `payload=${encodeURIComponent(payload)}`;
+    const payload = JSON.stringify(payloadObj);
+    const body = `payload=${encodeURIComponent(payload)}`;
 
-  // Internal rate limit: min 500ms between sends
-  const now = Date.now();
-  const elapsed = now - lastSendTime;
-  if (elapsed < MIN_SEND_INTERVAL_MS) {
-    await sleep(MIN_SEND_INTERVAL_MS - elapsed);
-  }
-
-  // Retry with exponential backoff (3 attempts, 300ms base)
-  const maxRetries = 3;
-  const baseDelay = 300;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const ok = await doPost(incomingUrl, body, allowInsecureSsl);
-      lastSendTime = Date.now();
-      if (ok) return true;
-    } catch {
-      // will retry
+    // Internal rate limit: min 500ms between sends
+    const now = Date.now();
+    const elapsed = now - lastSendTime;
+    if (elapsed < MIN_SEND_INTERVAL_MS) {
+      await sleep(MIN_SEND_INTERVAL_MS - elapsed);
     }
 
-    if (attempt < maxRetries - 1) {
-      await sleep(baseDelay * Math.pow(2, attempt));
+    // Retry with exponential backoff (3 attempts, 300ms base)
+    const maxRetries = 3;
+    const baseDelay = 300;
+
+    let sent = false;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const ok = await doPost(incomingUrl, body, allowInsecureSsl);
+        lastSendTime = Date.now();
+        if (ok) {
+          sent = true;
+          break;
+        }
+      } catch {
+        // will retry
+      }
+
+      if (attempt < maxRetries - 1) {
+        await sleep(baseDelay * Math.pow(2, attempt));
+      }
+    }
+
+    if (!sent) {
+      return false;
     }
   }
 
-  return false;
+  return true;
 }
 
 /**
@@ -90,6 +103,39 @@ export async function sendFileUrl(
   } catch {
     return false;
   }
+}
+
+function splitTextForSynology(text: string): string[] {
+  if (text.length <= MAX_TEXT_CHUNK_CHARS) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const remaining = text.length - cursor;
+    if (remaining <= MAX_TEXT_CHUNK_CHARS) {
+      chunks.push(text.slice(cursor));
+      break;
+    }
+
+    const window = text.slice(cursor, cursor + MAX_TEXT_CHUNK_CHARS);
+    const splitAtNewline = window.lastIndexOf("\n");
+    const splitAtSpace = window.lastIndexOf(" ");
+    const splitAt = Math.max(splitAtNewline, splitAtSpace);
+
+    if (splitAt > 0) {
+      chunks.push(text.slice(cursor, cursor + splitAt).trimEnd());
+      cursor += splitAt + 1;
+      continue;
+    }
+
+    chunks.push(window);
+    cursor += MAX_TEXT_CHUNK_CHARS;
+  }
+
+  return chunks.filter((chunk) => chunk.length > 0);
 }
 
 function doPost(url: string, body: string, allowInsecureSsl = true): Promise<boolean> {

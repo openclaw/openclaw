@@ -81,6 +81,16 @@ describe("sendMessage", () => {
     const callArgs = httpsRequest.mock.calls[0];
     expect(callArgs[0]).toBe("https://nas.example.com/incoming");
   });
+
+  it("splits long messages into multiple sends", async () => {
+    mockSuccessResponse();
+    const longText = "A".repeat(5000);
+    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", longText));
+    expect(result).toBe(true);
+
+    const httpsRequest = vi.mocked(https.request);
+    expect(httpsRequest.mock.calls.length).toBeGreaterThan(1);
+  });
 });
 
 describe("sendFileUrl", () => {
