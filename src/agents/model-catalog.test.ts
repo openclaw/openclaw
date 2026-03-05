@@ -8,6 +8,25 @@ import {
   type PiSdkModule,
 } from "./model-catalog.test-harness.js";
 
+function mockPiDiscoveryModels(models: unknown[]) {
+  __setModelCatalogImportForTest(
+    async () =>
+      ({
+        discoverAuthStorage: () => ({}),
+        AuthStorage: class {},
+        ModelRegistry: class {
+          getAll() {
+            return models;
+          }
+        },
+      }) as unknown as PiSdkModule,
+  );
+}
+
+function mockSingleOpenAiCatalogModel() {
+  mockPiDiscoveryModels([{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }]);
+}
+
 describe("loadModelCatalog", () => {
   installModelCatalogTestHooks();
 
@@ -67,32 +86,21 @@ describe("loadModelCatalog", () => {
   });
 
   it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.3-codex exists", async () => {
-    __setModelCatalogImportForTest(
-      async () =>
-        ({
-          discoverAuthStorage: () => ({}),
-          AuthStorage: class {},
-          ModelRegistry: class {
-            getAll() {
-              return [
-                {
-                  id: "gpt-5.3-codex",
-                  provider: "openai-codex",
-                  name: "GPT-5.3 Codex",
-                  reasoning: true,
-                  contextWindow: 200000,
-                  input: ["text"],
-                },
-                {
-                  id: "gpt-5.2-codex",
-                  provider: "openai-codex",
-                  name: "GPT-5.2 Codex",
-                },
-              ];
-            }
-          },
-        }) as unknown as PiSdkModule,
-    );
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5.3-codex",
+        provider: "openai-codex",
+        name: "GPT-5.3 Codex",
+        reasoning: true,
+        contextWindow: 200000,
+        input: ["text"],
+      },
+      {
+        id: "gpt-5.2-codex",
+        provider: "openai-codex",
+        name: "GPT-5.2 Codex",
+      },
+    ]);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
     expect(result).toContainEqual(
@@ -107,18 +115,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("merges configured models for opted-in non-pi-native providers", async () => {
-    __setModelCatalogImportForTest(
-      async () =>
-        ({
-          discoverAuthStorage: () => ({}),
-          AuthStorage: class {},
-          ModelRegistry: class {
-            getAll() {
-              return [{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }];
-            }
-          },
-        }) as unknown as PiSdkModule,
-    );
+    mockSingleOpenAiCatalogModel();
 
     const result = await loadModelCatalog({
       config: {
@@ -154,18 +151,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("does not merge configured models for providers that are not opted in", async () => {
-    __setModelCatalogImportForTest(
-      async () =>
-        ({
-          discoverAuthStorage: () => ({}),
-          AuthStorage: class {},
-          ModelRegistry: class {
-            getAll() {
-              return [{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }];
-            }
-          },
-        }) as unknown as PiSdkModule,
-    );
+    mockSingleOpenAiCatalogModel();
 
     const result = await loadModelCatalog({
       config: {
@@ -197,24 +183,13 @@ describe("loadModelCatalog", () => {
   });
 
   it("does not duplicate opted-in configured models already present in ModelRegistry", async () => {
-    __setModelCatalogImportForTest(
-      async () =>
-        ({
-          discoverAuthStorage: () => ({}),
-          AuthStorage: class {},
-          ModelRegistry: class {
-            getAll() {
-              return [
-                {
-                  id: "anthropic/claude-opus-4.6",
-                  provider: "kilocode",
-                  name: "Claude Opus 4.6",
-                },
-              ];
-            }
-          },
-        }) as unknown as PiSdkModule,
-    );
+    mockPiDiscoveryModels([
+      {
+        id: "anthropic/claude-opus-4.6",
+        provider: "kilocode",
+        name: "Claude Opus 4.6",
+      },
+    ]);
 
     const result = await loadModelCatalog({
       config: {

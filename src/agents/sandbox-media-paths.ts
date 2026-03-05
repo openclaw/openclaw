@@ -8,6 +8,16 @@ export type SandboxedBridgeMediaPathConfig = {
   workspaceOnly?: boolean;
 };
 
+export function createSandboxBridgeReadFile(params: {
+  sandbox: Pick<SandboxedBridgeMediaPathConfig, "root" | "bridge">;
+}): (filePath: string) => Promise<Buffer> {
+  return async (filePath: string) =>
+    await params.sandbox.bridge.readFile({
+      filePath,
+      cwd: params.sandbox.root,
+    });
+}
+
 export async function resolveSandboxedBridgeMediaPath(params: {
   sandbox: SandboxedBridgeMediaPathConfig;
   mediaPath: string;
