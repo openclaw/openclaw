@@ -117,10 +117,16 @@ function contentToText(content: unknown): string {
   if (!Array.isArray(content)) {
     return "";
   }
-  return (content as Array<{ type?: string; text?: string }>)
-    .filter((p) => p.type === "text" && typeof p.text === "string")
-    .map((p) => p.text as string)
-    .join("");
+  const parts: string[] = [];
+  for (const part of content as Array<{ type?: unknown; text?: unknown }>) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    if (part.type === "text" && typeof part.text === "string") {
+      parts.push(part.text);
+    }
+  }
+  return parts.join("");
 }
 
 /** Convert pi-ai content to OpenAI ContentPart[]. */

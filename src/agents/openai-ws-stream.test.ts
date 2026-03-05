@@ -551,6 +551,25 @@ describe("convertMessagesToInputItems", () => {
     expect(messageItem).toBeDefined();
     expect(messageItem).toMatchObject({ role: "assistant", content: "Hi." });
   });
+
+  it("ignores malformed entries in toolResult content arrays", () => {
+    const items = convertMessagesToInputItems([
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "test_tool",
+        content: [null, { type: "text", text: "ok" }],
+        isError: false,
+        timestamp: 0,
+      } as unknown as Parameters<typeof convertMessagesToInputItems>[0][number],
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_1",
+      output: "ok",
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
