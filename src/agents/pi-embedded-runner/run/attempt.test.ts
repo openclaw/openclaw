@@ -8,6 +8,7 @@ import {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldInjectOllamaCompatNumCtx,
+  decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
@@ -451,5 +452,44 @@ describe("shouldInjectOllamaCompatNumCtx", () => {
         providerId: "ollama",
       }),
     ).toBe(false);
+  });
+});
+
+describe("decodeHtmlEntitiesInObject", () => {
+  it("decodes HTML entities in string values", () => {
+    const result = decodeHtmlEntitiesInObject(
+      "source .env &amp;&amp; psql &quot;$DB&quot; -c &lt;query&gt;",
+    );
+    expect(result).toBe('source .env && psql "$DB" -c <query>');
+  });
+
+  it("recursively decodes nested objects", () => {
+    const input = {
+      command: "cd ~/dev &amp;&amp; npm run build",
+      args: ["--flag=&quot;value&quot;", "&lt;input&gt;"],
+      nested: { deep: "a &amp; b" },
+    };
+    const result = decodeHtmlEntitiesInObject(input) as Record<string, unknown>;
+    expect(result.command).toBe("cd ~/dev && npm run build");
+    expect((result.args as string[])[0]).toBe('--flag="value"');
+    expect((result.args as string[])[1]).toBe("<input>");
+    expect((result.nested as Record<string, string>).deep).toBe("a & b");
+  });
+
+  it("passes through non-string primitives unchanged", () => {
+    expect(decodeHtmlEntitiesInObject(42)).toBe(42);
+    expect(decodeHtmlEntitiesInObject(null)).toBe(null);
+    expect(decodeHtmlEntitiesInObject(true)).toBe(true);
+    expect(decodeHtmlEntitiesInObject(undefined)).toBe(undefined);
+  });
+
+  it("returns strings without entities unchanged", () => {
+    const input = "plain string with no entities";
+    expect(decodeHtmlEntitiesInObject(input)).toBe(input);
+  });
+
+  it("decodes numeric character references", () => {
+    expect(decodeHtmlEntitiesInObject("&#39;hello&#39;")).toBe("'hello'");
+    expect(decodeHtmlEntitiesInObject("&#x27;world&#x27;")).toBe("'world'");
   });
 });

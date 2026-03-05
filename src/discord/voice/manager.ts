@@ -36,6 +36,7 @@ import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { parseTtsDirectives } from "../../tts/tts-core.js";
 import { resolveTtsConfig, textToSpeech, type ResolvedTtsConfig } from "../../tts/tts.js";
+import { formatMention } from "../mentions.js";
 import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
 
@@ -156,32 +157,22 @@ type OpusDecoder = {
   decode: (buffer: Buffer) => Buffer;
 };
 
-let warnedOpusFallback = false;
+let warnedOpusMissing = false;
 
 function createOpusDecoder(): { decoder: OpusDecoder; name: string } | null {
   try {
-    const { OpusEncoder } = require("@discordjs/opus") as {
-      OpusEncoder: new (sampleRate: number, channels: number) => OpusDecoder;
+    const OpusScript = require("opusscript") as {
+      new (sampleRate: number, channels: number, application: number): OpusDecoder;
+      Application: { AUDIO: number };
     };
-    const decoder = new OpusEncoder(SAMPLE_RATE, CHANNELS);
-    return { decoder, name: "@discordjs/opus" };
-  } catch (nativeErr) {
-    try {
-      const OpusScript = require("opusscript") as {
-        new (sampleRate: number, channels: number, application: number): OpusDecoder;
-        Application: { AUDIO: number };
-      };
-      const decoder = new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
-      if (!warnedOpusFallback) {
-        warnedOpusFallback = true;
-        logger.warn(
-          `discord voice: @discordjs/opus unavailable (${formatErrorMessage(nativeErr)}); using opusscript fallback`,
-        );
-      }
-      return { decoder, name: "opusscript" };
-    } catch (jsErr) {
-      logger.warn(`discord voice: opus decoder init failed: ${formatErrorMessage(nativeErr)}`);
-      logger.warn(`discord voice: opusscript init failed: ${formatErrorMessage(jsErr)}`);
+    const decoder = new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
+    return { decoder, name: "opusscript" };
+  } catch (err) {
+    if (!warnedOpusMissing) {
+      warnedOpusMissing = true;
+      logger.warn(
+        `discord voice: opusscript unavailable (${formatErrorMessage(err)}); cannot decode voice audio`,
+      );
     }
   }
   return null;
@@ -378,7 +369,12 @@ export class DiscordVoiceManager {
     const existing = this.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
       logVoiceVerbose(`join: already connected to guild ${guildId} channel ${channelId}`);
-      return { ok: true, message: `Already connected to <#${channelId}>.`, guildId, channelId };
+      return {
+        ok: true,
+        message: `Already connected to ${formatMention({ channelId })}.`,
+        guildId,
+        channelId,
+      };
     }
     if (existing) {
       logVoiceVerbose(`join: replacing existing session for guild ${guildId}`);
@@ -518,7 +514,7 @@ export class DiscordVoiceManager {
     this.sessions.set(guildId, entry);
     return {
       ok: true,
-      message: `Joined <#${channelId}>.`,
+      message: `Joined ${formatMention({ channelId })}.`,
       guildId,
       channelId,
     };
@@ -539,7 +535,7 @@ export class DiscordVoiceManager {
     logVoiceVerbose(`leave: disconnected from guild ${guildId} channel ${entry.channelId}`);
     return {
       ok: true,
-      message: `Left <#${entry.channelId}>.`,
+      message: `Left ${formatMention({ channelId: entry.channelId })}.`,
       guildId,
       channelId: entry.channelId,
     };
@@ -677,7 +673,11 @@ export class DiscordVoiceManager {
       cfg: this.params.cfg,
       override: this.params.discordConfig.voice?.tts,
     });
-    const directive = parseTtsDirectives(replyText, ttsConfig.modelOverrides);
+    const directive = parseTtsDirectives(
+      replyText,
+      ttsConfig.modelOverrides,
+      ttsConfig.openai.baseUrl,
+    );
     const speakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
     if (!speakText) {
       logVoiceVerbose(

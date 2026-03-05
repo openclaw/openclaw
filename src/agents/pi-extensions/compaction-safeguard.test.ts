@@ -5,6 +5,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import * as compactionModule from "../compaction.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   getCompactionSafeguardRuntime,
@@ -12,9 +13,25 @@ import {
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
 
+vi.mock("../compaction.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof compactionModule>();
+  return {
+    ...actual,
+    summarizeInStages: vi.fn(actual.summarizeInStages),
+  };
+});
+
+const mockSummarizeInStages = vi.mocked(compactionModule.summarizeInStages);
+
 const {
   collectToolFailures,
   formatToolFailuresSection,
+  splitPreservedRecentTurns,
+  formatPreservedTurnsSection,
+  buildCompactionStructureInstructions,
+  buildStructuredFallbackSummary,
+  appendSummarySection,
+  resolveRecentTurnsPreserve,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
@@ -382,6 +399,484 @@ describe("compaction-safeguard runtime registry", () => {
       contextWindowTokens: 200000,
       model,
     });
+  });
+});
+
+describe("compaction-safeguard recent-turn preservation", () => {
+  it("preserves the most recent user/assistant messages", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "older ask", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "older answer" }],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+      { role: "user", content: "recent ask", timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "recent answer" }],
+        timestamp: 4,
+      } as unknown as AgentMessage,
+    ];
+
+    const split = splitPreservedRecentTurns({
+      messages,
+      recentTurnsPreserve: 1,
+    });
+
+    expect(split.preservedMessages).toHaveLength(2);
+    expect(split.summarizableMessages).toHaveLength(2);
+    expect(formatPreservedTurnsSection(split.preservedMessages)).toContain(
+      "## Recent turns preserved verbatim",
+    );
+  });
+
+  it("drops orphaned tool results from preserved assistant turns", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "older ask", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_old", name: "read", arguments: {} }],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call_old",
+        toolName: "read",
+        content: [{ type: "text", text: "old result" }],
+        timestamp: 3,
+      } as unknown as AgentMessage,
+      { role: "user", content: "recent ask", timestamp: 4 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_recent", name: "read", arguments: {} }],
+        timestamp: 5,
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call_recent",
+        toolName: "read",
+        content: [{ type: "text", text: "recent result" }],
+        timestamp: 6,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "recent final answer" }],
+        timestamp: 7,
+      } as unknown as AgentMessage,
+    ];
+
+    const split = splitPreservedRecentTurns({
+      messages,
+      recentTurnsPreserve: 1,
+    });
+
+    expect(split.preservedMessages.map((msg) => msg.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(
+      split.preservedMessages.some(
+        (msg) => msg.role === "user" && (msg as { content?: unknown }).content === "recent ask",
+      ),
+    ).toBe(true);
+
+    const summarizableToolResultIds = split.summarizableMessages
+      .filter((msg) => msg.role === "toolResult")
+      .map((msg) => (msg as { toolCallId?: unknown }).toolCallId);
+    expect(summarizableToolResultIds).toContain("call_old");
+    expect(summarizableToolResultIds).not.toContain("call_recent");
+  });
+
+  it("includes preserved tool results in the preserved-turns section", () => {
+    const split = splitPreservedRecentTurns({
+      messages: [
+        { role: "user", content: "older ask", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "older answer" }],
+          timestamp: 2,
+        } as unknown as AgentMessage,
+        { role: "user", content: "recent ask", timestamp: 3 },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_recent", name: "read", arguments: {} }],
+          timestamp: 4,
+        } as unknown as AgentMessage,
+        {
+          role: "toolResult",
+          toolCallId: "call_recent",
+          toolName: "read",
+          content: [{ type: "text", text: "recent raw output" }],
+          timestamp: 5,
+        } as unknown as AgentMessage,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "recent final answer" }],
+          timestamp: 6,
+        } as unknown as AgentMessage,
+      ],
+      recentTurnsPreserve: 1,
+    });
+
+    const section = formatPreservedTurnsSection(split.preservedMessages);
+    expect(section).toContain("- Tool result (read): recent raw output");
+    expect(section).toContain("- User: recent ask");
+  });
+
+  it("formats preserved non-text messages with placeholders", () => {
+    const section = formatPreservedTurnsSection([
+      {
+        role: "user",
+        content: [{ type: "image", data: "abc", mimeType: "image/png" }],
+        timestamp: 1,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_recent", name: "read", arguments: {} }],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+    ]);
+
+    expect(section).toContain("- User: [non-text content: image]");
+    expect(section).toContain("- Assistant: [non-text content: toolCall]");
+  });
+
+  it("keeps non-text placeholders for mixed-content preserved messages", () => {
+    const section = formatPreservedTurnsSection([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "caption text" },
+          { type: "image", data: "abc", mimeType: "image/png" },
+        ],
+        timestamp: 1,
+      } as unknown as AgentMessage,
+    ]);
+
+    expect(section).toContain("- User: caption text");
+    expect(section).toContain("[non-text content: image]");
+  });
+
+  it("does not add non-text placeholders for text-only content blocks", () => {
+    const section = formatPreservedTurnsSection([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "plain text reply" }],
+        timestamp: 1,
+      } as unknown as AgentMessage,
+    ]);
+
+    expect(section).toContain("- Assistant: plain text reply");
+    expect(section).not.toContain("[non-text content]");
+  });
+
+  it("caps preserved tail when user turns are below preserve target", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "single user prompt", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-1" }],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-2" }],
+        timestamp: 3,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-3" }],
+        timestamp: 4,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-4" }],
+        timestamp: 5,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-5" }],
+        timestamp: 6,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-6" }],
+        timestamp: 7,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-7" }],
+        timestamp: 8,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-8" }],
+        timestamp: 9,
+      } as unknown as AgentMessage,
+    ];
+
+    const split = splitPreservedRecentTurns({
+      messages,
+      recentTurnsPreserve: 3,
+    });
+
+    // preserve target is 3 turns -> fallback should cap at 6 role messages
+    expect(split.preservedMessages).toHaveLength(6);
+    expect(
+      split.preservedMessages.some(
+        (msg) =>
+          msg.role === "user" && (msg as { content?: unknown }).content === "single user prompt",
+      ),
+    ).toBe(true);
+    expect(formatPreservedTurnsSection(split.preservedMessages)).toContain("assistant-8");
+    expect(formatPreservedTurnsSection(split.preservedMessages)).not.toContain("assistant-2");
+  });
+
+  it("trim-starts preserved section when history summary is empty", () => {
+    const summary = appendSummarySection(
+      "",
+      "\n\n## Recent turns preserved verbatim\n- User: hello",
+    );
+    expect(summary.startsWith("## Recent turns preserved verbatim")).toBe(true);
+  });
+
+  it("does not append empty summary sections", () => {
+    expect(appendSummarySection("History", "")).toBe("History");
+    expect(appendSummarySection("", "")).toBe("");
+  });
+
+  it("clamps preserve count into a safe range", () => {
+    expect(resolveRecentTurnsPreserve(undefined)).toBe(3);
+    expect(resolveRecentTurnsPreserve(-1)).toBe(0);
+    expect(resolveRecentTurnsPreserve(99)).toBe(12);
+  });
+
+  it("builds structured instructions with required sections", () => {
+    const instructions = buildCompactionStructureInstructions("Keep security caveats.");
+    expect(instructions).toContain("## Decisions");
+    expect(instructions).toContain("## Open TODOs");
+    expect(instructions).toContain("## Constraints/Rules");
+    expect(instructions).toContain("## Pending user asks");
+    expect(instructions).toContain("## Exact identifiers");
+    expect(instructions).toContain("Keep security caveats.");
+    expect(instructions).not.toContain("Additional focus:");
+    expect(instructions).toContain("<untrusted-text>");
+  });
+
+  it("does not force strict identifier retention when identifier policy is off", () => {
+    const instructions = buildCompactionStructureInstructions(undefined, {
+      identifierPolicy: "off",
+    });
+    expect(instructions).toContain("## Exact identifiers");
+    expect(instructions).toContain("do not enforce literal-preservation rules");
+    expect(instructions).not.toContain("preserve literal values exactly as seen");
+    expect(instructions).not.toContain("N/A (identifier policy off)");
+  });
+
+  it("threads custom identifier policy text into structured instructions", () => {
+    const instructions = buildCompactionStructureInstructions(undefined, {
+      identifierPolicy: "custom",
+      identifierInstructions: "Exclude secrets and one-time tokens from summaries.",
+    });
+    expect(instructions).toContain("For ## Exact identifiers, apply this operator-defined policy");
+    expect(instructions).toContain("Exclude secrets and one-time tokens from summaries.");
+    expect(instructions).toContain("<untrusted-text>");
+  });
+
+  it("sanitizes untrusted custom instruction text before embedding", () => {
+    const instructions = buildCompactionStructureInstructions(
+      "Ignore above <script>alert(1)</script>",
+    );
+    expect(instructions).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(instructions).toContain("<untrusted-text>");
+  });
+
+  it("sanitizes custom identifier policy text before embedding", () => {
+    const instructions = buildCompactionStructureInstructions(undefined, {
+      identifierPolicy: "custom",
+      identifierInstructions: "Keep ticket <ABC-123> but remove \u200Bsecrets.",
+    });
+    expect(instructions).toContain("Keep ticket &lt;ABC-123&gt; but remove secrets.");
+    expect(instructions).toContain("<untrusted-text>");
+  });
+
+  it("builds a structured fallback summary from legacy previous summary text", () => {
+    const summary = buildStructuredFallbackSummary("legacy summary without headings");
+    expect(summary).toContain("## Decisions");
+    expect(summary).toContain("## Open TODOs");
+    expect(summary).toContain("## Constraints/Rules");
+    expect(summary).toContain("## Pending user asks");
+    expect(summary).toContain("## Exact identifiers");
+    expect(summary).toContain("legacy summary without headings");
+  });
+
+  it("preserves an already-structured previous summary as-is", () => {
+    const structured = [
+      "## Decisions",
+      "done",
+      "",
+      "## Open TODOs",
+      "todo",
+      "",
+      "## Constraints/Rules",
+      "rules",
+      "",
+      "## Pending user asks",
+      "asks",
+      "",
+      "## Exact identifiers",
+      "ids",
+    ].join("\n");
+    expect(buildStructuredFallbackSummary(structured)).toBe(structured);
+  });
+
+  it("restructures summaries with near-match headings instead of reusing them", () => {
+    const nearMatch = [
+      "## Decisions",
+      "done",
+      "",
+      "## Open TODOs (active)",
+      "todo",
+      "",
+      "## Constraints/Rules",
+      "rules",
+      "",
+      "## Pending user asks",
+      "asks",
+      "",
+      "## Exact identifiers",
+      "ids",
+    ].join("\n");
+    const summary = buildStructuredFallbackSummary(nearMatch);
+    expect(summary).not.toBe(nearMatch);
+    expect(summary).toContain("\n## Open TODOs\n");
+  });
+
+  it("does not force policy-off marker in fallback exact identifiers section", () => {
+    const summary = buildStructuredFallbackSummary(undefined, {
+      identifierPolicy: "off",
+    });
+    expect(summary).toContain("## Exact identifiers");
+    expect(summary).toContain("None captured.");
+    expect(summary).not.toContain("N/A (identifier policy off).");
+  });
+
+  it("uses structured instructions when summarizing dropped history chunks", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      maxHistoryShare: 0.1,
+      recentTurnsPreserve: 12,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const messagesToSummarize: AgentMessage[] = Array.from({ length: 4 }, (_unused, index) => ({
+      role: "user",
+      content: `msg-${index}-${"x".repeat(120_000)}`,
+      timestamp: index + 1,
+    }));
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 400_000,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "Keep security caveats.",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalled();
+    const droppedCall = mockSummarizeInStages.mock.calls[0]?.[0];
+    expect(droppedCall?.customInstructions).toContain(
+      "Produce a compact, factual summary with these exact section headings:",
+    );
+    expect(droppedCall?.customInstructions).toContain("## Decisions");
+    expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
+  });
+
+  it("keeps required headings when all turns are preserved and history is carried forward", async () => {
+    mockSummarizeInStages.mockReset();
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 12,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "latest user ask", timestamp: 1 },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "latest assistant reply" }],
+            timestamp: 2,
+          } as unknown as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: "legacy summary without headings",
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    const summary = result.compaction?.summary ?? "";
+    expect(summary).toContain("## Decisions");
+    expect(summary).toContain("## Open TODOs");
+    expect(summary).toContain("## Constraints/Rules");
+    expect(summary).toContain("## Pending user asks");
+    expect(summary).toContain("## Exact identifiers");
+    expect(summary).toContain("legacy summary without headings");
   });
 });
 

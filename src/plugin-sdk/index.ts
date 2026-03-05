@@ -398,7 +398,7 @@ export type { ScopeTokenProvider } from "./fetch-auth.js";
 export { rawDataToString } from "../infra/ws.js";
 export { isWSLSync, isWSL2Sync, isWSLEnv } from "../infra/wsl.js";
 export { isTruthyEnvValue } from "../infra/env.js";
-export { resolveToolsBySender } from "../config/group-policy.js";
+export { resolveChannelGroupRequireMention, resolveToolsBySender } from "../config/group-policy.js";
 export {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,
@@ -543,6 +543,8 @@ export type {
 } from "../infra/diagnostic-events.js";
 export { detectMime, extensionForMime, getFileExtension } from "../media/mime.js";
 export { extractOriginalFilename } from "../media/store.js";
+export { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
+export type { SkillCommandSpec } from "../agents/skills.js";
 
 // Channel: Discord
 export {

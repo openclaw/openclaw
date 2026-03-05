@@ -205,7 +205,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - Bot token: `channels.telegram.botToken` or `channels.telegram.tokenFile`, with `TELEGRAM_BOT_TOKEN` as fallback for the default account.
 - Optional `channels.telegram.defaultAccount` overrides default account selection when it matches a configured account id.
+- In multi-account setups (2+ account ids), set an explicit default (`channels.telegram.defaultAccount` or `channels.telegram.accounts.default`) to avoid fallback routing; `openclaw doctor` warns when this is missing or invalid.
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).
+- Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for forum topics (use canonical `chatId:topic:topicId` in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#channel-specific-settings).
 - Telegram stream previews use `sendMessage` + `editMessageText` (works in direct and group chats).
 - Retry policy: see [Retry policy](/concepts/retry).
 
@@ -244,6 +246,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         "123456789012345678": {
           slug: "friends-of-openclaw",
           requireMention: false,
+          ignoreOtherMentions: true,
           reactionNotifications: "own",
           users: ["987654321098765432"],
           channels: {
@@ -304,18 +307,21 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Optional `channels.discord.defaultAccount` overrides default account selection when it matches a configured account id.
 - Use `user:<id>` (DM) or `channel:<id>` (guild channel) for delivery targets; bare numeric IDs are rejected.
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
-- Bot-authored messages are ignored by default. `allowBots: true` enables them (own messages still filtered).
+- Bot-authored messages are ignored by default. `allowBots: true` enables them; use `allowBots: "mentions"` to only accept bot messages that mention the bot (own messages still filtered).
+- `channels.discord.guilds.<id>.ignoreOtherMentions` (and channel overrides) drops messages that mention another user or role but not the bot (excluding @everyone/@here).
 - `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
 - `channels.discord.threadBindings` controls Discord thread-bound routing:
   - `enabled`: Discord override for thread-bound session features (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`, and bound delivery/routing)
   - `idleHours`: Discord override for inactivity auto-unfocus in hours (`0` disables)
   - `maxAgeHours`: Discord override for hard max age in hours (`0` disables)
   - `spawnSubagentSessions`: opt-in switch for `sessions_spawn({ thread: true })` auto thread creation/binding
+- Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for channels and threads (use channel/thread id in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#channel-specific-settings).
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + TTS overrides.
 - `channels.discord.voice.daveEncryption` and `channels.discord.voice.decryptionFailureTolerance` pass through to `@discordjs/voice` DAVE options (`true` and `24` by default).
 - OpenClaw additionally attempts voice receive recovery by leaving/rejoining a voice session after repeated decrypt failures.
 - `channels.discord.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
+- `channels.discord.autoPresence` maps runtime availability to bot presence (healthy => online, degraded => idle, exhausted => dnd) and allows optional status text overrides.
 - `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
 
 **Reaction notification modes:** `off` (none), `own` (bot's messages, default), `all` (all messages), `allowlist` (from `guilds.<id>.users` on all messages).
@@ -443,6 +449,13 @@ Mattermost ships as a plugin: `openclaw plugins install @openclaw/mattermost`.
       dmPolicy: "pairing",
       chatmode: "oncall", // oncall | onmessage | onchar
       oncharPrefixes: [">", "!"],
+      commands: {
+        native: true, // opt-in
+        nativeSkills: true,
+        callbackPath: "/api/channels/mattermost/command",
+        // Optional explicit URL for reverse-proxy/public deployments
+        callbackUrl: "https://gateway.example.com/api/channels/mattermost/command",
+      },
       textChunkLimit: 4000,
       chunkMode: "length",
     },
@@ -452,6 +465,13 @@ Mattermost ships as a plugin: `openclaw plugins install @openclaw/mattermost`.
 
 Chat modes: `oncall` (respond on @-mention, default), `onmessage` (every message), `onchar` (messages starting with trigger prefix).
 
+When Mattermost native commands are enabled:
+
+- `commands.callbackPath` must be a path (for example `/api/channels/mattermost/command`), not a full URL.
+- `commands.callbackUrl` must resolve to the OpenClaw gateway endpoint and be reachable from the Mattermost server.
+- For private/tailnet/internal callback hosts, Mattermost may require
+  `ServiceSettings.AllowedUntrustedInternalConnections` to include the callback host/domain.
+  Use host/domain values, not full URLs.
 - `channels.mattermost.configWrites`: allow or deny Mattermost-initiated config writes.
 - `channels.mattermost.requireMention`: require `@mention` before replying in channels.
 - Optional `channels.mattermost.defaultAccount` overrides default account selection when it matches a configured account id.
@@ -780,6 +800,21 @@ Max total characters injected across all workspace bootstrap files. Default: `15
 ```json5
 {
   agents: { defaults: { bootstrapTotalMaxChars: 150000 } },
+}
+```
+
+### `agents.defaults.bootstrapPromptTruncationWarning`
+
+Controls agent-visible warning text when bootstrap context is truncated.
+Default: `"once"`.
+
+- `"off"`: never inject warning text into the system prompt.
+- `"once"`: inject warning once per unique truncation signature (recommended).
+- `"always"`: inject warning on every run when truncation exists.
+
+```json5
+{
+  agents: { defaults: { bootstrapPromptTruncationWarning: "once" } }, // off | once | always
 }
 ```
 
@@ -1238,6 +1273,15 @@ scripts/sandbox-browser-setup.sh   # optional browser image
         },
         groupChat: { mentionPatterns: ["@openclaw"] },
         sandbox: { mode: "off" },
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "codex",
+            backend: "acpx",
+            mode: "persistent",
+            cwd: "/workspace/openclaw",
+          },
+        },
         subagents: { allowAgents: ["*"] },
         tools: {
           profile: "coding",
@@ -1255,6 +1299,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
+- `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
@@ -1283,10 +1328,12 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 
 ### Binding match fields
 
+- `type` (optional): `route` for normal routing (missing type defaults to route), `acp` for persistent ACP conversation bindings.
 - `match.channel` (required)
 - `match.accountId` (optional; `*` = any account; omitted = default account)
 - `match.peer` (optional; `{ kind: direct|group|channel, id }`)
 - `match.guildId` / `match.teamId` (optional; channel-specific)
+- `acp` (optional; only for `type: "acp"`): `{ mode, label, cwd, backend }`
 
 **Deterministic match order:**
 
@@ -1298,6 +1345,8 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 6. Default agent
 
 Within each tier, the first matching `bindings` entry wins.
+
+For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`match.channel` + account + `match.peer.id`) and does not use the route binding tier order above.
 
 ### Per-agent access profiles
 
