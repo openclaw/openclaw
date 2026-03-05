@@ -233,7 +233,7 @@ export class GatewayBrowserClient {
       maxProtocol: 3,
       client: {
         id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        version: this.opts.clientVersion ?? "dev",
+        version: this.opts.clientVersion ?? "control-ui",
         platform: this.opts.platform ?? navigator.platform ?? "web",
         mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
         instanceId: this.opts.instanceId,

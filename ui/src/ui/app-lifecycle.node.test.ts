@@ -5,6 +5,7 @@ function createHost() {
   return {
     basePath: "",
     client: { stop: vi.fn() },
+    connectGeneration: 0,
     connected: true,
     tab: "chat",
     assistantName: "OpenClaw",
@@ -35,6 +36,7 @@ describe("handleDisconnected", () => {
     handleDisconnected(host as unknown as Parameters<typeof handleDisconnected>[0]);
 
     expect(removeSpy).toHaveBeenCalledWith("popstate", host.popStateHandler);
+    expect(host.connectGeneration).toBe(1);
     expect(host.client).toBeNull();
     expect(host.connected).toBe(false);
     expect(disconnectSpy).toHaveBeenCalledTimes(1);
