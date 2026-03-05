@@ -4,33 +4,26 @@ import type { RemoteReport } from "./types.js";
 
 const MOCK_REPORT: RemoteReport = {
   task_id: "t-42",
-  result_summary: {
-    total_return: 0.15,
-    sharpe_ratio: 1.23,
-    sortino_ratio: 1.56,
-    max_drawdown: -0.082,
-    calmar_ratio: 1.83,
-    win_rate: 0.55,
-    profit_factor: 1.78,
-    total_trades: 24,
-    final_equity: 115000,
-    alpha: 0.03,
+  metadata: { strategy_name: "momentum_v1" },
+  performance: {
+    totalReturn: 0.15,
+    sharpeRatio: 1.23,
+    sortinoRatio: 1.56,
+    maxDrawdown: -0.082,
+    calmarRatio: 1.83,
+    winRate: 0.55,
+    profitFactor: 1.78,
+    totalTrades: 24,
+    finalEquity: 115000,
   },
-  trades: [
+  alpha: null,
+  trade_journal: [
     {
-      entry_time: "2024-02-15T10:00:00Z",
-      exit_time: "2024-02-20T14:00:00Z",
-      symbol: "BTC-USD",
-      side: "long",
-      entry_price: 42000,
-      exit_price: 45000,
-      quantity: 1.5,
-      commission: 12.5,
-      slippage: 5.0,
-      pnl: 4482.5,
-      pnl_pct: 0.0714,
+      date: "2024-02-15T10:00:00Z",
+      action: "buy",
+      amount: 1.5,
+      price: 42000,
       reason: "momentum_signal",
-      exit_reason: "take_profit",
     },
   ],
   equity_curve: [
@@ -48,7 +41,7 @@ describe("toBacktestResult", () => {
     initialCapital: 100000,
   });
 
-  it("maps summary fields correctly", () => {
+  it("maps performance fields correctly (camelCase)", () => {
     expect(result.strategyId).toBe("momentum_v1");
     expect(result.initialCapital).toBe(100000);
     expect(result.finalEquity).toBe(115000);
@@ -62,20 +55,15 @@ describe("toBacktestResult", () => {
     expect(result.totalTrades).toBe(24);
   });
 
-  it("maps trades from snake_case to camelCase", () => {
+  it("maps trade_journal entries to TradeRecord", () => {
     expect(result.trades).toHaveLength(1);
     const t = result.trades[0];
     expect(t.entryPrice).toBe(42000);
-    expect(t.exitPrice).toBe(45000);
+    expect(t.exitPrice).toBe(42000); // v1.1: single date/price per entry
     expect(t.quantity).toBe(1.5);
-    expect(t.pnl).toBe(4482.5);
-    expect(t.pnlPct).toBe(0.0714);
-    expect(t.side).toBe("long");
+    expect(t.side).toBe("long"); // action=buy → long
     expect(t.reason).toBe("momentum_signal");
-    expect(t.exitReason).toBe("take_profit");
-    // Timestamps are Unix ms
     expect(t.entryTime).toBe(new Date("2024-02-15T10:00:00Z").getTime());
-    expect(t.exitTime).toBe(new Date("2024-02-20T14:00:00Z").getTime());
   });
 
   it("extracts equity curve as number array", () => {
@@ -84,9 +72,7 @@ describe("toBacktestResult", () => {
 
   it("computes daily returns from equity curve", () => {
     expect(result.dailyReturns).toHaveLength(4);
-    // Day 1 return: (101500 - 100000) / 100000 = 0.015
     expect(result.dailyReturns[0]).toBeCloseTo(0.015, 6);
-    // Day 3 return: (102800 - 103200) / 103200 ≈ -0.003876
     expect(result.dailyReturns[2]).toBeCloseTo(-0.003876, 4);
   });
 
@@ -95,21 +81,18 @@ describe("toBacktestResult", () => {
     expect(result.endDate).toBe(new Date("2024-01-05").getTime());
   });
 
-  it("handles empty trades and equity curve", () => {
+  it("handles empty trade_journal and equity_curve", () => {
     const emptyReport: RemoteReport = {
       task_id: "t-empty",
-      result_summary: {
-        total_return: 0,
-        sharpe_ratio: 0,
-        sortino_ratio: 0,
-        max_drawdown: 0,
-        calmar_ratio: 0,
-        win_rate: 0,
-        profit_factor: 0,
-        total_trades: 0,
-        final_equity: 100000,
+      metadata: null,
+      performance: {
+        totalReturn: 0,
+        sharpeRatio: 0,
+        maxDrawdown: 0,
+        totalTrades: 0,
       },
-      trades: [],
+      alpha: null,
+      trade_journal: [],
       equity_curve: [],
     };
 
@@ -123,5 +106,29 @@ describe("toBacktestResult", () => {
     expect(r.dailyReturns).toEqual([]);
     expect(r.startDate).toBe(0);
     expect(r.endDate).toBe(0);
+  });
+
+  it("computes finalEquity from totalReturn when not in performance", () => {
+    const minimalReport: RemoteReport = {
+      task_id: "t-min",
+      metadata: null,
+      performance: {
+        totalReturn: 0.25,
+        sharpeRatio: 1.0,
+        maxDrawdown: -0.05,
+        totalTrades: 10,
+      },
+      alpha: null,
+      trade_journal: [],
+      equity_curve: [],
+    };
+
+    const r = toBacktestResult(minimalReport, {
+      strategyId: "minimal",
+      initialCapital: 50000,
+    });
+
+    // finalEquity = 50000 * (1 + 0.25) = 62500
+    expect(r.finalEquity).toBe(62500);
   });
 });

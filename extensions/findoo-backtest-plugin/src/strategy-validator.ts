@@ -1,7 +1,8 @@
 /**
- * FEP 1.0 strategy compliance validator.
+ * FEP 1.0/1.1 strategy compliance validator.
  *
- * Runs 11 checks across 5 dimensions (structure, interface, safety, yaml, data).
+ * Runs checks across 5 dimensions (structure, interface, safety, yaml, data).
+ * v1.1 supports compute(data) function-style interface alongside v1.0 class-based.
  * Pure filesystem + regex — no external dependencies.
  */
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -98,7 +99,7 @@ async function checkStructure(dir: string): Promise<ValidationIssue[]> {
         "structure",
         "scripts/strategy.py not found",
         "scripts/strategy.py",
-        "Create scripts/strategy.py with a Strategy class implementing execute()",
+        "Create scripts/strategy.py with compute(data) function (FEP v1.1) or Strategy class (FEP v1.0)",
       ),
     );
   }
@@ -140,34 +141,27 @@ async function checkInterface(dir: string): Promise<ValidationIssue[]> {
   const content = await readText(strategyPath);
   if (!content) return issues; // structure check already flagged missing file
 
-  // #5: class ...Strategy
-  if (!/class\s+\w+Strategy/.test(content)) {
+  // v1.1: def compute(data) — function-style interface
+  const hasCompute = /def\s+compute\s*\(\s*data\s*\)/.test(content);
+  // v1.0: class *Strategy + def execute(self, ...)
+  const hasClass = /class\s+\w+Strategy/.test(content);
+  const hasExecute = /def\s+execute\s*\(\s*self/.test(content);
+
+  if (!hasCompute && !(hasClass && hasExecute)) {
     issues.push(
       issue(
         "error",
         "interface",
-        "strategy.py must contain a class ending in 'Strategy' (e.g. class MomentumStrategy)",
+        "strategy.py must implement compute(data) function (FEP v1.1) " +
+          "or class *Strategy with execute() method (FEP v1.0)",
         "scripts/strategy.py",
-        "Define a class like: class MyStrategy(StrategyBase):",
+        "Add: def compute(data): ... (v1.1) or class MyStrategy with def execute(self, ...): (v1.0)",
       ),
     );
   }
 
-  // #6: def execute(self
-  if (!/def\s+execute\s*\(\s*self/.test(content)) {
-    issues.push(
-      issue(
-        "error",
-        "interface",
-        "Strategy class must implement execute(self, ...) method",
-        "scripts/strategy.py",
-        "Add: def execute(self, data, portfolio):",
-      ),
-    );
-  }
-
-  // #7: def record_trade(self
-  if (!/def\s+record_trade\s*\(\s*self/.test(content)) {
+  // record_trade is only relevant for v1.0 class-based strategies
+  if (hasClass && !hasCompute && !/def\s+record_trade\s*\(\s*self/.test(content)) {
     issues.push(
       issue(
         "warning",
@@ -239,11 +233,11 @@ async function checkYaml(dir: string): Promise<ValidationIssue[]> {
   if (!content) return issues; // structure check already flagged
 
   // #10: Section A (identity) and Section B (classification) present
-  // Support both heading style ("# Section A") and key style ("section_a:")
+  // Support heading style ("# Section A"), key style ("section_a:"),
+  // and v1.1 flat keys ("identity:", "technical:", "backtest:")
   const hasIdentity = /(?:^#\s*Section\s*A\b|^section_a\s*:|^identity\s*:)/im.test(content);
-  const hasClassification = /(?:^#\s*Section\s*B\b|^section_b\s*:|^classification\s*:)/im.test(
-    content,
-  );
+  const hasClassification =
+    /(?:^#\s*Section\s*B\b|^section_b\s*:|^classification\s*:|^technical\s*:)/im.test(content);
 
   if (!hasIdentity) {
     issues.push(
@@ -315,7 +309,7 @@ async function checkData(dir: string): Promise<ValidationIssue[]> {
 // ---------------------------------------------------------------------------
 
 /**
- * Validate a local strategy directory against the FEP 1.0 specification.
+ * Validate a local strategy directory against FEP 1.0/1.1 specification.
  * Returns a result with errors (must fix) and warnings (should fix).
  */
 export async function validateStrategy(dirPath: string): Promise<ValidationResult> {

@@ -1,18 +1,22 @@
 import type {
+  CancelResponse,
   HealthResponse,
   ListResponse,
   RemoteReport,
   RemoteTask,
-  SubmitRequest,
+  SubmitResponse,
   UploadParams,
-  UploadResponse,
 } from "./types.js";
 
 /**
- * Thin HTTP client for the Findoo Backtest Agent REST API.
+ * Thin HTTP client for the Findoo Backtest Agent REST API (v1.1).
  *
  * Base URL: `http://<host>:8000/api/v1`
- * All methods throw on non-2xx responses.
+ *
+ * Key v1.1 changes vs v1.0:
+ * - Submit = multipart POST /backtests (file + optional form fields)
+ * - Cancel = DELETE /backtests/{id}
+ * - No separate /backtests/upload endpoint
  */
 export class BacktestClient {
   private readonly base: string;
@@ -26,20 +30,35 @@ export class BacktestClient {
   }
 
   // ------------------------------------------------------------------
-  // Core CRUD
+  // Core operations
   // ------------------------------------------------------------------
 
-  /** POST /backtests — submit a new backtest task. */
-  async submit(req: SubmitRequest): Promise<RemoteTask> {
-    return this.post<RemoteTask>("/backtests", req);
+  /** POST /backtests — submit a backtest via multipart/form-data (ZIP upload). */
+  async submit(archive: Buffer, filename: string, params?: UploadParams): Promise<SubmitResponse> {
+    const form = new FormData();
+    form.append("file", new Blob([archive], { type: "application/zip" }), filename);
+
+    if (params) {
+      for (const [key, value] of Object.entries(params)) {
+        if (value != null) form.append(key, String(value));
+      }
+    }
+
+    const resp = await fetch(`${this.base}/backtests`, {
+      method: "POST",
+      headers: this.authHeaders(),
+      body: form,
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+    return this.handleResponse<SubmitResponse>(resp);
   }
 
-  /** GET /backtests/:id — get task status. */
+  /** GET /backtests/{id} — get task status. */
   async getTask(taskId: string): Promise<RemoteTask> {
     return this.get<RemoteTask>(`/backtests/${encodeURIComponent(taskId)}`);
   }
 
-  /** GET /backtests/:id/report — get completed report. */
+  /** GET /backtests/{id}/report — get completed report. */
   async getReport(taskId: string): Promise<RemoteReport> {
     return this.get<RemoteReport>(`/backtests/${encodeURIComponent(taskId)}/report`);
   }
@@ -49,43 +68,9 @@ export class BacktestClient {
     return this.get<ListResponse>(`/backtests?limit=${limit}&offset=${offset}`);
   }
 
-  /** POST /backtests/:id/cancel — cancel a queued task. */
-  async cancelTask(taskId: string): Promise<{ success: boolean }> {
-    return this.post<{ success: boolean }>(`/backtests/${encodeURIComponent(taskId)}/cancel`, {});
-  }
-
-  // ------------------------------------------------------------------
-  // Upload
-  // ------------------------------------------------------------------
-
-  /** POST /backtests/upload — upload a strategy archive and optionally submit. */
-  async uploadStrategy(
-    archiveBuffer: Buffer,
-    filename: string,
-    params?: UploadParams,
-  ): Promise<UploadResponse> {
-    const form = new FormData();
-    form.append("file", new Blob([archiveBuffer], { type: "application/zip" }), filename);
-
-    // Append optional backtest params as form fields
-    if (params) {
-      for (const [key, value] of Object.entries(params)) {
-        if (value != null) form.append(key, String(value));
-      }
-    }
-
-    const headers: Record<string, string> = {};
-    if (this.apiKey) {
-      headers["X-API-Key"] = this.apiKey;
-    }
-
-    const resp = await fetch(`${this.base}/backtests/upload`, {
-      method: "POST",
-      headers,
-      body: form,
-      signal: AbortSignal.timeout(this.timeoutMs),
-    });
-    return this.handleResponse<UploadResponse>(resp);
+  /** DELETE /backtests/{id} — cancel a queued/processing task. */
+  async cancelTask(taskId: string): Promise<CancelResponse> {
+    return this.delete<CancelResponse>(`/backtests/${encodeURIComponent(taskId)}`);
   }
 
   // ------------------------------------------------------------------
@@ -101,8 +86,18 @@ export class BacktestClient {
   // HTTP helpers
   // ------------------------------------------------------------------
 
-  private headers(): Record<string, string> {
-    const h: Record<string, string> = { "Content-Type": "application/json" };
+  /** Auth-only headers (no Content-Type — let FormData/fetch set it). */
+  private authHeaders(): Record<string, string> {
+    const h: Record<string, string> = {};
+    if (this.apiKey) {
+      h["X-API-Key"] = this.apiKey;
+    }
+    return h;
+  }
+
+  /** JSON-capable headers for GET requests. */
+  private jsonHeaders(): Record<string, string> {
+    const h: Record<string, string> = { Accept: "application/json" };
     if (this.apiKey) {
       h["X-API-Key"] = this.apiKey;
     }
@@ -112,17 +107,16 @@ export class BacktestClient {
   private async get<T>(path: string): Promise<T> {
     const resp = await fetch(`${this.base}${path}`, {
       method: "GET",
-      headers: this.headers(),
+      headers: this.jsonHeaders(),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     return this.handleResponse<T>(resp);
   }
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
+  private async delete<T>(path: string): Promise<T> {
     const resp = await fetch(`${this.base}${path}`, {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(body),
+      method: "DELETE",
+      headers: this.authHeaders(),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     return this.handleResponse<T>(resp);

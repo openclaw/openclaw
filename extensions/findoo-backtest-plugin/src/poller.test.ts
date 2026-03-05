@@ -2,36 +2,27 @@ import { describe, expect, it, vi } from "vitest";
 import { isTerminal, pollUntilDone } from "./poller.js";
 import type { RemoteReport, RemoteTask } from "./types.js";
 
-function makeTask(status: string, error?: string): RemoteTask {
+function makeTask(status: string, message?: string): RemoteTask {
   return {
     task_id: "t1",
     status: status as RemoteTask["status"],
-    engine: "script",
-    strategy_dir: "strats/test",
-    symbol: "BTC-USD",
-    initial_capital: 100000,
-    start_date: "2024-01-01",
-    end_date: "2024-12-31",
     created_at: "2024-01-01T00:00:00Z",
-    error,
+    message,
   };
 }
 
 const MOCK_REPORT: RemoteReport = {
   task_id: "t1",
-  result_summary: {
-    total_return: 0.15,
-    sharpe_ratio: 1.2,
-    sortino_ratio: 1.5,
-    max_drawdown: -0.08,
-    calmar_ratio: 1.88,
-    win_rate: 0.55,
-    profit_factor: 1.8,
-    total_trades: 42,
-    final_equity: 115000,
+  metadata: null,
+  performance: {
+    totalReturn: 0.15,
+    sharpeRatio: 1.2,
+    maxDrawdown: -0.08,
+    totalTrades: 42,
   },
-  trades: [],
+  alpha: null,
   equity_curve: [],
+  trade_journal: [],
 };
 
 function mockClient(taskSequence: RemoteTask[], report = MOCK_REPORT) {
@@ -39,7 +30,6 @@ function mockClient(taskSequence: RemoteTask[], report = MOCK_REPORT) {
   return {
     getTask: vi.fn(async () => taskSequence[Math.min(callIndex++, taskSequence.length - 1)]),
     getReport: vi.fn(async () => report),
-    // Unused but required for type
     submit: vi.fn(),
     listTasks: vi.fn(),
     cancelTask: vi.fn(),
@@ -48,15 +38,16 @@ function mockClient(taskSequence: RemoteTask[], report = MOCK_REPORT) {
 }
 
 describe("isTerminal", () => {
-  it("returns true for completed/failed/cancelled", () => {
+  it("returns true for completed/failed/rejected", () => {
     expect(isTerminal("completed")).toBe(true);
     expect(isTerminal("failed")).toBe(true);
-    expect(isTerminal("cancelled")).toBe(true);
+    expect(isTerminal("rejected")).toBe(true);
   });
 
-  it("returns false for queued/running", () => {
+  it("returns false for non-terminal statuses", () => {
     expect(isTerminal("queued")).toBe(false);
-    expect(isTerminal("running")).toBe(false);
+    expect(isTerminal("submitted")).toBe(false);
+    expect(isTerminal("processing")).toBe(false);
   });
 });
 
@@ -76,7 +67,7 @@ describe("pollUntilDone", () => {
   });
 
   it("polls until completed", async () => {
-    const client = mockClient([makeTask("queued"), makeTask("running"), makeTask("completed")]);
+    const client = mockClient([makeTask("queued"), makeTask("processing"), makeTask("completed")]);
 
     const result = await pollUntilDone(client as never, "t1", {
       intervalMs: 10,
@@ -95,22 +86,46 @@ describe("pollUntilDone", () => {
     ).rejects.toThrow("Backtest failed: Strategy crash");
   });
 
-  it("returns cancelled task without report", async () => {
-    const client = mockClient([makeTask("cancelled")]);
+  it("throws on rejected task", async () => {
+    const rejectedTask = makeTask("rejected");
+    rejectedTask.reject_reason = "Strategy contains unsafe imports";
+    const client = mockClient([rejectedTask]);
+
+    await expect(
+      pollUntilDone(client as never, "t1", { intervalMs: 10, timeoutMs: 5000 }),
+    ).rejects.toThrow("Backtest rejected: Strategy contains unsafe imports");
+    expect(client.getReport).not.toHaveBeenCalled();
+  });
+
+  it("throws on rejected task with fallback message field", async () => {
+    const rejectedTask = makeTask("rejected", "Policy violation");
+    const client = mockClient([rejectedTask]);
+
+    await expect(
+      pollUntilDone(client as never, "t1", { intervalMs: 10, timeoutMs: 5000 }),
+    ).rejects.toThrow("Backtest rejected: Policy violation");
+  });
+
+  it("transitions through multiple non-terminal statuses", async () => {
+    const client = mockClient([
+      makeTask("submitted"),
+      makeTask("queued"),
+      makeTask("processing"),
+      makeTask("completed"),
+    ]);
 
     const result = await pollUntilDone(client as never, "t1", {
       intervalMs: 10,
       timeoutMs: 5000,
     });
 
-    expect(result.task.status).toBe("cancelled");
-    expect(result.report).toBeUndefined();
-    expect(client.getReport).not.toHaveBeenCalled();
+    expect(result.task.status).toBe("completed");
+    expect(client.getTask).toHaveBeenCalledTimes(4);
+    expect(client.getReport).toHaveBeenCalledTimes(1);
   });
 
   it("throws on timeout", async () => {
-    // Always returns running — should timeout
-    const client = mockClient([makeTask("running")]);
+    const client = mockClient([makeTask("processing")]);
 
     await expect(
       pollUntilDone(client as never, "t1", { intervalMs: 10, timeoutMs: 50 }),

@@ -1,8 +1,8 @@
 /**
- * Remote Backtest Agent API types.
+ * Remote Backtest Agent API types — aligned with FEP v1.1.
  *
  * These mirror the Findoo Backtest Agent REST API at /api/v1/*.
- * All remote types use snake_case to match the API; local types use camelCase.
+ * v1.1 uses camelCase for result_summary/performance fields.
  */
 
 // ---------------------------------------------------------------------------
@@ -11,99 +11,82 @@
 
 export type EngineType = "script" | "agent";
 
+/** v1.1: no "running" or "cancelled" — uses "processing"; cancel → "failed". */
 export type TaskStatus =
   | "submitted"
+  | "rejected"
   | "queued"
-  | "running"
   | "processing"
   | "completed"
-  | "failed"
-  | "cancelled"
-  | "rejected";
+  | "failed";
 
 /** Terminal statuses — polling stops when the task reaches one of these. */
 export const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
   "completed",
   "failed",
-  "cancelled",
   "rejected",
 ]);
 
 // ---------------------------------------------------------------------------
-// Submit request
-// ---------------------------------------------------------------------------
-
-export interface SubmitRequest {
-  strategy_dir: string;
-  engine: EngineType;
-  symbol?: string;
-  initial_capital?: number;
-  start_date: string;
-  end_date: string;
-  csv_path?: string;
-  // L2 (agent) specific
-  budget_cap_usd?: number;
-  max_turns_per_period?: number;
-  agent_model?: string;
-  agent_mode?: string;
-  reflection_interval?: number;
-}
-
-// ---------------------------------------------------------------------------
-// Task (returned by POST /backtests, GET /backtests/:id)
+// Task (returned by POST /backtests, GET /backtests/{id})
 // ---------------------------------------------------------------------------
 
 export interface RemoteTask {
   task_id: string;
   status: TaskStatus;
-  engine: EngineType;
-  strategy_dir: string;
-  symbol: string;
-  initial_capital: number;
-  start_date: string;
-  end_date: string;
   created_at: string;
   updated_at?: string;
-  error?: string;
   message?: string;
-  reject_reason?: string;
+  reject_reason?: string | null;
   progress?: number | null;
+  /** Inline summary, only present when status === "completed". */
+  result_summary?: RemoteResultSummary | null;
 }
 
 // ---------------------------------------------------------------------------
-// Report (returned by GET /backtests/:id/report)
+// result_summary — camelCase, 4 core fields
 // ---------------------------------------------------------------------------
 
 export interface RemoteResultSummary {
-  total_return: number;
-  sharpe_ratio: number;
-  sortino_ratio: number;
-  max_drawdown: number;
-  calmar_ratio: number;
-  win_rate: number;
-  profit_factor: number;
-  total_trades: number;
-  final_equity: number;
-  // L2 may include extra fields
-  alpha?: number;
-  beta?: number;
-  information_ratio?: number;
+  totalReturn: number;
+  sharpeRatio: number;
+  maxDrawdown: number;
+  totalTrades: number;
 }
 
-export interface RemoteTrade {
-  entry_time: string;
-  exit_time: string;
-  symbol: string;
-  side: "long" | "short";
-  entry_price: number;
-  exit_price: number;
-  quantity: number;
-  commission: number;
-  slippage: number;
-  pnl: number;
-  pnl_pct: number;
-  reason: string;
-  exit_reason: string;
+// ---------------------------------------------------------------------------
+// Report (GET /backtests/{id}/report)
+// ---------------------------------------------------------------------------
+
+export interface RemoteReport {
+  task_id: string;
+  metadata: Record<string, unknown> | null;
+  performance: RemotePerformance | null;
+  alpha: Record<string, unknown> | null;
+  equity_curve: RemoteEquityPoint[];
+  trade_journal: RemoteTradeEntry[];
+}
+
+export interface RemotePerformance {
+  totalReturn: number;
+  sharpeRatio?: number;
+  maxDrawdown?: number;
+  totalTrades?: number;
+  sortinoRatio?: number;
+  calmarRatio?: number;
+  winRate?: number;
+  profitFactor?: number;
+  finalEquity?: number;
+  [key: string]: unknown;
+}
+
+export interface RemoteTradeEntry {
+  date: string;
+  action: "buy" | "sell" | "hold" | string;
+  amount?: number;
+  price?: number;
+  reason?: string;
+  [key: string]: unknown;
 }
 
 export interface RemoteEquityPoint {
@@ -111,13 +94,33 @@ export interface RemoteEquityPoint {
   equity: number;
 }
 
-export interface RemoteReport {
+// ---------------------------------------------------------------------------
+// Submit response (POST /backtests — multipart/form-data)
+// ---------------------------------------------------------------------------
+
+export interface SubmitResponse {
   task_id: string;
-  result_summary: RemoteResultSummary;
-  trades: RemoteTrade[];
-  equity_curve: RemoteEquityPoint[];
-  // Raw data from remote; may contain extra engine-specific fields
-  [key: string]: unknown;
+  status: string;
+  message?: string;
+}
+
+/** Optional parameters sent alongside the upload file. */
+export interface UploadParams {
+  symbol?: string;
+  initial_capital?: number;
+  start_date?: string;
+  end_date?: string;
+  engine?: EngineType;
+  budget_cap_usd?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Cancel response (DELETE /backtests/{id})
+// ---------------------------------------------------------------------------
+
+export interface CancelResponse {
+  task_id: string;
+  status: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,26 +145,6 @@ export interface HealthResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Upload response (POST /strategies/upload)
-// ---------------------------------------------------------------------------
-
-export interface UploadResponse {
-  task_id: string;
-  status: string;
-  message: string;
-}
-
-/** Optional parameters sent alongside the upload file. */
-export interface UploadParams {
-  symbol?: string;
-  initial_capital?: number;
-  start_date?: string;
-  end_date?: string;
-  engine?: EngineType;
-  budget_cap_usd?: number;
-}
-
-// ---------------------------------------------------------------------------
 // Strategy validation (local compliance check)
 // ---------------------------------------------------------------------------
 
@@ -170,7 +153,7 @@ export interface ValidationIssue {
   category: "structure" | "interface" | "safety" | "yaml" | "data";
   file?: string;
   message: string;
-  fix?: string; // suggested fix
+  fix?: string;
 }
 
 export interface ValidationResult {

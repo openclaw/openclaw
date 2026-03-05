@@ -30,17 +30,13 @@ export async function pollUntilDone(
 
     if (TERMINAL_STATUSES.has(task.status)) {
       if (task.status === "failed") {
-        throw new Error(`Backtest failed: ${task.message ?? task.error ?? "unknown error"}`);
+        throw new Error(`Backtest failed: ${task.message ?? "unknown error"}`);
       }
 
       if (task.status === "rejected") {
         throw new Error(
-          `Backtest rejected: ${task.reject_reason ?? task.error ?? "unknown reason"}`,
+          `Backtest rejected: ${task.reject_reason ?? task.message ?? "unknown reason"}`,
         );
-      }
-
-      if (task.status === "cancelled") {
-        return { task };
       }
 
       // completed — fetch report

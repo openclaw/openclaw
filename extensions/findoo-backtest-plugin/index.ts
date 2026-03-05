@@ -6,7 +6,7 @@ import { pollUntilDone } from "./src/poller.js";
 import { toBacktestResult } from "./src/result-mapper.js";
 import { packStrategy } from "./src/strategy-packer.js";
 import { validateStrategy } from "./src/strategy-validator.js";
-import type { RemoteReport, SubmitRequest } from "./src/types.js";
+import type { RemoteReport, SubmitResponse, UploadParams } from "./src/types.js";
 
 /* ---------- helpers ---------- */
 
@@ -16,20 +16,18 @@ const json = (payload: unknown) => ({
 });
 
 function formatSummary(r: RemoteReport): Record<string, unknown> {
-  const s = r.result_summary;
+  const p = r.performance;
   return {
     task_id: r.task_id,
-    total_return: `${(s.total_return * 100).toFixed(2)}%`,
-    sharpe: s.sharpe_ratio.toFixed(3),
-    sortino: s.sortino_ratio.toFixed(3),
-    max_drawdown: `${(s.max_drawdown * 100).toFixed(2)}%`,
-    calmar: s.calmar_ratio.toFixed(3),
-    win_rate: `${(s.win_rate * 100).toFixed(1)}%`,
-    profit_factor: s.profit_factor.toFixed(2),
-    total_trades: s.total_trades,
-    final_equity: s.final_equity.toFixed(2),
-    ...(s.alpha != null ? { alpha: s.alpha.toFixed(4) } : {}),
-    ...(s.beta != null ? { beta: s.beta.toFixed(4) } : {}),
+    total_return: p?.totalReturn != null ? `${(p.totalReturn * 100).toFixed(2)}%` : "N/A",
+    sharpe: p?.sharpeRatio?.toFixed(3) ?? "N/A",
+    max_drawdown: p?.maxDrawdown != null ? `${(p.maxDrawdown * 100).toFixed(2)}%` : "N/A",
+    total_trades: p?.totalTrades ?? 0,
+    ...(p?.sortinoRatio != null ? { sortino: p.sortinoRatio.toFixed(3) } : {}),
+    ...(p?.calmarRatio != null ? { calmar: p.calmarRatio.toFixed(3) } : {}),
+    ...(p?.winRate != null ? { win_rate: `${(p.winRate * 100).toFixed(1)}%` } : {}),
+    ...(p?.profitFactor != null ? { profit_factor: p.profitFactor.toFixed(2) } : {}),
+    ...(p?.finalEquity != null ? { final_equity: p.finalEquity.toFixed(2) } : {}),
   };
 }
 
@@ -39,7 +37,7 @@ const findooBacktestPlugin = {
   id: "findoo-backtest-plugin",
   name: "Findoo Backtest",
   description:
-    "Remote backtesting via Findoo Backtest Agent — " +
+    "Remote backtesting via Findoo Backtest Agent (FEP v1.1) — " +
     "L1 (script deterministic) and L2 (Agent+LLM intelligent) engines.",
   kind: "financial" as const,
 
@@ -56,10 +54,10 @@ const findooBacktestPlugin = {
     // ------------------------------------------------------------------
 
     const service = {
-      async submit(params: SubmitRequest, wait = true) {
-        const task = await client.submit(params);
-        if (!wait) return task;
-        return pollUntilDone(client, task.task_id, {
+      async submit(archive: Buffer, filename: string, params?: UploadParams, wait = true) {
+        const resp = await client.submit(archive, filename, params);
+        if (!wait) return resp;
+        return pollUntilDone(client, resp.task_id, {
           intervalMs: config.pollIntervalMs,
           timeoutMs: config.pollTimeoutMs,
         });
@@ -85,81 +83,91 @@ const findooBacktestPlugin = {
     // AI Tools (6 total)
     // ==================================================================
 
-    // === Tool 1: fin_backtest_remote_submit ===
+    // === Tool 1: fin_backtest_remote_submit (Upload ZIP & Submit) ===
     api.registerTool(
       {
         name: "fin_backtest_remote_submit",
-        label: "Remote Backtest — Submit",
+        label: "Remote Backtest — Upload & Submit",
         description:
-          "Submit a backtest to the remote Findoo Backtest Agent. " +
+          "Pack a local strategy directory into ZIP and submit to the remote Findoo Backtest Agent. " +
           "Supports L1 (script deterministic) and L2 (Agent+LLM intelligent) engines. " +
-          "By default waits for completion and returns the full report summary.",
+          "By default runs compliance check, then waits for completion and returns the report summary.",
         parameters: Type.Object({
-          strategy_dir: Type.String({
-            description: "Server-side strategy directory path",
+          strategy_path: Type.String({
+            description: "Local path to the strategy directory",
           }),
-          engine: Type.Unsafe<string>({
-            type: "string",
-            enum: ["script", "agent"],
-            description: "Backtest engine: 'script' (L1 deterministic) or 'agent' (L2 LLM-driven)",
-          }),
+          engine: Type.Optional(
+            Type.Unsafe<string>({
+              type: "string",
+              enum: ["script", "agent"],
+              description: "Backtest engine: 'script' (L1) or 'agent' (L2). Default: 'script'",
+            }),
+          ),
           symbol: Type.Optional(Type.String({ description: "Trading symbol (default: BTC-USD)" })),
           initial_capital: Type.Optional(
             Type.Number({ description: "Starting capital in USD (default: 100000)" }),
           ),
-          start_date: Type.String({ description: "Backtest start date (YYYY-MM-DD)" }),
-          end_date: Type.String({ description: "Backtest end date (YYYY-MM-DD)" }),
+          start_date: Type.Optional(
+            Type.String({ description: "Backtest start date (YYYY-MM-DD)" }),
+          ),
+          end_date: Type.Optional(Type.String({ description: "Backtest end date (YYYY-MM-DD)" })),
+          validate: Type.Optional(
+            Type.Boolean({ description: "Run compliance check before upload (default: true)" }),
+          ),
           wait: Type.Optional(
             Type.Boolean({ description: "Wait for completion and return report (default: true)" }),
           ),
-          csv_path: Type.Optional(
-            Type.String({ description: "Custom CSV data file path on server" }),
-          ),
-          // L2 agent-specific
           budget_cap_usd: Type.Optional(Type.Number({ description: "L2: Max LLM budget in USD" })),
-          max_turns_per_period: Type.Optional(
-            Type.Number({ description: "L2: Max agent turns per period" }),
-          ),
-          agent_model: Type.Optional(Type.String({ description: "L2: LLM model name for agent" })),
-          agent_mode: Type.Optional(Type.String({ description: "L2: Agent execution mode" })),
-          reflection_interval: Type.Optional(
-            Type.Number({ description: "L2: Periods between reflection steps" }),
-          ),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
-            const req: SubmitRequest = {
-              strategy_dir: String(params.strategy_dir),
-              engine: params.engine as "script" | "agent",
-              start_date: String(params.start_date),
-              end_date: String(params.end_date),
-            };
-            if (params.symbol) req.symbol = String(params.symbol);
-            if (params.initial_capital != null)
-              req.initial_capital = Number(params.initial_capital);
-            if (params.csv_path) req.csv_path = String(params.csv_path);
-            if (params.budget_cap_usd != null) req.budget_cap_usd = Number(params.budget_cap_usd);
-            if (params.max_turns_per_period != null)
-              req.max_turns_per_period = Number(params.max_turns_per_period);
-            if (params.agent_model) req.agent_model = String(params.agent_model);
-            if (params.agent_mode) req.agent_mode = String(params.agent_mode);
-            if (params.reflection_interval != null)
-              req.reflection_interval = Number(params.reflection_interval);
+            const dirPath = String(params.strategy_path);
+            const shouldValidate = params.validate !== false;
 
-            const wait = params.wait !== false; // default true
-            const task = await client.submit(req);
+            // Optional pre-upload validation
+            if (shouldValidate) {
+              const validation = await validateStrategy(dirPath);
+              if (!validation.valid) {
+                return json({
+                  success: false,
+                  message: `Compliance check failed: ${validation.errors.length} error(s)`,
+                  errors: validation.errors,
+                  warnings: validation.warnings,
+                });
+              }
+            }
+
+            // Pack into ZIP
+            const zipBuffer = await packStrategy(dirPath);
+            const archiveName = `strategy-${Date.now()}.zip`;
+
+            // Build upload params
+            const uploadParams: UploadParams = {};
+            if (params.engine) uploadParams.engine = params.engine as UploadParams["engine"];
+            if (params.symbol) uploadParams.symbol = String(params.symbol);
+            if (params.start_date) uploadParams.start_date = String(params.start_date);
+            if (params.end_date) uploadParams.end_date = String(params.end_date);
+            if (params.initial_capital != null)
+              uploadParams.initial_capital = Number(params.initial_capital);
+            if (params.budget_cap_usd != null)
+              uploadParams.budget_cap_usd = Number(params.budget_cap_usd);
+
+            // Submit (multipart upload)
+            const submitResp = await client.submit(zipBuffer, archiveName, uploadParams);
+            const wait = params.wait !== false;
 
             if (!wait) {
               return json({
                 success: true,
                 message: "Backtest submitted (async mode)",
-                task_id: task.task_id,
-                status: task.status,
+                task_id: submitResp.task_id,
+                status: submitResp.status,
+                archive_size: zipBuffer.length,
               });
             }
 
             // Synchronous: poll until done
-            const result = await pollUntilDone(client, task.task_id, {
+            const result = await pollUntilDone(client, submitResp.task_id, {
               intervalMs: config.pollIntervalMs,
               timeoutMs: config.pollTimeoutMs,
             });
@@ -167,7 +175,7 @@ const findooBacktestPlugin = {
             if (!result.report) {
               return json({
                 success: true,
-                task_id: task.task_id,
+                task_id: submitResp.task_id,
                 status: result.task.status,
                 message: "Task finished but no report available",
               });
@@ -176,8 +184,9 @@ const findooBacktestPlugin = {
             return json({
               success: true,
               ...formatSummary(result.report),
-              trades_count: result.report.trades?.length ?? 0,
+              trade_journal_count: result.report.trade_journal?.length ?? 0,
               equity_points: result.report.equity_curve?.length ?? 0,
+              archive_size: zipBuffer.length,
             });
           } catch (err) {
             return json({ error: err instanceof Error ? err.message : String(err) });
@@ -210,7 +219,7 @@ const findooBacktestPlugin = {
               return json({
                 ...task,
                 report_summary: formatSummary(report),
-                trades_count: report.trades?.length ?? 0,
+                trade_journal_count: report.trade_journal?.length ?? 0,
               });
             }
 
@@ -245,9 +254,8 @@ const findooBacktestPlugin = {
               tasks: result.tasks.map((t) => ({
                 task_id: t.task_id,
                 status: t.status,
-                engine: t.engine,
-                symbol: t.symbol,
                 created_at: t.created_at,
+                progress: t.progress,
               })),
             });
           } catch (err) {
@@ -263,7 +271,7 @@ const findooBacktestPlugin = {
       {
         name: "fin_backtest_remote_cancel",
         label: "Remote Backtest — Cancel",
-        description: "Cancel a queued or running remote backtest task.",
+        description: "Cancel a queued or processing remote backtest task (sends DELETE).",
         parameters: Type.Object({
           task_id: Type.String({ description: "Backtest task ID to cancel" }),
         }),
@@ -272,9 +280,10 @@ const findooBacktestPlugin = {
             const taskId = String(params.task_id);
             const result = await client.cancelTask(taskId);
             return json({
-              success: result.success,
-              task_id: taskId,
-              message: result.success ? "Task cancelled" : "Cancel request sent",
+              success: true,
+              task_id: result.task_id,
+              status: result.status,
+              message: "Cancel request sent",
             });
           } catch (err) {
             return json({ error: err instanceof Error ? err.message : String(err) });
@@ -290,8 +299,8 @@ const findooBacktestPlugin = {
         name: "fin_backtest_strategy_check",
         label: "Strategy — Compliance Check",
         description:
-          "Validate a local strategy directory against FEP 1.0 specification. " +
-          "Checks structure (fep.yaml, strategy.py), Python interface (Strategy class, execute method), " +
+          "Validate a local strategy directory against FEP 1.0/1.1 specification. " +
+          "Checks structure (fep.yaml, strategy.py), Python interface (compute(data) or Strategy class), " +
           "safety (no dangerous imports), YAML sections, and data consistency. " +
           "Run this before uploading to catch issues early.",
         parameters: Type.Object({
@@ -322,16 +331,15 @@ const findooBacktestPlugin = {
       { names: ["fin_backtest_strategy_check"] },
     );
 
-    // === Tool 6: fin_backtest_remote_upload ===
+    // === Tool 6: fin_backtest_remote_upload (alias for submit) ===
     api.registerTool(
       {
         name: "fin_backtest_remote_upload",
         label: "Remote Backtest — Upload & Submit",
         description:
+          "Alias for fin_backtest_remote_submit. " +
           "Pack a local strategy directory into ZIP, upload to the remote Findoo Backtest Agent, " +
-          "and optionally submit a backtest in one step. " +
-          "By default runs compliance check before uploading. " +
-          "Returns task_id if backtest params are provided, or upload confirmation otherwise.",
+          "and optionally submit a backtest in one step.",
         parameters: Type.Object({
           strategy_path: Type.String({
             description: "Local path to the strategy directory",
@@ -344,7 +352,6 @@ const findooBacktestPlugin = {
               description: "Custom archive filename (default: strategy-<timestamp>.zip)",
             }),
           ),
-          // Optional: submit backtest together with upload
           engine: Type.Optional(
             Type.Unsafe<string>({
               type: "string",
@@ -370,7 +377,6 @@ const findooBacktestPlugin = {
             const dirPath = String(params.strategy_path);
             const shouldValidate = params.validate !== false;
 
-            // Optional pre-upload validation
             if (shouldValidate) {
               const validation = await validateStrategy(dirPath);
               if (!validation.valid) {
@@ -384,14 +390,14 @@ const findooBacktestPlugin = {
             }
 
             // Pack
-            const tarBuffer = await packStrategy(dirPath);
+            const zipBuffer = await packStrategy(dirPath);
             const archiveName = params.archive_name
               ? String(params.archive_name)
               : `strategy-${Date.now()}.zip`;
 
-            // Build optional upload params
-            const uploadParams: Record<string, string | number> = {};
-            if (params.engine) uploadParams.engine = String(params.engine);
+            // Build upload params
+            const uploadParams: UploadParams = {};
+            if (params.engine) uploadParams.engine = params.engine as UploadParams["engine"];
             if (params.symbol) uploadParams.symbol = String(params.symbol);
             if (params.start_date) uploadParams.start_date = String(params.start_date);
             if (params.end_date) uploadParams.end_date = String(params.end_date);
@@ -400,24 +406,24 @@ const findooBacktestPlugin = {
             if (params.budget_cap_usd != null)
               uploadParams.budget_cap_usd = Number(params.budget_cap_usd);
 
-            // Upload (+ optional submit)
-            const uploadResult = await client.uploadStrategy(
-              tarBuffer,
+            // Upload (multipart POST /backtests)
+            const submitResp = await client.submit(
+              zipBuffer,
               archiveName,
               Object.keys(uploadParams).length > 0 ? uploadParams : undefined,
             );
 
             const result: Record<string, unknown> = {
               success: true,
-              task_id: uploadResult.task_id,
-              status: uploadResult.status,
-              archive_size: tarBuffer.length,
-              message: uploadResult.message,
+              task_id: submitResp.task_id,
+              status: submitResp.status,
+              archive_size: zipBuffer.length,
+              message: submitResp.message ?? "Upload successful",
             };
 
             // If engine was specified and wait is requested, poll for completion
             if (params.engine && params.wait !== false) {
-              const pollResult = await pollUntilDone(client, uploadResult.task_id, {
+              const pollResult = await pollUntilDone(client, submitResp.task_id, {
                 intervalMs: config.pollIntervalMs,
                 timeoutMs: config.pollTimeoutMs,
               });
@@ -425,7 +431,7 @@ const findooBacktestPlugin = {
               if (pollResult.report) {
                 Object.assign(result, {
                   ...formatSummary(pollResult.report),
-                  trades_count: pollResult.report.trades?.length ?? 0,
+                  trade_journal_count: pollResult.report.trade_journal?.length ?? 0,
                   equity_points: pollResult.report.equity_curve?.length ?? 0,
                 });
               } else {
