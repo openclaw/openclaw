@@ -29,7 +29,9 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   // bundled into dist with a hashed filename (pi-embedded-*.js).
   try {
     // 1) Preferred: dist/agents path if present.
-    const mod = await import("../../../dist/agents/pi-embedded-runner.js");
+    // Use a computed import URL so TypeScript does not try to resolve this path in source builds.
+    const agentRunnerUrl = new URL("../../../dist/agents/pi-embedded-runner.js", import.meta.url).toString();
+    const mod = await import(agentRunnerUrl);
     // oxlint-disable-next-line typescript/no-explicit-any
     const fn = (mod as any).runEmbeddedPiAgent;
     if (typeof fn === "function") {
