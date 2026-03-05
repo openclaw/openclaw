@@ -146,6 +146,14 @@ function extractChatIdentifierFromChatGuid(chatGuid: string): string | null {
   return identifier ? identifier : null;
 }
 
+function extractServiceFromChatGuid(chatGuid: string): "imessage" | "sms" | "auto" {
+  const service = chatGuid.split(";")[0]?.trim().toLowerCase();
+  if (service === "imessage" || service === "sms") {
+    return service;
+  }
+  return "auto";
+}
+
 function extractParticipantAddresses(chat: BlueBubblesChatRecord): string[] {
   const raw =
     (Array.isArray(chat.participants) ? chat.participants : null) ??
@@ -220,6 +228,8 @@ export async function resolveChatGuidForTarget(params: {
 
   const normalizedHandle =
     params.target.kind === "handle" ? normalizeBlueBubblesHandle(params.target.address) : "";
+  const targetService =
+    params.target.kind === "handle" ? (params.target.service ?? "auto") : "auto";
   const targetChatId = params.target.kind === "chat_id" ? params.target.chatId : null;
   const targetChatIdentifier =
     params.target.kind === "chat_identifier" ? params.target.chatIdentifier : null;
@@ -276,14 +286,22 @@ export async function resolveChatGuidForTarget(params: {
         const guid = extractChatGuid(chat);
         const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
         if (directHandle && directHandle === normalizedHandle) {
-          return guid;
+          if (!guid) {
+            continue;
+          }
+          if (targetService === "auto" || extractServiceFromChatGuid(guid) === targetService) {
+            return guid;
+          }
+          continue;
         }
         if (!participantMatch && guid) {
           // Only consider DM chats (`;-;` separator) as participant matches.
           // Group chats (`;+;` separator) should never match when searching by handle/phone.
           // This prevents routing "send to +1234567890" to a group chat that contains that number.
           const isDmChat = guid.includes(";-;");
-          if (isDmChat) {
+          const serviceMatches =
+            targetService === "auto" || extractServiceFromChatGuid(guid) === targetService;
+          if (isDmChat && serviceMatches) {
             const participants = extractParticipantAddresses(chat).map((entry) =>
               normalizeBlueBubblesHandle(entry),
             );

@@ -191,6 +191,38 @@ describe("send", () => {
       expect(result).toBe("iMessage;-;+15551234567");
     });
 
+    it("respects requested service when both SMS and iMessage chats exist", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: [
+              {
+                guid: "SMS;-;+15551234567",
+                participants: [{ address: "+15551234567" }],
+              },
+              {
+                guid: "iMessage;-;+15551234567",
+                participants: [{ address: "+15551234567" }],
+              },
+            ],
+          }),
+      });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+15551234567",
+        service: "imessage",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      expect(result).toBe("iMessage;-;+15551234567");
+    });
+
     it("prefers direct chat guid when handle also appears in a group chat", async () => {
       const result = await resolveHandleTargetGuid([
         {

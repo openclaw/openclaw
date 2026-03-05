@@ -147,6 +147,14 @@ export function extractHandleFromChatGuid(chatGuid: string): string | null {
   return null;
 }
 
+function extractServiceFromChatGuid(chatGuid: string): BlueBubblesService | null {
+  const service = chatGuid.split(";")[0]?.trim().toLowerCase();
+  if (service === "imessage" || service === "sms") {
+    return service;
+  }
+  return null;
+}
+
 export function normalizeBlueBubblesMessagingTarget(raw: string): string | undefined {
   let trimmed = raw.trim();
   if (!trimmed) {
@@ -166,7 +174,8 @@ export function normalizeBlueBubblesMessagingTarget(raw: string): string | undef
       // This allows "chat_guid:iMessage;-;+1234567890" to match "+1234567890".
       const handle = extractHandleFromChatGuid(parsed.chatGuid);
       if (handle) {
-        return handle;
+        const service = extractServiceFromChatGuid(parsed.chatGuid);
+        return service ? `${service}:${handle}` : handle;
       }
       // For group chats or unrecognized formats, keep the full chat_guid
       return `chat_guid:${parsed.chatGuid}`;
