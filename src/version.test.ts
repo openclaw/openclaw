@@ -75,6 +75,17 @@ describe("version resolution", () => {
     });
   });
 
+  it("prefers build-info version when package metadata uses dev placeholder", async () => {
+    await withTempDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw", version: "dev" });
+      await writeJsonFixture(root, "build-info.json", { version: "2026.3.2" });
+      const moduleUrl = await ensureModuleFixture(root);
+      expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBe("dev");
+      expect(readVersionFromBuildInfoForModuleUrl(moduleUrl)).toBe("2026.3.2");
+      expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("2026.3.2");
+    });
+  });
+
   it("returns null when no version metadata exists", async () => {
     await withTempDir(async (root) => {
       const moduleUrl = await ensureModuleFixture(root);

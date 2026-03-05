@@ -15,6 +15,7 @@ const BUILD_INFO_CANDIDATES = [
   "../../build-info.json",
   "./build-info.json",
 ] as const;
+const DEV_VERSION_PLACEHOLDER = "dev";
 
 function readVersionFromJsonCandidates(
   moduleUrl: string,
@@ -65,10 +66,16 @@ export function readVersionFromBuildInfoForModuleUrl(moduleUrl: string): string 
 }
 
 export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
-  return (
-    readVersionFromPackageJsonForModuleUrl(moduleUrl) ||
-    readVersionFromBuildInfoForModuleUrl(moduleUrl)
-  );
+  const packageVersion = readVersionFromPackageJsonForModuleUrl(moduleUrl);
+  const buildInfoVersion = readVersionFromBuildInfoForModuleUrl(moduleUrl);
+  // Homebrew and other wrappers can stamp package.json as "dev"; prefer build metadata when present.
+  if (
+    packageVersion?.trim().toLowerCase() === DEV_VERSION_PLACEHOLDER &&
+    buildInfoVersion?.trim()
+  ) {
+    return buildInfoVersion;
+  }
+  return packageVersion || buildInfoVersion;
 }
 
 export function resolveBinaryVersion(params: {
