@@ -58,6 +58,18 @@ describe("config discord", () => {
     );
   });
 
+  it("accepts discord agentComponents config", () => {
+    const res = validateConfigObject({
+      channels: {
+        discord: {
+          agentComponents: { enabled: false },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects numeric discord allowlist entries", () => {
     const res = validateConfigObject({
       channels: {
