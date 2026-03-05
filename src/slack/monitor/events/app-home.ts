@@ -1,7 +1,6 @@
+import { resolveUserTimezone } from "../../../agents/date-time.js";
 import type { AgentConfig } from "../../../config/types.agents.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { SlackMonitorContext } from "../context.js";
-import { resolveUserTimezone } from "../../../agents/date-time.js";
 import { danger, logVerbose } from "../../../globals.js";
 import { VERSION } from "../../../version.js";
 import {
@@ -13,6 +12,7 @@ import {
   markPublishInFlight,
 } from "../../home-tab-state.js";
 import { buildDefaultHomeView, type HomeTabParams } from "../../home-tab.js";
+import type { SlackMonitorContext } from "../context.js";
 
 /** Returns process uptime in milliseconds, consistent with gateway health state. */
 function processUptimeMs(): number {
@@ -33,8 +33,8 @@ export function resolveAgentModelDisplay(
     return typeof agentModel === "string" ? agentModel : (agentModel.primary ?? "—");
   }
   const defaultsModel = cfg.agents?.defaults?.model;
-  if (defaultsModel?.primary) {
-    return defaultsModel.primary;
+  if (defaultsModel) {
+    return typeof defaultsModel === "string" ? defaultsModel : (defaultsModel.primary ?? "—");
   }
   return "—";
 }
