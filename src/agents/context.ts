@@ -86,18 +86,26 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const provider of Object.values(providers)) {
+  for (const [providerNameRaw, provider] of Object.entries(providers)) {
     if (!Array.isArray(provider?.models)) {
       continue;
     }
+    const providerName = providerNameRaw.trim().toLowerCase();
     for (const model of provider.models) {
-      const modelId = typeof model?.id === "string" ? model.id : undefined;
+      const modelId = typeof model?.id === "string" ? model.id.trim() : undefined;
       const contextWindow =
         typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
       if (!modelId || !contextWindow || contextWindow <= 0) {
         continue;
       }
       params.cache.set(modelId, contextWindow);
+
+      // Config entries are often declared as bare ids under models.providers.<provider>.
+      // Mirror those onto provider-qualified keys so provider-aware lookups still
+      // honor explicit config overrides ahead of discovered defaults.
+      if (providerName && !modelId.includes("/")) {
+        params.cache.set(`${providerName}/${modelId}`, contextWindow);
+      }
     }
   }
 }

@@ -62,6 +62,23 @@ describe("applyConfiguredContextWindows", () => {
     expect(cache.get("custom/model")).toBe(150_000);
     expect(cache.has("bad/model")).toBe(false);
   });
+
+  it("mirrors bare model ids to provider-qualified keys for provider-aware lookups", () => {
+    const cache = new Map<string, number>();
+    applyConfiguredContextWindows({
+      cache,
+      modelsConfig: {
+        providers: {
+          customprovider: {
+            models: [{ id: "llama-3.1-8b", contextWindow: 131_072 }],
+          },
+        },
+      },
+    });
+
+    expect(cache.get("llama-3.1-8b")).toBe(131_072);
+    expect(cache.get("customprovider/llama-3.1-8b")).toBe(131_072);
+  });
 });
 
 describe("createSessionManagerRuntimeRegistry", () => {

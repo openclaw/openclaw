@@ -76,6 +76,44 @@ describe("lookupContextTokens", () => {
     ).toBe(200_000);
   });
 
+  it("prefers configured bare-id overrides over discovered provider-qualified windows", async () => {
+    vi.doMock("../config/config.js", () => ({
+      loadConfig: () => ({
+        models: {
+          providers: {
+            customprovider: {
+              models: [{ id: "llama-3.1-8b", contextWindow: 131_072 }],
+            },
+          },
+        },
+      }),
+    }));
+    vi.doMock("./models-config.js", () => ({
+      ensureOpenClawModelsJson: vi.fn(async () => {}),
+    }));
+    vi.doMock("./agent-paths.js", () => ({
+      resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
+    }));
+    vi.doMock("./pi-model-discovery.js", () => ({
+      discoverAuthStorage: vi.fn(() => ({})),
+      discoverModels: vi.fn(() => ({
+        getAll: () => [{ provider: "customprovider", id: "llama-3.1-8b", contextWindow: 8_192 }],
+      })),
+    }));
+
+    const { resolveContextTokensForModel } = await import("./context.js");
+
+    await vi.waitFor(() => {
+      expect(
+        resolveContextTokensForModel({
+          provider: "customprovider",
+          model: "llama-3.1-8b",
+          fallbackContextTokens: 4_096,
+        }),
+      ).toBe(131_072);
+    });
+  });
+
   it("does not skip eager warmup when --profile is followed by -- terminator", async () => {
     const loadConfigMock = vi.fn(() => ({ models: {} }));
     vi.doMock("../config/config.js", () => ({
