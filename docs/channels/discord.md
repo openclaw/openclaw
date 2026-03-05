@@ -685,6 +685,71 @@ Default slash command settings:
 
   </Accordion>
 
+  <Accordion title="Persistent ACP channel bindings">
+    For stable "always-on" ACP workspaces, configure top-level typed ACP bindings targeting Discord conversations.
+
+    Config path:
+
+    - `bindings[]` with `type: "acp"` and `match.channel: "discord"`
+
+    Example:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "codex",
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "codex",
+            backend: "acpx",
+            mode: "persistent",
+            cwd: "/workspace/openclaw",
+          },
+        },
+      },
+    ],
+  },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "channel", id: "222222222222222222" },
+      },
+      acp: { label: "codex-main" },
+    },
+  ],
+  channels: {
+    discord: {
+      guilds: {
+        "111111111111111111": {
+          channels: {
+            "222222222222222222": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+    Notes:
+
+    - Thread messages can inherit the parent channel ACP binding.
+    - In a bound channel or thread, `/new` and `/reset` reset the same ACP session in place.
+    - Temporary thread bindings still work and can override target resolution while active.
+
+    See [ACP Agents](/tools/acp-agents) for binding behavior details.
+
+  </Accordion>
+
   <Accordion title="Reaction notifications">
     Per-guild reaction notification mode:
 
@@ -1120,7 +1185,7 @@ High-signal Discord fields:
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`
 - UI: `ui.components.accentColor`
-- features: `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
+- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
 
 ## Safety and operations
 
