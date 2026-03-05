@@ -12,6 +12,8 @@ export type DaemonActionResponse = {
   error?: string;
   hints?: string[];
   warnings?: string[];
+  // TODO(remove-migration-notice): Remove after 2 releases.
+  notice?: string;
   service?: {
     label: string;
     loaded: boolean;
