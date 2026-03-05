@@ -283,9 +283,80 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.apiKey).toBe("BSA-plain");
   });
 
-  it("exports all 5 providers in SEARCH_PROVIDER_OPTIONS", () => {
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(5);
+  it("exports all 6 providers in SEARCH_PROVIDER_OPTIONS", () => {
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(6);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity"]);
+    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity", "querit"]);
+  });
+
+  it("sets provider and key for querit", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "querit",
+      textValue: "querit-sk-test",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("querit");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.querit?.apiKey).toBe("querit-sk-test");
+  });
+
+  it("shows missing-key note for querit when no key and no env var", async () => {
+    const original = process.env.QUERIT_API_KEY;
+    delete process.env.QUERIT_API_KEY;
+    try {
+      const cfg: OpenClawConfig = {};
+      const { prompter, notes } = createPrompter({
+        selectValue: "querit",
+        textValue: "",
+      });
+      const result = await setupSearch(cfg, runtime, prompter);
+      expect(result.tools?.web?.search?.provider).toBe("querit");
+      expect(result.tools?.web?.search?.enabled).toBeUndefined();
+      const missingNote = notes.find((n) => n.message.includes("No API key stored"));
+      expect(missingNote).toBeDefined();
+    } finally {
+      if (original === undefined) {
+        delete process.env.QUERIT_API_KEY;
+      } else {
+        process.env.QUERIT_API_KEY = original;
+      }
+    }
+  });
+
+  it("quickstart skips key prompt for querit when env var is available", async () => {
+    const orig = process.env.QUERIT_API_KEY;
+    process.env.QUERIT_API_KEY = "env-querit-key"; // pragma: allowlist secret
+    try {
+      const cfg: OpenClawConfig = {};
+      const { prompter } = createPrompter({ selectValue: "querit" });
+      const result = await setupSearch(cfg, runtime, prompter, {
+        quickstartDefaults: true,
+      });
+      expect(result.tools?.web?.search?.provider).toBe("querit");
+      expect(result.tools?.web?.search?.enabled).toBe(true);
+      expect(prompter.text).not.toHaveBeenCalled();
+    } finally {
+      if (orig === undefined) {
+        delete process.env.QUERIT_API_KEY;
+      } else {
+        process.env.QUERIT_API_KEY = orig;
+      }
+    }
+  });
+
+  it("stores env-backed SecretRef when secretInputMode=ref for querit", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({ selectValue: "querit" });
+    const result = await setupSearch(cfg, runtime, prompter, {
+      secretInputMode: "ref", // pragma: allowlist secret
+    });
+    expect(result.tools?.web?.search?.provider).toBe("querit");
+    expect(result.tools?.web?.search?.querit?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "QUERIT_API_KEY",
+    });
+    expect(prompter.text).not.toHaveBeenCalled();
   });
 });

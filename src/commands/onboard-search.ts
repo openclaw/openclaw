@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "querit";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -62,6 +62,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     placeholder: "pplx-...",
     signupUrl: "https://www.perplexity.ai/settings/api",
   },
+  {
+    value: "querit",
+    label: "Querit Search",
+    hint: "Structured results",
+    envKeys: ["QUERIT_API_KEY"],
+    placeholder: "querit-sk-...",
+    signupUrl: "https://www.querit.ai",
+  },
 ] as const;
 
 export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
@@ -81,6 +89,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
       return search?.kimi?.apiKey;
     case "perplexity":
       return search?.perplexity?.apiKey;
+    case "querit":
+      return search?.querit?.apiKey;
   }
 }
 
@@ -143,6 +153,9 @@ export function applySearchKey(
       break;
     case "perplexity":
       search.perplexity = { ...search.perplexity, apiKey: key };
+      break;
+    case "querit":
+      search.querit = { ...search.querit, apiKey: key as string };
       break;
   }
   return {
