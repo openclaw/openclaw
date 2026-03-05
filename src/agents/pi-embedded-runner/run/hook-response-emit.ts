@@ -22,6 +22,10 @@ export interface ApplyBeforeResponseEmitParams {
   assistantTexts: string[];
   messagesSnapshot: AgentMessage[];
   activeSession: { messages: AgentMessage[] };
+  /** Number of messages in activeSession before this run started. Used to scope
+   *  block/rewrite operations to only current-run assistant messages so that
+   *  previously-delivered history is never corrupted. */
+  preRunMessageCount?: number;
   channel?: string;
 }
 
@@ -81,7 +85,15 @@ export function extractAssistantText(msg: AgentMessage): string {
 export async function applyBeforeResponseEmitHook(
   params: ApplyBeforeResponseEmitParams,
 ): Promise<ApplyBeforeResponseEmitResult | undefined> {
-  const { hookRunner, agentCtx, assistantTexts, messagesSnapshot, activeSession, channel } = params;
+  const {
+    hookRunner,
+    agentCtx,
+    assistantTexts,
+    messagesSnapshot,
+    activeSession,
+    preRunMessageCount,
+    channel,
+  } = params;
 
   // Find last assistant message
   const lastAssistantMsg = [...messagesSnapshot].toReversed().find((m) => m.role === "assistant");
@@ -104,11 +116,18 @@ export async function applyBeforeResponseEmitHook(
     agentCtx,
   );
 
+  // Slice to only current-run messages so we never corrupt prior history.
+  const runMessages =
+    preRunMessageCount !== undefined
+      ? activeSession.messages.slice(preRunMessageCount)
+      : activeSession.messages;
+
   if (emitResult?.block) {
     log.warn(`response blocked: ${emitResult.blockReason ?? "no reason"}`);
-    // Clear blocked content from session history so it doesn't leak to
-    // subsequent turns or session persistence.
-    clearAllAssistantContent(activeSession.messages);
+    // Clear blocked content from current-run session history only so it
+    // doesn't leak to subsequent turns or session persistence. Prior turns
+    // that were already delivered are left intact.
+    clearAllAssistantContent(runMessages);
     return { blocked: true };
   }
 
@@ -117,7 +136,7 @@ export async function applyBeforeResponseEmitHook(
     log.debug(
       `applying allContent modification (${emitResult.allContent.length} entries, original ${assistantTexts.length})`,
     );
-    rewriteAllAssistantContent(activeSession.messages, emitResult.allContent);
+    rewriteAllAssistantContent(runMessages, emitResult.allContent);
     return { blocked: false, allContent: emitResult.allContent };
   }
 
@@ -130,8 +149,8 @@ export async function applyBeforeResponseEmitHook(
 
   // Update session messages for consistency with the delivery pipeline.
   // We update in-place because activeSession.messages is a mutable array
-  // shared with the session persistence layer.
-  rewriteLastAssistantContent(activeSession.messages, emitResult.content);
+  // shared with the session persistence layer. Scoped to run messages only.
+  rewriteLastAssistantContent(runMessages, emitResult.content);
 
   return { blocked: false, content: emitResult.content };
 }

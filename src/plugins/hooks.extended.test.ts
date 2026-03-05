@@ -303,6 +303,7 @@ describe("after_llm_call hook", () => {
 describe("before_response_emit hook", () => {
   const baseEvent: PluginHookBeforeResponseEmitEvent = {
     content: "Here is the answer.",
+    allContent: ["Here is the answer."],
     channel: "discord",
     messageCount: 5,
   };

@@ -201,10 +201,12 @@ describe("applyBeforeResponseEmitHook", () => {
     expect(result).toBeUndefined();
   });
 
-  it("clears ALL assistant content on block (multi-turn)", async () => {
+  it("clears current-run assistant content on block (multi-turn)", async () => {
     const hookRunner = makeMockHookRunner({ block: true, blockReason: "PII detected" });
     const activeSession = {
       messages: [
+        makeMsg("assistant", "prior history - safe"),
+        makeMsg("user", "new question"),
         makeMsg("assistant", "turn 1 with SSN 123-45-6789"),
         makeMsg("user", "continue"),
         makeMsg("assistant", "turn 2 with SSN 123-45-6789"),
@@ -217,11 +219,16 @@ describe("applyBeforeResponseEmitHook", () => {
       assistantTexts: ["turn 1 with SSN 123-45-6789", "turn 2 with SSN 123-45-6789"],
       messagesSnapshot: activeSession.messages.slice(),
       activeSession,
+      preRunMessageCount: 2, // 2 messages existed before run (prior history + new question)
     });
 
-    // ALL assistant messages must be cleared, not just the last
-    expect((activeSession.messages[0] as { content: unknown }).content).toBe("");
+    // Prior history must be preserved
+    expect((activeSession.messages[0] as { content: unknown }).content).toBe(
+      "prior history - safe",
+    );
+    // Current-run assistant messages must be cleared
     expect((activeSession.messages[2] as { content: unknown }).content).toBe("");
+    expect((activeSession.messages[4] as { content: unknown }).content).toBe("");
   });
 
   it("clears all text parts in multi-part messages on block", async () => {
@@ -334,12 +341,14 @@ describe("applyBeforeResponseEmitHook", () => {
     expect(callArgs[0].content).toBe("turn 3");
   });
 
-  it("applies allContent multi-turn modification", async () => {
+  it("applies allContent multi-turn modification scoped to current run", async () => {
     const hookRunner = makeMockHookRunner({
       allContent: ["[REDACTED turn 1]", "[REDACTED turn 2]"],
     });
     const activeSession = {
       messages: [
+        makeMsg("assistant", "old safe history"),
+        makeMsg("user", "new question"),
         makeMsg("assistant", "PII in turn 1"),
         makeMsg("user", "continue"),
         makeMsg("assistant", "PII in turn 2"),
@@ -352,15 +361,18 @@ describe("applyBeforeResponseEmitHook", () => {
       assistantTexts: ["PII in turn 1", "PII in turn 2"],
       messagesSnapshot: activeSession.messages.slice(),
       activeSession,
+      preRunMessageCount: 2,
     });
 
     expect(result).toEqual({
       blocked: false,
       allContent: ["[REDACTED turn 1]", "[REDACTED turn 2]"],
     });
-    // Both assistant messages in session should be rewritten
-    expect((activeSession.messages[0] as { content: unknown }).content).toBe("[REDACTED turn 1]");
-    expect((activeSession.messages[2] as { content: unknown }).content).toBe("[REDACTED turn 2]");
+    // Prior history preserved
+    expect((activeSession.messages[0] as { content: unknown }).content).toBe("old safe history");
+    // Current-run assistant messages rewritten
+    expect((activeSession.messages[2] as { content: unknown }).content).toBe("[REDACTED turn 1]");
+    expect((activeSession.messages[4] as { content: unknown }).content).toBe("[REDACTED turn 2]");
   });
 
   it("allContent takes precedence over content", async () => {

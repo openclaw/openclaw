@@ -128,7 +128,7 @@ function getHooksForName<K extends PluginHookName>(
   registry: PluginRegistry,
   hookName: K,
 ): PluginHookRegistration<K>[] {
-  // Hooks sorted by priority (higher first), then priority order (higher first), then registration order (FIFO).
+  // Hooks sorted by priority (higher first), then registration order (FIFO) within the same priority.
   // Plugins register during loadGatewayPlugins, then bundled hooks register
   // during loadInternalHooks, so at equal priority plugin handlers naturally
   // run before bundled handlers.
