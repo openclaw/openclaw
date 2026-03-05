@@ -346,6 +346,52 @@ export async function resolveGatewayConnection(
   const defaults = config.secrets?.defaults;
   const hasConfiguredToken = hasConfiguredSecretInput(config.gateway?.auth?.token, defaults);
   const hasConfiguredPassword = hasConfiguredSecretInput(config.gateway?.auth?.password, defaults);
+  if (gatewayAuthMode === "password") {
+    const localPassword =
+      explicitAuth.password || envPassword
+        ? { value: explicitAuth.password ?? envPassword }
+        : await resolveConfiguredSecretInputString({
+            value: config.gateway?.auth?.password,
+            path: "gateway.auth.password",
+            env,
+            config,
+          });
+    const password = explicitAuth.password ?? envPassword ?? localPassword.value;
+    if (!password) {
+      throwGatewayAuthResolutionError(
+        localPassword.unresolvedRefReason ?? "Missing gateway auth password.",
+      );
+    }
+    return {
+      url,
+      token: explicitAuth.token ?? envToken,
+      password,
+    };
+  }
+
+  if (gatewayAuthMode === "token") {
+    const localToken =
+      explicitAuth.token || envToken
+        ? { value: explicitAuth.token ?? envToken }
+        : await resolveConfiguredSecretInputString({
+            value: config.gateway?.auth?.token,
+            path: "gateway.auth.token",
+            env,
+            config,
+          });
+    const token = explicitAuth.token ?? envToken ?? localToken.value;
+    if (!token) {
+      throwGatewayAuthResolutionError(
+        localToken.unresolvedRefReason ?? "Missing gateway auth token.",
+      );
+    }
+    return {
+      url,
+      token,
+      password: explicitAuth.password ?? envPassword,
+    };
+  }
+
   const localToken =
     explicitAuth.token || envToken
       ? { value: explicitAuth.token ?? envToken }
@@ -368,13 +414,7 @@ export async function resolveGatewayConnection(
   const password = explicitAuth.password ?? envPassword ?? localPassword.value;
 
   const effectiveMode: "token" | "password" =
-    gatewayAuthMode === "password"
-      ? "password"
-      : gatewayAuthMode === "token"
-        ? "token"
-        : password || (hasConfiguredPassword && !hasConfiguredToken)
-          ? "password"
-          : "token";
+    password || (hasConfiguredPassword && !hasConfiguredToken) ? "password" : "token";
 
   if (effectiveMode === "password") {
     if (!password) {

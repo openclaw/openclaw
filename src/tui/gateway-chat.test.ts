@@ -12,6 +12,15 @@ import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
 const { resolveGatewayConnection } = await import("./gateway-chat.js");
 
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe("resolveGatewayConnection", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -245,5 +254,111 @@ describe("resolveGatewayConnection", () => {
 
     const result = await resolveGatewayConnection({});
     expect(result.token).toBe("exec-secret-token");
+  });
+
+  it("resolves only token SecretRef when gateway.auth.mode is token", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tui-mode-token-"));
+    const tokenMarker = path.join(tempDir, "token-provider-ran");
+    const passwordMarker = path.join(tempDir, "password-provider-ran");
+    const tokenExecProgram = [
+      "const fs=require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(tokenMarker)},'1');`,
+      "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { TOKEN_SECRET: 'token-from-exec' } }));",
+    ].join("");
+    const passwordExecProgram = [
+      "const fs=require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(passwordMarker)},'1');`,
+      "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { PASSWORD_SECRET: 'password-from-exec' } }));",
+    ].join("");
+
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          tokenProvider: {
+            source: "exec",
+            command: process.execPath,
+            args: ["-e", tokenExecProgram],
+            allowInsecurePath: true,
+          },
+          passwordProvider: {
+            source: "exec",
+            command: process.execPath,
+            args: ["-e", passwordExecProgram],
+            allowInsecurePath: true,
+          },
+        },
+      },
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "token",
+          token: { source: "exec", provider: "tokenProvider", id: "TOKEN_SECRET" },
+          password: { source: "exec", provider: "passwordProvider", id: "PASSWORD_SECRET" },
+        },
+      },
+    });
+
+    try {
+      const result = await resolveGatewayConnection({});
+      expect(result.token).toBe("token-from-exec");
+      expect(result.password).toBeUndefined();
+      expect(await fileExists(tokenMarker)).toBe(true);
+      expect(await fileExists(passwordMarker)).toBe(false);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves only password SecretRef when gateway.auth.mode is password", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tui-mode-password-"));
+    const tokenMarker = path.join(tempDir, "token-provider-ran");
+    const passwordMarker = path.join(tempDir, "password-provider-ran");
+    const tokenExecProgram = [
+      "const fs=require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(tokenMarker)},'1');`,
+      "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { TOKEN_SECRET: 'token-from-exec' } }));",
+    ].join("");
+    const passwordExecProgram = [
+      "const fs=require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(passwordMarker)},'1');`,
+      "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { PASSWORD_SECRET: 'password-from-exec' } }));",
+    ].join("");
+
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          tokenProvider: {
+            source: "exec",
+            command: process.execPath,
+            args: ["-e", tokenExecProgram],
+            allowInsecurePath: true,
+          },
+          passwordProvider: {
+            source: "exec",
+            command: process.execPath,
+            args: ["-e", passwordExecProgram],
+            allowInsecurePath: true,
+          },
+        },
+      },
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          token: { source: "exec", provider: "tokenProvider", id: "TOKEN_SECRET" },
+          password: { source: "exec", provider: "passwordProvider", id: "PASSWORD_SECRET" },
+        },
+      },
+    });
+
+    try {
+      const result = await resolveGatewayConnection({});
+      expect(result.password).toBe("password-from-exec");
+      expect(result.token).toBeUndefined();
+      expect(await fileExists(tokenMarker)).toBe(false);
+      expect(await fileExists(passwordMarker)).toBe(true);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
