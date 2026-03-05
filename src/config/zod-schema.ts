@@ -702,6 +702,15 @@ export const OpenClawSchema = z
                 chatCompletions: z
                   .object({
                     enabled: z.boolean().optional(),
+                    maxBodyBytes: z.number().int().positive().optional(),
+                    maxImageParts: z.number().int().nonnegative().optional(),
+                    maxTotalImageBytes: z.number().int().positive().optional(),
+                    images: z
+                      .object({
+                        ...ResponsesEndpointUrlFetchShape,
+                      })
+                      .strict()
+                      .optional(),
                   })
                   .strict()
                   .optional(),

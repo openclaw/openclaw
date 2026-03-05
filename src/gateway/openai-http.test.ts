@@ -308,6 +308,30 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image_url",
+                  image_url: { url: "https://example.com/image.png" },
+                },
+              ],
+            },
+          ],
+        });
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as Record<string, unknown>;
+        expect((json.error as Record<string, unknown> | undefined)?.type).toBe(
+          "invalid_request_error",
+        );
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
+      {
         mockAgentOnce([{ text: "I can see the image" }]);
         const res = await postChatCompletions(port, {
           model: "openclaw",

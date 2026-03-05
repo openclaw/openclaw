@@ -242,6 +242,23 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.allowInsecureAuth": "Insecure Control UI Auth Toggle",
   "gateway.controlUi.dangerouslyDisableDeviceAuth": "Dangerously Disable Control UI Device Auth",
   "gateway.http.endpoints.chatCompletions.enabled": "OpenAI Chat Completions Endpoint",
+  "gateway.http.endpoints.chatCompletions.maxBodyBytes": "OpenAI Chat Completions Max Body Bytes",
+  "gateway.http.endpoints.chatCompletions.maxImageParts": "OpenAI Chat Completions Max Image Parts",
+  "gateway.http.endpoints.chatCompletions.maxTotalImageBytes":
+    "OpenAI Chat Completions Max Total Image Bytes",
+  "gateway.http.endpoints.chatCompletions.images": "OpenAI Chat Completions Image Limits",
+  "gateway.http.endpoints.chatCompletions.images.allowUrl":
+    "OpenAI Chat Completions Allow Image URLs",
+  "gateway.http.endpoints.chatCompletions.images.urlAllowlist":
+    "OpenAI Chat Completions Image URL Allowlist",
+  "gateway.http.endpoints.chatCompletions.images.allowedMimes":
+    "OpenAI Chat Completions Image MIME Allowlist",
+  "gateway.http.endpoints.chatCompletions.images.maxBytes":
+    "OpenAI Chat Completions Image Max Bytes",
+  "gateway.http.endpoints.chatCompletions.images.maxRedirects":
+    "OpenAI Chat Completions Image Max Redirects",
+  "gateway.http.endpoints.chatCompletions.images.timeoutMs":
+    "OpenAI Chat Completions Image Timeout (ms)",
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "gateway.nodes.browser.mode": "Gateway Node Browser Mode",

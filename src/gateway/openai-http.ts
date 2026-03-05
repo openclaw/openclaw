@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { ImageContent } from "../commands/agent/types.js";
+import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { estimateBase64DecodedBytes } from "../media/base64.js";
@@ -12,6 +13,7 @@ import {
   DEFAULT_INPUT_MAX_REDIRECTS,
   DEFAULT_INPUT_TIMEOUT_MS,
   extractImageContentFromSource,
+  normalizeMimeList,
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
@@ -29,6 +31,7 @@ import { resolveGatewayRequestContext } from "./http-utils.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
+  config?: GatewayHttpChatCompletionsConfig;
   maxBodyBytes?: number;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
@@ -53,12 +56,52 @@ const IMAGE_ONLY_USER_MESSAGE = "User sent image(s) with no text.";
 const DEFAULT_OPENAI_MAX_IMAGE_PARTS = 8;
 const DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_OPENAI_IMAGE_LIMITS: InputImageLimits = {
-  allowUrl: true,
+  allowUrl: false,
   allowedMimes: new Set(DEFAULT_INPUT_IMAGE_MIMES),
   maxBytes: DEFAULT_INPUT_IMAGE_MAX_BYTES,
   maxRedirects: DEFAULT_INPUT_MAX_REDIRECTS,
   timeoutMs: DEFAULT_INPUT_TIMEOUT_MS,
 };
+
+type ResolvedOpenAiChatCompletionsLimits = {
+  maxBodyBytes: number;
+  maxImageParts: number;
+  maxTotalImageBytes: number;
+  images: InputImageLimits;
+};
+
+function normalizeHostnameAllowlist(values: string[] | undefined): string[] | undefined {
+  if (!values || values.length === 0) {
+    return undefined;
+  }
+  const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function resolveOpenAiChatCompletionsLimits(
+  config: GatewayHttpChatCompletionsConfig | undefined,
+): ResolvedOpenAiChatCompletionsLimits {
+  const imageConfig = config?.images;
+  return {
+    maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
+    maxImageParts:
+      typeof config?.maxImageParts === "number"
+        ? Math.max(0, Math.floor(config.maxImageParts))
+        : DEFAULT_OPENAI_MAX_IMAGE_PARTS,
+    maxTotalImageBytes:
+      typeof config?.maxTotalImageBytes === "number"
+        ? Math.max(1, Math.floor(config.maxTotalImageBytes))
+        : DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
+    images: {
+      allowUrl: imageConfig?.allowUrl ?? DEFAULT_OPENAI_IMAGE_LIMITS.allowUrl,
+      urlAllowlist: normalizeHostnameAllowlist(imageConfig?.urlAllowlist),
+      allowedMimes: normalizeMimeList(imageConfig?.allowedMimes, DEFAULT_INPUT_IMAGE_MIMES),
+      maxBytes: imageConfig?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,
+      maxRedirects: imageConfig?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
+      timeoutMs: imageConfig?.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS,
+    },
+  };
+}
 
 function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -236,30 +279,29 @@ function resolveLatestUserImageRefs(messagesUnknown: unknown): LatestUserImageRe
 
 async function resolveImagesForRequest(
   latestUserImageRefs: Pick<LatestUserImageRefs, "urls">,
+  limits: ResolvedOpenAiChatCompletionsLimits,
 ): Promise<ImageContent[]> {
   const urls = latestUserImageRefs.urls;
   if (urls.length === 0) {
     return [];
   }
-  if (urls.length > DEFAULT_OPENAI_MAX_IMAGE_PARTS) {
-    throw new Error(
-      `Too many image_url parts (${urls.length}; limit ${DEFAULT_OPENAI_MAX_IMAGE_PARTS})`,
-    );
+  if (urls.length > limits.maxImageParts) {
+    throw new Error(`Too many image_url parts (${urls.length}; limit ${limits.maxImageParts})`);
   }
 
   const images = await Promise.all(
     urls.map(async (url) => {
       const source = parseImageUrlToSource(url);
-      return await extractImageContentFromSource(source, DEFAULT_OPENAI_IMAGE_LIMITS);
+      return await extractImageContentFromSource(source, limits.images);
     }),
   );
 
   let totalBytes = 0;
   for (const image of images) {
     totalBytes += estimateBase64DecodedBytes(image.data);
-    if (totalBytes > DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES) {
+    if (totalBytes > limits.maxTotalImageBytes) {
       throw new Error(
-        `Total image payload too large (${totalBytes}; limit ${DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES})`,
+        `Total image payload too large (${totalBytes}; limit ${limits.maxTotalImageBytes})`,
       );
     }
   }
@@ -358,13 +400,14 @@ export async function handleOpenAiHttpRequest(
   res: ServerResponse,
   opts: OpenAiHttpOptions,
 ): Promise<boolean> {
+  const limits = resolveOpenAiChatCompletionsLimits(opts.config);
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/chat/completions",
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
-    maxBodyBytes: opts.maxBodyBytes ?? DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
+    maxBodyBytes: opts.maxBodyBytes ?? limits.maxBodyBytes,
   });
   if (handled === false) {
     return false;
@@ -390,7 +433,7 @@ export async function handleOpenAiHttpRequest(
   const prompt = buildAgentPrompt(payload.messages, latestUserImageRefs.messageIndex);
   let images: ImageContent[] = [];
   try {
-    images = await resolveImagesForRequest(latestUserImageRefs);
+    images = await resolveImagesForRequest(latestUserImageRefs, limits);
   } catch (err) {
     logWarn(`openai-compat: invalid image_url content: ${String(err)}`);
     sendJson(res, 400, {
