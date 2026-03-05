@@ -22,9 +22,6 @@ import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 const log = createSubsystemLogger("hooks/session-memory");
 
 /**
- * Read recent messages from session file for slug generation
- */
-/**
  * Canonicalize an absolute path by walking up to the nearest existing ancestor
  * and resolving symlinks from there. Handles cases like macOS /tmp → /private/tmp
  * where the target file (or its parent dirs) don't exist yet.

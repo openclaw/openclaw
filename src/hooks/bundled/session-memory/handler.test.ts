@@ -684,7 +684,36 @@ describe("session-memory hook", () => {
     const files = (await fs.readdir(memoryDir)).filter((f) => f.endsWith(".md"));
     expect(files.length).toBeGreaterThan(0);
     const content = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
-    // Should NOT contain the original transcript
-    expect(content).not.toContain("sensitive data");
+    // Should be truly empty — blank marker file
+    expect(content).toBe("");
+  });
+
+  it("sessionSaveContent + sessionSaveRedirectPath writes custom content to redirect path", async () => {
+    const tempDir = await createCaseWorkspace("custom-content-redirect");
+    const quarantine = path.join(tempDir, "quarantine");
+    await fs.mkdir(quarantine, { recursive: true });
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([{ role: "user", content: "original" }]),
+    });
+
+    const redirectFile = path.join(quarantine, "custom.md");
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "s1", sessionFile },
+    });
+    event.context.sessionSaveContent = "Redacted by policy";
+    event.context.sessionSaveRedirectPath = redirectFile;
+
+    await handler(event);
+
+    const content = await fs.readFile(redirectFile, "utf-8");
+    expect(content).toBe("Redacted by policy");
+    // Default memory/ dir should be empty
+    const memoryFiles = await fs.readdir(path.join(tempDir, "memory")).catch(() => [] as string[]);
+    expect(memoryFiles.filter((f) => f.endsWith(".md"))).toHaveLength(0);
   });
 });
