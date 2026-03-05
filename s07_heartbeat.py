@@ -1,17 +1,31 @@
 """
-Section 07: Heartbeat & Proactive Behavior
+Section 07 — Heartbeat & Proactive Behavior
 "Not just reactive — proactive"
 
-本文件在 s06_soul_memory 的 Soul+Memory 框架之上, 加入 OpenClaw 最独特的特性:
-心跳系统 (Heartbeat), 让 agent 在没有用户消息时也能主动行动.
+本文件是 s06_soul_memory.py 的【功能超集】— 在 Soul+Memory 框架之上,
+加入 OpenClaw 最独特的特性: 心跳系统 (Heartbeat).
 
 传统 chatbot 只能被动回复; OpenClaw 的 agent 像一个真正的助手,
 会定期 "检查一下" 是否有需要汇报的事情.
 
-【与 s06 的关系】
-  s05_gateway.py    → 多 Agent 路由 + WebSocket 网关
-  s06_soul_memory.py → Soul (人格) + Memory (记忆)
-  s07_heartbeat.py   → Heartbeat (心跳) — 本文件
+【与 s06 的关系 — 纯增量, 零删减】
+  s06_soul_memory.py 提供:
+    - AgentWithSoulMemory / workspace / SOUL.md / MEMORY.md
+    - MemoryIndexManager + memory_search / memory_get / memory_write
+    - build_agent_system_prompt (soul + memory 注入)
+    - run_agent_with_soul_and_memory (带工具循环的 agent runner)
+    - SoulMemoryGateway (WebSocket 网关)
+    - run_repl / test_client / interactive_chat
+
+  本文件新增:
+    - HEARTBEAT.md: workspace bootstrap file, 定义心跳检查内容
+    - HeartbeatRunner: 后台定时器, 周期性触发 agent 执行
+    - Active Hours: 只在配置时间窗口内运行
+    - HEARTBEAT_OK token: 静默信号, 不发送给用户
+    - 互斥锁: 心跳让位于用户消息
+    - 去重: 24h 内不发送重复内容
+    - HeartbeatGateway: 继承 SoulMemoryGateway, 增加心跳 RPC
+    - run_repl_with_heartbeat: 继承 s06 REPL, 增加心跳后台循环
 
 【参考】OpenClaw 源码
   - src/infra/heartbeat-runner.ts      HeartbeatRunner + runHeartbeatOnce
@@ -22,67 +36,84 @@ Section 07: Heartbeat & Proactive Behavior
   - src/infra/heartbeat-visibility.ts  可见性 (showOk / showAlerts)
   - src/auto-reply/tokens.ts           HEARTBEAT_TOKEN = "HEARTBEAT_OK"
 
-在 OpenClaw 中:
-  - HeartbeatRunner: 后台定时器, 周期性触发 agent 执行
-  - HEARTBEAT.md: 定义心跳时要检查的内容 (workspace bootstrap file)
-  - Active Hours: 只在配置的时间窗口内运行 (不在凌晨打扰用户)
-  - HEARTBEAT_OK: agent 认为没事可报时的静默信号, 不发送给用户
-  - 互斥锁: 心跳让位于用户消息 (主通道优先)
-  - 去重: 24 小时内不发送重复内容 (session 级 lastHeartbeatText)
-  - ackMaxChars: HEARTBEAT_OK 附带少量文字 (≤300 chars) 也视为静默
+── 心跳与 Soul/Memory 的信息流 ──────────────────────────
 
-OpenClaw 的 6 步检查链 (runHeartbeatOnce):
-  [1] heartbeat 是否启用? (agent 配置 + 间隔有效)
-  [2] 是否在活跃时段? (activeHours 配置)
-  [3] 主通道是否空闲? (CommandLane.Main 队列深度 = 0)
-  [4] HEARTBEAT.md 是否存在且有实质内容? (跳过纯 heading/空 checkbox)
-  [5] 解析心跳 session (复用 agent 的主 session)
-  [6] 调用 agent, 处理响应 (strip token → dedup → deliver)
+  HeartbeatRunner (后台线程, 每秒 tick)
+      │
+      ├─ [1] 6 步检查链 (enabled → interval → active hours
+      │       → HEARTBEAT.md 有内容 → 主通道空闲 → 未在运行)
+      │
+      ├─ [2] 获取互斥锁 (与用户消息互斥)
+      │
+      ├─ [3] 构建心跳上下文 — 复用 s06 的完整流程:
+      │       │
+      │       ├─ build_agent_system_prompt(agent, base_prompt)
+      │       │   ├─ Base system prompt (identity + tools)
+      │       │   ├─ Personality (from agent config)
+      │       │   ├─ ## Memory Recall 指令
+      │       │   ├─ ## Time / Workspace
+      │       │   ├─ ## Project Context Files
+      │       │   │   ├─ SOUL.md → 人格注入 (心跳也有人格!)
+      │       │   │   └─ MEMORY.md → 长期记忆
+      │       │   └─ ## Recent Memory (今日 + 昨日 headline)
+      │       │
+      │       ├─ 加载 HEARTBEAT.md → 追加到 user message
+      │       │   "Read HEARTBEAT.md ... If nothing needs attention, reply HEARTBEAT_OK"
+      │       │
+      │       └─ 加载 session 历史 (与用户对话共享!)
+      │           → 心跳能看到之前的用户消息, 知道上下文
+      │
+      ├─ [4] 调用 LLM (带完整工具集)
+      │       │
+      │       ├─ Tools = s04 工具 + memory_search + memory_get + memory_write
+      │       │   → 心跳可以搜索记忆 (查 deadline / todo)
+      │       │   → 心跳可以写入记忆 (记录观察结果)
+      │       │
+      │       └─ 工具循环: 与 run_agent_with_soul_and_memory 相同
+      │           → 可能多轮: search memory → get lines → 生成回复
+      │
+      ├─ [5] 处理响应
+      │       │
+      │       ├─ 空响应 → status="ok-empty", 静默
+      │       ├─ 含 HEARTBEAT_OK → strip token
+      │       │   ├─ 剩余文字 ≤ ackMaxChars (300) → status="ok-token", 静默
+      │       │   └─ 剩余文字 > ackMaxChars → 视为有内容
+      │       ├─ 有内容 → 去重检查 (24h hash)
+      │       │   ├─ 重复 → status="skipped", reason="duplicate"
+      │       │   └─ 新内容 → status="sent", 输出给用户
+      │       │
+      │       └─ 注意: 心跳回复 **不** 推进 session.updatedAt
+      │           → 保持 idle timeout 语义, 只有用户消息才算活跃
+      │
+      └─ [6] 发射心跳事件 (Gateway 广播 / UI 指示器)
 
-HEARTBEAT.md 示例 (放在 workspace/{agent_id}/ 下):
+  关键设计:
+    ✓ 心跳复用 Soul (同一个人格说话)
+    ✓ 心跳复用 Memory (能查历史、查 todo、查 deadline)
+    ✓ 心跳共享 Session (知道用户聊了什么)
+    ✓ 心跳能写 Memory (把观察结果持久化)
+    ✓ 心跳让位于用户 (互斥锁, 用户消息优先)
+    ✓ 心跳不推进 session 时间 (不干扰 idle 超时)
 
-    # Heartbeat Instructions
+── 运行方式 (完全兼容 s06 的所有模式, 且增加心跳) ──
 
-    Check the following and report ONLY if action is needed:
+  1. 服务器模式 (带心跳的网关):
+     python s07_heartbeat.py
 
-    1. Are there any pending reminders for the user?
-    2. Review today's memory log for unfinished tasks.
-    3. If the user mentioned a deadline, check if it's approaching.
+  2. 测试客户端 (s06 测试 + 心跳状态):
+     python s07_heartbeat.py --test-client
 
-    If nothing needs attention, respond with exactly: HEARTBEAT_OK
+  3. 交互式对话 (连接网关, s06 完整功能):
+     python s07_heartbeat.py --chat
 
-架构图:
+  4. 交互式 REPL (路由 + Soul/Memory + 心跳后台循环):
+     python s07_heartbeat.py --repl
 
-  +--- HeartbeatRunner (background thread) ------+
-  |  schedule:                                    |
-  |  [1] enabled? (interval > 0)                 |
-  |  [2] active hours? --------+                 |
-  |  [3] main lane idle?       |                 |
-  |  [4] HEARTBEAT.md content? |                 |
-  +----+-----------------------+-----------------+
-       |                       |
-       v                (mutual exclusion)
-    runHeartbeatOnce()         |
-       |                       v
-       v                  User Message
-    Agent LLM call         (takes priority)
-       |
-       v
-    Response handling
-    /              \\
-  HEARTBEAT_OK     Content
-  (suppress)        |
-                    v
-               Dedup check (24h)
-                    |
-                    v
-               Output to user
+  5. 自定义心跳间隔:
+     python s07_heartbeat.py --repl --interval 30 --active-start 09:00 --active-end 22:00
 
-运行方式:
-    python s07_heartbeat.py --repl
-
-依赖:
-    pip install python-dotenv websockets
+── 依赖 ──────────────────────────────────────────
+  pip install python-dotenv websockets
 """
 
 from __future__ import annotations
@@ -90,6 +121,7 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 # 导入
 # ---------------------------------------------------------------------------
+import asyncio
 import hashlib
 import json
 import logging
@@ -98,6 +130,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -116,9 +149,9 @@ from llm_client import (
     LLMValidationError,
 )
 
-# 从 s06 导入 Soul+Memory 框架 (本文件是 s06 的递进)
+# ── 从 s06 导入: Soul+Memory 框架 (全量, 零删减) ──
 from s06_soul_memory import (
-    # Agent 配置
+    # Agent 配置 + workspace
     AgentWithSoulMemory,
     create_agents_with_soul_memory,
     _ensure_sample_soul,
@@ -133,8 +166,15 @@ from s06_soul_memory import (
     load_workspace_bootstrap_files,
     _truncate_bootstrap,
     BOOTSTRAP_MAX_CHARS,
-    # Agent runner
+    # Agent runner (核心: 心跳复用此函数与 soul/memory 交互)
     run_agent_with_soul_and_memory,
+    # Gateway (心跳版将继承它)
+    SoulMemoryGateway,
+    # 客户端模式 (原样继承)
+    test_client as s06_test_client,
+    interactive_chat as s06_interactive_chat,
+    # REPL (心跳版将扩展它)
+    run_repl as s06_run_repl,
     # UI 工具
     colored_prompt,
     print_assistant,
@@ -148,13 +188,19 @@ from s06_soul_memory import (
     SESSIONS_DIR,
 )
 
-# 从 s05 导入路由基础设施
+# ── 从 s05 导入: 路由基础设施 ──
 from s05_gateway import (
     MessageRouter,
     Binding,
+    ConnectedClient,
+    make_event,
+    make_result,
+    make_error,
+    JSONRPC_VERSION,
+    INTERNAL_ERROR,
 )
 
-# 从 s04 导入 session 管理
+# ── 从 s04 导入: session + 工具 ──
 from s04_multi_channel import (
     TOOLS_OPENAI,
     SessionStore as S04SessionStore,
@@ -169,8 +215,12 @@ from s04_multi_channel import (
 load_dotenv()
 load_env_if_exists()
 
-# LLM 配置
 MODEL = os.getenv("DEEPSEEK_DEFAULT_MODEL", "deepseek-chat")
+
+# 网关配置 (与 s06 一致)
+GATEWAY_HOST = os.getenv("GATEWAY_HOST", "127.0.0.1")
+GATEWAY_PORT = int(os.getenv("GATEWAY_PORT", "18789"))
+GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "")
 
 # 日志
 logging.basicConfig(
@@ -200,13 +250,11 @@ def print_heartbeat_status(text: str) -> None:
 # Part 1: HEARTBEAT_OK Token 处理
 # ============================================================================
 #
-# 【参考】OpenClaw src/auto-reply/heartbeat.ts
-#   - HEARTBEAT_TOKEN = "HEARTBEAT_OK"
-#   - stripHeartbeatToken(): 从响应中移除 token
-#   - ackMaxChars: token 附带少量文字也视为静默
+# 【参考】OpenClaw src/auto-reply/heartbeat.ts  stripHeartbeatToken()
+# 【参考】OpenClaw src/auto-reply/tokens.ts     HEARTBEAT_TOKEN = "HEARTBEAT_OK"
 #
-# 【参考】OpenClaw src/auto-reply/tokens.ts
-#   export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+# Agent 回复 HEARTBEAT_OK 表示 "没事可报", 不应发送给用户.
+# 如果 HEARTBEAT_OK 后面跟着少量文字 (≤ ackMaxChars), 也视为静默.
 # ============================================================================
 
 HEARTBEAT_OK_TOKEN = "HEARTBEAT_OK"
@@ -228,14 +276,12 @@ HEARTBEAT_ACTIVE_END = os.getenv("HEARTBEAT_ACTIVE_END", "22:00")
 DEDUP_WINDOW_SECONDS = 24 * 60 * 60
 
 # 【参考】OpenClaw heartbeat.ts  HEARTBEAT_PROMPT
-# 生产版默认心跳 prompt (与原始 OpenClaw 一致)
 HEARTBEAT_PROMPT = (
     "Read HEARTBEAT.md if it exists (workspace context). "
     "Follow it strictly. Do not infer or repeat old tasks from prior chats. "
     "If nothing needs attention, reply HEARTBEAT_OK."
 )
 
-# HEARTBEAT.md 默认文件名
 DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md"
 
 
@@ -249,15 +295,12 @@ def strip_heartbeat_token(
     【参考】OpenClaw src/auto-reply/heartbeat.ts  stripHeartbeatToken()
 
     逻辑:
-      1. 如果文本为空 → should_skip=True
-      2. 移除 HTML/Markdown 包裹 (如 <b>HEARTBEAT_OK</b>, **HEARTBEAT_OK**)
-      3. 从文本前后移除 HEARTBEAT_OK token (支持连续移除)
-      4. 移除后剩余文本为空 → should_skip=True
-      5. 剩余文本 ≤ ackMaxChars → should_skip=True (少量注释也视为静默)
+      1. 空文本 → should_skip=True
+      2. 移除 HTML/Markdown 包裹 (<b>HEARTBEAT_OK</b>, **HEARTBEAT_OK**)
+      3. 从前后反复移除 HEARTBEAT_OK token
+      4. 剩余为空 → should_skip=True
+      5. 剩余 ≤ ackMaxChars → should_skip=True (少量注释也视为静默)
       6. 否则返回去掉 token 后的实质内容
-
-    返回:
-      {"should_skip": bool, "text": str, "did_strip": bool}
     """
     if not text:
         return {"should_skip": True, "text": "", "did_strip": False}
@@ -266,13 +309,11 @@ def strip_heartbeat_token(
     if not trimmed:
         return {"should_skip": True, "text": "", "did_strip": False}
 
-    # 移除 HTML/Markdown 包裹
-    # 【参考】OpenClaw heartbeat.ts  stripMarkup()
     def strip_markup(s: str) -> str:
-        s = re.sub(r"<[^>]*>", " ", s)         # HTML tags
+        s = re.sub(r"<[^>]*>", " ", s)
         s = re.sub(r"&nbsp;", " ", s, flags=re.IGNORECASE)
-        s = re.sub(r"^[*`~_]+", "", s)          # Markdown 前缀
-        s = re.sub(r"[*`~_]+$", "", s)          # Markdown 后缀
+        s = re.sub(r"^[*`~_]+", "", s)
+        s = re.sub(r"[*`~_]+$", "", s)
         return s
 
     normalized = strip_markup(trimmed)
@@ -281,8 +322,6 @@ def strip_heartbeat_token(
     if not has_token:
         return {"should_skip": False, "text": trimmed, "did_strip": False}
 
-    # 从前后反复剥离 token
-    # 【参考】OpenClaw heartbeat.ts  stripTokenAtEdges()
     def strip_edges(s: str) -> tuple[str, bool]:
         did_strip = False
         changed = True
@@ -293,21 +332,17 @@ def strip_heartbeat_token(
                 s = s[len(HEARTBEAT_OK_TOKEN):].lstrip()
                 did_strip = True
                 changed = True
-            # 尾部: token + 最多 4 个非单词字符
             pattern = re.escape(HEARTBEAT_OK_TOKEN) + r"[^\w]{0,4}$"
             m = re.search(pattern, s)
             if m:
-                before = s[:m.start()].rstrip()
+                s = s[:m.start()].rstrip()
                 did_strip = True
                 changed = True
-                s = before
-        collapsed = re.sub(r"\s+", " ", s).strip()
-        return collapsed, did_strip
+        return re.sub(r"\s+", " ", s).strip(), did_strip
 
     stripped_orig, did_orig = strip_edges(trimmed)
     stripped_norm, did_norm = strip_edges(normalized)
 
-    # 优先使用原始文本的剥离结果 (保留格式)
     if did_orig and stripped_orig:
         rest = stripped_orig
     elif did_norm:
@@ -320,8 +355,6 @@ def strip_heartbeat_token(
     if not rest:
         return {"should_skip": True, "text": "", "did_strip": did_strip}
 
-    # ackMaxChars: 少量附带文字也视为静默
-    # 【参考】OpenClaw heartbeat.ts  mode === "heartbeat" && rest.length <= maxAckChars
     if len(rest) <= ack_max_chars:
         return {"should_skip": True, "text": "", "did_strip": did_strip}
 
@@ -332,22 +365,13 @@ def strip_heartbeat_token(
 # Part 2: HEARTBEAT.md 内容检查
 # ============================================================================
 #
-# 【参考】OpenClaw src/auto-reply/heartbeat.ts  isHeartbeatContentEffectivelyEmpty()
+# 【参考】OpenClaw src/auto-reply/heartbeat.ts isHeartbeatContentEffectivelyEmpty()
 #
-# 判断 HEARTBEAT.md 是否"实质为空":
-#   - 纯空行 → 空
-#   - 纯 heading (# xxx) → 空 (ATX heading 要求 # 后有空格)
-#   - 空 checkbox (- [ ]) → 空
-#   - 有任何其他内容 → 非空
+# 文件只含空行 / heading / 空 checkbox → 视为"无实质内容", 跳过 LLM 调用.
 # ============================================================================
 
 def is_heartbeat_content_effectively_empty(content: str | None) -> bool:
-    """检查 HEARTBEAT.md 内容是否实质为空.
-
-    【参考】OpenClaw src/auto-reply/heartbeat.ts  isHeartbeatContentEffectivelyEmpty()
-
-    文件不存在时返回 False (让 LLM 自行决定), 只在文件存在但无内容时返回 True.
-    """
+    """检查 HEARTBEAT.md 内容是否实质为空."""
     if content is None:
         return False
     if not isinstance(content, str):
@@ -357,23 +381,16 @@ def is_heartbeat_content_effectively_empty(content: str | None) -> bool:
         stripped = line.strip()
         if not stripped:
             continue
-        # 跳过 markdown heading (# 后面必须有空格或 EOL, 与原始 OpenClaw 一致)
         if re.match(r"^#+(\s|$)", stripped):
             continue
-        # 跳过空 checkbox  - [ ]  * [ ]  + [ ]  或纯 list marker  -
         if re.match(r"^[-*+]\s*(\[[\sXx]?\]\s*)?$", stripped):
             continue
-        # 有实质内容
         return False
-
     return True
 
 
 def load_heartbeat_file(workspace_dir: Path) -> str | None:
-    """加载 HEARTBEAT.md 文件内容.
-
-    返回文件内容字符串, 文件不存在时返回 None.
-    """
+    """加载 HEARTBEAT.md 文件内容."""
     path = workspace_dir / DEFAULT_HEARTBEAT_FILENAME
     if not path.exists():
         return None
@@ -388,21 +405,12 @@ def load_heartbeat_file(workspace_dir: Path) -> str | None:
 # ============================================================================
 #
 # 【参考】OpenClaw src/infra/heartbeat-active-hours.ts  isWithinActiveHours()
-#
-# 支持:
-#   - "HH:MM" 格式 (24 小时制)
-#   - 跨午夜时段 (如 22:00 - 06:00)
-#   - end 支持 "24:00" 表示午夜
 # ============================================================================
 
 def parse_active_hours_time(raw: str, *, allow_24: bool = False) -> int | None:
-    """解析 "HH:MM" 格式的时间, 返回分钟数 (0-1440).
-
-    【参考】OpenClaw heartbeat-active-hours.ts  parseActiveHoursTime()
-    """
+    """解析 "HH:MM" 格式时间, 返回分钟数 (0-1440)."""
     m = re.match(r"^([01]\d|2[0-3]|24):([0-5]\d)$", raw.strip())
     if not m:
-        # 也支持纯小时数 (兼容旧格式)
         try:
             hour = int(raw.strip())
             if 0 <= hour <= 23:
@@ -426,20 +434,13 @@ def is_within_active_hours(
     active_end: str = "22:00",
     now: datetime | None = None,
 ) -> bool:
-    """检查当前时间是否在活跃时段内.
-
-    【参考】OpenClaw src/infra/heartbeat-active-hours.ts  isWithinActiveHours()
-
-    支持跨午夜时段: 如 22:00 - 06:00 表示晚 10 点到早 6 点.
-    """
+    """检查当前时间是否在活跃时段内. 支持跨午夜."""
     start_min = parse_active_hours_time(active_start, allow_24=False)
     end_min = parse_active_hours_time(active_end, allow_24=True)
 
     if start_min is None or end_min is None:
-        # 解析失败, 默认允许运行
         return True
     if start_min == end_min:
-        # 起止相同 = 全天允许
         return True
 
     if now is None:
@@ -447,29 +448,23 @@ def is_within_active_hours(
     current_min = now.hour * 60 + now.minute
 
     if end_min > start_min:
-        # 不跨午夜: 09:00 - 22:00
         return start_min <= current_min < end_min
     else:
-        # 跨午夜: 22:00 - 06:00
         return current_min >= start_min or current_min < end_min
 
 
 # ============================================================================
-# Part 4: Heartbeat Event — 心跳事件 (简化版)
+# Part 4: Heartbeat Event — 心跳事件
 # ============================================================================
 #
 # 【参考】OpenClaw src/infra/heartbeat-events.ts
-#   - HeartbeatEventPayload: status, to, preview, durationMs, reason, channel
-#   - emitHeartbeatEvent(): 发射事件到 listener
-#   - resolveIndicatorType(): ok / alert / error
 # ============================================================================
 
-# 心跳事件状态, 与 OpenClaw 一致
-HEARTBEAT_STATUS_SENT = "sent"           # 有内容, 已发送
-HEARTBEAT_STATUS_OK_EMPTY = "ok-empty"   # LLM 返回空 → 静默
-HEARTBEAT_STATUS_OK_TOKEN = "ok-token"   # LLM 返回 HEARTBEAT_OK → 静默
-HEARTBEAT_STATUS_SKIPPED = "skipped"     # 被检查链跳过
-HEARTBEAT_STATUS_FAILED = "failed"       # 出错
+HEARTBEAT_STATUS_SENT = "sent"
+HEARTBEAT_STATUS_OK_EMPTY = "ok-empty"
+HEARTBEAT_STATUS_OK_TOKEN = "ok-token"
+HEARTBEAT_STATUS_SKIPPED = "skipped"
+HEARTBEAT_STATUS_FAILED = "failed"
 
 
 def emit_heartbeat_event(
@@ -478,14 +473,27 @@ def emit_heartbeat_event(
     reason: str | None = None,
     preview: str | None = None,
     duration_ms: int | None = None,
-) -> None:
-    """发射心跳事件 (教学简化版: 打印日志).
+) -> dict:
+    """发射心跳事件. 返回事件 payload 供 Gateway 广播.
 
     【参考】OpenClaw src/infra/heartbeat-events.ts  emitHeartbeatEvent()
-
-    生产版 OpenClaw 通过事件总线通知 UI 指示器;
-    教学版仅记录日志, 方便调试.
     """
+    payload = {"ts": time.time(), "status": status}
+    if reason:
+        payload["reason"] = reason
+    if preview:
+        payload["preview"] = preview[:200]
+    if duration_ms is not None:
+        payload["durationMs"] = duration_ms
+
+    # 指示器类型 (供 UI 显示)
+    if status in (HEARTBEAT_STATUS_OK_EMPTY, HEARTBEAT_STATUS_OK_TOKEN):
+        payload["indicatorType"] = "ok"
+    elif status == HEARTBEAT_STATUS_SENT:
+        payload["indicatorType"] = "alert"
+    elif status == HEARTBEAT_STATUS_FAILED:
+        payload["indicatorType"] = "error"
+
     parts = [f"status={status}"]
     if reason:
         parts.append(f"reason={reason}")
@@ -493,8 +501,9 @@ def emit_heartbeat_event(
         parts.append(f"preview={preview[:80]!r}")
     if duration_ms is not None:
         parts.append(f"duration={duration_ms}ms")
-
     log.info("heartbeat-event: %s", ", ".join(parts))
+
+    return payload
 
 
 # ============================================================================
@@ -502,39 +511,38 @@ def emit_heartbeat_event(
 # ============================================================================
 #
 # 【参考】OpenClaw src/infra/heartbeat-runner.ts
-#   - startHeartbeatRunner(): 创建后台调度器
-#   - runHeartbeatOnce(): 单次心跳执行
-#   - resolveHeartbeatSession(): 解析心跳使用的 session
-#   - normalizeHeartbeatReply(): 处理响应
 #
-# 核心流程:
-#   1. 后台线程每秒检查 should_run()
-#   2. 满足条件时获取互斥锁
-#   3. 调用 LLM (带 HEARTBEAT.md 上下文)
-#   4. 处理响应: strip token → dedup → 输出
-#   5. 记录 lastHeartbeatText 用于去重
+# 核心设计: 心跳复用 s06 的 run_agent_with_soul_and_memory 完整流程,
+# 包括 Soul 人格注入、Memory 搜索/写入、Session 历史.
+#
+# 信息流:
+#   HeartbeatRunner._background_loop()   ← 后台线程, 每秒 tick
+#       │
+#       ├─ should_run() → 6 步检查
+#       ├─ 获取互斥锁 (与用户消息互斥)
+#       │
+#       └─ run_heartbeat_once()
+#           │
+#           ├─ 加载 HEARTBEAT.md → 构建心跳 user message
+#           ├─ build_agent_system_prompt() → Soul + Memory 完整注入
+#           ├─ 加载 session 历史 (共享!) → 心跳看到用户聊天上下文
+#           ├─ 调用 LLM (带 memory 工具) → 可搜索/写入记忆
+#           ├─ strip HEARTBEAT_OK → 去重 → 输出
+#           └─ 心跳回复不存入 session (不推进 updatedAt)
+#
+# 与 s06 的信息交互:
+#   ✓ 读: Soul (人格) → 心跳用相同人格说话
+#   ✓ 读: MEMORY.md (长期记忆) → 心跳知道持久化的知识
+#   ✓ 读: memory/日期.md (每日记忆) → 心跳检查 todo/deadline
+#   ✓ 读: Session 历史 → 心跳知道用户最近聊了什么
+#   ✓ 写: memory_write → 心跳可以把观察结果写入记忆
+#   ✗ 写: Session → 心跳回复不写入 session (保持 idle 语义)
 # ============================================================================
 
 class HeartbeatRunner:
-    """心跳运行器: 让 agent 定期检查并主动汇报.
+    """心跳运行器: 后台定时循环, 让 agent 定期检查并主动汇报.
 
     【参考】OpenClaw src/infra/heartbeat-runner.ts
-
-    核心概念:
-      - interval: 检查间隔 (秒)
-      - active_hours: 活跃时段 (HH:MM 格式, 支持跨午夜)
-      - heartbeat_path: HEARTBEAT.md 路径, 定义检查内容
-      - main_lane_lock: 与用户消息互斥的锁
-      - last_heartbeat_text: 上一次发送的心跳文本 (用于 24h 去重)
-      - ack_max_chars: HEARTBEAT_OK 附带文本视为静默的字符阈值
-
-    6 步检查链:
-      [1] heartbeat 是否启用? (interval > 0 且 HEARTBEAT.md 路径有效)
-      [2] 间隔是否已过?
-      [3] 是否在活跃时段?
-      [4] HEARTBEAT.md 是否存在且有实质内容?
-      [5] 主通道是否空闲? (互斥锁)
-      [6] agent 是否空闲? (不在运行中)
     """
 
     def __init__(
@@ -557,20 +565,19 @@ class HeartbeatRunner:
         self.active_end = active_end
         self.ack_max_chars = ack_max_chars
 
-        # HEARTBEAT.md 路径
         self.heartbeat_path = agent.workspace_dir / DEFAULT_HEARTBEAT_FILENAME
 
         # 运行时状态
         self.last_run: float = 0.0
         self.running = False
+        self.total_runs: int = 0
+        self.total_alerts: int = 0
 
-        # 去重: 记录上次发送的心跳文本和时间
-        # 【参考】OpenClaw heartbeat-runner.ts  entry.lastHeartbeatText / lastHeartbeatSentAt
+        # 去重
         self.last_heartbeat_text: str = ""
         self.last_heartbeat_sent_at: float = 0.0
 
         # 互斥锁: 心跳和用户消息共享
-        # 【参考】OpenClaw 通过 CommandLane 队列深度判断; 教学版用 threading.Lock
         self._lock = threading.Lock()
 
         # 后台线程控制
@@ -578,55 +585,35 @@ class HeartbeatRunner:
         self._thread: threading.Thread | None = None
 
         # 心跳产生的消息队列, 由主线程消费
-        self._output_queue: list[str] = []
+        self._output_queue: list[dict] = []
         self._output_lock = threading.Lock()
+
+        # 事件回调 (Gateway 模式下用于广播)
+        self.on_event: list = []  # list of callable(payload)
 
     # -- 6 步检查链 --
 
     def _is_enabled(self) -> bool:
-        """[1] heartbeat 是否启用?
-
-        【参考】OpenClaw heartbeat-runner.ts  isHeartbeatEnabledForAgent()
-
-        检查: interval > 0 且心跳路径有效.
-        """
+        """[1] heartbeat 是否启用?"""
         return self.interval > 0
 
     def _interval_elapsed(self) -> bool:
-        """[2] 距离上次运行是否已过足够时间?
-
-        【参考】OpenClaw heartbeat-runner.ts  agent.nextDueMs <= now
-        """
+        """[2] 间隔是否已过?"""
         return (time.time() - self.last_run) >= self.interval
 
     def _is_active_hours(self) -> bool:
-        """[3] 当前是否在活跃时段?
-
-        【参考】OpenClaw src/infra/heartbeat-active-hours.ts  isWithinActiveHours()
-
-        支持跨午夜时段和 HH:MM 格式.
-        """
+        """[3] 当前是否在活跃时段?"""
         return is_within_active_hours(self.active_start, self.active_end)
 
     def _heartbeat_has_content(self) -> bool:
-        """[4] HEARTBEAT.md 是否存在且有实质内容?
-
-        【参考】OpenClaw src/auto-reply/heartbeat.ts  isHeartbeatContentEffectivelyEmpty()
-
-        跳过: 纯空行, 纯 heading (# xxx), 空 checkbox (- [ ]).
-        """
+        """[4] HEARTBEAT.md 是否有实质内容?"""
         content = load_heartbeat_file(self.agent.workspace_dir)
         if content is None:
             return False
         return not is_heartbeat_content_effectively_empty(content)
 
     def _main_lane_idle(self) -> bool:
-        """[5] 主通道是否空闲?
-
-        【参考】OpenClaw heartbeat-runner.ts  getQueueSize(CommandLane.Main) > 0
-
-        教学版: 尝试非阻塞获取锁, 成功说明没有用户消息在处理.
-        """
+        """[5] 主通道是否空闲? (尝试非阻塞获取锁)"""
         acquired = self._lock.acquire(blocking=False)
         if acquired:
             self._lock.release()
@@ -634,12 +621,7 @@ class HeartbeatRunner:
         return False
 
     def should_run(self) -> tuple[bool, str]:
-        """6 步检查链, 返回 (是否运行, 原因).
-
-        【参考】OpenClaw heartbeat-runner.ts  runHeartbeatOnce() 的检查顺序
-
-        每一步失败都返回 skipped + 具体原因, 与 OpenClaw 的 HeartbeatRunResult 对齐.
-        """
+        """6 步检查链, 返回 (是否运行, 原因)."""
         if not self._is_enabled():
             return False, "disabled"
         if not self._interval_elapsed():
@@ -654,67 +636,105 @@ class HeartbeatRunner:
             return False, "already-running"
         return True, "ok"
 
-    # -- 心跳执行 --
+    # -- 心跳执行 (核心信息流) --
 
     def run_heartbeat_once(self) -> dict:
-        """执行一次心跳, 返回结果.
+        """执行一次心跳.
 
-        【参考】OpenClaw heartbeat-runner.ts  runHeartbeatOnce()
+        【信息流详解】
+        这是心跳与 soul/memory 框架交互的核心:
 
-        流程:
-          1. 构建心跳 system prompt (复用 s06 的 build_agent_system_prompt)
-          2. 注入 HEARTBEAT.md 作为额外上下文
-          3. 调用 LLM (单轮, 带工具支持)
-          4. 处理响应:
-             - strip HEARTBEAT_OK token
-             - 去重检查 (24h 内相同内容不重发)
-          5. 返回 {status, text, duration_ms}
+        1. 构建 system prompt — 复用 s06 的 build_agent_system_prompt:
+           - 注入 SOUL.md (心跳用相同人格说话)
+           - 注入 MEMORY.md (心跳知道长期记忆)
+           - 注入 Recent Memory (心跳知道最近发生了什么)
+           - 注入 Memory Recall 指令 (心跳被提示用 memory_search)
+
+        2. 加载 session 历史 — 与用户对话共享:
+           - 心跳能看到用户之前说了什么
+           - 例: 用户说 "明天下午 3 点开会", 心跳到时间会提醒
+
+        3. 构建心跳 prompt — 注入 HEARTBEAT.md:
+           - HEARTBEAT.md 定义检查清单
+           - 作为 user message 追加到 session 历史后面
+
+        4. 调用 LLM — 带完整工具集:
+           - memory_search: 搜索记忆 (查 deadline, todo, reminder)
+           - memory_get: 精确读取记忆行
+           - memory_write: 写入观察结果 (心跳也能产生记忆!)
+           - s04 工具: get_weather, search_web 等
+
+        5. 处理响应:
+           - HEARTBEAT_OK → 静默
+           - 有内容 → 去重 → 输出给用户
+
+        6. 关键: 心跳回复不写入 session 历史
+           - 避免 session 被心跳消息污染
+           - 保持 idle timeout 语义
 
         返回:
-          {"status": "sent"|"ok-empty"|"ok-token"|"skipped"|"failed",
-           "text": str, "duration_ms": int, "reason": str|None}
+          {"status": str, "text": str, "duration_ms": int, "reason": str|None}
         """
         started_at = time.time()
+        self.total_runs += 1
 
         try:
-            # 构建心跳 prompt
-            # 【参考】OpenClaw heartbeat-runner.ts
-            #   ctx.Body = appendCronStyleCurrentTimeLine(prompt, cfg, startedAt)
-            #   ctx.Provider = "heartbeat"
-            heartbeat_content = load_heartbeat_file(self.agent.workspace_dir)
-            heartbeat_prompt = HEARTBEAT_PROMPT
-            if heartbeat_content:
-                heartbeat_prompt += (
-                    f"\n\n--- HEARTBEAT.md ---\n{heartbeat_content.strip()}\n--- end ---"
-                )
-
-            # 构建 system prompt (复用 s06 的构建逻辑)
+            # ── Step 1: 构建 system prompt (复用 s06 完整流程) ──
+            # 这里 build_agent_system_prompt 会:
+            #   - 注入 Base prompt (identity + tools)
+            #   - 注入 agent.system_prompt (personality)
+            #   - 注入 Memory Recall 指令
+            #   - 注入 Time / Workspace
+            #   - 注入 SOUL.md (project context file → 人格!)
+            #   - 注入 MEMORY.md (project context file → 长期记忆!)
+            #   - 注入 Recent Memory (今日 + 昨日 headline)
             system_prompt = build_agent_system_prompt(self.agent, S04_SYSTEM_PROMPT)
 
-            # 准备 messages (使用心跳 session 的历史)
+            # ── Step 2: 加载 session 历史 (与用户对话共享) ──
+            # 心跳看到的是同一个 session, 所以知道用户之前聊了什么
             session_data = self.session_store.load_session(self.session_key)
-            messages = session_data["history"]
-            messages.append({"role": "user", "content": heartbeat_prompt})
+            messages = list(session_data["history"])  # 浅拷贝, 不修改原始 session
 
-            # 组合工具: s04 工具 + memory 工具
+            # ── Step 3: 构建心跳 user message ──
+            # 加载 HEARTBEAT.md 作为上下文, 追加到心跳 prompt
+            heartbeat_content = load_heartbeat_file(self.agent.workspace_dir)
+            heartbeat_user_msg = HEARTBEAT_PROMPT
+            if heartbeat_content:
+                heartbeat_user_msg += (
+                    f"\n\n--- HEARTBEAT.md ---\n{heartbeat_content.strip()}\n--- end ---"
+                )
+            messages.append({"role": "user", "content": heartbeat_user_msg})
+
+            # ── Step 4: 调用 LLM (带完整工具集) ──
+            # 工具 = s04 工具 + memory 工具
+            # 心跳可以: search memory → 查找 deadline/todo
+            #           get memory → 精确读取
+            #           write memory → 记录观察结果
             all_tools = TOOLS_OPENAI + build_memory_tools()
 
-            # 调用 LLM (单轮, 不做工具循环 — 心跳场景简化)
-            # 【参考】OpenClaw getReplyFromConfig(ctx, {isHeartbeat: true})
-            resp = deepseek_chat_with_tools(
-                messages,
-                all_tools,
-                model=self.agent.model,
-                system_prompt=system_prompt,
-                max_tokens=1024,
-            )
+            # 工具循环 — 与 run_agent_with_soul_and_memory 相同逻辑
+            response_text = ""
+            max_tool_rounds = 5  # 防止无限循环
 
-            response_text = resp.get("content") or ""
-            tool_calls = resp.get("tool_calls") or []
+            for _round in range(max_tool_rounds):
+                resp = deepseek_chat_with_tools(
+                    messages,
+                    all_tools,
+                    model=self.agent.model,
+                    system_prompt=system_prompt,
+                    max_tokens=1024,
+                )
 
-            # 处理工具调用 (心跳中也可能调用 memory_search)
-            if tool_calls:
-                assistant_msg: dict = {"role": "assistant", "content": response_text}
+                content = resp.get("content") or ""
+                tool_calls = resp.get("tool_calls") or []
+
+                if not tool_calls:
+                    # 没有工具调用, content 就是最终回复
+                    response_text = content
+                    break
+
+                # 有工具调用 → 执行工具 → 继续循环
+                assistant_msg: dict = {"role": "assistant", "content": content}
                 assistant_msg["tool_calls"] = [
                     {
                         "id": tc["id"],
@@ -734,6 +754,7 @@ class HeartbeatRunner:
                     log.info("  [heartbeat-tool] %s(%s)", tc["name"],
                              json.dumps(args, ensure_ascii=False)[:80])
 
+                    # memory 工具 → 心跳与 memory 的核心交互点
                     if tc["name"] in MEMORY_TOOL_NAMES:
                         result = handle_memory_tool(tc["name"], args, self.agent)
                     else:
@@ -744,97 +765,98 @@ class HeartbeatRunner:
                         "tool_call_id": tc["id"],
                         "content": result,
                     })
-
-                # 二次调用获取最终文本
-                resp2 = deepseek_chat_with_tools(
-                    messages,
-                    all_tools,
-                    model=self.agent.model,
-                    system_prompt=system_prompt,
-                    max_tokens=1024,
-                )
-                response_text = resp2.get("content") or ""
+            else:
+                # 超过 max_tool_rounds, 取最后一次的 content
+                response_text = content
 
             duration_ms = int((time.time() - started_at) * 1000)
 
+            # ── Step 5: 处理响应 ──
+            # 注意: 我们不把心跳的 messages 写回 session
+            # 这保证心跳不污染用户对话历史, 不推进 session.updatedAt
+
             if not response_text.strip():
-                emit_heartbeat_event(
-                    HEARTBEAT_STATUS_OK_EMPTY,
-                    duration_ms=duration_ms,
-                )
+                payload = emit_heartbeat_event(
+                    HEARTBEAT_STATUS_OK_EMPTY, duration_ms=duration_ms)
+                self._notify_event(payload)
                 return {"status": HEARTBEAT_STATUS_OK_EMPTY, "text": "",
                         "duration_ms": duration_ms, "reason": None}
 
-            # Strip HEARTBEAT_OK token
-            # 【参考】OpenClaw heartbeat-runner.ts  normalizeHeartbeatReply()
             stripped = strip_heartbeat_token(
-                response_text,
-                ack_max_chars=self.ack_max_chars,
-            )
+                response_text, ack_max_chars=self.ack_max_chars)
 
             if stripped["should_skip"]:
-                emit_heartbeat_event(
-                    HEARTBEAT_STATUS_OK_TOKEN,
-                    duration_ms=duration_ms,
-                )
+                payload = emit_heartbeat_event(
+                    HEARTBEAT_STATUS_OK_TOKEN, duration_ms=duration_ms)
+                self._notify_event(payload)
                 return {"status": HEARTBEAT_STATUS_OK_TOKEN, "text": "",
                         "duration_ms": duration_ms, "reason": None}
 
             final_text = stripped["text"]
 
-            # 去重检查 (24h 内不重发相同内容)
-            # 【参考】OpenClaw heartbeat-runner.ts  isDuplicateMain
-            #   prevHeartbeatText.trim() === normalized.text.trim()
-            #   && startedAt - prevHeartbeatAt < 24 * 60 * 60 * 1000
+            # 去重检查 (24h)
             if (
                 self.last_heartbeat_text.strip()
                 and final_text.strip() == self.last_heartbeat_text.strip()
                 and self.last_heartbeat_sent_at > 0
                 and (started_at - self.last_heartbeat_sent_at) < DEDUP_WINDOW_SECONDS
             ):
-                emit_heartbeat_event(
-                    HEARTBEAT_STATUS_SKIPPED,
-                    reason="duplicate",
-                    preview=final_text[:200],
-                    duration_ms=duration_ms,
-                )
+                payload = emit_heartbeat_event(
+                    HEARTBEAT_STATUS_SKIPPED, reason="duplicate",
+                    preview=final_text[:200], duration_ms=duration_ms)
+                self._notify_event(payload)
                 return {"status": HEARTBEAT_STATUS_SKIPPED, "text": "",
                         "duration_ms": duration_ms, "reason": "duplicate"}
 
-            # 记录本次发送的内容 (用于下次去重)
+            # 有新内容 → 记录 + 输出
             self.last_heartbeat_text = final_text
             self.last_heartbeat_sent_at = started_at
+            self.total_alerts += 1
 
-            emit_heartbeat_event(
-                HEARTBEAT_STATUS_SENT,
-                preview=final_text[:200],
-                duration_ms=duration_ms,
-            )
+            payload = emit_heartbeat_event(
+                HEARTBEAT_STATUS_SENT, preview=final_text[:200],
+                duration_ms=duration_ms)
+            self._notify_event(payload)
             return {"status": HEARTBEAT_STATUS_SENT, "text": final_text,
                     "duration_ms": duration_ms, "reason": None}
 
         except Exception as exc:
             duration_ms = int((time.time() - started_at) * 1000)
             reason = str(exc)
-            emit_heartbeat_event(
-                HEARTBEAT_STATUS_FAILED,
-                reason=reason,
-                duration_ms=duration_ms,
-            )
+            payload = emit_heartbeat_event(
+                HEARTBEAT_STATUS_FAILED, reason=reason, duration_ms=duration_ms)
+            self._notify_event(payload)
             log.error("heartbeat failed: %s", reason)
             return {"status": HEARTBEAT_STATUS_FAILED, "text": "",
                     "duration_ms": duration_ms, "reason": reason}
 
-    # -- 后台线程 --
+    def _notify_event(self, payload: dict) -> None:
+        """通知所有事件监听器 (Gateway 广播用)."""
+        for cb in self.on_event:
+            try:
+                cb(payload)
+            except Exception:
+                pass
+
+    # -- 后台循环 --
 
     def _background_loop(self) -> None:
-        """后台心跳循环.
+        """后台心跳循环: 每秒检查, 满足条件时执行.
 
-        【参考】OpenClaw heartbeat-runner.ts  startHeartbeatRunner() 的调度逻辑
+        【参考】OpenClaw heartbeat-runner.ts  startHeartbeatRunner()
 
-        以 1 秒间隔检查 should_run(), 满足条件时执行心跳.
-        这样即使 interval 是 60 秒, 停止信号也能在 1 秒内响应.
+        这是心跳系统的核心循环:
+          while not stopped:
+            if should_run():
+              acquire lock (与用户消息互斥)
+              run_heartbeat_once()
+              release lock
+            sleep 1s
         """
+        log.info("heartbeat loop started: agent=%s interval=%ds active=%s-%s",
+                 self.agent.id, self.interval,
+                 self.active_start, self.active_end)
+
         while not self._stop_event.is_set():
             should, reason = self.should_run()
             if should:
@@ -847,14 +869,9 @@ class HeartbeatRunner:
                     self.running = True
                     self.last_run = time.time()
                     result = self.run_heartbeat_once()
-                    if result["status"] == HEARTBEAT_STATUS_SENT and result["text"]:
-                        with self._output_lock:
-                            self._output_queue.append(result["text"])
-                    elif result["status"] == HEARTBEAT_STATUS_FAILED and result.get("reason"):
-                        with self._output_lock:
-                            self._output_queue.append(
-                                f"[heartbeat error: {result['reason']}]"
-                            )
+                    # 把结果放入输出队列 (REPL 模式消费)
+                    with self._output_lock:
+                        self._output_queue.append(result)
                 except Exception as exc:
                     log.error("heartbeat runner error: %s", exc)
                 finally:
@@ -862,6 +879,8 @@ class HeartbeatRunner:
                     self._lock.release()
 
             self._stop_event.wait(1.0)
+
+        log.info("heartbeat loop stopped: agent=%s", self.agent.id)
 
     def start(self) -> None:
         """启动后台心跳线程."""
@@ -871,26 +890,23 @@ class HeartbeatRunner:
         self._thread = threading.Thread(
             target=self._background_loop,
             daemon=True,
-            name="heartbeat-runner",
+            name=f"heartbeat-{self.agent.id}",
         )
         self._thread.start()
 
     def stop(self) -> None:
-        """停止后台心跳线程.
-
-        【参考】OpenClaw heartbeat-runner.ts  cleanup()
-        """
+        """停止后台心跳线程."""
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=5.0)
             self._thread = None
 
-    def drain_output(self) -> list[str]:
-        """取出所有待输出的心跳消息. 由主线程调用."""
+    def drain_output(self) -> list[dict]:
+        """取出所有待输出的心跳结果. 由主线程调用."""
         with self._output_lock:
-            messages = self._output_queue[:]
+            results = self._output_queue[:]
             self._output_queue.clear()
-            return messages
+            return results
 
 
 # ============================================================================
@@ -901,15 +917,22 @@ def _ensure_sample_heartbeat(agents: dict[str, AgentWithSoulMemory]) -> None:
     """为没有 HEARTBEAT.md 的 Agent 创建示例文件.
 
     【参考】OpenClaw docs/reference/templates/HEARTBEAT.md
+
+    注意 HEARTBEAT.md 的内容决定了心跳检查什么:
+    - 检查每日记忆中的 todo/deadline
+    - 检查用户提到的提醒事项
+    - 检查未完成任务
+    这些检查项直接驱动心跳与 Memory 系统的信息交互.
     """
     sample_heartbeat = """\
 # Heartbeat Instructions
 
 Check the following and report ONLY if action is needed:
 
-1. Review today's memory log for any unfinished tasks or pending items.
-2. If the user mentioned a deadline or reminder, check if it is approaching.
-3. If there are new daily memories, summarize any actionable items.
+1. Use memory_search to find any pending tasks, deadlines, or reminders.
+2. Review today's memory log (memory_get on today's file) for unfinished items.
+3. If the user mentioned a deadline or reminder in recent conversation, check if it is approaching.
+4. If you find something actionable, report it concisely.
 
 If nothing needs attention, respond with exactly: HEARTBEAT_OK
 """
@@ -921,15 +944,185 @@ If nothing needs attention, respond with exactly: HEARTBEAT_OK
 
 
 # ============================================================================
-# Part 7: REPL — 交互式 REPL (s06 REPL + 心跳扩展)
+# Part 7: HeartbeatGateway — 继承 SoulMemoryGateway, 增加心跳 RPC
 # ============================================================================
 #
-# 在 s06 的 run_repl 基础上增加:
-#   - 后台心跳线程
+# 在 s06 的 SoulMemoryGateway 基础上增加:
+#   - 每个 agent 启动一个 HeartbeatRunner 后台线程
+#   - 新增 RPC: heartbeat.status / heartbeat.trigger
+#   - 心跳事件通过 WebSocket 广播给所有客户端
+#
+# 信息流 (Gateway 模式):
+#   HeartbeatRunner (后台)
+#       │
+#       ├─ 产生心跳消息 → broadcast("heartbeat", payload)
+#       │                  → 所有连接的 WebSocket 客户端收到
+#       │
+#       ├─ 共享 session → 心跳和 WebSocket chat.send 使用同一 session
+#       │                → 心跳知道通过 Gateway 的对话内容
+#       │
+#       └─ 共享 memory → 心跳和用户对话读写同一份记忆
+# ============================================================================
+
+class HeartbeatGateway(SoulMemoryGateway):
+    """带心跳的 WebSocket 网关 — 继承 s06 SoulMemoryGateway 的全部功能.
+
+    新增:
+      - 每个 Agent 一个 HeartbeatRunner 后台线程
+      - heartbeat.status RPC: 查询心跳状态
+      - heartbeat.trigger RPC: 手动触发心跳
+      - 心跳事件广播: 所有客户端收到心跳通知
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        router: MessageRouter,
+        sessions: S04SessionStore,
+        soul_agents: dict[str, AgentWithSoulMemory],
+        token: str = "",
+        *,
+        heartbeat_interval: int = DEMO_HEARTBEAT_INTERVAL,
+        active_start: str = HEARTBEAT_ACTIVE_START,
+        active_end: str = HEARTBEAT_ACTIVE_END,
+    ) -> None:
+        super().__init__(host, port, router, sessions, soul_agents, token)
+
+        self.heartbeat_interval = heartbeat_interval
+        self.active_start = active_start
+        self.active_end = active_end
+
+        # 为每个 agent 创建 HeartbeatRunner
+        self._heartbeat_runners: dict[str, HeartbeatRunner] = {}
+        for agent_id, agent in soul_agents.items():
+            session_key = f"gateway:{agent_id}:heartbeat"
+            runner = HeartbeatRunner(
+                agent=agent,
+                session_store=sessions,
+                session_key=session_key,
+                interval_seconds=heartbeat_interval,
+                active_start=active_start,
+                active_end=active_end,
+            )
+            # 注册事件回调: 心跳事件 → 广播给所有客户端
+            runner.on_event.append(
+                lambda payload, aid=agent_id: self._broadcast_heartbeat(aid, payload)
+            )
+            self._heartbeat_runners[agent_id] = runner
+
+        # 注册新 RPC 方法
+        self._methods["heartbeat.status"] = self._handle_heartbeat_status
+        self._methods["heartbeat.trigger"] = self._handle_heartbeat_trigger
+
+    def _broadcast_heartbeat(self, agent_id: str, payload: dict) -> None:
+        """广播心跳事件给所有连接的客户端.
+
+        【参考】OpenClaw server.impl.ts  broadcast("heartbeat", evt, {dropIfSlow: true})
+        """
+        payload["agentId"] = agent_id
+        event_str = make_event("heartbeat", payload)
+        for client in list(self.clients.values()):
+            try:
+                asyncio.get_event_loop().call_soon_threadsafe(
+                    asyncio.ensure_future,
+                    client.ws.send(event_str),
+                )
+            except Exception:
+                pass  # dropIfSlow: 发送失败就跳过
+
+    async def _handle_heartbeat_status(self, client: ConnectedClient, params: dict) -> dict:
+        """heartbeat.status — 查询指定 agent 的心跳状态."""
+        agent_id = params.get("agent_id", self.router.default_agent)
+        runner = self._heartbeat_runners.get(agent_id)
+        if runner is None:
+            return {"error": f"No heartbeat runner for agent: {agent_id}"}
+
+        should, reason = runner.should_run()
+        elapsed = time.time() - runner.last_run if runner.last_run > 0 else 0
+        next_in = max(0, runner.interval - elapsed)
+
+        return {
+            "agent_id": agent_id,
+            "enabled": runner._is_enabled(),
+            "interval_seconds": runner.interval,
+            "active_hours": f"{runner.active_start}-{runner.active_end}",
+            "is_active_hours": runner._is_active_hours(),
+            "has_heartbeat_file": runner.heartbeat_path.exists(),
+            "has_content": runner._heartbeat_has_content(),
+            "running": runner.running,
+            "last_run_seconds_ago": round(elapsed, 1) if runner.last_run > 0 else None,
+            "next_in_seconds": round(next_in, 1),
+            "should_run": should,
+            "should_run_reason": reason,
+            "total_runs": runner.total_runs,
+            "total_alerts": runner.total_alerts,
+            "last_sent_preview": runner.last_heartbeat_text[:200] if runner.last_heartbeat_text else None,
+        }
+
+    async def _handle_heartbeat_trigger(self, client: ConnectedClient, params: dict) -> dict:
+        """heartbeat.trigger — 手动触发一次心跳 (跳过 interval 检查)."""
+        agent_id = params.get("agent_id", self.router.default_agent)
+        runner = self._heartbeat_runners.get(agent_id)
+        if runner is None:
+            return {"error": f"No heartbeat runner for agent: {agent_id}"}
+
+        # 在线程池中执行 (避免阻塞事件循环)
+        result = await asyncio.to_thread(runner.run_heartbeat_once)
+        runner.last_run = time.time()
+        return result
+
+    async def start(self) -> None:
+        """启动网关 + 所有心跳线程."""
+        # 启动所有心跳 runner
+        for agent_id, runner in self._heartbeat_runners.items():
+            runner.start()
+            log.info("heartbeat runner started for agent=%s", agent_id)
+
+        try:
+            await super().start()
+        finally:
+            # 停止所有心跳
+            for runner in self._heartbeat_runners.values():
+                runner.stop()
+
+
+# ============================================================================
+# Part 8: run_repl_with_heartbeat — 扩展 s06 REPL, 加入心跳后台循环
+# ============================================================================
+#
+# 在 s06 run_repl 的基础上增加:
+#   - 后台 HeartbeatRunner 线程
 #   - /heartbeat 命令: 查看心跳状态
 #   - /trigger 命令: 手动触发心跳
-#   - 用户输入前检查心跳输出队列
-#   - 互斥锁保护用户消息和心跳不并发
+#   - 每次等待输入前, 检查并输出心跳消息
+#   - 互斥锁: 用户消息和心跳不并发
+#
+# 信息流 (REPL 模式):
+#
+#   ┌─────────────────────────────────────────────────────────┐
+#   │                    共享资源                              │
+#   │  ┌─────────┐  ┌───────────┐  ┌──────────────────────┐  │
+#   │  │ Session  │  │  Memory   │  │  Agent workspace     │  │
+#   │  │ (对话    │  │ (MEMORY   │  │  ├─ SOUL.md         │  │
+#   │  │  历史)   │  │  .md +    │  │  ├─ MEMORY.md       │  │
+#   │  │         │  │  daily/)  │  │  ├─ HEARTBEAT.md    │  │
+#   │  └────┬────┘  └─────┬─────┘  │  └─ memory/         │  │
+#   │       │             │         └──────────────────────┘  │
+#   │       │             │                                    │
+#   │  ┌────┴─────────────┴────┐    ┌──────────────────────┐  │
+#   │  │   用户消息处理         │    │  HeartbeatRunner     │  │
+#   │  │   (主线程)            │    │  (后台线程)          │  │
+#   │  │                       │    │                      │  │
+#   │  │  input() → LLM call  │◄──►│  tick → LLM call    │  │
+#   │  │  (soul+memory+tools)  │    │  (soul+memory+tools) │  │
+#   │  │                       │    │                      │  │
+#   │  │  互斥锁 ◄─────────────┼────► 互斥锁              │  │
+#   │  │                       │    │                      │  │
+#   │  │  → print_assistant()  │    │  → output queue     │  │
+#   │  └───────────────────────┘    │  → drain → print    │  │
+#   │                                └──────────────────────┘  │
+#   └─────────────────────────────────────────────────────────┘
 # ============================================================================
 
 def run_repl_with_heartbeat(
@@ -940,13 +1133,10 @@ def run_repl_with_heartbeat(
     active_start: str = HEARTBEAT_ACTIVE_START,
     active_end: str = HEARTBEAT_ACTIVE_END,
 ) -> None:
-    """交互式 REPL: s06 路由 + Soul/Memory + 心跳.
+    """交互式 REPL: s06 全部功能 + 心跳后台循环.
 
-    整合 s06 的 run_repl 和心跳系统:
-      1. 后台线程运行 HeartbeatRunner, 周期性触发 agent
-      2. 主线程运行交互式 REPL, 处理用户输入
-      3. 两者共享互斥锁, 确保不同时运行
-      4. 主线程在每次等待用户输入前, 检查并输出心跳消息
+    包含 s06 run_repl 的所有命令 (/soul, /memory, /agents, /switch,
+    /bindings, /route) 并新增心跳命令 (/heartbeat, /trigger).
     """
     default_agent_id = router.default_agent
     current_agent = soul_agents.get(default_agent_id)
@@ -954,7 +1144,7 @@ def run_repl_with_heartbeat(
         current_agent = next(iter(soul_agents.values()))
     session_key = f"repl:{current_agent.id}:local"
 
-    # 创建心跳 runner
+    # 创建心跳 runner — 与用户对话共享 session!
     heartbeat = HeartbeatRunner(
         agent=current_agent,
         session_store=session_store,
@@ -972,15 +1162,17 @@ def run_repl_with_heartbeat(
     print_info(f"  Heartbeat: every {heartbeat_interval}s "
                f"(active {active_start}-{active_end})")
     print_info("")
-    print_info("  Commands:")
+    print_info("  Commands (s06 inherited):")
     print_info("    /quit or /exit     - Leave REPL")
     print_info("    /soul              - View current agent's soul")
     print_info("    /memory            - View memory status")
-    print_info("    /heartbeat         - View heartbeat status")
-    print_info("    /trigger           - Manually trigger a heartbeat")
+    print_info("    /route <ch> <sender> [kind] [guild]  - Test routing")
     print_info("    /switch <agent_id> - Switch to a different agent")
     print_info("    /agents            - List all agents")
     print_info("    /bindings          - List all routing bindings")
+    print_info("  Commands (s07 new):")
+    print_info("    /heartbeat         - View heartbeat status")
+    print_info("    /trigger           - Manually trigger a heartbeat")
     print_info("    (anything else)    - Chat with current agent")
     print_info("=" * 70)
     print()
@@ -996,19 +1188,22 @@ def run_repl_with_heartbeat(
     if hb_content and not is_heartbeat_content_effectively_empty(hb_content):
         print_info(f"HEARTBEAT.md loaded ({len(hb_content)} chars)")
     else:
-        print_info("HEARTBEAT.md not found or empty (heartbeat disabled)")
+        print_info("HEARTBEAT.md not found or empty (heartbeat will skip LLM calls)")
     print()
 
-    # 启动心跳
+    # 启动心跳后台循环
     heartbeat.start()
     print_info(f"Heartbeat started (interval={heartbeat_interval}s)")
     print()
 
     try:
         while True:
-            # 输出心跳消息 (在等待用户输入前)
-            for msg in heartbeat.drain_output():
-                print_heartbeat(msg)
+            # ── 心跳输出: 在等待输入前, 显示心跳产生的消息 ──
+            for result in heartbeat.drain_output():
+                if result["status"] == HEARTBEAT_STATUS_SENT and result["text"]:
+                    print_heartbeat(result["text"])
+                elif result["status"] == HEARTBEAT_STATUS_FAILED and result.get("reason"):
+                    print(f"  {RED}[heartbeat error] {result['reason']}{RESET}")
 
             try:
                 user_input = input(colored_prompt()).strip()
@@ -1023,7 +1218,7 @@ def run_repl_with_heartbeat(
                 print(f"{DIM}Goodbye.{RESET}")
                 break
 
-            # -- 内置命令 --
+            # ── s06 继承的命令 ──
 
             if user_input == "/soul":
                 sp = current_agent.soul_path
@@ -1052,47 +1247,6 @@ def run_repl_with_heartbeat(
                 print(f"{MAGENTA}--- end ---{RESET}\n")
                 continue
 
-            if user_input == "/heartbeat":
-                should, reason = heartbeat.should_run()
-                elapsed = time.time() - heartbeat.last_run if heartbeat.last_run > 0 else 0
-                next_in = max(0, heartbeat.interval - elapsed)
-                hb_exists = heartbeat.heartbeat_path.exists()
-                hb_has_content = heartbeat._heartbeat_has_content()
-                active = heartbeat._is_active_hours()
-                print(f"\n{BLUE}--- Heartbeat Status ---{RESET}")
-                print(f"  Enabled:        {heartbeat._is_enabled()}")
-                print(f"  HEARTBEAT.md:   {'exists' if hb_exists else 'not found'}"
-                      f" ({'has content' if hb_has_content else 'empty'})")
-                print(f"  Active hours:   {heartbeat.active_start}-{heartbeat.active_end}"
-                      f" ({'active' if active else 'quiet'})")
-                print(f"  Interval:       {heartbeat.interval}s")
-                print(f"  Last run:       {elapsed:.0f}s ago" if heartbeat.last_run > 0 else
-                      "  Last run:       never")
-                print(f"  Next in:        ~{next_in:.0f}s")
-                print(f"  Should run:     {should} ({reason})")
-                print(f"  Running:        {heartbeat.running}")
-                print(f"  ackMaxChars:    {heartbeat.ack_max_chars}")
-                if heartbeat.last_heartbeat_text:
-                    print(f"  Last sent:      {heartbeat.last_heartbeat_text[:100]!r}")
-                print(f"{BLUE}--- end ---{RESET}\n")
-                continue
-
-            if user_input == "/trigger":
-                print_info("Manually triggering heartbeat...")
-                result = heartbeat.run_heartbeat_once()
-                if result["status"] == HEARTBEAT_STATUS_SENT and result["text"]:
-                    print_heartbeat(result["text"])
-                elif result["status"] == HEARTBEAT_STATUS_OK_TOKEN:
-                    print_info("Heartbeat returned HEARTBEAT_OK (nothing to report).\n")
-                elif result["status"] == HEARTBEAT_STATUS_OK_EMPTY:
-                    print_info("Heartbeat returned empty response.\n")
-                elif result["status"] == HEARTBEAT_STATUS_SKIPPED:
-                    print_info(f"Heartbeat skipped: {result.get('reason', '?')}\n")
-                elif result["status"] == HEARTBEAT_STATUS_FAILED:
-                    print(f"  {RED}Heartbeat failed: {result.get('reason', '?')}{RESET}\n")
-                heartbeat.last_run = time.time()
-                continue
-
             if user_input == "/bindings":
                 print(router.describe_bindings())
                 continue
@@ -1106,10 +1260,31 @@ def run_repl_with_heartbeat(
                           f" workspace={a.workspace_dir}{marker}")
                 continue
 
+            if user_input.startswith("/route "):
+                parts = user_input[7:].split()
+                if len(parts) < 2:
+                    print("  Usage: /route <channel> <sender> [kind] [guild_id]")
+                    continue
+                channel = parts[0]
+                sender = parts[1]
+                peer_kind = parts[2] if len(parts) > 2 else "direct"
+                guild_id = parts[3] if len(parts) > 3 else None
+                agent_cfg, sk = router.resolve(
+                    channel=channel, sender=sender,
+                    peer_kind=peer_kind, guild_id=guild_id,
+                )
+                sa = soul_agents.get(agent_cfg.id)
+                has_soul = sa and sa.soul_path.exists()
+                print(f"  Agent:       {agent_cfg.id} ({agent_cfg.model})")
+                print(f"  Session Key: {sk}")
+                print(f"  Prompt:      {agent_cfg.system_prompt[:80]}...")
+                print(f"  Soul:        {'Yes' if has_soul else 'No'}")
+                continue
+
             if user_input.startswith("/switch "):
                 new_id = user_input[8:].strip()
                 if new_id in soul_agents:
-                    # 停止旧心跳, 切换 agent, 启动新心跳
+                    # 停止旧心跳, 切换, 启动新心跳
                     heartbeat.stop()
                     current_agent = soul_agents[new_id]
                     session_key = f"repl:{current_agent.id}:local"
@@ -1130,8 +1305,55 @@ def run_repl_with_heartbeat(
                           f" Available: {', '.join(soul_agents.keys())}")
                 continue
 
-            # -- 普通对话: 获取互斥锁, 调用 Agent --
-            # 如果心跳正在运行, 等待它完成
+            # ── s07 新增的命令 ──
+
+            if user_input == "/heartbeat":
+                should, reason = heartbeat.should_run()
+                elapsed = time.time() - heartbeat.last_run if heartbeat.last_run > 0 else 0
+                next_in = max(0, heartbeat.interval - elapsed)
+                hb_exists = heartbeat.heartbeat_path.exists()
+                hb_has_content = heartbeat._heartbeat_has_content()
+                active = heartbeat._is_active_hours()
+                print(f"\n{BLUE}--- Heartbeat Status ---{RESET}")
+                print(f"  Enabled:        {heartbeat._is_enabled()}")
+                print(f"  HEARTBEAT.md:   {'exists' if hb_exists else 'not found'}"
+                      f" ({'has content' if hb_has_content else 'empty'})")
+                print(f"  Active hours:   {heartbeat.active_start}-{heartbeat.active_end}"
+                      f" ({'active' if active else 'quiet'})")
+                print(f"  Interval:       {heartbeat.interval}s")
+                print(f"  Last run:       {elapsed:.0f}s ago" if heartbeat.last_run > 0 else
+                      "  Last run:       never")
+                print(f"  Next in:        ~{next_in:.0f}s")
+                print(f"  Should run:     {should} ({reason})")
+                print(f"  Running:        {heartbeat.running}")
+                print(f"  Total runs:     {heartbeat.total_runs}")
+                print(f"  Total alerts:   {heartbeat.total_alerts}")
+                print(f"  ackMaxChars:    {heartbeat.ack_max_chars}")
+                if heartbeat.last_heartbeat_text:
+                    print(f"  Last sent:      {heartbeat.last_heartbeat_text[:100]!r}")
+                print(f"  Session:        {heartbeat.session_key}")
+                print(f"                  (shared with user conversation!)")
+                print(f"{BLUE}--- end ---{RESET}\n")
+                continue
+
+            if user_input == "/trigger":
+                print_info("Manually triggering heartbeat...")
+                result = heartbeat.run_heartbeat_once()
+                if result["status"] == HEARTBEAT_STATUS_SENT and result["text"]:
+                    print_heartbeat(result["text"])
+                elif result["status"] == HEARTBEAT_STATUS_OK_TOKEN:
+                    print_info("Heartbeat returned HEARTBEAT_OK (nothing to report).\n")
+                elif result["status"] == HEARTBEAT_STATUS_OK_EMPTY:
+                    print_info("Heartbeat returned empty response.\n")
+                elif result["status"] == HEARTBEAT_STATUS_SKIPPED:
+                    print_info(f"Heartbeat skipped: {result.get('reason', '?')}\n")
+                elif result["status"] == HEARTBEAT_STATUS_FAILED:
+                    print(f"  {RED}Heartbeat failed: {result.get('reason', '?')}{RESET}\n")
+                heartbeat.last_run = time.time()
+                continue
+
+            # ── 普通对话: 获取互斥锁, 调用 Agent (s06 run_agent_with_soul_and_memory) ──
+            # 互斥锁保证: 用户消息处理期间, 心跳不会并发运行
             heartbeat._lock.acquire()
             try:
                 print(f"\n{BLUE}[Agent: {current_agent.id}]{RESET}")
@@ -1155,15 +1377,22 @@ def run_repl_with_heartbeat(
 
 
 # ============================================================================
-# Part 8: Main 程序入口
+# Part 9: Main 程序入口 — s06 全部模式 + 心跳
 # ============================================================================
 
 def main() -> None:
-    """程序入口: 启动带心跳的 REPL.
+    """程序入口: 兼容 s06 所有运行模式, 且增加心跳支持.
 
     运行方式:
-      python s07_heartbeat.py --repl     # 交互式 REPL (推荐)
-      python s07_heartbeat.py            # 默认也启动 REPL
+      python s07_heartbeat.py              # 启动带心跳的网关 (默认)
+      python s07_heartbeat.py --test-client # 运行测试客户端 (s06 功能)
+      python s07_heartbeat.py --chat       # 交互式对话 (s06 功能)
+      python s07_heartbeat.py --repl       # REPL + 心跳后台循环
+
+    心跳参数:
+      --interval 30          # 心跳间隔 (秒)
+      --active-start 09:00   # 活跃时段开始
+      --active-end 22:00     # 活跃时段结束
     """
     # 检查 API 密钥
     try:
@@ -1192,38 +1421,86 @@ def main() -> None:
         elif arg == "--active-end" and i + 1 < len(sys.argv):
             active_end = sys.argv[i + 1]
 
-    # 确保 workspace 和 sessions 目录存在
+    # 确保目录存在
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 加载配置, 创建 Agent (复用 s06 的创建逻辑)
+    # 加载配置, 创建 Agent (复用 s06)
     soul_agents, bindings, default_agent, dm_scope = create_agents_with_soul_memory(config_path)
     if not soul_agents:
         print(f"{YELLOW}Error: No agents found in config.{RESET}")
         sys.exit(1)
 
-    # 创建示例文件 (Soul + Heartbeat)
+    # 创建示例文件 (s06 Soul + s07 Heartbeat)
     _ensure_sample_soul(soul_agents)
     _ensure_sample_heartbeat(soul_agents)
 
     # 构建路由器
     router = MessageRouter(soul_agents, bindings, default_agent, dm_scope)
 
-    # 初始化 session store (复用 s06 的方式)
-    session_store = S04SessionStore(
-        store_path=SESSIONS_DIR / "sessions.json",
-        transcript_dir=SESSIONS_DIR / "transcripts",
-    )
+    if "--test-client" in sys.argv:
+        # 测试客户端 — 直接复用 s06 (网关需要单独启动, 可用本文件默认模式)
+        asyncio.run(s06_test_client())
 
-    # 启动 REPL (带心跳)
-    run_repl_with_heartbeat(
-        router,
-        soul_agents,
-        session_store,
-        heartbeat_interval=heartbeat_interval,
-        active_start=active_start,
-        active_end=active_end,
-    )
+    elif "--chat" in sys.argv:
+        # 交互式对话 — 直接复用 s06
+        asyncio.run(s06_interactive_chat())
+
+    elif "--repl" in sys.argv:
+        # REPL + 心跳 — s07 的核心模式
+        session_store = S04SessionStore(
+            store_path=SESSIONS_DIR / "sessions.json",
+            transcript_dir=SESSIONS_DIR / "transcripts",
+        )
+        run_repl_with_heartbeat(
+            router,
+            soul_agents,
+            session_store,
+            heartbeat_interval=heartbeat_interval,
+            active_start=active_start,
+            active_end=active_end,
+        )
+
+    else:
+        # 默认: 启动带心跳的网关
+        print("=" * 60)
+        print("  OpenClaw Gateway — Heartbeat Edition")
+        print("  (s07: s06 Soul+Memory Gateway + Heartbeat)")
+        print("=" * 60)
+        print(f"  Host:        {GATEWAY_HOST}")
+        print(f"  Port:        {GATEWAY_PORT}")
+        print(f"  Agents:      {', '.join(soul_agents.keys())}")
+        print(f"  Bindings:    {len(bindings)} rules")
+        print(f"  DM Scope:    {dm_scope}")
+        print(f"  Heartbeat:   every {heartbeat_interval}s"
+              f" (active {active_start}-{active_end})")
+        print()
+        print("  New RPC methods (s07):")
+        print("    heartbeat.status   - Query heartbeat status for an agent")
+        print("    heartbeat.trigger  - Manually trigger a heartbeat")
+        print()
+        print("  All s06 RPC methods also available:")
+        print("    health, chat.send, chat.history, routing.resolve,")
+        print("    routing.bindings, sessions.list, identify,")
+        print("    memory.status, soul.get")
+        print("=" * 60)
+
+        sessions = S04SessionStore(
+            store_path=SESSIONS_DIR / "sessions.json",
+            transcript_dir=SESSIONS_DIR / "transcripts",
+        )
+        gateway = HeartbeatGateway(
+            host=GATEWAY_HOST,
+            port=GATEWAY_PORT,
+            router=router,
+            sessions=sessions,
+            soul_agents=soul_agents,
+            token=GATEWAY_TOKEN,
+            heartbeat_interval=heartbeat_interval,
+            active_start=active_start,
+            active_end=active_end,
+        )
+        asyncio.run(gateway.start())
 
 
 if __name__ == "__main__":
