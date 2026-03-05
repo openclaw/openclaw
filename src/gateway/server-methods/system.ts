@@ -1,10 +1,12 @@
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
+import { canonicalizeWakeSessionKey } from "../session-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const systemHandlers: GatewayRequestHandlers = {
@@ -37,7 +39,24 @@ export const systemHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "text required"));
       return;
     }
-    const sessionKey = resolveMainSessionKeyFromConfig();
+    const mainSessionKey = resolveMainSessionKeyFromConfig();
+    const rawSessionKey =
+      typeof params.sessionKey === "string" && params.sessionKey.trim()
+        ? params.sessionKey.trim()
+        : undefined;
+    // Validate sessionKey BEFORE mutating presence state — if canonicalization
+    // fails we reject the request without side effects.
+    const isNodePresenceLine = text.startsWith("Node:");
+    let targetSessionKey: string | undefined;
+    if (!isNodePresenceLine && rawSessionKey) {
+      try {
+        targetSessionKey = canonicalizeWakeSessionKey(rawSessionKey);
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, (err as Error).message));
+        return;
+      }
+    }
+
     const deviceId = typeof params.deviceId === "string" ? params.deviceId : undefined;
     const instanceId = typeof params.instanceId === "string" ? params.instanceId : undefined;
     const host = typeof params.host === "string" ? params.host : undefined;
@@ -82,7 +101,6 @@ export const systemHandlers: GatewayRequestHandlers = {
       scopes,
       tags,
     });
-    const isNodePresenceLine = text.startsWith("Node:");
     if (isNodePresenceLine) {
       const next = presenceUpdate.next;
       const changed = new Set(presenceUpdate.changedKeys);
@@ -97,7 +115,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       const reasonChanged = changed.has("reason") && !ignoreReason;
       const hasChanges = hostChanged || ipChanged || versionChanged || modeChanged || reasonChanged;
       if (hasChanges) {
-        const contextChanged = isSystemEventContextChanged(sessionKey, presenceUpdate.key);
+        const contextChanged = isSystemEventContextChanged(mainSessionKey, presenceUpdate.key);
         const parts: string[] = [];
         if (contextChanged || hostChanged || ipChanged) {
           const hostLabel = next.host?.trim() || "Unknown";
@@ -116,13 +134,17 @@ export const systemHandlers: GatewayRequestHandlers = {
         const deltaText = parts.join(" · ");
         if (deltaText) {
           enqueueSystemEvent(deltaText, {
-            sessionKey,
+            sessionKey: mainSessionKey,
             contextKey: presenceUpdate.key,
           });
         }
       }
     } else {
+      const sessionKey = targetSessionKey ?? mainSessionKey;
       enqueueSystemEvent(text, { sessionKey });
+      if (targetSessionKey) {
+        requestHeartbeatNow({ reason: "system-event", sessionKey: targetSessionKey });
+      }
     }
     broadcastPresenceSnapshot({
       broadcast: context.broadcast,

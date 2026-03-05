@@ -68,7 +68,11 @@ const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 
 type HookDispatchers = {
-  dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
+  dispatchWakeHook: (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+    sessionKey?: string;
+  }) => { ok: true } | { ok: false; error: string };
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
 };
 
@@ -386,7 +390,35 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
       }
-      dispatchWakeHook(normalized.value);
+      // Validate session key policy when provided
+      if (normalized.value.sessionKey) {
+        const sessionKeyResult = resolveHookSessionKey({
+          hooksConfig,
+          source: "request",
+          sessionKey: normalized.value.sessionKey,
+        });
+        if (!sessionKeyResult.ok) {
+          sendJson(res, 400, { ok: false, error: sessionKeyResult.error });
+          return true;
+        }
+        const wakeResult = dispatchWakeHook({
+          ...normalized.value,
+          sessionKey: sessionKeyResult.value,
+        });
+        if (!wakeResult.ok) {
+          sendJson(res, 400, { ok: false, error: wakeResult.error });
+          return true;
+        }
+      } else {
+        const wakeResult = dispatchWakeHook(normalized.value);
+        // dispatchWakeHook only returns ok:false when sessionKey canonicalization
+        // fails; without a sessionKey it always succeeds. This guard is intentionally
+        // defensive for future-proofing.
+        if (!wakeResult.ok) {
+          sendJson(res, 400, { ok: false, error: wakeResult.error });
+          return true;
+        }
+      }
       sendJson(res, 200, { ok: true, mode: normalized.value.mode });
       return true;
     }
@@ -442,10 +474,38 @@ export function createHooksRequestHandler(
             return true;
           }
           if (mapped.action.kind === "wake") {
-            dispatchWakeHook({
-              text: mapped.action.text,
-              mode: mapped.action.mode,
-            });
+            if (mapped.action.sessionKey) {
+              const sessionKeyResult = resolveHookSessionKey({
+                hooksConfig,
+                source: "mapping",
+                sessionKey: mapped.action.sessionKey,
+              });
+              if (!sessionKeyResult.ok) {
+                sendJson(res, 400, { ok: false, error: sessionKeyResult.error });
+                return true;
+              }
+              const wakeResult = dispatchWakeHook({
+                text: mapped.action.text,
+                mode: mapped.action.mode,
+                sessionKey: sessionKeyResult.value,
+              });
+              if (!wakeResult.ok) {
+                sendJson(res, 400, { ok: false, error: wakeResult.error });
+                return true;
+              }
+            } else {
+              const wakeResult = dispatchWakeHook({
+                text: mapped.action.text,
+                mode: mapped.action.mode,
+              });
+              // dispatchWakeHook only returns ok:false when sessionKey canonicalization
+              // fails; without a sessionKey it always succeeds. This guard is intentionally
+              // defensive for future-proofing.
+              if (!wakeResult.ok) {
+                sendJson(res, 400, { ok: false, error: wakeResult.error });
+                return true;
+              }
+            }
             sendJson(res, 200, { ok: true, mode: mapped.action.mode });
             return true;
           }
