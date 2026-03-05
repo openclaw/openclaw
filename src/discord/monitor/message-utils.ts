@@ -100,6 +100,7 @@ const DISCORD_CHANNEL_INFO_CACHE = new Map<
   { value: DiscordChannelInfo | null; expiresAt: number }
 >();
 const DISCORD_STICKER_ASSET_BASE_URL = "https://media.discordapp.net/stickers";
+const PDF_SIGNATURE = Buffer.from("%PDF-");
 
 export function __resetDiscordChannelInfoCacheForTest() {
   DISCORD_CHANNEL_INFO_CACHE.clear();
@@ -202,6 +203,29 @@ function resolveDiscordSnapshotStickers(snapshot: DiscordSnapshotMessage): APISt
   return normalizeStickerItems(snapshot.stickers ?? snapshot.sticker_items);
 }
 
+function isPdfAttachment(attachment: APIAttachment): boolean {
+  const mime = attachment.content_type?.toLowerCase();
+  if (mime === "application/pdf") {
+    return true;
+  }
+  return attachment.filename?.toLowerCase().endsWith(".pdf") ?? false;
+}
+
+function hasPdfSignature(buffer: Buffer): boolean {
+  return (
+    buffer.length >= PDF_SIGNATURE.length &&
+    buffer.subarray(0, PDF_SIGNATURE.length).equals(PDF_SIGNATURE)
+  );
+}
+
+function assertAttachmentPayloadIntegrity(attachment: APIAttachment, buffer: Buffer): void {
+  // Discord CDN intermittently returns a JSON `null` body for some attachment URLs.
+  // Guard obvious PDF corruption so we fall back to URL metadata instead of saving bad bytes.
+  if (isPdfAttachment(attachment) && !hasPdfSignature(buffer)) {
+    throw new Error("downloaded payload is not a valid PDF");
+  }
+}
+
 export function hasDiscordMessageStickers(message: Message): boolean {
   return resolveDiscordMessageStickers(message).length > 0;
 }
@@ -287,6 +311,7 @@ async function appendResolvedMediaFromAttachments(params: {
         fetchImpl: params.fetchImpl,
         ssrfPolicy: params.ssrfPolicy,
       });
+      assertAttachmentPayloadIntegrity(attachment, fetched.buffer);
       const saved = await saveMediaBuffer(
         fetched.buffer,
         fetched.contentType ?? attachment.content_type,

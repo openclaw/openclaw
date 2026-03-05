@@ -423,6 +423,70 @@ describe("resolveMediaList", () => {
     ]);
   });
 
+  it("falls back to URL when downloaded PDF payload is invalid", async () => {
+    const attachment = {
+      id: "att-invalid-pdf",
+      url: "https://cdn.discordapp.com/attachments/1/invalid.pdf",
+      filename: "invalid.pdf",
+      content_type: "application/pdf",
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("null"),
+      contentType: "application/json",
+    });
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual([
+      {
+        path: attachment.url,
+        contentType: "application/pdf",
+        placeholder: "<media:document>",
+      },
+    ]);
+  });
+
+  it("keeps valid PDF payloads", async () => {
+    const attachment = {
+      id: "att-valid-pdf",
+      url: "https://cdn.discordapp.com/attachments/1/valid.pdf",
+      filename: "valid.pdf",
+      content_type: "application/pdf",
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("%PDF-1.7\n"),
+      contentType: "application/pdf",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/valid.pdf",
+      contentType: "application/pdf",
+    });
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([
+      {
+        path: "/tmp/valid.pdf",
+        contentType: "application/pdf",
+        placeholder: "<media:document>",
+      },
+    ]);
+  });
+
   it("preserves downloaded attachments alongside failed ones", async () => {
     const goodAttachment = {
       id: "att-good",
