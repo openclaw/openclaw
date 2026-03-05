@@ -61,7 +61,7 @@ export async function saveCronStore(
   store: CronStoreFile,
   opts?: SaveCronStoreOptions,
 ) {
-  await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.promises.mkdir(path.dirname(storePath), { recursive: true, mode: 0o700 });
   const json = JSON.stringify(store, null, 2);
   const cached = serializedStoreCache.get(storePath);
   if (cached === json) {
@@ -86,12 +86,12 @@ export async function saveCronStore(
   // Create backup BEFORE writing new content - we already have the old content in `previous`
   if (previous !== null && !opts?.skipBackup) {
     try {
-      await fs.promises.writeFile(`${storePath}.bak`, previous, "utf-8");
+      await fs.promises.writeFile(`${storePath}.bak`, previous, { encoding: "utf-8", mode: 0o600 });
     } catch {
       // best-effort
     }
   }
-  await fs.promises.writeFile(tmp, json, "utf-8");
+  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
   await renameWithRetry(tmp, storePath);
   serializedStoreCache.set(storePath, json);
 }
