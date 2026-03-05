@@ -26,6 +26,16 @@ function parseOrigin(
   }
 }
 
+function normalizeHostWithoutPort(host: string | undefined): string | undefined {
+  const normalized = normalizeHostHeader(host);
+  if (!normalized) {
+    return undefined;
+  }
+  // Strip default ports (:80 for http, :443 for https) to match URL.host behavior
+  // URL.host keeps non-standard ports (e.g., :18789) but strips defaults
+  return normalized.replace(/:(80|443)$/, "").toLowerCase();
+}
+
 export function checkBrowserOrigin(params: {
   requestHost?: string;
   requestForwardedHost?: string;
@@ -48,27 +58,22 @@ export function checkBrowserOrigin(params: {
     return { ok: true, matchedBy: "allowlist" };
   }
 
-  const requestForwardedHost = normalizeHostHeader(params.requestForwardedHost);
+  const requestForwardedHost = normalizeHostWithoutPort(params.requestForwardedHost);
   if (requestForwardedHost) {
-    const normalizedForwardedHost = requestForwardedHost.toLowerCase();
-
     // Security: Origin MUST match the forwarded host (cross-validation)
-    if (parsedOrigin.host !== normalizedForwardedHost) {
+    if (parsedOrigin.host !== requestForwardedHost) {
       return { ok: false, reason: "origin does not match forwarded host" };
     }
 
-    // Security: Check the full origin (with scheme) is in allowlist
-    if (allowlist.has(parsedOrigin.origin)) {
-      return { ok: true, matchedBy: "allowlist" };
-    }
-
     // Legacy fallback for forwarded host with explicit opt-in
+    // Note: Full-origin allowlist check already ran at line 47 and failed (would have returned early).
+    // The forwarded-host path therefore only reaches this explicit fallback opt-in.
     if (params.allowHostHeaderOriginFallback === true) {
       return { ok: true, matchedBy: "host-header-fallback" };
     }
   }
 
-  const directRequestHost = normalizeHostHeader(params.requestHost);
+  const directRequestHost = normalizeHostWithoutPort(params.requestHost);
   if (
     params.allowHostHeaderOriginFallback === true &&
     parsedOrigin.host === directRequestHost
