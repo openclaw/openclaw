@@ -384,10 +384,12 @@ describe("buildAgentSystemPrompt", () => {
       const prompt = buildAgentSystemPrompt(testCase.params);
       expect(prompt, testCase.name).toContain("## Current Date & Time");
       expect(prompt, testCase.name).toContain("Time zone: America/Chicago");
-      if (testCase.params.userTime) {
-        expect(prompt, testCase.name).toContain(
-          `Current date and time: ${testCase.params.userTime}`,
-        );
+      const userTime =
+        "userTime" in testCase.params && typeof testCase.params.userTime === "string"
+          ? testCase.params.userTime
+          : undefined;
+      if (userTime) {
+        expect(prompt, testCase.name).toContain(`Current date and time: ${userTime}`);
       } else {
         expect(prompt, testCase.name).not.toContain("Current date and time:");
       }
