@@ -168,11 +168,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamText =
       mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
     partialUpdateQueue = partialUpdateQueue.then(async () => {
-      if (streamingStartPromise) {
-        await streamingStartPromise;
-      }
-      if (streaming?.isActive()) {
-        await streaming.update(streamText);
+      try {
+        if (streamingStartPromise) {
+          await streamingStartPromise;
+        }
+        if (streaming?.isActive()) {
+          await streaming.update(streamText);
+        }
+      } catch (err) {
+        params.runtime.error?.(
+          `feishu[${account.accountId}] streaming update failed: ${String(err)}`,
+        );
       }
     });
   };
@@ -207,21 +213,26 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const closeStreaming = async () => {
-    if (streamingStartPromise) {
-      await streamingStartPromise;
-    }
-    await partialUpdateQueue;
-    if (streaming?.isActive()) {
-      let text = streamText;
-      if (mentionTargets?.length) {
-        text = buildMentionedCardContent(mentionTargets, text);
+    try {
+      if (streamingStartPromise) {
+        await streamingStartPromise;
       }
-      await streaming.close(text);
+      await partialUpdateQueue;
+      if (streaming?.isActive()) {
+        let text = streamText;
+        if (mentionTargets?.length) {
+          text = buildMentionedCardContent(mentionTargets, text);
+        }
+        await streaming.close(text);
+      }
+    } catch (err) {
+      params.runtime.error?.(`feishu[${account.accountId}] streaming close failed: ${String(err)}`);
+    } finally {
+      streaming = null;
+      streamingStartPromise = null;
+      streamText = "";
+      lastPartial = "";
     }
-    streaming = null;
-    streamingStartPromise = null;
-    streamText = "";
-    lastPartial = "";
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =

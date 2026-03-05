@@ -267,12 +267,19 @@ export class FeishuStreamingSession {
     }
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
+    let token: string;
+    try {
+      token = await getToken(this.creds);
+    } catch (error) {
+      onError?.(error);
+      return;
+    }
     await fetchWithSsrFGuard({
       url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
       init: {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -341,12 +348,19 @@ export class FeishuStreamingSession {
 
     // Close streaming mode
     this.state.sequence += 1;
+    let closeToken: string;
+    try {
+      closeToken = await getToken(this.creds);
+    } catch (e) {
+      this.log?.(`Close token failed: ${String(e)}`);
+      return;
+    }
     await fetchWithSsrFGuard({
       url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
       init: {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
+          Authorization: `Bearer ${closeToken}`,
           "Content-Type": "application/json; charset=utf-8",
         },
         body: JSON.stringify({
