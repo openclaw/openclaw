@@ -416,6 +416,97 @@ describe("context-dedup", () => {
     expect(repeatedChunkNote).not.toContain("Earlier chunk: context message #1");
   });
 
+  it("selects a full-range lineage source instead of a later partial source", () => {
+    const baseLines = Array.from(
+      { length: 200 },
+      (_, idx) => `line ${idx + 1} :: ${"p".repeat(60)}`,
+    );
+    const updatedLines = [...baseLines];
+    for (let line = 150; line <= 170; line++) {
+      updatedLines[line - 1] = `line ${line} updated :: ${"q".repeat(60)}`;
+    }
+    const newestLines = [...updatedLines];
+    newestLines[9] = `line 10 newest :: ${"r".repeat(60)}`;
+
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_range_1",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/range-source.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_range_1",
+        content: baseLines.join("\n"),
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_range_2",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/range-source.txt", offset: 150 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_range_2",
+        content: updatedLines.slice(149, 170).join("\n"),
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_range_3",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/range-source.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_range_3",
+        content: updatedLines.join("\n"),
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_range_4",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/range-source.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_range_4",
+        content: newestLines.join("\n"),
+      },
+    ];
+
+    const result = applyReadLineageCompaction(messages as any[]);
+    const deltaText = String(result.messages[7].content);
+
+    expect(deltaText).toContain("[Read delta from earlier chunk]");
+    expect(deltaText).toContain("Earlier chunk: context message #5");
+    expect(deltaText).not.toContain("Earlier chunk: context message #3");
+  });
+
   it("rewrites dedup pointers that target lineage notes back to root source", () => {
     const fullChunk = "Heartbeat content line ".repeat(20);
     const lineageNote =

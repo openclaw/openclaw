@@ -93,11 +93,20 @@ type SeenLine = {
   text: string;
   firstSeenMessageIndex: number;
   firstSeenToolCallId?: string;
+  lastSeenMessageIndex: number;
+  lastSeenToolCallId?: string;
 };
 
 type SeenChunkSource = {
   firstSeenMessageIndex: number;
   firstSeenToolCallId?: string;
+};
+
+type SeenRangeSource = {
+  messageIndex: number;
+  toolCallId?: string;
+  startLine: number;
+  endLine: number;
 };
 
 function normalizeFilePath(input: string): string {
@@ -334,6 +343,58 @@ function buildSourceHint(sourceMessageIndex?: number, sourceToolCallId?: string)
   return "Earlier chunk: prior read output";
 }
 
+function findCoveringRangeSource(
+  seenRanges: SeenRangeSource[],
+  startLine: number,
+  endLine: number,
+  minimumMessageIndex: number,
+): SeenChunkSource | undefined {
+  let candidate: SeenRangeSource | undefined;
+
+  for (const seenRange of seenRanges) {
+    if (seenRange.messageIndex < minimumMessageIndex) {
+      continue;
+    }
+    if (seenRange.startLine > startLine || seenRange.endLine < endLine) {
+      continue;
+    }
+
+    if (!candidate || seenRange.messageIndex > candidate.messageIndex) {
+      candidate = seenRange;
+    }
+  }
+
+  if (!candidate) {
+    return undefined;
+  }
+
+  return {
+    firstSeenMessageIndex: candidate.messageIndex,
+    firstSeenToolCallId: candidate.toolCallId,
+  };
+}
+
+function recordSeenRange(seenRanges: SeenRangeSource[], incoming: SeenRangeSource): void {
+  for (const existing of seenRanges) {
+    if (
+      existing.messageIndex !== incoming.messageIndex ||
+      existing.toolCallId !== incoming.toolCallId
+    ) {
+      continue;
+    }
+
+    if (incoming.endLine + 1 < existing.startLine || incoming.startLine > existing.endLine + 1) {
+      continue;
+    }
+
+    existing.startLine = Math.min(existing.startLine, incoming.startLine);
+    existing.endLine = Math.max(existing.endLine, incoming.endLine);
+    return;
+  }
+
+  seenRanges.push(incoming);
+}
+
 function tryBuildReadDeltaNote(params: {
   lines: string[];
   repeated: boolean[];
@@ -397,6 +458,7 @@ function collapseReadChunkAgainstSeen(params: {
   startLine: number;
   seenLines: Map<number, SeenLine>;
   seenChunks: Map<string, SeenChunkSource>;
+  seenRanges: SeenRangeSource[];
   currentMessageIndex: number;
   currentToolCallId?: string;
 }): {
@@ -422,8 +484,7 @@ function collapseReadChunkAgainstSeen(params: {
 
   const repeated = Array.from({ length: lines.length }, () => false);
   let repeatedCount = 0;
-  let sourceMessageIndex: number | undefined;
-  let sourceToolCallId: string | undefined;
+  let minimumSourceMessageIndex = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const absoluteLine = start + i;
@@ -431,12 +492,20 @@ function collapseReadChunkAgainstSeen(params: {
     if (seen && seen.text === lines[i]) {
       repeated[i] = true;
       repeatedCount++;
-      if (sourceMessageIndex === undefined || seen.firstSeenMessageIndex > sourceMessageIndex) {
-        sourceMessageIndex = seen.firstSeenMessageIndex;
-        sourceToolCallId = seen.firstSeenToolCallId;
+      if (seen.lastSeenMessageIndex > minimumSourceMessageIndex) {
+        minimumSourceMessageIndex = seen.lastSeenMessageIndex;
       }
     }
   }
+
+  const fullRangeSource = findCoveringRangeSource(
+    params.seenRanges,
+    start,
+    end,
+    minimumSourceMessageIndex,
+  );
+  const sourceMessageIndex = fullRangeSource?.firstSeenMessageIndex;
+  const sourceToolCallId = fullRangeSource?.firstSeenToolCallId;
 
   for (let i = 0; i < lines.length; i++) {
     const absoluteLine = start + i;
@@ -448,6 +517,8 @@ function collapseReadChunkAgainstSeen(params: {
       text: lines[i],
       firstSeenMessageIndex: params.currentMessageIndex,
       firstSeenToolCallId: params.currentToolCallId,
+      lastSeenMessageIndex: params.currentMessageIndex,
+      lastSeenToolCallId: params.currentToolCallId,
     });
   }
 
@@ -461,10 +532,11 @@ function collapseReadChunkAgainstSeen(params: {
     };
   }
 
-  if (repeatedCount === lines.length && lines.length >= 8) {
-    const fullSourceMessageIndex = exactChunkSource?.firstSeenMessageIndex ?? sourceMessageIndex;
-    const fullSourceToolCallId = exactChunkSource?.firstSeenToolCallId ?? sourceToolCallId;
-    const sourceHint = buildSourceHint(fullSourceMessageIndex, fullSourceToolCallId);
+  if (repeatedCount === lines.length && lines.length >= 8 && exactChunkSource) {
+    const sourceHint = buildSourceHint(
+      exactChunkSource.firstSeenMessageIndex,
+      exactChunkSource.firstSeenToolCallId,
+    );
 
     const note =
       `[Same file chunk already shown earlier]\nPath: ${params.path}\n` +
@@ -478,7 +550,7 @@ function collapseReadChunkAgainstSeen(params: {
         omittedChars: params.text.length - note.length,
         fullOmit: true,
         partialTrim: false,
-        sourceMessageIndex: fullSourceMessageIndex,
+        sourceMessageIndex: exactChunkSource.firstSeenMessageIndex,
       };
     }
     return {
@@ -490,16 +562,18 @@ function collapseReadChunkAgainstSeen(params: {
     };
   }
 
-  const deltaNote = tryBuildReadDeltaNote({
-    lines,
-    repeated,
-    path: params.path,
-    startLine: start,
-    endLine: end,
-    sourceMessageIndex,
-    sourceToolCallId,
-    originalTextLength: params.text.length,
-  });
+  const deltaNote =
+    fullRangeSource &&
+    tryBuildReadDeltaNote({
+      lines,
+      repeated,
+      path: params.path,
+      startLine: start,
+      endLine: end,
+      sourceMessageIndex,
+      sourceToolCallId,
+      originalTextLength: params.text.length,
+    });
 
   if (deltaNote) {
     return {
@@ -528,7 +602,7 @@ function collapseReadChunkAgainstSeen(params: {
   const suffixRepeated = lines.length - 1 - lastNovel;
   const omittedLines = prefixRepeated + suffixRepeated;
 
-  if (omittedLines < 8) {
+  if (omittedLines < 8 || !fullRangeSource) {
     return {
       nextText: params.text,
       changed: false,
@@ -594,6 +668,7 @@ export function applyReadLineageCompaction(messages: any[]): ReadLineageCompacti
 
   const seenLinesByPath = new Map<string, Map<number, SeenLine>>();
   const seenChunksByPath = new Map<string, Map<string, SeenChunkSource>>();
+  const seenRangesByPath = new Map<string, SeenRangeSource[]>();
   let nextMessages: any[] | null = null;
 
   const stats: ReadLineageStats = {
@@ -644,17 +719,36 @@ export function applyReadLineageCompaction(messages: any[]): ReadLineageCompacti
     }
     const seenChunksForPath = seenChunks;
 
+    let seenRanges = seenRangesByPath.get(meta.path);
+    if (!seenRanges) {
+      seenRanges = [];
+      seenRangesByPath.set(meta.path, seenRanges);
+    }
+    const seenRangesForPath = seenRanges;
+
     const content = msg.content;
 
     if (typeof content === "string") {
+      const lineCount = countLines(content);
+      const startLine = meta.offset;
+      const endLine = startLine + lineCount - 1;
+
       const collapsed = collapseReadChunkAgainstSeen({
         text: content,
         path: meta.path,
-        startLine: meta.offset,
+        startLine,
         seenLines: seenLinesForPath,
         seenChunks: seenChunksForPath,
+        seenRanges: seenRangesForPath,
         currentMessageIndex: msgIndex,
         currentToolCallId: toolCallId,
+      });
+
+      recordSeenRange(seenRangesForPath, {
+        messageIndex: msgIndex,
+        toolCallId,
+        startLine,
+        endLine,
       });
 
       if (collapsed.changed) {
@@ -692,17 +786,29 @@ export function applyReadLineageCompaction(messages: any[]): ReadLineageCompacti
         return block;
       }
 
+      const lineCount = countLines(text);
+      const startLine = lineCursor;
+      const endLine = startLine + lineCount - 1;
+
       const collapsed = collapseReadChunkAgainstSeen({
         text,
         path: meta.path,
-        startLine: lineCursor,
+        startLine,
         seenLines: seenLinesForPath,
         seenChunks: seenChunksForPath,
+        seenRanges: seenRangesForPath,
         currentMessageIndex: msgIndex,
         currentToolCallId: toolCallId,
       });
 
-      lineCursor += countLines(text);
+      lineCursor += lineCount;
+
+      recordSeenRange(seenRangesForPath, {
+        messageIndex: msgIndex,
+        toolCallId,
+        startLine,
+        endLine,
+      });
 
       if (!collapsed.changed) {
         return block;
