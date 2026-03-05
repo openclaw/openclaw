@@ -463,8 +463,13 @@ export function createAgentEventHandler({
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
-    // Build tool payload: strip result/partialResult unless verbose=full
-    const toolPayload =
+
+    // WS tool-streaming payload: keep tool output so the Control UI can stream it live.
+    const toolPayloadForWs = agentPayload;
+
+    // Node/channel payload: strip result/partialResult unless verbose=full.
+    // (Verbose affects messaging surfaces; WS recipients are explicitly opted-in.)
+    const toolPayloadForNode =
       isToolEvent && toolVerbose !== "full"
         ? (() => {
             const data = evt.data ? { ...evt.data } : {};
@@ -490,13 +495,15 @@ export function createAgentEventHandler({
     }
     agentRunSeq.set(evt.runId, evt.seq);
     if (isToolEvent) {
-      // Always broadcast tool events to registered WS recipients with
-      // tool-events capability, regardless of verboseLevel. The verbose
-      // setting only controls whether tool details are sent as channel
-      // messages to messaging surfaces (Telegram, Discord, etc.).
-      const recipients = toolEventRecipients.get(evt.runId);
-      if (recipients && recipients.size > 0) {
-        broadcastToConnIds("agent", toolPayload, recipients);
+      // Tool events can be noisy and may include sensitive output.
+      // Only deliver them to WebSocket connection(s) that registered interest
+      // for this run (per-run recipient isolation).
+      const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      const connIds = toolEventRecipients.get(evt.runId);
+      if (connIds && connIds.size > 0) {
+        broadcastToConnIds("agent", toolPayloadForWs, connIds, {
+          dropIfSlow: toolPhase === "update",
+        });
       }
     } else {
       broadcast("agent", agentPayload);
@@ -507,9 +514,9 @@ export function createAgentEventHandler({
 
     if (sessionKey) {
       // Send tool events to node/channel subscribers only when verbose is enabled;
-      // WS clients already received the event above via broadcastToConnIds.
+      // WS clients already received the event above via broadcast().
       if (!isToolEvent || toolVerbose !== "off") {
-        nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
+        nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayloadForNode : agentPayload);
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text);

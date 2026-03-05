@@ -566,14 +566,14 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       message: msg,
     });
   }
-  if (props.showThinking) {
-    for (let i = 0; i < tools.length; i++) {
-      items.push({
-        kind: "message",
-        key: messageKey(tools[i], i + history.length),
-        message: tools[i],
-      });
-    }
+  // Tool calls/results should be visible regardless of the "show thinking" toggle.
+  // (Thinking controls reasoning visibility, not operational transparency.)
+  for (let i = 0; i < tools.length; i++) {
+    items.push({
+      kind: "message",
+      key: messageKey(tools[i], i + history.length),
+      message: tools[i],
+    });
   }
 
   if (props.stream !== null) {

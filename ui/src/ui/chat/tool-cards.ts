@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { normalizeTerminalText } from "../format.ts";
 import { icons } from "../icons.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
@@ -41,7 +42,8 @@ export function extractToolCards(message: unknown): ToolCard[] {
       (typeof m.toolName === "string" && m.toolName) ||
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
-    const text = extractTextCached(message) ?? undefined;
+    const raw = extractTextCached(message);
+    const text = typeof raw === "string" ? normalizeTerminalText(raw) : undefined;
     cards.push({ kind: "result", name, text });
   }
 
@@ -112,10 +114,10 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
       }
       ${
         showCollapsed
-          ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>`
+          ? html`<pre class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</pre>`
           : nothing
       }
-      ${showInline ? html`<div class="chat-tool-card__inline mono">${card.text}</div>` : nothing}
+      ${showInline ? html`<pre class="chat-tool-card__inline mono">${card.text}</pre>` : nothing}
     </div>
   `;
 }
@@ -146,11 +148,11 @@ function coerceArgs(value: unknown): unknown {
 }
 
 function extractToolText(item: Record<string, unknown>): string | undefined {
-  if (typeof item.text === "string") {
-    return item.text;
-  }
-  if (typeof item.content === "string") {
-    return item.content;
-  }
-  return undefined;
+  const raw =
+    typeof item.text === "string"
+      ? item.text
+      : typeof item.content === "string"
+        ? item.content
+        : undefined;
+  return typeof raw === "string" ? normalizeTerminalText(raw) : undefined;
 }

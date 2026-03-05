@@ -378,13 +378,12 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
-  it("routes tool events only to registered recipients when verbose is enabled", () => {
-    const { broadcast, broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+  it("broadcasts tool events over WS when verbose is enabled", () => {
+    const { broadcast, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
 
     registerAgentRunContext("run-tool", { sessionKey: "session-1", verboseLevel: "on" });
-    toolEventRecipients.add("run-tool", "conn-1");
 
     handler({
       runId: "run-tool",
@@ -394,18 +393,19 @@ describe("agent event handler", () => {
       data: { phase: "start", name: "read", toolCallId: "t1" },
     });
 
-    expect(broadcast).not.toHaveBeenCalled();
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    const [event, payload] = broadcast.mock.calls[0] ?? [];
+    expect(event).toBe("agent");
+    expect(payload).toMatchObject({ stream: "tool" });
     resetAgentRunContextForTest();
   });
 
-  it("broadcasts tool events to WS recipients even when verbose is off, but skips node send", () => {
-    const { broadcastToConnIds, nodeSendToSession, toolEventRecipients, handler } = createHarness({
+  it("broadcasts tool events over WS even when verbose is off, but skips node send", () => {
+    const { broadcast, nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
 
     registerAgentRunContext("run-tool-off", { sessionKey: "session-1", verboseLevel: "off" });
-    toolEventRecipients.add("run-tool-off", "conn-1");
 
     handler({
       runId: "run-tool-off",
@@ -415,21 +415,22 @@ describe("agent event handler", () => {
       data: { phase: "start", name: "read", toolCallId: "t2" },
     });
 
-    // Tool events always broadcast to registered WS recipients
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(broadcast).toHaveBeenCalledTimes(1);
     // But node/channel subscribers should NOT receive when verbose is off
     const nodeToolCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
     expect(nodeToolCalls).toHaveLength(0);
     resetAgentRunContextForTest();
   });
 
-  it("strips tool output when verbose is on", () => {
-    const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+  it("streams tool output over WS when verbose is on", () => {
+    const { broadcast, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
 
     registerAgentRunContext("run-tool-on", { sessionKey: "session-1", verboseLevel: "on" });
-    toolEventRecipients.add("run-tool-on", "conn-1");
+
+    const result = { content: [{ type: "text", text: "secret" }] };
+    const partialResult = { content: [{ type: "text", text: "partial" }] };
 
     handler({
       runId: "run-tool-on",
@@ -440,25 +441,25 @@ describe("agent event handler", () => {
         phase: "result",
         name: "exec",
         toolCallId: "t3",
-        result: { content: [{ type: "text", text: "secret" }] },
-        partialResult: { content: [{ type: "text", text: "partial" }] },
+        result,
+        partialResult,
       },
     });
 
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    const payload = broadcastToConnIds.mock.calls[0]?.[1] as { data?: Record<string, unknown> };
-    expect(payload.data?.result).toBeUndefined();
-    expect(payload.data?.partialResult).toBeUndefined();
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    const [, payload] = broadcast.mock.calls[0] ?? [];
+    const toolPayload = payload as { data?: Record<string, unknown> };
+    expect(toolPayload.data?.result).toEqual(result);
+    expect(toolPayload.data?.partialResult).toEqual(partialResult);
     resetAgentRunContextForTest();
   });
 
-  it("keeps tool output when verbose is full", () => {
-    const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+  it("keeps tool output over WS when verbose is full", () => {
+    const { broadcast, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
 
     registerAgentRunContext("run-tool-full", { sessionKey: "session-1", verboseLevel: "full" });
-    toolEventRecipients.add("run-tool-full", "conn-1");
 
     const result = { content: [{ type: "text", text: "secret" }] };
     handler({
@@ -474,9 +475,10 @@ describe("agent event handler", () => {
       },
     });
 
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    const payload = broadcastToConnIds.mock.calls[0]?.[1] as { data?: Record<string, unknown> };
-    expect(payload.data?.result).toEqual(result);
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    const [, payload] = broadcast.mock.calls[0] ?? [];
+    const toolPayload = payload as { data?: Record<string, unknown> };
+    expect(toolPayload.data?.result).toEqual(result);
     resetAgentRunContextForTest();
   });
 
@@ -535,8 +537,8 @@ describe("agent event handler", () => {
     expect(payload.sessionKey).toBe("session-from-event");
   });
 
-  it("remaps chat-linked tool runId for non-full verbose payloads", () => {
-    const { broadcastToConnIds, chatRunState, toolEventRecipients, handler } = createHarness({
+  it("remaps chat-linked tool runId to client runId", () => {
+    const { broadcast, chatRunState, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-tool-remap",
     });
 
@@ -548,7 +550,6 @@ describe("agent event handler", () => {
       sessionKey: "session-tool-remap",
       verboseLevel: "on",
     });
-    toolEventRecipients.add("run-tool-internal", "conn-1");
 
     handler({
       runId: "run-tool-internal",
@@ -563,9 +564,9 @@ describe("agent event handler", () => {
       },
     });
 
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    const payload = broadcastToConnIds.mock.calls[0]?.[1] as { runId?: string };
-    expect(payload.runId).toBe("run-tool-client");
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    const [, payload] = broadcast.mock.calls[0] ?? [];
+    expect((payload as { runId?: string }).runId).toBe("run-tool-client");
     resetAgentRunContextForTest();
   });
 

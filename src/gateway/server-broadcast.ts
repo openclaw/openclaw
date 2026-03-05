@@ -1,3 +1,4 @@
+import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "./protocol/client-info.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
@@ -67,7 +68,21 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       return;
     }
     const isTargeted = Boolean(targetConnIds);
-    const eventSeq = isTargeted ? undefined : ++seq;
+
+    const isAgentToolEvent = (() => {
+      if (event !== "agent") {
+        return false;
+      }
+      if (!payload || typeof payload !== "object") {
+        return false;
+      }
+      return (payload as { stream?: unknown }).stream === "tool";
+    })();
+
+    // Tool streams are high-frequency and may be dropped for slow consumers.
+    // Avoid sequencing them so UI clients don't raise spurious "event gap" warnings.
+    const shouldSequence = !isTargeted && !isAgentToolEvent;
+    const eventSeq = shouldSequence ? ++seq : undefined;
     const frame = JSON.stringify({
       type: "event",
       event,
@@ -97,6 +112,18 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       if (!hasEventScope(c, event)) {
         continue;
       }
+
+      // Tool streams can be noisy and may include sensitive output.
+      // Only deliver tool agent events to clients that explicitly opt in.
+      if (event === "agent") {
+        const payloadAny = payload as { stream?: unknown } | null;
+        if (payloadAny && typeof payloadAny === "object" && payloadAny.stream === "tool") {
+          if (!hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.TOOL_EVENTS)) {
+            continue;
+          }
+        }
+      }
+
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
       if (slow && opts?.dropIfSlow) {
         continue;

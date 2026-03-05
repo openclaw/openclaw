@@ -2003,15 +2003,39 @@
   font-family: var(--mono);
   font-size: 11px;
   line-height: 1.5;
-  white-space: pre-wrap;
+  /* Prefer terminal/code-style formatting: preserve whitespace and avoid wrapping long lines. */
+  white-space: pre;
+  overflow-x: auto;
   color: var(--chat-text);
   padding: 8px 10px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--card);
+  tab-size: 2;
+  font-variant-ligatures: none;
 }
 
-:root[data-theme="light"] .chat-tool-card__output {
+/* Back-compat: some tool card renderers use inline/preview containers. */
+.chat-tool-card__preview,
+.chat-tool-card__inline {
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--chat-text);
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--card);
+  tab-size: 2;
+  font-variant-ligatures: none;
+}
+
+:root[data-theme="light"] .chat-tool-card__output,
+:root[data-theme="light"] .chat-tool-card__preview,
+:root[data-theme="light"] .chat-tool-card__inline {
   background: var(--bg);
 }
 

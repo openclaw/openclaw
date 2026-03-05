@@ -1,4 +1,4 @@
-import { truncateText } from "./format.ts";
+import { normalizeTerminalText, truncateText } from "./format.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -161,11 +161,65 @@ function formatToolOutput(value: unknown): string | null {
       text = String(value);
     }
   }
-  const truncated = truncateText(text, TOOL_OUTPUT_CHAR_LIMIT);
+  const normalized = normalizeTerminalText(text);
+  const truncated = truncateText(normalized, TOOL_OUTPUT_CHAR_LIMIT);
   if (!truncated.truncated) {
     return truncated.text;
   }
   return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
+}
+
+function limitDiffText(text: string, opts?: { maxChars?: number; maxLines?: number }): string {
+  const maxChars = Math.max(1000, opts?.maxChars ?? 40_000);
+  const maxLines = Math.max(50, opts?.maxLines ?? 400);
+  const normalized = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+  const lines = normalized.split("\n");
+  const slicedLines = lines.slice(0, maxLines);
+  let out = slicedLines.join("\n");
+  let truncated = slicedLines.length < lines.length;
+  if (out.length > maxChars) {
+    out = out.slice(0, maxChars);
+    truncated = true;
+  }
+  if (truncated) {
+    out += "\n\n… (diff truncated)";
+  }
+  return out;
+}
+
+function formatEditDiff(args: unknown): string | null {
+  if (!args || typeof args !== "object") {
+    return null;
+  }
+  const a = args as Record<string, unknown>;
+  const path =
+    typeof a.path === "string" ? a.path : typeof a.file_path === "string" ? a.file_path : null;
+  const oldText =
+    typeof a.oldText === "string"
+      ? a.oldText
+      : typeof a.old_string === "string"
+        ? a.old_string
+        : null;
+  const newText =
+    typeof a.newText === "string"
+      ? a.newText
+      : typeof a.new_string === "string"
+        ? a.new_string
+        : null;
+  if (oldText === null || newText === null) {
+    return null;
+  }
+
+  const normalize = (s: string) => s.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+  const oldLimited = limitDiffText(oldText);
+  const newLimited = limitDiffText(newText);
+  const oldLines = normalize(oldLimited).split("\n");
+  const newLines = normalize(newLimited).split("\n");
+
+  const headerPath = (path ?? "<unknown>").replaceAll("\\", "/");
+  const body = [...oldLines.map((l) => `-${l}`), ...newLines.map((l) => `+${l}`)].join("\n");
+
+  return `--- a/${headerPath}\n+++ b/${headerPath}\n@@\n${body}`;
 }
 
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
@@ -301,16 +355,23 @@ function resolveAcceptedSession(
   },
 ): { accepted: boolean; sessionKey?: string } {
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
-  if (sessionKey && sessionKey !== host.sessionKey) {
+
+  // Prefer session-scoped routing when available: tool/lifecycle events may carry a runId
+  // that differs from the client-side chatRunId, but still belong to the active session.
+  if (sessionKey) {
+    if (sessionKey !== host.sessionKey) {
+      return { accepted: false };
+    }
+    if (host.chatRunId) {
+      return { accepted: true, sessionKey };
+    }
+    if (options?.allowSessionScopedWhenIdle) {
+      return { accepted: true, sessionKey };
+    }
     return { accepted: false };
   }
-  if (!host.chatRunId && options?.allowSessionScopedWhenIdle && sessionKey) {
-    return { accepted: true, sessionKey };
-  }
-  // Fallback: only accept session-less events for the active run.
-  if (!sessionKey && host.chatRunId && payload.runId !== host.chatRunId) {
-    return { accepted: false };
-  }
+
+  // Legacy fallback: session-less events must match the active run.
   if (host.chatRunId && payload.runId !== host.chatRunId) {
     return { accepted: false };
   }
@@ -414,7 +475,17 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
   const name = typeof data.name === "string" ? data.name : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
-  const args = phase === "start" ? data.args : undefined;
+
+  const argsCandidate =
+    data.args ??
+    // some providers/bridges may use different field names
+    data.arguments ??
+    data.params;
+  const args =
+    argsCandidate && typeof argsCandidate === "object"
+      ? (argsCandidate as Record<string, unknown>)
+      : undefined;
+
   const output =
     phase === "update"
       ? formatToolOutput(data.partialResult)
@@ -447,6 +518,20 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       entry.output = output || undefined;
     }
     entry.updatedAt = now;
+  }
+
+  // Some tools (notably `edit`) often return empty output even on success.
+  // Additionally, `edit` typically has no update frames, which can make it feel
+  // like it "doesn't stream" in the UI.
+  // To improve perceived streaming, synthesize a diff-like preview as soon as we
+  // have args (on start), then keep/refresh it on result.
+  if (entry.name === "edit" && (phase === "start" || phase === "result")) {
+    if (!entry.output || entry.output.trim() === "") {
+      const diff = formatEditDiff(entry.args);
+      if (diff) {
+        entry.output = diff;
+      }
+    }
   }
 
   entry.message = buildToolStreamMessage(entry);
