@@ -27,6 +27,7 @@ import {
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
@@ -597,6 +598,9 @@ export async function startGatewayServer(
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
 
+  const deviceIdentity = loadOrCreateDeviceIdentity();
+  let meshManager: import("../mesh/manager.js").MeshManager | null = null;
+
   if (!minimalTestGateway) {
     const machineDisplayName = await getMachineDisplayName();
     const discovery = await startGatewayDiscovery({
@@ -609,9 +613,25 @@ export async function startGatewayServer(
       wideAreaDiscoveryDomain: cfgAtStart.discovery?.wideArea?.domain,
       tailscaleMode,
       mdnsMode: cfgAtStart.discovery?.mdns?.mode,
+      deviceId: deviceIdentity.deviceId,
       logDiscovery,
     });
     bonjourStop = discovery.bonjourStop;
+
+    // Start mesh manager if enabled.
+    if (cfgAtStart.mesh?.enabled) {
+      const { MeshManager } = await import("../mesh/manager.js");
+      const { discoverGatewayBeacons } = await import("../infra/bonjour-discovery.js");
+      const logMesh = log.child("mesh");
+      meshManager = new MeshManager({
+        identity: deviceIdentity,
+        config: cfgAtStart.mesh,
+        displayName: machineDisplayName,
+        discoverFn: () => discoverGatewayBeacons(),
+        log: logMesh,
+      });
+      meshManager.start();
+    }
   }
 
   if (!minimalTestGateway) {
@@ -768,6 +788,23 @@ export async function startGatewayServer(
       ...pluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
       ...secretsHandlers,
+      ...(meshManager ? meshManager.getHandlers() : {}),
+      ...(meshManager
+        ? await (async () => {
+            const { createMeshPeersHandlers } = await import("../mesh/server-methods/peers.js");
+            const { createMeshTrustHandlers } = await import("../mesh/server-methods/trust.js");
+            const { createMeshForwardHandlers } = await import("../mesh/server-methods/forward.js");
+            return {
+              ...createMeshPeersHandlers({
+                peerRegistry: meshManager.peerRegistry,
+                capabilityRegistry: meshManager.capabilityRegistry,
+                localDeviceId: deviceIdentity.deviceId,
+              }),
+              ...createMeshTrustHandlers(),
+              ...createMeshForwardHandlers({ identity: deviceIdentity }),
+            };
+          })()
+        : {}),
     },
     broadcast,
     context: {
@@ -820,6 +857,13 @@ export async function startGatewayServer(
       markChannelLoggedOut,
       wizardRunner,
       broadcastVoiceWakeChanged,
+      ...(meshManager
+        ? {
+            meshPeerRegistry: meshManager.peerRegistry,
+            meshCapabilityRegistry: meshManager.capabilityRegistry,
+            meshLocalDeviceId: deviceIdentity.deviceId,
+          }
+        : {}),
     },
   });
   logGatewayStartup({
@@ -945,6 +989,7 @@ export async function startGatewayServer(
 
   const close = createGatewayCloseHandler({
     bonjourStop,
+    meshManager,
     tailscaleCleanup,
     canvasHost,
     canvasHostServer,

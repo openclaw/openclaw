@@ -23,6 +23,8 @@ export type GatewayBonjourAdvertiseOpts = {
    * Reduces information disclosure for better operational security.
    */
   minimal?: boolean;
+  /** Device identity ID (SHA256 of Ed25519 public key) for mesh peer discovery. */
+  deviceId?: string;
 };
 
 function isDisabledByEnv() {
@@ -126,6 +128,9 @@ export async function startGatewayBonjourAdvertiser(
   }
   if (typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
     txtBase.tailnetDns = opts.tailnetDns.trim();
+  }
+  if (typeof opts.deviceId === "string" && opts.deviceId.trim()) {
+    txtBase.deviceId = opts.deviceId.trim();
   }
   // In minimal mode, omit cliPath to avoid exposing filesystem structure.
   // This info can be obtained via the authenticated WebSocket if needed.
