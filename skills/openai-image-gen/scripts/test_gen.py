@@ -1,9 +1,37 @@
-"""Tests for write_gallery HTML escaping (fixes #12538 - stored XSS)."""
+"""Tests for openai-image-gen helpers."""
 
 import tempfile
 from pathlib import Path
 
-from gen import write_gallery
+import pytest
+
+from gen import normalize_background, normalize_style, write_gallery
+
+
+def test_normalize_background_allows_empty_for_non_gpt_models():
+    assert normalize_background("dall-e-3", "transparent") == ""
+
+
+def test_normalize_background_normalizes_case_for_gpt_models():
+    assert normalize_background("gpt-image-1", "TRANSPARENT") == "transparent"
+
+
+def test_normalize_background_rejects_invalid_values():
+    with pytest.raises(ValueError, match="Invalid --background"):
+        normalize_background("gpt-image-1", "checkerboard")
+
+
+def test_normalize_style_allows_empty_for_non_dalle3_models():
+    assert normalize_style("gpt-image-1", "vivid") == ""
+
+
+def test_normalize_style_normalizes_case_for_dalle3():
+    assert normalize_style("dall-e-3", "NATURAL") == "natural"
+
+
+def test_normalize_style_rejects_invalid_values():
+    with pytest.raises(ValueError, match="Invalid --style"):
+        normalize_style("dall-e-3", "cinematic")
 
 
 def test_write_gallery_escapes_prompt_xss():

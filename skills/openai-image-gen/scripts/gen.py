@@ -75,6 +75,40 @@ def get_model_defaults(model: str) -> tuple[str, str]:
         return ("1024x1024", "high")
 
 
+def normalize_background(model: str, background: str) -> str:
+    """Validate --background for GPT image models."""
+    if not model.startswith("gpt-image"):
+        return ""
+
+    value = background.strip().lower()
+    if not value:
+        return ""
+
+    allowed = {"transparent", "opaque", "auto"}
+    if value not in allowed:
+        raise ValueError(
+            f"Invalid --background '{background}'. Allowed values: transparent, opaque, auto."
+        )
+    return value
+
+
+def normalize_style(model: str, style: str) -> str:
+    """Validate --style for dall-e-3."""
+    if model != "dall-e-3":
+        return ""
+
+    value = style.strip().lower()
+    if not value:
+        return ""
+
+    allowed = {"vivid", "natural"}
+    if value not in allowed:
+        raise ValueError(
+            f"Invalid --style '{style}'. Allowed values for dall-e-3: vivid, natural."
+        )
+    return value
+
+
 def request_images(
     api_key: str,
     prompt: str,
@@ -194,6 +228,13 @@ def main() -> int:
 
     prompts = [args.prompt] * count if args.prompt else pick_prompts(count)
 
+    try:
+        normalized_background = normalize_background(args.model, args.background)
+        normalized_style = normalize_style(args.model, args.style)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+
     # Determine file extension based on output format
     if args.model.startswith("gpt-image") and args.output_format:
         file_ext = args.output_format
@@ -209,9 +250,9 @@ def main() -> int:
             args.model,
             size,
             quality,
-            args.background,
+            normalized_background,
             args.output_format,
-            args.style,
+            normalized_style,
         )
         data = res.get("data", [{}])[0]
         image_b64 = data.get("b64_json")
