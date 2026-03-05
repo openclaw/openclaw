@@ -10,6 +10,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { stripInboundMetadata } from "../strip-inbound-meta.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
@@ -114,7 +115,10 @@ export function scheduleFollowupDrain(
             title: "[Queued messages while agent was busy]",
             items,
             summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
+            renderItem: (item, idx) => {
+              const sanitizedPrompt = stripInboundMetadata(item.prompt).trim() || "[message omitted]";
+              return `---\nQueued #${idx + 1}\n${sanitizedPrompt}`.trim();
+            },
           });
           await runFollowup({
             prompt,

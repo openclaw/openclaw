@@ -1,4 +1,5 @@
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
+import { stripInboundMetadata } from "../strip-inbound-meta.js";
 import { kickFollowupDrainIfIdle } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
@@ -47,7 +48,11 @@ export function enqueueFollowupRun(
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
-    summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
+    summarize: (item) => {
+      const rawSummary = item.summaryLine?.trim() || item.prompt.trim();
+      const sanitized = stripInboundMetadata(rawSummary).trim();
+      return sanitized || "[message omitted]";
+    },
   });
   if (!shouldEnqueue) {
     return false;
