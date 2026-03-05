@@ -93,9 +93,7 @@ import { Still } from "remotion";
 import { Thumbnail } from "./Thumbnail";
 
 export const RemotionRoot = () => {
-  return (
-    <Still id="Thumbnail" component={Thumbnail} width={1280} height={720} />
-  );
+  return <Still id="Thumbnail" component={Thumbnail} width={1280} height={720} />;
 };
 ```
 
@@ -107,9 +105,11 @@ Use `calculateMetadata` to make dimensions, duration, or props dynamic based on 
 import { Composition, CalculateMetadataFunction } from "remotion";
 import { MyComposition, MyCompositionProps } from "./MyComposition";
 
-const calculateMetadata: CalculateMetadataFunction<
-  MyCompositionProps
-> = async ({ props, fps, abortSignal }) => {
+const calculateMetadata: CalculateMetadataFunction<MyCompositionProps> = async ({
+  props,
+  fps,
+  abortSignal,
+}) => {
   const data = await fetch(`https://api.example.com/video/${props.videoId}`, {
     signal: abortSignal,
   }).then((res) => res.json());
