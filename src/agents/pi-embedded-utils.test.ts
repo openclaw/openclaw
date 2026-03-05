@@ -296,6 +296,36 @@ describe("extractAssistantText", () => {
     expect(result).toBe("BeforeAfter");
   });
 
+  it("strips self-closing legacy tool_call tags with attributes", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Before<tool_call tool="exec" command="cat /etc/hosts" />After',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("BeforeAfter");
+  });
+
+  it("strips paired legacy tool_call tags", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Before<tool_call>exec tool="exec"</tool_call>After',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("BeforeAfter");
+  });
+
   it("strips both minimax markers and legacy tool_call snippets when both are present", () => {
     const msg = makeAssistantMessage({
       role: "assistant",

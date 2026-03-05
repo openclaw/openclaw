@@ -9,9 +9,60 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
   return msg?.role === "assistant";
 }
 
-const LEGACY_TOOL_CALL_SNIPPET_RE = /<tool_call\b[^>]*>(?:(?:"[^"]*"|'[^']*'|[^<"'`])+?)\/>/i;
-const MARKDOWN_CODE_OR_LEGACY_TOOL_CALL_RE =
-  /```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]+`|<tool_call\b[^>]*>(?:(?:"[^"]*"|'[^']*'|[^<"'`])+?)\/>/gi;
+const MARKDOWN_CODE_RE = /```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]+`/gi;
+
+function findLegacyToolCallEnd(text: string, start: number): number | null {
+  let index = start;
+  let inSingle = false;
+  let inDouble = false;
+  while (index < text.length) {
+    const ch = text[index];
+    if (!inDouble && ch === "'") {
+      inSingle = !inSingle;
+      index += 1;
+      continue;
+    }
+    if (!inSingle && ch === '"') {
+      inDouble = !inDouble;
+      index += 1;
+      continue;
+    }
+    if (!inSingle && !inDouble) {
+      if (ch === "\n" || ch === "\r") {
+        return null;
+      }
+      if (text.startsWith("/>", index)) {
+        return index + 2;
+      }
+      if (text.slice(index, index + 12).toLowerCase() === "</tool_call>") {
+        return index + 12;
+      }
+    }
+    index += 1;
+  }
+  return null;
+}
+
+function stripLegacyToolCallSnippets(text: string): string {
+  const lower = text.toLowerCase();
+  let cursor = 0;
+  let cleaned = "";
+  while (cursor < text.length) {
+    const start = lower.indexOf("<tool_call", cursor);
+    if (start === -1) {
+      cleaned += text.slice(cursor);
+      break;
+    }
+    cleaned += text.slice(cursor, start);
+    const end = findLegacyToolCallEnd(text, start + "<tool_call".length);
+    if (end === null) {
+      cleaned += text.slice(start);
+      break;
+    }
+    cursor = end;
+  }
+  return cleaned;
+}
 
 /**
  * Strip leaked tool-call syntax that shows up as plain assistant text.
@@ -24,7 +75,7 @@ export function stripLeakedToolCallSyntax(text: string): string {
     return text;
   }
   const hasMinimaxMarkers = /minimax:tool_call/i.test(text);
-  const hasLegacyToolCallSnippet = LEGACY_TOOL_CALL_SNIPPET_RE.test(text);
+  const hasLegacyToolCallSnippet = /<tool_call\b/i.test(text);
   if (!hasMinimaxMarkers && !hasLegacyToolCallSnippet) {
     return text;
   }
@@ -38,10 +89,16 @@ export function stripLeakedToolCallSyntax(text: string): string {
     cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
   }
   if (hasLegacyToolCallSnippet) {
-    // Remove legacy self-closing tool call snippets that can leak into user text.
-    cleaned = cleaned.replace(MARKDOWN_CODE_OR_LEGACY_TOOL_CALL_RE, (match) =>
-      /^<tool_call\b/i.test(match) ? "" : match,
-    );
+    let result = "";
+    let lastIndex = 0;
+    for (const match of cleaned.matchAll(MARKDOWN_CODE_RE)) {
+      const index = match.index ?? 0;
+      result += stripLegacyToolCallSnippets(cleaned.slice(lastIndex, index));
+      result += match[0];
+      lastIndex = index + match[0].length;
+    }
+    result += stripLegacyToolCallSnippets(cleaned.slice(lastIndex));
+    cleaned = result;
   }
 
   return cleaned;
