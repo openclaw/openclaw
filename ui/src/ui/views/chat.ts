@@ -213,12 +213,20 @@ function flushPendingAttachments() {
  * Batch-read files and append via accumulator to avoid race conditions.
  * Multiple concurrent calls (rapid paste + drop) collect into pendingAttachments
  * and flush together in a single microtask, ensuring no batch overwrites another.
+ *
+ * The originating `sessionKey` is captured at call time. If the user switches
+ * sessions before the reads complete, the resolved batch is discarded to prevent
+ * cross-session attachment leakage.
  */
-function addFilesAsAttachments(files: File[]) {
+function addFilesAsAttachments(files: File[], sessionKey: string) {
   if (!latestOnAttachmentsChange || files.length === 0) {
     return;
   }
   void Promise.all(files.map(readFileAsAttachment)).then((results) => {
+    // Drop batch if the session changed while reads were in-flight
+    if (sessionKey !== lastSessionKey) {
+      return;
+    }
     const newAttachments = results.filter((att): att is ChatAttachment => att !== null);
     if (newAttachments.length === 0) {
       return;
@@ -253,7 +261,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
   }
 
   e.preventDefault();
-  addFilesAsAttachments(files);
+  addFilesAsAttachments(files, props.sessionKey);
 }
 
 /** Handle file input change (from attach or camera buttons). */
@@ -277,7 +285,7 @@ function handleFileInput(e: Event, props: ChatProps) {
       files.push(file);
     }
   }
-  addFilesAsAttachments(files);
+  addFilesAsAttachments(files, props.sessionKey);
   // Reset so re-selecting the same file triggers change again
   input.value = "";
 }
@@ -308,7 +316,7 @@ function handleDrop(e: DragEvent, props: ChatProps) {
     }
   }
   if (files.length > 0) {
-    addFilesAsAttachments(files);
+    addFilesAsAttachments(files, props.sessionKey);
   }
 }
 
