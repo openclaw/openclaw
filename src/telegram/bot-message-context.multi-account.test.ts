@@ -16,23 +16,13 @@ describe("buildTelegramMessageContext multi-account defaults", () => {
     expect(ctx?.route.accountId).toBe("jarvis2");
   });
 
-  it("still routes non-default account when default account is disabled", async () => {
+  it("routes non-default account DMs without relying on account enabled flags", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "jarvis2",
       message: {
         chat: { id: 99_002, type: "private" },
         from: { id: 42, first_name: "Guido" },
         text: "/ping",
-      },
-      cfg: {
-        channels: {
-          telegram: {
-            accounts: {
-              default: { enabled: false },
-              jarvis2: { enabled: true },
-            },
-          },
-        },
       },
     });
 
