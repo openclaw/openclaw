@@ -304,14 +304,18 @@ describe("gateway server hooks", () => {
         sessionKey: "agent:hooks:slack:channel:c123",
       });
       expect(resAgent.status).toBe(200);
-      await waitForSystemEvent();
+      const requestedSessionKey = "agent:hooks:slack:channel:c123";
+      const notifyEvents = await waitForSessionEvent(requestedSessionKey);
+      expect(notifyEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
 
       const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
         | { sessionKey?: string; job?: { agentId?: string } }
         | undefined;
       expect(routedCall?.job?.agentId).toBe("hooks");
       expect(routedCall?.sessionKey).toBe("slack:channel:c123");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents("slack:channel:c123")).toEqual([]);
+      expect(peekSystemEvents(resolveMainKey())).toEqual([]);
+      drainSystemEvents(requestedSessionKey);
     });
   });
 

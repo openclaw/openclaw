@@ -39,7 +39,6 @@ import {
   normalizeHookHeaders,
   normalizeWakePayload,
   readJsonBody,
-  normalizeHookDispatchSessionKey,
   resolveHookSessionKey,
   resolveHookTargetAgentId,
   resolveHookChannel,
@@ -413,10 +412,7 @@ export function createHooksRequestHandler(
       const targetAgentId = resolveHookTargetAgentId(hooksConfig, normalized.value.agentId);
       const runId = dispatchAgentHook({
         ...normalized.value,
-        sessionKey: normalizeHookDispatchSessionKey({
-          sessionKey: sessionKey.value,
-          targetAgentId,
-        }),
+        sessionKey: sessionKey.value,
         agentId: targetAgentId,
       });
       sendJson(res, 200, { ok: true, runId });
@@ -473,10 +469,7 @@ export function createHooksRequestHandler(
             name: mapped.action.name ?? "Hook",
             agentId: targetAgentId,
             wakeMode: mapped.action.wakeMode,
-            sessionKey: normalizeHookDispatchSessionKey({
-              sessionKey: sessionKey.value,
-              targetAgentId,
-            }),
+            sessionKey: sessionKey.value,
             deliver: resolveHookDeliver(mapped.action.deliver),
             channel,
             to: mapped.action.to,

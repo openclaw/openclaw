@@ -34,12 +34,16 @@ export function createGatewayHooksRequestHandler(params: {
   };
 
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
+    const requestedSessionKey = value.sessionKey.trim();
     const sessionKey = normalizeHookDispatchSessionKey({
-      sessionKey: value.sessionKey,
+      sessionKey: requestedSessionKey,
       targetAgentId: value.agentId,
     });
     const mainSessionKey = resolveMainSessionKeyFromConfig();
-    const notifySessionKey = sessionKey || mainSessionKey;
+    const notifySessionKey =
+      requestedSessionKey && requestedSessionKey !== sessionKey
+        ? requestedSessionKey
+        : sessionKey || mainSessionKey;
     const jobId = randomUUID();
     const now = Date.now();
     const job: CronJob = {
