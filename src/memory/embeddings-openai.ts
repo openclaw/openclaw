@@ -14,18 +14,28 @@ export type OpenAiEmbeddingClient = {
 
 export const DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1";
 const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-3-small": 8192,
   "text-embedding-3-large": 8192,
   "text-embedding-ada-002": 8191,
 };
 
-export function normalizeOpenAiModel(model: string): string {
+type OpenAiCompatEmbeddingProviderId = "openai" | "siliconflow";
+
+export function normalizeOpenAiModel(
+  model: string,
+  provider: OpenAiCompatEmbeddingProviderId = "openai",
+): string {
   const trimmed = model.trim();
   if (!trimmed) {
     return DEFAULT_OPENAI_EMBEDDING_MODEL;
   }
-  if (trimmed.startsWith("openai/")) {
+  const prefix = `${provider}/`;
+  if (trimmed.startsWith(prefix)) {
+    return trimmed.slice(prefix.length);
+  }
+  if (provider !== "openai" && trimmed.startsWith("openai/")) {
     return trimmed.slice("openai/".length);
   }
   return trimmed;
@@ -33,14 +43,15 @@ export function normalizeOpenAiModel(model: string): string {
 
 export async function createOpenAiEmbeddingProvider(
   options: EmbeddingProviderOptions,
+  provider: OpenAiCompatEmbeddingProviderId = "openai",
 ): Promise<{ provider: EmbeddingProvider; client: OpenAiEmbeddingClient }> {
-  const client = await resolveOpenAiEmbeddingClient(options);
+  const client = await resolveOpenAiEmbeddingClient(options, provider);
 
   return {
     provider: createRemoteEmbeddingProvider({
-      id: "openai",
+      id: provider,
       client,
-      errorPrefix: "openai embeddings failed",
+      errorPrefix: `${provider} embeddings failed`,
       maxInputTokens: OPENAI_MAX_INPUT_TOKENS[client.model],
     }),
     client,
@@ -49,11 +60,14 @@ export async function createOpenAiEmbeddingProvider(
 
 export async function resolveOpenAiEmbeddingClient(
   options: EmbeddingProviderOptions,
+  provider: OpenAiCompatEmbeddingProviderId = "openai",
 ): Promise<OpenAiEmbeddingClient> {
+  const defaultBaseUrl =
+    provider === "siliconflow" ? DEFAULT_SILICONFLOW_BASE_URL : DEFAULT_OPENAI_BASE_URL;
   return await resolveRemoteEmbeddingClient({
-    provider: "openai",
+    provider,
     options,
-    defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
-    normalizeModel: normalizeOpenAiModel,
+    defaultBaseUrl,
+    normalizeModel: (model) => normalizeOpenAiModel(model, provider),
   });
 }

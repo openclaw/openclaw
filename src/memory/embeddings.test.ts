@@ -245,6 +245,50 @@ describe("embedding provider remote overrides", () => {
     const payload = JSON.parse((init?.body as string | undefined) ?? "{}") as { model?: string };
     expect(payload.model).toBe("mistral-embed");
   });
+
+  it("builds SiliconFlow embeddings requests with provider auth config", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey("siliconflow-key");
+
+    const cfg = {
+      models: {
+        providers: {
+          siliconflow: {
+            baseUrl: "https://api.siliconflow.cn/v1",
+            headers: {
+              "X-SiliconFlow": "1",
+            },
+          },
+        },
+      },
+    };
+
+    const result = await createEmbeddingProvider({
+      config: cfg as never,
+      provider: "siliconflow",
+      model: "siliconflow/BAAI/bge-large-zh-v1.5",
+      fallback: "none",
+    });
+
+    const provider = requireProvider(result);
+    await provider.embedQuery("hello");
+
+    expect(provider.id).toBe("siliconflow");
+    expect(authModule.resolveApiKeyForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "siliconflow",
+      }),
+    );
+
+    const { url, init } = readFirstFetchRequest(fetchMock);
+    expect(url).toBe("https://api.siliconflow.cn/v1/embeddings");
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer siliconflow-key");
+    expect(headers["X-SiliconFlow"]).toBe("1");
+    const payload = JSON.parse((init?.body as string | undefined) ?? "{}") as { model?: string };
+    expect(payload.model).toBe("BAAI/bge-large-zh-v1.5");
+  });
 });
 
 describe("embedding provider auto selection", () => {

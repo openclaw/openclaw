@@ -556,6 +556,7 @@ export const MemorySearchSchema = z
     provider: z
       .union([
         z.literal("openai"),
+        z.literal("siliconflow"),
         z.literal("local"),
         z.literal("gemini"),
         z.literal("voyage"),
@@ -584,6 +585,7 @@ export const MemorySearchSchema = z
     fallback: z
       .union([
         z.literal("openai"),
+        z.literal("siliconflow"),
         z.literal("gemini"),
         z.literal("local"),
         z.literal("voyage"),
