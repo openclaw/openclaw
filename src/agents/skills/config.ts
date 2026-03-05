@@ -64,7 +64,7 @@ export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): 
     return true;
   }
   const key = resolveSkillKey(entry.skill, entry);
-  return allowlist.includes(key) || allowlist.includes(entry.skill.name);
+  return allowlist.includes(key) || allowlist.includes(String(entry.skill.name));
 }
 
 export function shouldIncludeSkill(params: {

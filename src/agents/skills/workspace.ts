@@ -78,10 +78,10 @@ function filterSkillEntries(
     skillsLogger.debug(`Applying skill filter: ${label}`);
     filtered =
       normalized.length > 0
-        ? filtered.filter((entry) => normalized.includes(entry.skill.name))
+        ? filtered.filter((entry) => normalized.includes(String(entry.skill.name)))
         : [];
     skillsLogger.debug(
-      `After skill filter: ${filtered.map((entry) => entry.skill.name).join(", ") || "(none)"}`,
+      `After skill filter: ${filtered.map((entry) => String(entry.skill.name)).join(", ") || "(none)"}`,
     );
   }
   return filtered;
@@ -207,12 +207,20 @@ function resolveNestedSkillsRoot(
 
 function unwrapLoadedSkills(loaded: unknown): Skill[] {
   if (Array.isArray(loaded)) {
-    return loaded as Skill[];
+    // Defensive: ensure skill names are strings (YAML may parse bare numbers as number type)
+    return (loaded as Skill[]).map((skill) => ({
+      ...skill,
+      name: String(skill.name),
+    }));
   }
   if (loaded && typeof loaded === "object" && "skills" in loaded) {
     const skills = (loaded as { skills?: unknown }).skills;
     if (Array.isArray(skills)) {
-      return skills as Skill[];
+      // Defensive: ensure skill names are strings (YAML may parse bare numbers as number type)
+      return (skills as Skill[]).map((skill) => ({
+        ...skill,
+        name: String(skill.name),
+      }));
     }
   }
   return [];
