@@ -507,7 +507,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     if (mentionGate.shouldSkip) {
       logVerbose(`line: skipping group message (requireMention, not mentioned)`);
       // Store as pending history so the agent has context when later mentioned.
-      const historyKey = groupId ?? roomId ?? "";
+      const historyKey = groupId ?? roomId;
       const senderId = event.source.type === "group" || event.source.type === "room"
         ? (event.source.userId ?? "unknown")
         : "unknown";
