@@ -60,9 +60,36 @@ function parseContentDispositionFileName(header?: string | null): string | undef
   return undefined;
 }
 
-async function readErrorBodySnippet(res: Response, maxChars = 200): Promise<string | undefined> {
+async function readErrorBodySnippet(
+  res: Response,
+  maxChars = 200,
+  maxBytes = 4 * 1024,
+): Promise<string | undefined> {
   try {
-    const text = await res.text();
+    if (!res.body) {
+      return undefined;
+    }
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (total < maxBytes) {
+      const { value, done } = await reader.read();
+      if (done || !value) {
+        break;
+      }
+      const remaining = maxBytes - total;
+      if (value.byteLength <= remaining) {
+        chunks.push(value);
+        total += value.byteLength;
+      } else {
+        chunks.push(value.subarray(0, remaining));
+        total += remaining;
+        break;
+      }
+    }
+    await reader.cancel().catch(() => undefined);
+
+    const text = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
     if (!text) {
       return undefined;
     }

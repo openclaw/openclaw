@@ -12,6 +12,21 @@ function makeStream(chunks: Uint8Array[]) {
   });
 }
 
+function makeNeverEndingStreamWithLateError(chunkText: string, throwAfterReads: number) {
+  const chunk = new TextEncoder().encode(chunkText);
+  let reads = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      reads += 1;
+      if (reads > throwAfterReads) {
+        controller.error(new Error("stream read overflow"));
+        return;
+      }
+      controller.enqueue(chunk);
+    },
+  });
+}
+
 describe("fetchRemoteMedia", () => {
   type LookupFn = NonNullable<Parameters<typeof fetchRemoteMedia>[0]["lookupFn"]>;
 
@@ -64,5 +79,24 @@ describe("fetchRemoteMedia", () => {
       }),
     ).rejects.toThrow(/private|internal|blocked/i);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("captures an HTTP error body snippet without reading an unbounded stream", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = async () =>
+      new Response(makeNeverEndingStreamWithLateError("x".repeat(1024), 6), {
+        status: 500,
+        statusText: "Internal Server Error",
+      });
+
+    await expect(
+      fetchRemoteMedia({
+        url: "https://example.com/fail.bin",
+        fetchImpl,
+        lookupFn,
+      }),
+    ).rejects.toThrow(/body: x{20}/);
   });
 });
