@@ -104,13 +104,33 @@ describe("context-dedup", () => {
     expect(Object.keys(result.refTable)).toHaveLength(0);
   });
 
+  it("keeps protected lineage source messages expanded", () => {
+    const repeated = "E".repeat(260);
+
+    const result = deduplicateMessages(
+      [
+        { role: "toolResult", toolCallId: "read_a", content: repeated },
+        { role: "toolResult", toolCallId: "read_b", content: repeated },
+        { role: "toolResult", toolCallId: "read_c", content: repeated },
+      ],
+      DEDUP_ON,
+      { protectedMessageIndexes: new Set([1]) },
+    );
+
+    expect(String(result.messages[1].content)).toBe(repeated);
+    expect(String(result.messages[2].content)).toContain("Same as context message #0");
+  });
+
   it("compresses near-duplicate read chunks into line-based delta notes", () => {
-    const baseLines = Array.from({ length: 20 }, (_, idx) => `line ${idx + 1}`);
+    const baseLines = Array.from(
+      { length: 40 },
+      (_, idx) => `line ${idx + 1} :: ${"x".repeat(48)}`,
+    );
     const changedLines = [...baseLines];
-    changedLines[2] = "line 3 changed";
-    changedLines[3] = "line 4 changed";
-    changedLines[9] = "line 10 changed";
-    changedLines[16] = "line 17 changed";
+    changedLines[2] = "line 3 changed :: XXXXXXXX";
+    changedLines[3] = "line 4 changed :: XXXXXXXX";
+    changedLines[9] = "line 10 changed :: XXXXXXXX";
+    changedLines[16] = "line 17 changed :: XXXXXXXX";
 
     const messages = [
       {
@@ -153,21 +173,25 @@ describe("context-dedup", () => {
     const deltaText = String(result.messages[3].content);
 
     expect(deltaText).toContain("[Read delta from earlier chunk]");
-    expect(deltaText).toContain("Same as earlier chunk lines 1-20, except:");
+    expect(deltaText).toContain("Same as earlier chunk lines 1-40, except:");
     expect(deltaText).toContain("lines 3-4 now read");
     expect(deltaText).toContain("lines 10 now read");
     expect(deltaText).toContain("lines 17 now read");
     expect(result.stats.partiallyTrimmedChunks).toBe(1);
+    expect(result.protectedSourceMessageIndexes.has(1)).toBe(true);
   });
 
   it("limits read delta notes to at most three hunks", () => {
-    const baseLines = Array.from({ length: 30 }, (_, idx) => `line ${idx + 1}`);
+    const baseLines = Array.from(
+      { length: 60 },
+      (_, idx) => `line ${idx + 1} :: ${"y".repeat(48)}`,
+    );
     const changedLines = [...baseLines];
-    changedLines[2] = "line 3 changed";
-    changedLines[5] = "line 6 changed";
-    changedLines[8] = "line 9 changed";
-    changedLines[19] = "line 20 changed";
-    changedLines[22] = "line 23 changed";
+    changedLines[2] = "line 3 changed :: YYYYYYYY";
+    changedLines[5] = "line 6 changed :: YYYYYYYY";
+    changedLines[8] = "line 9 changed :: YYYYYYYY";
+    changedLines[19] = "line 20 changed :: YYYYYYYY";
+    changedLines[22] = "line 23 changed :: YYYYYYYY";
 
     const messages = [
       {
@@ -212,5 +236,104 @@ describe("context-dedup", () => {
 
     expect(deltaText).toContain("[Read delta from earlier chunk]");
     expect(hunkCount).toBeLessThanOrEqual(3);
+  });
+
+  it("prevents nested dedup by protecting read-lineage source messages", () => {
+    const original = Array.from(
+      { length: 40 },
+      (_, idx) => `line ${idx + 1} :: ${"z".repeat(48)}`,
+    );
+    const variant = Array.from(
+      { length: 40 },
+      (_, idx) => `variant ${idx + 1} :: ${"q".repeat(48)}`,
+    );
+    const finalVariant = [...original];
+    finalVariant[39] = "line 40 changed :: ZZZZZZZZ";
+
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_nest_1",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/nested-demo.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_nest_1",
+        content: original.join("\n"),
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_nest_2",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/nested-demo.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_nest_2",
+        content: variant.join("\n"),
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_nest_3",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/nested-demo.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_nest_3",
+        content: original.join("\n"),
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_nest_4",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/nested-demo.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_nest_4",
+        content: finalVariant.join("\n"),
+      },
+    ];
+
+    const lineage = applyReadLineageCompaction(messages as any[]);
+    expect(lineage.protectedSourceMessageIndexes.has(5)).toBe(true);
+
+    const deduped = deduplicateMessages(lineage.messages as any[], DEDUP_ON, {
+      protectedMessageIndexes: lineage.protectedSourceMessageIndexes,
+    });
+
+    const sourceMessageText = String(deduped.messages[5].content);
+    expect(sourceMessageText).toContain("line 1 ::");
+    expect(sourceMessageText).not.toContain("Same as context message #");
+
+    const deltaText = String(deduped.messages[7].content);
+    expect(deltaText).toContain("[Read delta from earlier chunk]");
+    expect(deltaText).toContain("context message #5");
   });
 });

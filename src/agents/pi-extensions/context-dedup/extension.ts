@@ -77,6 +77,12 @@ type ReadLineageStats = {
   omittedChars: number;
 };
 
+type ReadLineageCompactionResult = {
+  messages: any[];
+  stats: ReadLineageStats;
+  protectedSourceMessageIndexes: Set<number>;
+};
+
 type SeenLine = {
   text: string;
   firstSeenMessageIndex: number;
@@ -349,6 +355,7 @@ function collapseReadChunkAgainstSeen(params: {
   omittedChars: number;
   fullOmit: boolean;
   partialTrim: boolean;
+  sourceMessageIndex?: number;
 } {
   const lines = params.text.split("\n");
   const start = Math.max(1, Math.floor(params.startLine));
@@ -413,6 +420,7 @@ function collapseReadChunkAgainstSeen(params: {
         omittedChars: params.text.length - note.length,
         fullOmit: true,
         partialTrim: false,
+        sourceMessageIndex,
       };
     }
     return {
@@ -442,6 +450,7 @@ function collapseReadChunkAgainstSeen(params: {
       omittedChars: params.text.length - deltaNote.length,
       fullOmit: false,
       partialTrim: true,
+      sourceMessageIndex,
     };
   }
 
@@ -507,10 +516,11 @@ function collapseReadChunkAgainstSeen(params: {
     omittedChars: params.text.length - note.length,
     fullOmit: false,
     partialTrim: true,
+    sourceMessageIndex,
   };
 }
 
-export function applyReadLineageCompaction(messages: any[]): { messages: any[]; stats: ReadLineageStats } {
+export function applyReadLineageCompaction(messages: any[]): ReadLineageCompactionResult {
   const toolCallMeta = collectReadToolCallMeta(messages);
   if (toolCallMeta.size === 0) {
     return {
@@ -520,6 +530,7 @@ export function applyReadLineageCompaction(messages: any[]): { messages: any[]; 
         partiallyTrimmedChunks: 0,
         omittedChars: 0,
       },
+      protectedSourceMessageIndexes: new Set<number>(),
     };
   }
 
@@ -531,6 +542,7 @@ export function applyReadLineageCompaction(messages: any[]): { messages: any[]; 
     partiallyTrimmedChunks: 0,
     omittedChars: 0,
   };
+  const protectedSourceMessageIndexes = new Set<number>();
 
   for (let msgIndex = 0; msgIndex < messages.length; msgIndex++) {
     const msg = messages[msgIndex];
@@ -582,6 +594,12 @@ export function applyReadLineageCompaction(messages: any[]): { messages: any[]; 
         if (collapsed.partialTrim) {
           stats.partiallyTrimmedChunks++;
         }
+        if (
+          typeof collapsed.sourceMessageIndex === "number" &&
+          collapsed.sourceMessageIndex < msgIndex
+        ) {
+          protectedSourceMessageIndexes.add(collapsed.sourceMessageIndex);
+        }
       }
 
       continue;
@@ -622,6 +640,12 @@ export function applyReadLineageCompaction(messages: any[]): { messages: any[]; 
       if (collapsed.partialTrim) {
         stats.partiallyTrimmedChunks++;
       }
+      if (
+        typeof collapsed.sourceMessageIndex === "number" &&
+        collapsed.sourceMessageIndex < msgIndex
+      ) {
+        protectedSourceMessageIndexes.add(collapsed.sourceMessageIndex);
+      }
 
       return setBlockText(block, collapsed.nextText);
     });
@@ -640,6 +664,7 @@ export function applyReadLineageCompaction(messages: any[]): { messages: any[]; 
   return {
     messages: nextMessages ?? messages,
     stats,
+    protectedSourceMessageIndexes,
   };
 }
 
@@ -666,7 +691,9 @@ export default function contextDedupExtension(api: ExtensionAPI): void {
     const cleanedTable = cleanOrphanedRefs(lineageMessages, runtime.refTable, runtime.settings);
 
     // Run deduplication on normalized messages
-    const result = deduplicateMessages(lineageMessages, runtime.settings);
+    const result = deduplicateMessages(lineageMessages, runtime.settings, {
+      protectedMessageIndexes: lineage.protectedSourceMessageIndexes,
+    });
 
     // Merge ref tables (new refs from this turn + cleaned old refs)
     const mergedTable = { ...cleanedTable, ...result.refTable };

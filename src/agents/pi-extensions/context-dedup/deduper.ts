@@ -32,6 +32,14 @@ export interface DedupResult {
   refTagSize: number;
 }
 
+export interface DedupOptions {
+  /**
+   * Message indexes that must remain fully expanded (no pointer replacement).
+   * Used to avoid nested compaction when read-lineage notes point at these messages.
+   */
+  protectedMessageIndexes?: Set<number>;
+}
+
 function refSuffix(refId: string): string {
   return refId.startsWith("REF_") ? refId.slice(4) : refId;
 }
@@ -195,7 +203,11 @@ Each entry uses: <¯REF_XXXX= [content] END_REF¯>
  * - This intentionally avoids symbolic ref-table tags to keep smaller models stable.
  * - We still return a DedupResult shape with an empty refTable for compatibility.
  */
-export function deduplicateMessages(messages: any[], config: DedupConfig): DedupResult {
+export function deduplicateMessages(
+  messages: any[],
+  config: DedupConfig,
+  options: DedupOptions = {},
+): DedupResult {
   if (config.mode === "off") {
     return {
       messages,
@@ -203,6 +215,8 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
       refTagSize: getRefTagSize(config),
     };
   }
+
+  const protectedMessageIndexes = options.protectedMessageIndexes ?? new Set<number>();
 
   type FirstOccurrence = {
     text: string;
@@ -277,11 +291,12 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
   }
 
   const seenOrder = new Map<string, number>();
-  const newMessages: any[] = messages.map((msg) => {
+  const newMessages: any[] = messages.map((msg, msgIdx) => {
     if (!isDedupEligibleMessage(msg)) {
       return msg;
     }
 
+    const isProtectedMessage = protectedMessageIndexes.has(msgIdx);
     const role = messageRole(msg);
     const isArrayContent = Array.isArray(msg.content);
     const contents = isArrayContent ? msg.content : [msg.content];
@@ -307,6 +322,11 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
 
       // Keep the first occurrence as full content; only replace repeats.
       if (seenCount === 0) {
+        return block;
+      }
+
+      // Protect lineage source messages from becoming pointers, which would create nested refs.
+      if (isProtectedMessage) {
         return block;
       }
 
