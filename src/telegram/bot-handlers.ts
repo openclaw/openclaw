@@ -498,7 +498,7 @@ export const registerTelegramHandlers = ({
     groupConfig?: TelegramGroupConfig;
     topicConfig?: TelegramTopicConfig;
     msg?: Message;
-    ctx: TelegramContext;
+    ctx?: TelegramContext;
     botUsername?: string;
     bot: Bot;
   }) => {
@@ -684,7 +684,7 @@ export const registerTelegramHandlers = ({
     senderId: string;
     senderUsername: string;
     mode: TelegramEventAuthorizationMode;
-    ctx: TelegramContext;
+    ctx?: TelegramContext;
     context: TelegramEventAuthorizationContext;
     bot: Bot;
   }): Promise<TelegramEventAuthorizationResult> => {
@@ -798,7 +798,6 @@ export const registerTelegramHandlers = ({
         senderUsername,
         mode: "reaction",
         context: eventAuthContext,
-        ctx,
         bot,
       });
       if (!senderAuthorization.allowed) {
@@ -1169,7 +1168,6 @@ export const registerTelegramHandlers = ({
         senderUsername,
         mode: authorizationMode,
         context: eventAuthContext,
-        ctx,
         bot,
       });
       if (!senderAuthorization.allowed) {
@@ -1470,8 +1468,8 @@ export const registerTelegramHandlers = ({
           groupConfig,
           topicConfig,
           msg: event.msg,
-          botUsername: ctx.me?.username,
-          ctx,
+          botUsername: event.ctx.me?.username,
+          ctx: event.ctx,
           bot,
         })
       ) {
