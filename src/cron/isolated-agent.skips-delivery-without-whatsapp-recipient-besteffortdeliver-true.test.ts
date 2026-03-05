@@ -421,13 +421,13 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("marks attempted when announce delivery reports false and best-effort is enabled", async () => {
+  it("falls back to direct delivery when announce reports false and best-effort is enabled", async () => {
     const { res, deps } = await runAnnounceFlowResult(true);
     expect(res.status).toBe("ok");
-    expect(res.delivered).toBe(false);
+    expect(res.delivered).toBe(true);
     expect(res.deliveryAttempted).toBe(true);
     expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to direct delivery when announce flow throws and best-effort is disabled", async () => {
