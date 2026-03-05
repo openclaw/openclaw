@@ -104,7 +104,7 @@ export async function runGatewayLoop(params: {
     const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
-      exitProcess(0);
+      exitProcess(isRestart ? 1 : 0);
     }, forceExitMs);
 
     void (async () => {
