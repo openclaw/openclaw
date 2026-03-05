@@ -126,6 +126,7 @@ async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLin
   const { randomBytes } = await import("node:crypto");
   const tmp = `${filePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   await fs.writeFile(tmp, `${kept.join("\n")}\n`, "utf-8");
+  await fs.chmod(tmp, 0o600);
   await fs.rename(tmp, filePath);
 }
 
@@ -139,8 +140,13 @@ export async function appendCronRunLog(
   const next = prev
     .catch(() => undefined)
     .then(async () => {
-      await fs.mkdir(path.dirname(resolved), { recursive: true });
+      await fs.mkdir(path.dirname(resolved), { recursive: true, mode: 0o700 });
       await fs.appendFile(resolved, `${JSON.stringify(entry)}\n`, "utf-8");
+      try {
+        await fs.chmod(resolved, 0o600);
+      } catch {
+        // File may not exist yet, ignore
+      }
       await pruneIfNeeded(resolved, {
         maxBytes: opts?.maxBytes ?? DEFAULT_CRON_RUN_LOG_MAX_BYTES,
         keepLines: opts?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
