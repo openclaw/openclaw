@@ -191,17 +191,24 @@ describe("runGatewayLoop", () => {
         return { close: closeSecond };
       });
 
-      start.mockRejectedValueOnce(new Error("stop-loop"));
-
-      const { runGatewayLoop } = await import("./run-loop.js");
-      const runtime = {
+      let resolveThirdExit: ((code: number) => void) | null = null;
+      const thirdExited = new Promise<number>((resolve) => {
+        resolveThirdExit = resolve;
+      });
+      const thirdRuntime = {
         log: vi.fn(),
         error: vi.fn(),
-        exit: vi.fn(),
+        exit: vi.fn((code: number) => {
+          resolveThirdExit?.(code);
+        }),
       };
+
+      start.mockRejectedValueOnce(new Error("bad-config"));
+
+      const { runGatewayLoop } = await import("./run-loop.js");
       const loopPromise = runGatewayLoop({
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
-        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        runtime: thirdRuntime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
       });
 
       await startedFirst;
@@ -226,7 +233,12 @@ describe("runGatewayLoop", () => {
 
       process.emit("SIGUSR1");
 
-      await expect(loopPromise).rejects.toThrow("stop-loop");
+      await thirdExited;
+      await loopPromise;
+      expect(thirdRuntime.exit).toHaveBeenCalledWith(1);
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringContaining("gateway failed to start"),
+      );
       expect(closeSecond).toHaveBeenCalledWith({
         reason: "gateway restarting",
         restartExpectedMs: 1500,
@@ -276,12 +288,22 @@ describe("runGatewayLoop", () => {
       const closeSecond = vi.fn(async () => {});
       restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "disabled" });
 
+      let resolveExit: ((code: number) => void) | null = null;
+      const exited = new Promise<number>((resolve) => {
+        resolveExit = resolve;
+      });
       const start = vi
         .fn()
         .mockResolvedValueOnce({ close: closeFirst })
         .mockResolvedValueOnce({ close: closeSecond })
-        .mockRejectedValueOnce(new Error("stop-loop"));
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        .mockRejectedValueOnce(new Error("bad-config"));
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn((code: number) => {
+          resolveExit?.(code);
+        }),
+      };
       const { runGatewayLoop } = await import("./run-loop.js");
       const loopPromise = runGatewayLoop({
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
@@ -294,10 +316,94 @@ describe("runGatewayLoop", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       process.emit("SIGUSR1");
 
-      await expect(loopPromise).rejects.toThrow("stop-loop");
+      await exited;
+      await loopPromise;
+      expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(1, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(2, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(3, { port: 18789 });
+    });
+  });
+
+  it("exits gracefully when start() throws on restart instead of crashing", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async () => {
+      const close = vi.fn(async () => {});
+      let resolveStarted: (() => void) | null = null;
+      const started = new Promise<void>((resolve) => {
+        resolveStarted = resolve;
+      });
+      const start = vi.fn();
+      start.mockImplementationOnce(async () => {
+        resolveStarted?.();
+        return { close };
+      });
+      start.mockRejectedValueOnce(new Error("Invalid config at openclaw.json"));
+
+      let resolveExit: ((code: number) => void) | null = null;
+      const exited = new Promise<number>((resolve) => {
+        resolveExit = resolve;
+      });
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn((code: number) => {
+          resolveExit?.(code);
+        }),
+      };
+
+      const { runGatewayLoop } = await import("./run-loop.js");
+      const loopPromise = runGatewayLoop({
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+
+      await started;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      process.emit("SIGUSR1");
+
+      const exitCode = await exited;
+      await loopPromise;
+      expect(exitCode).toBe(1);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringContaining("gateway failed to start"),
+      );
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringContaining("Invalid config at openclaw.json"),
+      );
+      // runtime.error is also called so the message is visible when subsystem logs are filtered.
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Gateway failed to start"),
+      );
+    });
+  });
+
+  it("propagates first-start errors to the caller for GatewayLockError diagnostics", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async () => {
+      const startError = new Error("EADDRINUSE");
+      const start = vi.fn().mockRejectedValueOnce(startError);
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      const { runGatewayLoop } = await import("./run-loop.js");
+      await expect(
+        runGatewayLoop({
+          start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        }),
+      ).rejects.toThrow("EADDRINUSE");
+
+      // The error should NOT be caught internally — runtime.exit should not be called.
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
     });
   });
 
