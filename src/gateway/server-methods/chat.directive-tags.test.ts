@@ -38,7 +38,7 @@ vi.mock("../session-utils.js", async (importOriginal) => {
       cfg: {
         ...mockState.cfg,
         session: {
-          ...((mockState.cfg as { session?: Record<string, unknown> }).session ?? {}),
+          ...(mockState.cfg as { session?: Record<string, unknown> }).session,
           mainKey: mockState.mainSessionKey,
         },
       },
