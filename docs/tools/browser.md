@@ -152,6 +152,48 @@ OpenClaw preserves the auth when calling `/json/*` endpoints and when connecting
 to the CDP WebSocket. Prefer environment variables or secrets managers for
 tokens instead of committing them to config files.
 
+## Attach to an existing Chrome instance (remote debugging port)
+
+If you want OpenClaw to use an already-running Chrome session (with your
+existing logins/cookies), run Chrome with remote debugging enabled and point a
+browser profile to that CDP endpoint.
+
+1. Start Chrome with a remote debugging port:
+
+```bash
+# macOS (example)
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.openclaw/chrome-remote-profile"
+```
+
+2. Configure a profile that uses that `cdpUrl`:
+
+```json5
+{
+  browser: {
+    defaultProfile: "chrome-live",
+    profiles: {
+      "chrome-live": {
+        cdpUrl: "http://127.0.0.1:9222",
+        color: "#4285F4",
+      },
+    },
+  },
+}
+```
+
+3. Restart the gateway, then use the profile with browser tools/CLI.
+
+Notes:
+
+- This is a direct CDP attach flow (no extension tab attach required).
+- If you want to keep the profile name `chrome`, define `browser.profiles.chrome`
+  in config; explicit profile config overrides the built-in extension relay
+  profile target.
+- Treat this profile as sensitive because OpenClaw can act with whatever
+  accounts are signed into that browser session.
+
 ## Node browser proxy (zero-config default)
 
 If you run a **node host** on the machine that has your browser, OpenClaw can
