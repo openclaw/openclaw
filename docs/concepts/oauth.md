@@ -25,6 +25,12 @@ flows. Run them via:
 openclaw models auth login --provider <id>
 ```
 
+Built-in OpenAI Codex OAuth is available directly via:
+
+```bash
+openclaw models auth login
+```
+
 ## The token sink (why it exists)
 
 OAuth providers commonly mint a **new refresh token** during login/refresh flows. Some providers (or OAuth clients) can invalidate older refresh tokens when a new one is issued for the same user/app.

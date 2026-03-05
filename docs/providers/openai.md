@@ -46,8 +46,11 @@ Codex cloud requires ChatGPT sign-in, while the Codex CLI supports ChatGPT or AP
 openclaw onboard --auth-choice openai-codex
 
 # Or run OAuth directly
-openclaw models auth login --provider openai-codex
+openclaw models auth login
 ```
+
+`openclaw models auth login` starts the built-in OpenAI Codex OAuth flow. For
+plugin providers, use `openclaw models auth login --provider <id>`.
 
 ### Config snippet (Codex subscription)
 

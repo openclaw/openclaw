@@ -19,8 +19,13 @@ import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
-import { applyAuthProfileConfig } from "../onboard-auth.js";
+import { applyAuthProfileConfig, writeOAuthCredentials } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
+import {
+  applyOpenAICodexModelDefault,
+  OPENAI_CODEX_DEFAULT_MODEL,
+} from "../openai-codex-model-default.js";
+import { loginOpenAICodexOAuth } from "../openai-codex-oauth.js";
 import {
   applyDefaultModel,
   mergeConfigPatch,
@@ -28,6 +33,8 @@ import {
   resolveProviderMatch,
 } from "../provider-auth-helpers.js";
 import { loadValidConfigOrThrow, updateConfig } from "./shared.js";
+
+const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 
 const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
   clackConfirm({
@@ -242,6 +249,14 @@ type LoginOptions = {
 
 export function resolveRequestedLoginProviderOrThrow(
   providers: ProviderPlugin[],
+  rawProvider: string,
+): ProviderPlugin;
+export function resolveRequestedLoginProviderOrThrow(
+  providers: ProviderPlugin[],
+  rawProvider?: string,
+): ProviderPlugin | null;
+export function resolveRequestedLoginProviderOrThrow(
+  providers: ProviderPlugin[],
   rawProvider?: string,
 ): ProviderPlugin | null {
   const requested = rawProvider?.trim();
@@ -284,45 +299,117 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
 
   const providers = resolvePluginProviders({ config, workspaceDir });
-  if (providers.length === 0) {
-    throw new Error(
-      `No provider plugins found. Install one via \`${formatCliCommand("openclaw plugins install")}\`.`,
-    );
-  }
 
   const prompter = createClackPrompter();
-  const requestedProvider = resolveRequestedLoginProviderOrThrow(providers, opts.provider);
-  const selectedProvider =
-    requestedProvider ??
-    (await prompter
-      .select({
-        message: "Select a provider",
-        options: providers.map((provider) => ({
-          value: provider.id,
-          label: provider.label,
-          hint: provider.docsPath ? `Docs: ${provider.docsPath}` : undefined,
-        })),
-      })
-      .then((id) => resolveProviderMatch(providers, String(id))));
+  const requestedProviderRaw = opts.provider?.trim();
+  const requestedProviderIsOpenAICodex =
+    requestedProviderRaw !== undefined &&
+    normalizeProviderId(requestedProviderRaw) === OPENAI_CODEX_PROVIDER_ID;
 
-  if (!selectedProvider) {
-    throw new Error("Unknown provider. Use --provider <id> to pick a provider plugin.");
-  }
-
-  const chosenMethod =
-    pickAuthMethod(selectedProvider, opts.method) ??
-    (selectedProvider.auth.length === 1
-      ? selectedProvider.auth[0]
+  const selectedProvider = requestedProviderIsOpenAICodex
+    ? { kind: "openai-codex" as const }
+    : requestedProviderRaw
+      ? (() => {
+          const provider = resolveRequestedLoginProviderOrThrow(providers, requestedProviderRaw);
+          return { kind: "plugin" as const, provider };
+        })()
       : await prompter
           .select({
-            message: `Auth method for ${selectedProvider.label}`,
-            options: selectedProvider.auth.map((method) => ({
+            message: "Select a provider",
+            options: [
+              {
+                value: OPENAI_CODEX_PROVIDER_ID,
+                label: "OpenAI Codex",
+                hint: "Built-in OAuth",
+              },
+              ...providers.map((provider) => ({
+                value: provider.id,
+                label: provider.label,
+                hint: provider.docsPath ? `Docs: ${provider.docsPath}` : undefined,
+              })),
+            ],
+          })
+          .then((id) => {
+            const selectedId = String(id);
+            if (normalizeProviderId(selectedId) === OPENAI_CODEX_PROVIDER_ID) {
+              return { kind: "openai-codex" as const };
+            }
+            const provider = resolveProviderMatch(providers, selectedId);
+            if (!provider) {
+              throw new Error("Unknown provider. Use --provider <id> to pick a provider.");
+            }
+            return { kind: "plugin" as const, provider };
+          });
+
+  if (selectedProvider.kind === "openai-codex") {
+    const requestedMethod = opts.method?.trim();
+    if (requestedMethod && requestedMethod.toLowerCase() !== "oauth") {
+      throw new Error(
+        `Unsupported auth method "${requestedMethod}" for ${OPENAI_CODEX_PROVIDER_ID}. Use --method oauth or omit --method.`,
+      );
+    }
+
+    const creds = await loginOpenAICodexOAuth({
+      prompter,
+      runtime,
+      isRemote: isRemoteEnvironment(),
+      openUrl: async (url) => {
+        await openUrl(url);
+      },
+      localBrowserMessage: "Complete sign-in in browser…",
+    });
+
+    if (!creds) {
+      return;
+    }
+
+    const profileId = await writeOAuthCredentials(OPENAI_CODEX_PROVIDER_ID, creds, agentDir, {
+      syncSiblingAgents: true,
+    });
+
+    let defaultModelApplied = false;
+    await updateConfig((cfg) => {
+      let next = applyAuthProfileConfig(cfg, {
+        profileId,
+        provider: OPENAI_CODEX_PROVIDER_ID,
+        mode: "oauth",
+      });
+      if (opts.setDefault) {
+        const applied = applyOpenAICodexModelDefault(next);
+        next = applied.next;
+        defaultModelApplied = applied.changed;
+      }
+      return next;
+    });
+
+    logConfigUpdated(runtime);
+    runtime.log(`Auth profile: ${profileId} (${OPENAI_CODEX_PROVIDER_ID}/oauth)`);
+    runtime.log(
+      opts.setDefault
+        ? defaultModelApplied
+          ? `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`
+          : `Default model unchanged (current model preserved)`
+        : `Default model available: ${OPENAI_CODEX_DEFAULT_MODEL} (use --set-default to apply)`,
+    );
+    return;
+  }
+
+  const { provider: selectedPluginProvider } = selectedProvider;
+
+  const chosenMethod =
+    pickAuthMethod(selectedPluginProvider, opts.method) ??
+    (selectedPluginProvider.auth.length === 1
+      ? selectedPluginProvider.auth[0]
+      : await prompter
+          .select({
+            message: `Auth method for ${selectedPluginProvider.label}`,
+            options: selectedPluginProvider.auth.map((method) => ({
               value: method.id,
               label: method.label,
               hint: method.hint,
             })),
           })
-          .then((id) => selectedProvider.auth.find((method) => method.id === String(id))));
+          .then((id) => selectedPluginProvider.auth.find((method) => method.id === String(id))));
 
   if (!chosenMethod) {
     throw new Error("Unknown auth method. Use --method <id> to select one.");

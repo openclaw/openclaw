@@ -1,6 +1,7 @@
 import path from "node:path";
 
 export const CONFIG_BACKUP_COUNT = 5;
+export const CONFIG_BACKUP_MODE = 0o600;
 
 export interface BackupRotationFs {
   unlink: (path: string) => Promise<void>;
@@ -50,12 +51,12 @@ export async function hardenBackupPermissions(
   }
   const backupBase = `${configPath}.bak`;
   // Harden the primary .bak
-  await ioFs.chmod(backupBase, 0o600).catch(() => {
+  await ioFs.chmod(backupBase, CONFIG_BACKUP_MODE).catch(() => {
     // best-effort
   });
   // Harden numbered backups
   for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
-    await ioFs.chmod(`${backupBase}.${i}`, 0o600).catch(() => {
+    await ioFs.chmod(`${backupBase}.${i}`, CONFIG_BACKUP_MODE).catch(() => {
       // best-effort
     });
   }
