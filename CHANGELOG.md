@@ -2,6 +2,13 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.3.4
+
+### Changes
+
+- OpenAI HTTP/image_url: add `image_url` content part support for multimodal chat completions via the OpenAI-compatible HTTP API. Base64 data URIs (`data:image/*;base64,...`) are parsed and forwarded to the agent's multimodal pipeline. Image-only user turns (no accompanying text) are now handled correctly and no longer trigger a "Missing user message" error.
+
+## 2026.2.27
 ## 2026.3.3
 
 ### Changes

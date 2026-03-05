@@ -517,4 +517,155 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       // shared server
     }
   });
+
+  it("GET /v1/models returns model list", async () => {
+    const port = enabledPort;
+
+    {
+      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+        method: "GET",
+        headers: { authorization: "Bearer secret" },
+      });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, unknown>;
+      expect(json.object).toBe("list");
+      const data = json.data as Array<Record<string, unknown>>;
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBe(2);
+      expect(data[0]?.id).toBe("openclaw");
+      expect(data[0]?.object).toBe("model");
+      expect(data[0]?.owned_by).toBe("openclaw");
+      expect(data[1]?.id).toBe("openclaw:main");
+    }
+
+    // Unauthorized
+    {
+      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+        method: "GET",
+      });
+      expect(res.status).toBe(401);
+      await res.text();
+    }
+
+    // Wrong method
+    {
+      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer secret",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+      expect(res.status).toBe(405);
+      await res.text();
+    }
+  });
+
+  it("returns 404 for /v1/models when disabled", async () => {
+    await expectChatCompletionsDisabled(async (port) => {
+      const server = await startServerWithDefaultConfig(port);
+      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+        method: "GET",
+        headers: { authorization: "Bearer secret" },
+      });
+      expect(res.status).toBe(404);
+      await res.text();
+      return server;
+    });
+  });
+
+  it("passes image_url content parts as images to agent command", async () => {
+    const port = enabledPort;
+    const base64Data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk";
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "I see an image" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "What is in this image?" },
+            {
+              type: "image_url",
+              image_url: { url: `data:image/png;base64,${base64Data}` },
+            },
+          ],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { message?: string; images?: Array<{ type: string; data: string; mimeType: string }> }
+      | undefined;
+    expect(opts?.message).toBe("What is in this image?");
+    expect(opts?.images).toHaveLength(1);
+    expect(opts?.images?.[0]?.type).toBe("image");
+    expect(opts?.images?.[0]?.mimeType).toBe("image/png");
+    expect(opts?.images?.[0]?.data).toBe(base64Data);
+    await res.text();
+  });
+
+  it("ignores non-data-uri image_url (no crash)", async () => {
+    const port = enabledPort;
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Look at this" },
+            { type: "image_url", image_url: { url: "https://example.com/image.png" } },
+          ],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { images?: unknown[] }
+      | undefined;
+    // Non-data-URI images are not passed (only base64 data URIs are supported)
+    expect(opts?.images).toBeUndefined();
+    await res.text();
+  });
+
+  it("handles image-only user turn without missing-message error", async () => {
+    const port = enabledPort;
+    const base64Data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk";
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "I see an image" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image_url",
+              image_url: { url: `data:image/png;base64,${base64Data}` },
+            },
+          ],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { message?: string; images?: Array<{ type: string; data: string; mimeType: string }> }
+      | undefined;
+    expect(opts?.images).toHaveLength(1);
+    expect(opts?.images?.[0]?.mimeType).toBe("image/png");
+    await res.text();
+  });
 });
