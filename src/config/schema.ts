@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { CHANNEL_IDS } from "../channels/registry.js";
 import { VERSION } from "../version.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
@@ -322,7 +323,18 @@ function buildMergedSchemaCacheKey(params: {
       configUiHints: channel.configUiHints ?? null,
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
-  return JSON.stringify({ plugins, channels });
+  // Build a compact cache key by hashing individual items incrementally to
+  // avoid a single giant JSON.stringify that can exceed V8 string limits
+  // when many plugins/channels with large schemas are registered (#36508).
+  const hash = createHash("sha256");
+  for (const p of plugins) {
+    hash.update(JSON.stringify(p));
+  }
+  hash.update("|");
+  for (const c of channels) {
+    hash.update(JSON.stringify(c));
+  }
+  return hash.digest("hex");
 }
 
 function setMergedSchemaCache(key: string, value: ConfigSchemaResponse): void {
