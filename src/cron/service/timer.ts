@@ -741,9 +741,10 @@ function isRunnableJob(params: {
     typeof next === "number" &&
     Number.isFinite(next) &&
     next > nowMs &&
-    job.state.lastStatus === "error"
+    isErrorBackoffPending(job, nowMs)
   ) {
-    // Respect persisted retry backoff windows for recurring jobs on restart.
+    // Respect active retry backoff windows on restart, but allow missed-slot
+    // replay once the backoff window has elapsed.
     return false;
   }
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
@@ -764,6 +765,22 @@ function isRunnableJob(params: {
     return false;
   }
   return previousRunAtMs > lastRunAtMs;
+}
+
+function isErrorBackoffPending(job: CronJob, nowMs: number): boolean {
+  if (job.schedule.kind === "at" || job.state.lastStatus !== "error") {
+    return false;
+  }
+  const lastRunAtMs = job.state.lastRunAtMs;
+  if (typeof lastRunAtMs !== "number" || !Number.isFinite(lastRunAtMs)) {
+    return false;
+  }
+  const consecutiveErrorsRaw = job.state.consecutiveErrors;
+  const consecutiveErrors =
+    typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
+      ? Math.max(1, Math.floor(consecutiveErrorsRaw))
+      : 1;
+  return nowMs < lastRunAtMs + errorBackoffMs(consecutiveErrors);
 }
 
 function collectRunnableJobs(
