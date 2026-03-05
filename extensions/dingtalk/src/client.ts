@@ -29,9 +29,7 @@ export async function getAccessToken(account: ResolvedDingtalkAccount): Promise<
   }
 
   if (!account.clientId || !account.clientSecret) {
-    throw new Error(
-      `DingTalk credentials not configured for account "${account.accountId}"`,
-    );
+    throw new Error(`DingTalk credentials not configured for account "${account.accountId}"`);
   }
 
   const res = await axios.get(`${DINGTALK_OAPI_BASE}/gettoken`, {
@@ -42,9 +40,7 @@ export async function getAccessToken(account: ResolvedDingtalkAccount): Promise<
   });
 
   if (res.status !== 200 || !res.data?.access_token) {
-    throw new Error(
-      `Failed to get DingTalk access token: ${JSON.stringify(res.data)}`,
-    );
+    throw new Error(`Failed to get DingTalk access token: ${JSON.stringify(res.data)}`);
   }
 
   const accessToken: string = res.data.access_token;

@@ -91,12 +91,11 @@ export async function handleDingtalkMessage(params: {
   // --- 群组策略检查 / Group policy check ---
   if (isGroup) {
     const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-    const { groupPolicy, providerMissingFallbackApplied } =
-      resolveOpenProviderRuntimeGroupPolicy({
-        providerConfigPresent: cfg.channels?.dingtalk !== undefined,
-        groupPolicy: dingtalkCfg?.groupPolicy,
-        defaultGroupPolicy,
-      });
+    const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.dingtalk !== undefined,
+      groupPolicy: dingtalkCfg?.groupPolicy,
+      defaultGroupPolicy,
+    });
     warnMissingProviderGroupPolicyFallbackOnce({
       providerMissingFallbackApplied,
       providerKey: "dingtalk",
@@ -136,9 +135,7 @@ export async function handleDingtalkMessage(params: {
 
     if (dmPolicy === "allowlist") {
       const allowed = configAllowFrom.some(
-        (entry) =>
-          String(entry).trim() === ctx.senderStaffId ||
-          String(entry).trim() === "*",
+        (entry) => String(entry).trim() === ctx.senderStaffId || String(entry).trim() === "*",
       );
       if (!allowed) {
         log(`dingtalk[${account.accountId}]: sender ${ctx.senderStaffId} not in allowlist`);
@@ -155,9 +152,7 @@ export async function handleDingtalkMessage(params: {
       const storeAllowFrom = await pairing.readAllowFromStore().catch(() => []);
       const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];
       const allowed = effectiveAllowFrom.some(
-        (entry) =>
-          String(entry).trim() === ctx.senderStaffId ||
-          String(entry).trim() === "*",
+        (entry) => String(entry).trim() === ctx.senderStaffId || String(entry).trim() === "*",
       );
       if (!allowed) {
         log(
@@ -168,9 +163,7 @@ export async function handleDingtalkMessage(params: {
           meta: { name: ctx.senderNick },
         });
         if (created) {
-          log(
-            `dingtalk[${account.accountId}]: pairing code ${code} for ${ctx.senderStaffId}`,
-          );
+          log(`dingtalk[${account.accountId}]: pairing code ${code} for ${ctx.senderStaffId}`);
           try {
             await sendTextMessage({
               account,
@@ -184,9 +177,7 @@ export async function handleDingtalkMessage(params: {
               }),
             });
           } catch (err) {
-            log(
-              `dingtalk[${account.accountId}]: failed to send pairing reply: ${err}`,
-            );
+            log(`dingtalk[${account.accountId}]: failed to send pairing reply: ${err}`);
           }
         }
         return;

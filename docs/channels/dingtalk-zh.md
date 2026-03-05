@@ -266,8 +266,8 @@ openclaw pairing list dingtalk
 
 ## 常用命令
 
-| 命令      | 说明         |
-| --------- | ------------ |
+| 命令      | 说明           |
+| --------- | -------------- |
 | `/status` | 显示机器人状态 |
 | `/reset`  | 重置当前会话   |
 | `/model`  | 显示/切换模型  |
@@ -276,13 +276,13 @@ openclaw pairing list dingtalk
 
 ## 网关管理命令
 
-| 命令                       | 说明               |
-| -------------------------- | ------------------ |
-| `openclaw gateway status`  | 查看网关状态        |
-| `openclaw gateway install` | 安装/启动网关服务    |
-| `openclaw gateway stop`    | 停止网关服务        |
-| `openclaw gateway restart` | 重启网关服务        |
-| `openclaw logs --follow`   | 实时查看网关日志    |
+| 命令                       | 说明              |
+| -------------------------- | ----------------- |
+| `openclaw gateway status`  | 查看网关状态      |
+| `openclaw gateway install` | 安装/启动网关服务 |
+| `openclaw gateway stop`    | 停止网关服务      |
+| `openclaw gateway restart` | 重启网关服务      |
+| `openclaw logs --follow`   | 实时查看网关日志  |
 
 ---
 
@@ -426,36 +426,36 @@ openclaw pairing list dingtalk
 
 核心配置项：
 
-| 配置项                                                     | 说明                              | 默认值      |
-| ---------------------------------------------------------- | --------------------------------- | ----------- |
-| `channels.dingtalk.enabled`                                | 启用/禁用 channel                 | `true`      |
-| `channels.dingtalk.clientId`                               | 应用 Client ID（AppKey）          | -           |
-| `channels.dingtalk.clientSecret`                           | 应用 Client Secret（AppSecret）   | -           |
-| `channels.dingtalk.robotCode`                              | 机器人编码（默认等于 clientId）     | `clientId`  |
-| `channels.dingtalk.defaultAccount`                         | 出站路由的默认账号 ID              | `default`   |
-| `channels.dingtalk.accounts.<id>.clientId`                 | 单账号 Client ID                  | -           |
-| `channels.dingtalk.accounts.<id>.clientSecret`             | 单账号 Client Secret              | -           |
-| `channels.dingtalk.dmPolicy`                               | 私聊策略                          | `pairing`   |
-| `channels.dingtalk.allowFrom`                              | 私聊白名单（staffId 列表）         | -           |
-| `channels.dingtalk.groupPolicy`                            | 群组策略                          | `open`      |
-| `channels.dingtalk.groupAllowFrom`                         | 群组白名单（conversationId 列表）  | -           |
-| `channels.dingtalk.requireMention`                         | 群聊中是否需要 @机器人             | `true`      |
-| `channels.dingtalk.groups.<conversationId>.requireMention` | 单群组 @提及要求                   | `true`      |
-| `channels.dingtalk.groups.<conversationId>.enabled`        | 启用/禁用单个群组                  | `true`      |
-| `channels.dingtalk.textChunkLimit`                         | 消息分块大小                      | `2000`      |
-| `channels.dingtalk.mediaMaxMb`                             | 媒体大小限制                      | `20`        |
-| `channels.dingtalk.streaming`                              | 启用流式卡片输出                   | `true`      |
-| `channels.dingtalk.resolveSenderNames`                     | 解析发送者显示名称                 | `true`      |
+| 配置项                                                     | 说明                              | 默认值     |
+| ---------------------------------------------------------- | --------------------------------- | ---------- |
+| `channels.dingtalk.enabled`                                | 启用/禁用 channel                 | `true`     |
+| `channels.dingtalk.clientId`                               | 应用 Client ID（AppKey）          | -          |
+| `channels.dingtalk.clientSecret`                           | 应用 Client Secret（AppSecret）   | -          |
+| `channels.dingtalk.robotCode`                              | 机器人编码（默认等于 clientId）   | `clientId` |
+| `channels.dingtalk.defaultAccount`                         | 出站路由的默认账号 ID             | `default`  |
+| `channels.dingtalk.accounts.<id>.clientId`                 | 单账号 Client ID                  | -          |
+| `channels.dingtalk.accounts.<id>.clientSecret`             | 单账号 Client Secret              | -          |
+| `channels.dingtalk.dmPolicy`                               | 私聊策略                          | `pairing`  |
+| `channels.dingtalk.allowFrom`                              | 私聊白名单（staffId 列表）        | -          |
+| `channels.dingtalk.groupPolicy`                            | 群组策略                          | `open`     |
+| `channels.dingtalk.groupAllowFrom`                         | 群组白名单（conversationId 列表） | -          |
+| `channels.dingtalk.requireMention`                         | 群聊中是否需要 @机器人            | `true`     |
+| `channels.dingtalk.groups.<conversationId>.requireMention` | 单群组 @提及要求                  | `true`     |
+| `channels.dingtalk.groups.<conversationId>.enabled`        | 启用/禁用单个群组                 | `true`     |
+| `channels.dingtalk.textChunkLimit`                         | 消息分块大小                      | `2000`     |
+| `channels.dingtalk.mediaMaxMb`                             | 媒体大小限制                      | `20`       |
+| `channels.dingtalk.streaming`                              | 启用流式卡片输出                  | `true`     |
+| `channels.dingtalk.resolveSenderNames`                     | 解析发送者显示名称                | `true`     |
 
 ---
 
 ## dmPolicy 参考
 
-| 值            | 行为                                               |
-| ------------- | -------------------------------------------------- |
+| 值            | 行为                                                      |
+| ------------- | --------------------------------------------------------- |
 | `"pairing"`   | **默认。** 未知用户会收到配对码，需要管理员审批后才能对话 |
-| `"allowlist"` | 仅 `allowFrom` 中的用户可以对话                      |
-| `"open"`      | 允许所有用户（需要 `allowFrom` 包含 `"*"`）          |
+| `"allowlist"` | 仅 `allowFrom` 中的用户可以对话                           |
+| `"open"`      | 允许所有用户（需要 `allowFrom` 包含 `"*"`）               |
 
 ---
 
@@ -484,16 +484,16 @@ openclaw pairing list dingtalk
 
 ## 与飞书功能对比
 
-| 功能          | 钉钉     | 飞书  |
-| ------------- | -------- | ----- |
-| 文本消息       | ✅       | ✅    |
-| Markdown      | ✅       | ✅    |
-| 图片          | ✅       | ✅    |
-| 文件          | ✅（私聊）| ✅    |
-| 音视频        | ✅（私聊）| ✅    |
-| 流式卡片       | ✅       | ✅    |
-| 消息表情回应   | ❌       | ✅    |
-| 消息编辑       | ❌       | ✅    |
-| 回复/话题      | ❌       | ✅    |
-| 贴纸          | ❌       | ✅    |
-| WebSocket 模式 | ✅       | ✅    |
+| 功能           | 钉钉       | 飞书 |
+| -------------- | ---------- | ---- |
+| 文本消息       | ✅         | ✅   |
+| Markdown       | ✅         | ✅   |
+| 图片           | ✅         | ✅   |
+| 文件           | ✅（私聊） | ✅   |
+| 音视频         | ✅（私聊） | ✅   |
+| 流式卡片       | ✅         | ✅   |
+| 消息表情回应   | ❌         | ✅   |
+| 消息编辑       | ❌         | ✅   |
+| 回复/话题      | ❌         | ✅   |
+| 贴纸           | ❌         | ✅   |
+| WebSocket 模式 | ✅         | ✅   |

@@ -30,9 +30,11 @@ function setCachedProbeResult(
  * 通过获取 AccessToken 来验证凭证是否有效。
  * Validates credentials by attempting to get an AccessToken.
  */
-export async function probeDingtalk(
-  creds?: { accountId?: string; clientId?: string; clientSecret?: string },
-): Promise<DingtalkProbeResult> {
+export async function probeDingtalk(creds?: {
+  accountId?: string;
+  clientId?: string;
+  clientSecret?: string;
+}): Promise<DingtalkProbeResult> {
   if (!creds?.clientId || !creds?.clientSecret) {
     return { ok: false, error: "missing credentials (clientId, clientSecret)" };
   }

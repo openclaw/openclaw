@@ -21,9 +21,7 @@ export async function monitorStream(params: {
   const { account, onMessage, abortSignal, log = console.log } = params;
 
   if (!account.clientId || !account.clientSecret) {
-    throw new Error(
-      `DingTalk credentials not configured for account "${account.accountId}"`,
-    );
+    throw new Error(`DingTalk credentials not configured for account "${account.accountId}"`);
   }
 
   const client = new DWClient({

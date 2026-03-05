@@ -1,6 +1,6 @@
-import axios from "axios";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import axios from "axios";
 import { getAccessToken } from "./client.js";
 import { sendDingtalkDM, sendDingtalkGroup } from "./send.js";
 import type { ResolvedDingtalkAccount, DingtalkSendResult } from "./types.js";
@@ -31,17 +31,13 @@ export async function uploadMedia(params: {
   const formData = new (await import("form-data")).default();
   formData.append("media", fileStream, fileName);
 
-  const res = await axios.post(
-    `${DINGTALK_OAPI_BASE}/media/upload`,
-    formData,
-    {
-      params: {
-        access_token: accessToken,
-        type,
-      },
-      headers: formData.getHeaders(),
+  const res = await axios.post(`${DINGTALK_OAPI_BASE}/media/upload`, formData, {
+    params: {
+      access_token: accessToken,
+      type,
     },
-  );
+    headers: formData.getHeaders(),
+  });
 
   if (res.data?.media_id) {
     return res.data.media_id;
