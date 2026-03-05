@@ -54,11 +54,17 @@ function expectDeniedForTarget(params: {
   mode: ResolveParams["mode"];
   to?: string;
 }) {
-  expectResolutionError({
+  const result = resolveWhatsAppOutboundTarget({
     to: params.to ?? PRIMARY_TARGET,
     allowFrom: params.allowFrom,
     mode: params.mode,
   });
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("expected resolution to fail");
+  }
+  expect(result.error).toBeInstanceOf(Error);
+  return result.error;
 }
 
 describe("resolveWhatsAppOutboundTarget", () => {
@@ -136,7 +142,13 @@ describe("resolveWhatsAppOutboundTarget", () => {
 
     it("denies message when target is not in allowList", () => {
       mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
-      expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "implicit" });
+      const error = expectDeniedForTarget({
+        allowFrom: [SECONDARY_TARGET],
+        mode: "implicit",
+      });
+      expect(error.message).toBe(
+        'Target "+19876543210" is not listed in the configured WhatsApp allowFrom policy.',
+      );
     });
 
     it("handles mixed numeric and string allowList entries", () => {
@@ -174,7 +186,13 @@ describe("resolveWhatsAppOutboundTarget", () => {
 
     it("denies message when target is not in allowList in heartbeat mode", () => {
       mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
-      expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "heartbeat" });
+      const error = expectDeniedForTarget({
+        allowFrom: [SECONDARY_TARGET],
+        mode: "heartbeat",
+      });
+      expect(error.message).toBe(
+        'Target "+19876543210" is not listed in the configured WhatsApp allowFrom policy.',
+      );
     });
   });
 
@@ -191,7 +209,13 @@ describe("resolveWhatsAppOutboundTarget", () => {
 
     it("enforces allowList in custom mode string", () => {
       mockNormalizedDirectMessage(SECONDARY_TARGET, PRIMARY_TARGET);
-      expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "broadcast" });
+      const error = expectDeniedForTarget({
+        allowFrom: [SECONDARY_TARGET],
+        mode: "broadcast",
+      });
+      expect(error.message).toBe(
+        'Target "+11234567890" is not listed in the configured WhatsApp allowFrom policy.',
+      );
     });
 
     it("allows message in custom mode string when target is in allowList", () => {
