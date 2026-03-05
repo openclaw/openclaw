@@ -163,7 +163,8 @@ describe("Fund tools L1 unit tests", () => {
     expect(byLevel.L2_PAPER).toBe(2);
     expect(byLevel.L3_LIVE).toBe(1);
     expect(d.risk).toBeDefined();
-    expect((d.risk as Record<string, unknown>).riskLevel).toBeDefined();
+    const risk = d.risk as Record<string, unknown>;
+    expect(risk.riskLevel).toBe("normal");
   });
 
   // ── 2. fin_fund_promote: L2 strategy returns eligible + needsUserConfirmation ──
@@ -183,11 +184,14 @@ describe("Fund tools L1 unit tests", () => {
     const d = parseDetails(result);
 
     // L2 without paper data won't be eligible (needs 30d, 30 trades etc.)
-    // The tool returns the promotion check — verify structure
     expect(d.strategyId).toBe("strat-l2-good");
     expect(d.currentLevel).toBe("L2_PAPER");
-    // Without paper data, blockers will exist
-    expect(Array.isArray(d.blockers)).toBe(true);
+    expect(d.eligible).toBe(false);
+    // Without paper data, specific blockers should exist
+    const blockers = d.blockers as string[];
+    expect(blockers.length).toBeGreaterThanOrEqual(1);
+    expect(blockers.some((b) => b.includes("days"))).toBe(true);
+    expect(blockers.some((b) => b.includes("trades"))).toBe(true);
   });
 
   // ── 3. fin_fund_promote: L0 strategy returns eligible + auto (no confirmation) ──
@@ -225,20 +229,48 @@ describe("Fund tools L1 unit tests", () => {
       level: "L2_PAPER",
       lastBacktest: { sharpe: 1.5, maxDrawdown: -10, totalTrades: 200 },
       lastWalkForward: { passed: true, ratio: 0.8, threshold: 0.6 },
-      // createdAt far enough for paper days
       createdAt: Date.now() - 86_400_000 * 60,
     });
 
-    const { tools } = buildDeps([record]);
+    // Provide paper data that satisfies L2→L3 gates (30d, 30 trades, Sharpe ≥ 0.5, DD ≤ 20%)
+    const paperMock = {
+      listAccounts: vi.fn(() => [{ id: "paper-1", name: "Paper Acct", equity: 11_000 }]),
+      getAccountState: vi.fn(() => ({
+        id: "paper-1",
+        initialCapital: 10_000,
+        equity: 11_000,
+        orders: Array.from({ length: 35 }, (_, i) => ({
+          strategyId: "strat-pend",
+          symbol: "BTC/USDT",
+          side: "buy",
+          id: `order-${i}`,
+        })),
+        createdAt: Date.now() - 86_400_000 * 40,
+      })),
+      getMetrics: vi.fn(() => ({
+        rollingSharpe7d: 1.2,
+        rollingSharpe30d: 1.2,
+        currentDrawdown: -5,
+        consecutiveLossDays: 0,
+        decayLevel: "none",
+      })),
+    };
+
+    const { tools } = buildDeps([record], { getPaper: () => paperMock as never });
 
     const result = await tools.get("fin_fund_rebalance")!("test", {});
     const d = parseDetails(result);
 
-    // The rebalance runs; promotions depend on real FundManager logic
     expect(d.allocations).toBeDefined();
     expect(Array.isArray(d.promotions)).toBe(true);
-    // pendingConfirmations contains L3 candidates that weren't confirmed
-    expect(Array.isArray(d.pendingConfirmations)).toBe(true);
+    // pendingConfirmations should contain strat-pend (L3 eligible, not confirmed)
+    const pending = d.pendingConfirmations as Array<{
+      strategyId: string;
+      needsUserConfirmation: boolean;
+    }>;
+    expect(pending.length).toBeGreaterThanOrEqual(1);
+    expect(pending.some((p) => p.strategyId === "strat-pend")).toBe(true);
+    expect(pending[0]!.needsUserConfirmation).toBe(true);
   });
 
   // ── 6. fin_fund_rebalance: with confirmed_promotions → calls updateLevel to L3 ──
@@ -267,6 +299,30 @@ describe("Fund tools L1 unit tests", () => {
       updateLevel: updateLevelSpy,
     };
 
+    // Provide paper data satisfying L2→L3 gates
+    const paperMock = {
+      listAccounts: () => [{ id: "paper-1", name: "Paper Acct", equity: 11_000 }],
+      getAccountState: () => ({
+        id: "paper-1",
+        initialCapital: 10_000,
+        equity: 11_000,
+        orders: Array.from({ length: 35 }, (_, i) => ({
+          strategyId: "strat-confirmed",
+          symbol: "BTC/USDT",
+          side: "buy",
+          id: `order-${i}`,
+        })),
+        createdAt: Date.now() - 86_400_000 * 40,
+      }),
+      getMetrics: () => ({
+        rollingSharpe7d: 1.2,
+        rollingSharpe30d: 1.2,
+        currentDrawdown: -5,
+        consecutiveLossDays: 0,
+        decayLevel: "none",
+      }),
+    };
+
     const { api, tools: toolMap } = captureTools();
     registerFundTools(api as never, {
       manager: fundManager,
@@ -274,8 +330,7 @@ describe("Fund tools L1 unit tests", () => {
       flowStore: { record: vi.fn() } as never,
       perfStore: { addSnapshot: vi.fn() } as never,
       getRegistry: () => registry as never,
-      getPaper: () =>
-        ({ listAccounts: () => [], getAccountState: () => null, getMetrics: () => null }) as never,
+      getPaper: () => paperMock as never,
     });
 
     const result = await toolMap.get("fin_fund_rebalance")!("test", {
@@ -284,12 +339,10 @@ describe("Fund tools L1 unit tests", () => {
     const d = parseDetails(result);
 
     expect(d.allocations).toBeDefined();
-    // If strategy was eligible for L3, confirmed_promotions should allow updateLevel
-    // Check if updateLevel was called for any L3 promotion
+    // With paper data satisfying gates + confirmed_promotions, updateLevel should be called with L3_LIVE
     const l3Calls = updateLevelSpy.mock.calls.filter(([, lvl]) => lvl === "L3_LIVE");
-    // Whether the strategy actually qualifies depends on real FundManager gates;
-    // but the confirmed_promotions logic at least runs without error
-    expect(d.pendingConfirmations).toBeDefined();
+    expect(l3Calls.length).toBeGreaterThanOrEqual(1);
+    expect(l3Calls[0]![0]).toBe("strat-confirmed");
   });
 
   // ── 7. fin_lifecycle_scan: L2 eligible returns action="approve_promotion" ──
@@ -319,8 +372,8 @@ describe("Fund tools L1 unit tests", () => {
 
     // Summary
     const summary = d.summary as Record<string, unknown>;
-    expect(typeof summary.totalStrategies).toBe("number");
-    expect(typeof summary.actionableCount).toBe("number");
+    expect(summary.totalStrategies).toBe(1);
+    expect(summary.actionableCount).toBeGreaterThanOrEqual(1);
   });
 
   // ── 8. fin_list_promotions_ready: filters by level correctly ──
@@ -349,9 +402,41 @@ describe("Fund tools L1 unit tests", () => {
     expect(promotions.every((p) => p.strategyId === "l0-a")).toBe(true);
 
     const summary = d.summary as Record<string, unknown>;
-    expect(typeof summary.total).toBe("number");
-    expect(typeof summary.eligible).toBe("number");
+    expect(summary.total).toBe(1);
+    expect(summary.eligible).toBeGreaterThanOrEqual(1);
     expect(typeof summary.needsConfirmation).toBe("number");
     expect(typeof summary.autoPromote).toBe("number");
+  });
+
+  // ── 8b. fin_list_promotions_ready: L1_BACKTEST filter works (regression for cast bug) ──
+
+  it("fin_list_promotions_ready: L1_BACKTEST filter returns only L1 strategies", async () => {
+    const records = [
+      makeRecord({ id: "l0-x", level: "L0_INCUBATE" }),
+      makeRecord({
+        id: "l1-x",
+        level: "L1_BACKTEST",
+        lastBacktest: { sharpe: 1.5, maxDrawdown: -12, totalTrades: 150 },
+        lastWalkForward: { passed: true, ratio: 0.8, threshold: 0.6 },
+      }),
+      makeRecord({ id: "l2-x", level: "L2_PAPER" }),
+    ];
+
+    const { tools } = buildDeps(records);
+
+    // Filter for L1_BACKTEST — this used to be broken by `as "L0_INCUBATE"` cast
+    const result = await tools.get("fin_list_promotions_ready")!("test", {
+      level: "L1_BACKTEST",
+    });
+    const d = parseDetails(result);
+
+    const promotions = d.promotions as Array<{ strategyId: string }>;
+    // Should only include L1 strategies, not L0 or L2
+    expect(promotions.every((p) => p.strategyId.startsWith("l1-"))).toBe(true);
+    expect(promotions.length).toBeGreaterThanOrEqual(1);
+
+    const summary = d.summary as Record<string, unknown>;
+    // total should be 1 (only L1 strategies after filter)
+    expect(summary.total).toBe(1);
   });
 });

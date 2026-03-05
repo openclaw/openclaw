@@ -373,10 +373,12 @@ export async function gatherLiveTradingData(deps: DataGatheringDeps) {
       dailyPnl: 0,
       dailyPnlPct: 0,
       positionCount: 0,
+      orderCount: 0,
       exchangeCount: 0,
     },
     positions: [] as Array<Record<string, unknown>>,
     balances: [] as Array<Record<string, unknown>>,
+    orders: [] as Array<Record<string, unknown>>,
     exchanges: [] as Array<{ id: string; exchange: string; status: string }>,
   };
 
@@ -385,12 +387,21 @@ export async function gatherLiveTradingData(deps: DataGatheringDeps) {
   const exchanges = registry.listExchanges();
   const allPositions: Array<Record<string, unknown>> = [];
   const allBalances: Array<Record<string, unknown>> = [];
+  const allOrders: Array<Record<string, unknown>> = [];
   const exchangeStatuses: Array<{ id: string; exchange: string; status: string }> = [];
   let totalEquity = 0;
+  let totalUnrealizedPnl = 0;
+
+  // Type for fetchOpenOrders — LiveExecutor delegates to CcxtBridge which has it
+  type LiveExecutorExt = typeof liveExecutor & {
+    fetchOpenOrders?: (exchangeId?: string, symbol?: string) => Promise<unknown[]>;
+  };
+  const executor = liveExecutor as LiveExecutorExt;
 
   for (const ex of exchanges) {
     let balance: Record<string, unknown> | undefined;
     let positions: unknown[] | undefined;
+    let openOrders: unknown[] | undefined;
 
     try {
       balance = await liveExecutor.fetchBalance(ex.id);
@@ -403,6 +414,15 @@ export async function gatherLiveTradingData(deps: DataGatheringDeps) {
       positions = await liveExecutor.fetchPositions(ex.id);
     } catch {
       // Balance succeeded but positions failed — still include balance
+    }
+
+    // Fetch open orders if method is available
+    try {
+      if (executor.fetchOpenOrders) {
+        openOrders = await executor.fetchOpenOrders(ex.id);
+      }
+    } catch {
+      // Non-fatal — open orders are supplementary
     }
 
     exchangeStatuses.push({ id: ex.id, exchange: ex.exchange, status: "ok" });
@@ -420,7 +440,20 @@ export async function gatherLiveTradingData(deps: DataGatheringDeps) {
 
     if (positions) {
       for (const pos of positions) {
-        allPositions.push({ exchangeId: ex.id, ...(pos as Record<string, unknown>) });
+        const posData = pos as Record<string, unknown>;
+        const posRecord = { exchangeId: ex.id, ...posData };
+        allPositions.push(posRecord);
+        // Accumulate unrealized PnL from CCXT position format
+        const unrealizedPnl = posData.unrealizedPnl;
+        if (typeof unrealizedPnl === "number") {
+          totalUnrealizedPnl += unrealizedPnl;
+        }
+      }
+    }
+
+    if (openOrders) {
+      for (const order of openOrders) {
+        allOrders.push({ exchangeId: ex.id, ...(order as Record<string, unknown>) });
       }
     }
   }
@@ -428,13 +461,15 @@ export async function gatherLiveTradingData(deps: DataGatheringDeps) {
   return {
     summary: {
       totalEquity,
-      dailyPnl: 0,
-      dailyPnlPct: 0,
+      dailyPnl: totalUnrealizedPnl,
+      dailyPnlPct: totalEquity > 0 ? (totalUnrealizedPnl / totalEquity) * 100 : 0,
       positionCount: allPositions.length,
+      orderCount: allOrders.length,
       exchangeCount: exchanges.length,
     },
     positions: allPositions,
     balances: allBalances,
+    orders: allOrders,
     exchanges: exchangeStatuses,
   };
 }
@@ -675,14 +710,23 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
     total: strategies.length,
   };
 
-  // Strategy details with backtest info + evolution enrichment
+  // Strategy details with backtest info + evolution enrichment + market/symbol/timeframe
   const strategyData = strategies.map((s) => {
     const evo = evoLookup.get(s.id);
+    const def = s.definition;
+    // Derive market type: first entry from definition.markets (lowercase passthrough)
+    const market = def?.markets?.[0]?.toLowerCase() ?? null;
+    // Derive symbols array and primary timeframe
+    const symbols = def?.symbols ?? [];
+    const timeframe = def?.timeframes?.[0] ?? null;
     return {
       id: s.id,
       name: s.name,
       level: s.level,
       status: s.status ?? "running",
+      market,
+      symbols,
+      timeframe,
       totalReturn: s.lastBacktest?.totalReturn,
       sharpe: s.lastBacktest?.sharpe,
       sortino: s.lastBacktest?.sortino,

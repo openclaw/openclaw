@@ -560,6 +560,7 @@ body.embedded .topbar__logo{display:none}
       <div class="topbar__sse" id="sseDots" title="SSE connections">
         <span class="sse-dot" id="sseTrade" title="Trading"></span>
         <span class="sse-dot" id="sseEvents" title="Events"></span>
+        <span class="sse-dot" id="sseActivity" title="Activity"></span>
       </div>
       <span class="topbar__clock num" id="clock">--:--</span>
       <button class="btn-estop" id="estopBtn">&#9632; STOP</button>
@@ -585,14 +586,24 @@ body.embedded .topbar__logo{display:none}
         </div>
 
         <div class="col-l__section fade-up d2">
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+            <div>
+              <div class="buying-power__label">Available</div>
+              <div class="buying-power__val num" id="bpVal" style="font-size:12px">--</div>
+            </div>
+            <div style="text-align:right">
+              <div class="buying-power__label">In Use</div>
+              <div class="buying-power__val num" id="inUseVal" style="font-size:12px">--</div>
+            </div>
+          </div>
           <div class="buying-power">
             <div style="flex:1">
-              <div class="buying-power__label">Buying Power</div>
+              <div class="buying-power__label">Margin %</div>
               <div class="buying-power__bar">
                 <div class="buying-power__bar-fill" id="bpBarFill" style="width:0%"></div>
               </div>
             </div>
-            <div class="buying-power__val num" id="bpVal">--</div>
+            <div class="buying-power__val num" id="marginPctVal" style="font-size:10px">--%</div>
           </div>
         </div>
 
@@ -730,7 +741,7 @@ body.embedded .topbar__logo{display:none}
             <div style="overflow-y:auto;flex:1">
               <table class="fin-table">
                 <thead>
-                  <tr><th>Time</th><th>Symbol</th><th>Side</th><th style="text-align:right">Qty</th><th style="text-align:right">Price</th><th>Status</th></tr>
+                  <tr><th>Time</th><th>Symbol</th><th>Side</th><th>Type</th><th style="text-align:right">Qty</th><th style="text-align:right">Price</th><th>Status</th><th style="text-align:right">P&L</th></tr>
                 </thead>
                 <tbody id="orderHistBody"></tbody>
               </table>
@@ -741,6 +752,9 @@ body.embedded .topbar__logo{display:none}
           <div class="history-pane" id="paneFeed">
             <div class="filter-chips" id="feedFilters">
               <button class="fchip active" data-f="all">All</button>
+              <button class="fchip" data-f="live">Live</button>
+              <button class="fchip" data-f="paper">Paper</button>
+              <button class="fchip" data-f="backtest">Backtest</button>
               <button class="fchip" data-f="trades">Trades</button>
               <button class="fchip" data-f="alerts">Alerts</button>
             </div>
@@ -783,10 +797,20 @@ body.embedded .topbar__logo{display:none}
               </div>
             </div>
           </div>
-          <div class="fg">
+          <div class="fg" id="fgPrice">
             <div class="fg__row">
-              <div><span class="fg__label">Amount</span><input type="text" id="orderAmount" value="0.01" style="width:100%" /></div>
               <div><span class="fg__label">Price</span><input type="text" id="orderPrice" value="Market" disabled style="width:100%;opacity:.5" /></div>
+              <div id="fgStopPrice" style="display:none"><span class="fg__label">Stop Price</span><input type="text" id="orderStopPrice" style="width:100%" /></div>
+            </div>
+          </div>
+          <div class="fg">
+            <span class="fg__label">Amount</span>
+            <input type="text" id="orderAmount" value="0.01" style="width:100%;margin-bottom:4px" />
+            <div style="display:flex;gap:4px">
+              <button class="qa-btn qa-btn--primary amt-pct-btn" data-pct="25" style="padding:3px 0;font-size:9px">25%</button>
+              <button class="qa-btn qa-btn--primary amt-pct-btn" data-pct="50" style="padding:3px 0;font-size:9px">50%</button>
+              <button class="qa-btn qa-btn--primary amt-pct-btn" data-pct="75" style="padding:3px 0;font-size:9px">75%</button>
+              <button class="qa-btn qa-btn--primary amt-pct-btn" data-pct="100" style="padding:3px 0;font-size:9px">100%</button>
             </div>
           </div>
           <div class="fg">
@@ -794,6 +818,10 @@ body.embedded .topbar__logo{display:none}
               <div><span class="fg__label">Stop Loss</span><input type="text" id="orderSl" style="width:100%" /></div>
               <div><span class="fg__label">Take Profit</span><input type="text" id="orderTp" style="width:100%" /></div>
             </div>
+          </div>
+          <div class="fg">
+            <span class="fg__label">Estimated Total</span>
+            <div id="orderTotal" class="num" style="font-size:13px;font-weight:600;color:var(--text-hi);padding:4px 0">--</div>
           </div>
           <button class="submit-btn" style="width:100%;padding:10px 0;font-size:12px" onclick="TR.submitOrder()">Submit Order</button>
         </div>
@@ -1040,9 +1068,17 @@ body.embedded .topbar__logo{display:none}
           var summary = (trading && trading.summary) || {};
           var cash = allocations.cashReserve || 0;
           var equity = summary.totalEquity || summary.equity || 0;
+          var inUse = allocations.totalAllocated || (equity - cash) || 0;
+          var marginPct = equity > 0 ? Math.min((inUse / equity) * 100, 100) : 0;
           $("bpVal").textContent = "$" + fmt(cash, 2);
-          var pct = equity > 0 ? Math.min((cash / equity) * 100, 100) : 0;
-          $("bpBarFill").style.width = pct + "%";
+          $("inUseVal").textContent = "$" + fmt(inUse, 2);
+          $("marginPctVal").textContent = marginPct.toFixed(1) + "%";
+          $("bpBarFill").style.width = marginPct + "%";
+          // Color the margin bar: green < 50%, yellow 50-80%, red > 80%
+          var barEl = $("bpBarFill");
+          if (marginPct > 80) barEl.style.background = "var(--loss)";
+          else if (marginPct > 50) barEl.style.background = "var(--warn)";
+          else barEl.style.background = "var(--gain)";
         }
 
         function renderRiskBadge(risk) {
@@ -1050,8 +1086,16 @@ body.embedded .topbar__logo{display:none}
           var level = (risk && risk.level) || "NORMAL";
           el.textContent = level.toUpperCase();
           el.className = "topbar__risk";
-          if (/high|critical|danger/i.test(level)) el.classList.add("topbar__risk--danger");
-          else if (/medium|elevated|warning/i.test(level)) el.classList.add("topbar__risk--warning");
+          var halo = $("riskHalo");
+          if (/high|critical|danger/i.test(level)) {
+            el.classList.add("topbar__risk--danger");
+            halo.className = "risk-halo risk-halo--danger";
+          } else if (/medium|elevated|warning|alert/i.test(level)) {
+            el.classList.add("topbar__risk--warning");
+            halo.className = "risk-halo"; // normal halo, no danger
+          } else {
+            halo.className = "risk-halo"; // green/normal
+          }
         }
 
         function renderPositions(positions) {
@@ -1066,12 +1110,17 @@ body.embedded .topbar__logo{display:none}
             var pnl = p.unrealizedPnl || p.pnl || 0;
             totalPnl += pnl;
             var side = (p.side || "long").toLowerCase();
+            var qty = p.quantity || p.amount || 0;
+            var entryPrice = p.entryPrice || p.avgPrice || 0;
+            var markPrice = p.markPrice || p.currentPrice || 0;
+            var pnlPct = (entryPrice > 0 && markPrice > 0) ? ((markPrice - entryPrice) / entryPrice * 100 * (side === "short" ? -1 : 1)) : (p.pnlPct || p.unrealizedPnlPct || null);
             html +=
               '<div class="pos-detail-row">' +
               '<span class="pos-detail-row__sym num">' + esc(p.symbol) + "</span>" +
               '<span class="pos-row__side pos-row__side--' + side + '">' + side.toUpperCase() + "</span>" +
-              '<span class="num" style="text-align:right;flex:1">' + fmt(p.quantity || p.amount, 4) + "</span>" +
-              '<span class="' + pnlClass(pnl) + ' num" style="text-align:right;font-weight:600">' + fmtUsd(pnl) + "</span>" +
+              '<span class="num" style="text-align:right;width:50px">' + fmt(qty, 4) + "</span>" +
+              '<span class="' + pnlClass(pnl) + ' num" style="text-align:right;font-weight:600;width:60px">' + fmtUsd(pnl) + "</span>" +
+              '<span class="' + pnlClass(pnlPct) + ' num" style="text-align:right;font-size:9px;width:42px">' + fmtPct(pnlPct) + "</span>" +
               '<button class="pos-row__close" onclick="TR.closePosition(\'' + esc(p.symbol) + '\')" title="Close">&times;</button>' +
               "</div>";
           });
@@ -1118,7 +1167,7 @@ body.embedded .topbar__logo{display:none}
         function renderOrderHistory(orders) {
           var body = $("orderHistBody");
           if (!orders || !orders.length) {
-            body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:12px">No orders</td></tr>';
+            body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-dim);padding:12px">No orders</td></tr>';
             $("orderCount").textContent = "";
             return;
           }
@@ -1127,15 +1176,19 @@ body.embedded .topbar__logo{display:none}
           orders.slice(0, 50).forEach(function (o) {
             var side = (o.side || "").toLowerCase();
             var status = o.status || "unknown";
-            var statusCls = status === "filled" ? "gain" : status === "cancelled" || status === "rejected" ? "loss" : "";
+            var statusBadge = "status-badge status-badge--" + (status === "filled" ? "filled" : status === "pending" || status === "open" ? "pending" : "cancelled");
+            var orderType = (o.type || "market").replace("_", "-");
+            var pnl = o.pnl || o.realizedPnl || null;
             html +=
               "<tr>" +
               '<td class="num">' + timeAgo(o.createdAt || o.timestamp) + "</td>" +
               '<td class="num" style="font-weight:600;color:var(--text-hi)">' + esc(o.symbol) + "</td>" +
               '<td><span class="pos-row__side pos-row__side--' + (side === "sell" || side === "short" ? "short" : "long") + '">' + side.toUpperCase() + "</span></td>" +
-              '<td class="num" style="text-align:right">' + fmt(o.quantity, 4) + "</td>" +
-              '<td class="num" style="text-align:right">$' + fmt(o.fillPrice || o.limitPrice || 0, 2) + "</td>" +
-              '<td class="' + statusCls + '">' + status + "</td>" +
+              '<td style="font-size:9px;color:var(--text-dim)">' + esc(orderType) + "</td>" +
+              '<td class="num" style="text-align:right">' + fmt(o.quantity || o.amount, 4) + "</td>" +
+              '<td class="num" style="text-align:right">$' + fmt(o.fillPrice || o.limitPrice || o.price || 0, 2) + "</td>" +
+              '<td><span class="' + statusBadge + '">' + status.toUpperCase() + "</span></td>" +
+              '<td class="num ' + (pnl != null ? pnlClass(pnl) : "") + '" style="text-align:right;font-weight:600">' + (pnl != null ? fmtUsd(pnl) : "--") + "</td>" +
               "</tr>";
           });
           body.innerHTML = html;
@@ -1169,6 +1222,16 @@ body.embedded .topbar__logo{display:none}
           if (/alert|warn/i.test(t)) return "alerts";
           return "trades";
         }
+        function eventDomain(e) {
+          // Derive domain from event metadata or type
+          var d = (e.domain || "").toLowerCase();
+          if (d === "live" || d === "paper" || d === "backtest") return d;
+          var t = (e.type || e.category || "").toLowerCase();
+          if (/live|real/i.test(t)) return "live";
+          if (/paper|simul/i.test(t)) return "paper";
+          if (/backtest|bt/i.test(t)) return "backtest";
+          return "";
+        }
         function eventTypeLabel(e) {
           var t = (e.type || "").toLowerCase();
           if (/execut|auto/i.test(t)) return { label: "EXECUTED", cls: "executed" };
@@ -1184,22 +1247,35 @@ body.embedded .topbar__logo{display:none}
             el.innerHTML = '<div style="text-align:center;color:var(--text-dim);padding:16px;font-size:10px">No trade activity yet</div>';
             return;
           }
+          // Domain filters: live, paper, backtest; Category filters: trades, alerts
+          var domainFilters = ["live", "paper", "backtest"];
+          var isDomainFilter = domainFilters.indexOf(filter) !== -1;
           var html = "", count = 0;
           events.forEach(function (e) {
-            var cat = eventCategory(e);
-            if (filter !== "all" && cat !== filter) return;
+            if (filter !== "all") {
+              if (isDomainFilter) {
+                if (eventDomain(e) !== filter) return;
+              } else {
+                if (eventCategory(e) !== filter) return;
+              }
+            }
             if (count >= 30) return;
             count++;
             var tl = eventTypeLabel(e);
+            var dom = eventDomain(e);
+            var domBadge = dom ? ' <span style="font-size:7px;opacity:.6;text-transform:uppercase;letter-spacing:.3px">' + dom + '</span>' : "";
             html +=
-              '<div class="fcard fcard--' + tl.cls + '">' +
+              '<div class="fcard fcard--' + tl.cls + (dom ? " fcard--" + dom : "") + '">' +
               '<div class="fcard__top">' +
-              '<span class="fcard__type fcard__type--' + tl.cls + '">' + tl.label + "</span>" +
+              '<span class="fcard__type fcard__type--' + tl.cls + '">' + tl.label + domBadge + "</span>" +
               '<span class="fcard__time num">' + timeAgo(e.timestamp || e.createdAt) + "</span>" +
               "</div>" +
               '<div class="fcard__title">' + esc(e.title || e.summary || e.message || "") + "</div>" +
               "</div>";
           });
+          if (!html) {
+            html = '<div style="text-align:center;color:var(--text-dim);padding:16px;font-size:10px">No ' + filter + ' activity</div>';
+          }
           el.innerHTML = html;
         }
 
@@ -1292,7 +1368,14 @@ body.embedded .topbar__logo{display:none}
 
         function onTradingData(data) {
           state.trading = data;
+          // Update risk from trading SSE (data.risk or data.summary.riskLevel)
+          if (data.risk) {
+            state.risk = data.risk;
+          } else if (data.summary && data.summary.riskLevel) {
+            state.risk = { level: data.summary.riskLevel };
+          }
           renderTopEquity(data); renderBuyingPower(data);
+          renderRiskBadge(state.risk);
           renderPositions(data.positions); renderRecentOrders(data.orders);
           renderChartStats(data); renderOrderHistory(data.orders);
           updateEquityChart(data.snapshots);
@@ -1302,13 +1385,47 @@ body.embedded .topbar__logo{display:none}
           if (data.type === "new_event" && data.event) {
             state.events.events = state.events.events || [];
             state.events.events.push(data.event);
+            // Risk alerts from events
+            if (data.event.risk || /risk|alert/i.test(data.event.type || "")) {
+              var riskLevel = (data.event.risk && data.event.risk.level) || data.event.riskLevel;
+              if (riskLevel) { state.risk = { level: riskLevel }; renderRiskBadge(state.risk); }
+            }
           } else if (data.events) { state.events = data; }
+          // Extract risk from event batch
+          if (data.risk) { state.risk = data.risk; renderRiskBadge(state.risk); }
           renderFeed(((state.events && state.events.events) || []).slice().reverse(), state.feedFilter);
+        }
+
+        function onActivityData(data) {
+          if (data.type === "new_entry" && data.entry) {
+            // Push agent activity into the events feed for unified display
+            state.events.events = state.events.events || [];
+            state.events.events.push({
+              type: data.entry.type || "activity",
+              domain: data.entry.domain || "",
+              title: data.entry.summary || data.entry.message || "",
+              timestamp: data.entry.timestamp || data.entry.createdAt || new Date().toISOString(),
+            });
+            renderFeed(((state.events && state.events.events) || []).slice().reverse(), state.feedFilter);
+          } else if (data.type === "initial" && data.entries) {
+            // Merge initial activity entries into events
+            state.events.events = state.events.events || [];
+            data.entries.forEach(function (entry) {
+              state.events.events.push({
+                type: entry.type || "activity",
+                domain: entry.domain || "",
+                title: entry.summary || entry.message || "",
+                timestamp: entry.timestamp || entry.createdAt || "",
+              });
+            });
+            renderFeed(((state.events && state.events.events) || []).slice().reverse(), state.feedFilter);
+          }
         }
 
         function initSSE() {
           connectSSE("trade", "/api/v1/finance/trading/stream", onTradingData, 10000);
           connectSSE("events", "/api/v1/finance/events/stream", onEventsData, 5000);
+          connectSSE("activity", "/api/v1/finance/agent-activity/stream", onActivityData, 15000);
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -1512,10 +1629,24 @@ body.embedded .topbar__logo{display:none}
           submitOrder: function () {
             var side = $("buyBtn").classList.contains("active-buy") ? "buy" : "sell";
             var symbol = $("orderSymbol").value;
-            var type = $("orderType").value.toLowerCase();
+            var type = $("orderType").value.toLowerCase().replace("-", "_");
             var amount = parseFloat($("orderAmount").value);
+            if (!amount || amount <= 0) { toast("Enter a valid amount", "error"); return; }
             var price = type === "market" ? undefined : parseFloat($("orderPrice").value.replace(/[^0-9.]/g, ""));
-            postApi("/api/v1/finance/orders", { side: side, symbol: symbol, type: type, quantity: amount, limitPrice: price, domain: state.domain })
+            if (type !== "market" && (!price || price <= 0)) { toast("Enter a valid price", "error"); return; }
+            var body = { side: side, symbol: symbol, type: type, quantity: amount, limitPrice: price, domain: state.domain };
+            // Stop-Limit: include stopPrice
+            if (type === "stop_limit") {
+              var stopPrice = parseFloat(($("orderStopPrice").value || "").replace(/[^0-9.]/g, ""));
+              if (!stopPrice || stopPrice <= 0) { toast("Enter a valid stop price", "error"); return; }
+              body.stopPrice = stopPrice;
+            }
+            // Optional SL/TP
+            var sl = parseFloat(($("orderSl").value || "").replace(/[^0-9.]/g, ""));
+            var tp = parseFloat(($("orderTp").value || "").replace(/[^0-9.]/g, ""));
+            if (sl > 0) body.stopLoss = sl;
+            if (tp > 0) body.takeProfit = tp;
+            postApi("/api/v1/finance/orders", body)
               .then(function () { TR.closeSlide("order"); toast(side.toUpperCase() + " " + amount + " " + symbol + " submitted", "success"); })
               .catch(function (e) { toast("Order failed: " + e.message, "error"); });
           },
@@ -1540,6 +1671,44 @@ body.embedded .topbar__logo{display:none}
           },
         };
 
+        // ── Amount quick-fill (25%/50%/75%/100%) ──
+        function getAvailableBalance() {
+          var bpText = ($("bpVal").textContent || "").replace(/[^0-9.]/g, "");
+          return parseFloat(bpText) || 0;
+        }
+        function getCurrentPrice() {
+          // From slide-over price input, or from chart header price
+          var priceVal = $("orderPrice").value.replace(/[^0-9.]/g, "");
+          if (priceVal && parseFloat(priceVal) > 0) return parseFloat(priceVal);
+          // Fallback: use active symbol's last price from watchlist data
+          var wd = state.watchlistData[state.activeSymbol];
+          return (wd && wd.last) ? wd.last : 0;
+        }
+        document.querySelectorAll(".amt-pct-btn").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            var pct = parseInt(btn.dataset.pct) / 100;
+            var balance = getAvailableBalance();
+            var price = getCurrentPrice();
+            if (balance <= 0) { toast("No available balance", "error"); return; }
+            if (price <= 0) { toast("Price unknown — enter a price first", "error"); return; }
+            var amount = (balance * pct) / price;
+            // Round to reasonable precision
+            $("orderAmount").value = amount < 1 ? amount.toFixed(6) : amount < 100 ? amount.toFixed(4) : amount.toFixed(2);
+            updateOrderTotal();
+          });
+        });
+
+        // ── Order Total dynamic calculation ──
+        function updateOrderTotal() {
+          var price = getCurrentPrice();
+          var amount = parseFloat($("orderAmount").value) || 0;
+          var total = price * amount;
+          $("orderTotal").textContent = total > 0 ? "$" + fmt(total, 2) : "--";
+          $("orderTotal").style.color = total > getAvailableBalance() ? "var(--loss)" : "var(--text-hi)";
+        }
+        $("orderAmount").addEventListener("input", updateOrderTotal);
+        $("orderPrice").addEventListener("input", updateOrderTotal);
+
         // ── Event bindings ──
         document.querySelectorAll(".domain-btn").forEach(function (btn) {
           btn.addEventListener("click", function () { switchDomain(btn.dataset.domain); });
@@ -1549,14 +1718,23 @@ body.embedded .topbar__logo{display:none}
           var isMarket = this.value === "Market";
           $("qoPrice").disabled = isMarket;
           $("qoPrice").style.opacity = isMarket ? ".5" : "1";
-          $("qoPrice").value = isMarket ? "" : "";
+          $("qoPrice").value = "";
+          $("qoPrice").placeholder = isMarket ? "Price" : "Limit";
         });
 
         $("orderType").addEventListener("change", function () {
-          var isMarket = this.value === "Market";
+          var val = this.value;
+          var isMarket = val === "Market";
+          var isStopLimit = val === "Stop-Limit";
+          // Price field
           $("orderPrice").disabled = isMarket;
           $("orderPrice").style.opacity = isMarket ? ".5" : "1";
           $("orderPrice").value = isMarket ? "Market" : "";
+          $("orderPrice").placeholder = isStopLimit ? "Limit Price" : "Price";
+          // Stop Price field (only for Stop-Limit)
+          $("fgStopPrice").style.display = isStopLimit ? "" : "none";
+          if (!isStopLimit) $("orderStopPrice").value = "";
+          updateOrderTotal();
         });
 
         document.querySelectorAll(".fchip").forEach(function (c) {

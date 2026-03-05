@@ -163,7 +163,7 @@ d("Phase F — A5: Browser Flow", () => {
     expect(await timeline.isVisible()).toBe(true);
 
     // Wait for client-side JS to render entries from pageData
-    await page.waitForTimeout(500);
+    await page.waitForSelector(".timeline-entry", { timeout: 5000 });
 
     // Verify entries rendered with correct DOM structure
     const entries = page.locator(".timeline-entry");
@@ -268,6 +268,16 @@ d("Phase F — A5: Browser Flow", () => {
     // Verify the strategy was promoted to L3_LIVE via registry
     const updated = ctx.services.strategyRegistry.get(strategyId);
     expect(updated?.level).toBe("L3_LIVE");
+
+    // Reload page and verify card is NOT in L2 column, IS in L3 column via DOM
+    await gotoFlow();
+    await page.waitForSelector(".pipeline-col", { timeout: 5000 });
+    const l2Col = page.locator('[data-level="L2_PAPER"] .pipeline-col__cards');
+    const l2Text = await l2Col.textContent();
+    expect(l2Text).not.toContain("Approve Button Test");
+    const l3Col = page.locator('[data-level="L3_LIVE"] .pipeline-col__cards');
+    const l3Text = await l3Col.textContent();
+    expect(l3Text).toContain("Approve Button Test");
   });
 
   // ═══════════════════════════════════════════════════════════════
@@ -328,12 +338,17 @@ d("Phase F — A5: Browser Flow", () => {
     );
     expect(promoEvent).toBeDefined();
 
-    // Reload page and verify card appears in L3 column
+    // Reload page and verify card appears in L3 column, not as pending in L2
     await gotoFlow();
-    await page.waitForTimeout(500);
+    await page.waitForSelector(".pipeline-col", { timeout: 5000 });
     const l3Col = page.locator('[data-level="L3_LIVE"] .pipeline-col__cards');
     const l3Text = await l3Col.textContent();
     expect(l3Text).toContain("Approve Column Test");
+
+    // Verify no pending cards remain for this strategy in L2
+    const l2Col = page.locator('[data-level="L2_PAPER"] .pipeline-col__cards');
+    const l2Text = await l2Col.textContent();
+    expect(l2Text).not.toContain("Approve Column Test");
   });
 
   // ═══════════════════════════════════════════════════════════════
@@ -396,5 +411,15 @@ d("Phase F — A5: Browser Flow", () => {
       (l) => l.strategyId === strategyId && l.action === "l3_promotion_rejected",
     );
     expect(rejectLog).toBeDefined();
+
+    // Reload page and verify card is still in L2 column, not in L3
+    await gotoFlow();
+    await page.waitForSelector(".pipeline-col", { timeout: 5000 });
+    const l2Col = page.locator('[data-level="L2_PAPER"] .pipeline-col__cards');
+    const l2Text = await l2Col.textContent();
+    expect(l2Text).toContain("Reject Column Test");
+    const l3Col = page.locator('[data-level="L3_LIVE"] .pipeline-col__cards');
+    const l3Text = await l3Col.textContent();
+    expect(l3Text).not.toContain("Reject Column Test");
   });
 });

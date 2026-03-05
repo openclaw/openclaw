@@ -390,7 +390,7 @@ export function registerFundTools(api: OpenClawPluginApi, deps: FundToolDeps): v
         if (!registry) return json({ error: "Strategy registry not available" });
 
         const level = params.level as string | undefined;
-        const strategies = registry.list(level ? { level: level as "L0_INCUBATE" } : undefined);
+        const strategies = registry.list(level ? { level } : undefined);
         const records = strategies as Parameters<typeof manager.buildProfiles>[0];
         const profiles = manager.buildProfiles(records);
 

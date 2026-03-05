@@ -75,6 +75,7 @@ export class RemoteBacktestBridge {
     // Generate Python strategy ZIP from TS definition
     const { buffer, filename } = await generateStrategyZip(definition, {
       symbol: definition.symbols[0],
+      dataSource: "datahub",
     });
 
     onProgress?.({

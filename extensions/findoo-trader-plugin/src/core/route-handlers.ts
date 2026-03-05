@@ -5,7 +5,9 @@
  */
 
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
+import type { LiveExecutor } from "../execution/live-executor.js";
 import type { PerformanceSnapshotStore } from "../fund/performance-snapshot-store.js";
+import { submitOrderSchema } from "../schemas.js";
 import type {
   HttpReq,
   HttpRes,
@@ -121,49 +123,40 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     },
   });
 
-  // ── Place Order ──
+  // ── Place Order (unified: paper + live) ──
   api.registerHttpRoute({
     path: "/api/v1/finance/orders",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
         const body = await parseJsonBody(req);
+        const parsed = submitOrderSchema.safeParse(body);
+        if (!parsed.success) {
+          const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
+          errorResponse(res, 400, `Validation failed: ${issues.join("; ")}`);
+          return;
+        }
+
         const {
-          accountId,
           symbol,
           side,
-          type,
-          quantity,
-          limitPrice,
+          type: orderType,
+          price,
+          amount,
+          domain,
+          accountId,
+          exchangeId,
           stopLoss,
           takeProfit,
-          currentPrice,
+          approvalId,
           reason,
           strategyId,
-          approvalId,
-        } = body as Record<string, unknown>;
+        } = parsed.data;
 
-        if (!symbol || !side || !quantity) {
-          errorResponse(res, 400, "Missing required fields: symbol, side, quantity");
-          return;
-        }
-
-        const paperEngine = runtime.services?.get?.("fin-paper-engine") as
-          | PaperEngineLike
-          | undefined;
-        if (!paperEngine) {
-          errorResponse(res, 503, "Paper trading engine not available");
-          return;
-        }
-
-        // Risk evaluation (skip if this is an approved action)
-        const estimatedUsd = ((currentPrice as number) ?? 0) * ((quantity as number) ?? 0);
+        // ── Risk evaluation (skip if pre-approved) ──
+        const estimatedUsd = (price ?? 0) * amount;
         if (!approvalId && estimatedUsd > 0) {
           const evaluation = riskController.evaluate(
-            {
-              symbol: symbol as string,
-              side: side as string,
-              amount: quantity as number,
-            } as Parameters<typeof riskController.evaluate>[0],
+            { symbol, side, amount } as Parameters<typeof riskController.evaluate>[0],
             estimatedUsd,
           );
 
@@ -175,19 +168,20 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
           if (evaluation.tier === "confirm") {
             const event = eventStore.addEvent({
               type: "trade_pending",
-              title: `${(side as string).toUpperCase()} ${quantity} ${symbol}`,
+              title: `${side.toUpperCase()} ${amount} ${symbol}`,
               detail: evaluation.reason ?? "Requires user confirmation",
               status: "pending",
               actionParams: {
-                accountId,
                 symbol,
                 side,
-                type,
-                quantity,
-                limitPrice,
+                type: orderType,
+                price,
+                amount,
+                domain,
+                accountId,
+                exchangeId,
                 stopLoss,
                 takeProfit,
-                currentPrice,
                 reason,
                 strategyId,
               },
@@ -201,17 +195,56 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
           }
         }
 
-        // Verify approval if provided
+        // ── Verify approval if provided ──
         if (approvalId) {
-          const event = eventStore.getEvent(approvalId as string);
+          const event = eventStore.getEvent(approvalId);
           if (!event || event.status !== "approved") {
             errorResponse(res, 403, "Invalid or unapproved approval ID");
             return;
           }
         }
 
-        // Use first account if not specified
-        let targetAccountId = accountId as string | undefined;
+        // ── Route to executor based on domain ──
+        if (domain === "live") {
+          const liveExecutor = runtime.services?.get?.("fin-live-executor") as
+            | LiveExecutor
+            | undefined;
+          if (!liveExecutor) {
+            errorResponse(res, 503, "Live trading executor not available");
+            return;
+          }
+
+          const order = await liveExecutor.placeOrder({
+            exchangeId,
+            symbol,
+            side,
+            type: orderType === "stop-limit" ? "limit" : orderType,
+            amount,
+            price,
+            params: stopLoss || takeProfit ? { stopLoss, takeProfit } : undefined,
+          });
+
+          eventStore.addEvent({
+            type: "trade_executed",
+            title: `[LIVE] ${side.toUpperCase()} ${amount} ${symbol}`,
+            detail: `Order ${(order as { status?: string }).status ?? "submitted"} via live executor`,
+            status: "completed",
+          });
+
+          jsonResponse(res, 201, { domain, order });
+          return;
+        }
+
+        // ── Paper domain (default) ──
+        const paperEngine = runtime.services?.get?.("fin-paper-engine") as
+          | PaperEngineLike
+          | undefined;
+        if (!paperEngine) {
+          errorResponse(res, 503, "Paper trading engine not available");
+          return;
+        }
+
+        let targetAccountId = accountId;
         if (!targetAccountId) {
           const accounts = paperEngine.listAccounts();
           if (accounts.length === 0) {
@@ -224,7 +257,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
         const submitOrder = (
           paperEngine as unknown as {
             submitOrder: (
-              accountId: string,
+              acctId: string,
               order: Record<string, unknown>,
               currentPrice: number,
             ) => Record<string, unknown>;
@@ -242,25 +275,25 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
           {
             symbol,
             side,
-            type: type ?? "market",
-            quantity,
-            limitPrice,
+            type: orderType === "stop-limit" ? "limit" : orderType,
+            quantity: amount,
+            limitPrice: price,
             stopLoss,
             takeProfit,
             reason,
             strategyId,
           },
-          (currentPrice as number) ?? 0,
+          price ?? 0,
         );
 
         eventStore.addEvent({
           type: "trade_executed",
-          title: `${(side as string).toUpperCase()} ${quantity} ${symbol}`,
+          title: `${side.toUpperCase()} ${amount} ${symbol}`,
           detail: `Order ${(order as { status?: string }).status ?? "submitted"} via paper engine`,
           status: "completed",
         });
 
-        jsonResponse(res, 201, order);
+        jsonResponse(res, 201, { domain, order });
       } catch (err) {
         errorResponse(res, 500, (err as Error).message);
       }

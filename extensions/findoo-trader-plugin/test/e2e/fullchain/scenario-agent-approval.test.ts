@@ -111,7 +111,7 @@ describe("Phase F — Scenario: Agent Intermediated Approval (L2→L3)", () => {
 
     // ── 6. Inject paper trading data satisfying L2→L3 boundary ──
     // L2→L3 needs: 30d, 30 trades, Sharpe ≥ 0.5, DD ≤ 20%, deviation ≤ 30%
-    // We create a paper account with matching orders
+    // Create paper account and inject orders + equity snapshots for proper metrics
     const acctState = ctx.services.paperEngine.createAccount("Agent Approval Paper", 10_000);
     const acctId = acctState.id;
 
@@ -130,30 +130,48 @@ describe("Phase F — Scenario: Agent Intermediated Approval (L2→L3)", () => {
       );
     }
 
+    // Backdate the paper account to 40 days ago (for daysActive >= 30)
+    // Access private internals via cast (same pattern used in browser-flow tests)
+    const pe = ctx.services.paperEngine as unknown as {
+      accounts: Map<string, { createdAt: number }>;
+      store: {
+        saveSnapshot: (s: unknown) => void;
+        db: { prepare: (sql: string) => { run: (...args: unknown[]) => void } };
+      };
+    };
+    const acctInternal = pe.accounts.get(acctId);
+    if (acctInternal) {
+      (acctInternal as { createdAt: number }).createdAt = Date.now() - 86_400_000 * 40;
+    }
+    // Also backdate in the DB so loadAccount reads the correct createdAt
+    pe.store.db
+      .prepare("UPDATE accounts SET created_at = ? WHERE id = ?")
+      .run(Date.now() - 86_400_000 * 40, acctId);
+
+    // Inject 35 equity snapshots with realistic variance
+    // Pattern: 2 up days (+1%) then 1 down day (-1.5%) → annualized Sharpe ≈ 2.2
+    // BT Sharpe is 1.8, deviation = |1.8 - 2.2| / 1.8 ≈ 22% ≤ 30% threshold
+    let snapshotEquity = 10_000;
+    for (let day = 0; day < 35; day++) {
+      const ts = Date.now() - 86_400_000 * (35 - day);
+      const dailyReturn = day % 3 === 0 ? -0.015 : 0.01;
+      snapshotEquity *= 1 + dailyReturn;
+      pe.store.saveSnapshot({
+        accountId: acctId,
+        timestamp: ts,
+        equity: snapshotEquity,
+        cash: snapshotEquity * 0.8,
+        positionsValue: snapshotEquity * 0.2,
+        dailyPnl: snapshotEquity * dailyReturn,
+        dailyPnlPct: dailyReturn * 100,
+      });
+    }
+
     // ── 7. Run cycle #3: L2→L3 should trigger approval request (not auto-promote) ──
     const cycle3 = await ctx.services.lifecycleEngine.runCycle();
-    // L2→L3 always needs user approval — may or may not detect eligibility
-    // depending on how paper data flows through FundManager.buildProfiles
-    // At minimum, no errors
     expect(cycle3.errors).toBe(0);
-
-    // ── 8. Manually inject approval event (simulating what lifecycle does when eligible) ──
-    // This ensures the rest of the flow is testable even if paper data shape
-    // doesn't perfectly match (integration seam between paper engine and fund manager)
-    ctx.services.eventStore.addEvent({
-      type: "trade_pending",
-      title: `L3 Promotion: Agent Approval Flow`,
-      detail: `Strategy eligible for live trading`,
-      status: "pending",
-      actionParams: { action: "promote_l3", strategyId },
-    });
-
-    ctx.services.activityLog.append({
-      category: "approval",
-      action: "l3_approval_requested",
-      strategyId,
-      detail: `Requesting user approval for "Agent Approval Flow" L2→L3`,
-    });
+    // With proper paper data, lifecycle should detect L2→L3 eligibility and send approval
+    expect(cycle3.approvalsSent).toBeGreaterThanOrEqual(1);
 
     // ── 9. Verify approval event in activity log ──
     const approvalLogs = ctx.services.activityLog.listRecent(50, "approval");

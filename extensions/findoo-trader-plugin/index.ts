@@ -733,18 +733,111 @@ const findooTraderPlugin = {
 
     // ── Risk control hook: intercept fin_* trading tool calls ──
 
+    // Tools that move real or simulated money — must pass risk checks.
+    const TRADING_TOOLS = new Set([
+      // Live execution (real money)
+      "fin_place_order",
+      "fin_modify_order",
+      "fin_set_stop_loss",
+      "fin_set_take_profit",
+      // Paper trading (simulated money, still risk-governed)
+      "fin_paper_order",
+      // Fund management (capital allocation / rebalance)
+      "fin_fund_rebalance",
+      "fin_fund_allocate",
+      "fin_fund_promote",
+      // Strategy execution tick (triggers paper/live orders)
+      "fin_strategy_tick",
+    ]);
+
     api.registerHook(
       "before_tool_call",
-      async (ctx: Record<string, unknown>) => {
-        const toolName = typeof ctx.toolName === "string" ? ctx.toolName : undefined;
-        if (
-          !toolName ||
-          (!toolName.startsWith("fin_place_order") && !toolName.startsWith("fin_modify_order"))
-        ) {
-          return;
+      // Handler receives (event: { toolName, params }, ctx) at runtime via plugin hook system.
+      // Cast needed because registerHook's static type is InternalHookHandler (void return),
+      // but runModifyingHook casts the handler to extract the return value at runtime.
+      (async (event: { toolName: string; params: Record<string, unknown> }) => {
+        const toolName = event.toolName;
+        if (!toolName || !TRADING_TOOLS.has(toolName)) {
+          return; // Read-only tools pass through without checks
         }
-        ctx.riskController = riskController;
-      },
+
+        const params = event.params ?? {};
+
+        // Estimate USD value from tool parameters.
+        // Different tools expose value differently; use best available signal.
+        const estimatedValueUsd =
+          typeof params.estimatedValueUsd === "number"
+            ? params.estimatedValueUsd
+            : typeof params.quantity === "number" && typeof params.price === "number"
+              ? params.quantity * params.price
+              : typeof params.amount === "number" && typeof params.price === "number"
+                ? params.amount * params.price
+                : typeof params.amountUsd === "number"
+                  ? params.amountUsd
+                  : typeof params.capitalUsd === "number"
+                    ? params.capitalUsd
+                    : 0;
+
+        // Build a minimal OrderRequest for the risk controller.
+        const orderForRisk: import("./src/types.js").OrderRequest = {
+          exchange: (typeof params.exchange === "string"
+            ? params.exchange
+            : "default") as import("./src/types.js").ExchangeId,
+          symbol: typeof params.symbol === "string" ? params.symbol : "UNKNOWN",
+          side: (typeof params.side === "string" ? params.side : "buy") as "buy" | "sell",
+          type: "market" as const,
+          amount:
+            typeof params.amount === "number"
+              ? params.amount
+              : typeof params.quantity === "number"
+                ? params.quantity
+                : 0,
+          leverage: typeof params.leverage === "number" ? params.leverage : undefined,
+        };
+
+        const evaluation = riskController.evaluate(orderForRisk, estimatedValueUsd);
+
+        if (evaluation.tier === "reject") {
+          // Log the intercept to the activity audit trail
+          activityLog.append({
+            category: "decision",
+            action: "risk_gate_block",
+            detail: `Blocked ${toolName}: ${evaluation.reason}`,
+            metadata: {
+              toolName,
+              estimatedValueUsd,
+              params: Object.fromEntries(
+                Object.entries(params).filter(
+                  ([k]) => !k.toLowerCase().includes("secret") && !k.toLowerCase().includes("key"),
+                ),
+              ),
+            },
+          });
+
+          return {
+            block: true,
+            blockReason: `[Risk Gate] ${evaluation.reason}`,
+          };
+        }
+
+        if (evaluation.tier === "confirm") {
+          // Log that confirmation is required — the LLM will see the blockReason
+          // and can present it to the user for manual approval.
+          activityLog.append({
+            category: "decision",
+            action: "risk_gate_confirm",
+            detail: `Requires confirmation for ${toolName}: ${evaluation.reason}`,
+            metadata: { toolName, estimatedValueUsd },
+          });
+
+          return {
+            block: true,
+            blockReason: `[Risk Gate — Confirmation Required] ${evaluation.reason}`,
+          };
+        }
+
+        // tier === "auto" — allowed, no block
+      }) as unknown as Parameters<typeof api.registerHook>[1],
       { name: "fin-risk-gate" },
     );
 

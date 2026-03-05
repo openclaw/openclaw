@@ -191,13 +191,57 @@
           </div>
         </div>
 
-        <!-- Quick Actions -->
+        <!-- Multi-Market Status -->
         <div class="col-l__section fade-up d5">
+          <div class="col-l__title">Multi-Market Status</div>
+          <div class="market-status-list" id="marketStatusList">
+            <div class="market-status-row" data-market="crypto">
+              <span class="market-status-row__dot market-status-row__dot--online" id="mktDotCrypto"></span>
+              <span class="market-status-row__name">Crypto</span>
+              <span class="market-status-row__state" id="mktStateCrypto">Online</span>
+              <span class="market-status-row__latency num" id="mktLatCrypto">--</span>
+            </div>
+            <div class="market-status-row" data-market="us">
+              <span class="market-status-row__dot" id="mktDotUs"></span>
+              <span class="market-status-row__name">US Stock</span>
+              <span class="market-status-row__state" id="mktStateUs">--</span>
+              <span class="market-status-row__latency num" id="mktLatUs">--</span>
+            </div>
+            <div class="market-status-row" data-market="hk">
+              <span class="market-status-row__dot" id="mktDotHk"></span>
+              <span class="market-status-row__name">HK Stock</span>
+              <span class="market-status-row__state" id="mktStateHk">--</span>
+              <span class="market-status-row__latency num" id="mktLatHk">--</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="col-l__section fade-up d6">
           <div class="qa-grid">
             <button class="qa-btn qa-btn--primary" onclick="OV.openSlide('order')">
               Place Order
             </button>
             <button class="qa-btn" onclick="OV.openSlide('alert')">Set Alert</button>
+          </div>
+        </div>
+
+        <!-- Quick Links -->
+        <div class="col-l__section fade-up d7">
+          <div class="col-l__title">Quick Links</div>
+          <div class="quick-links">
+            <a class="quick-link" href="/plugins/findoo-trader/dashboard/strategy">
+              <span class="quick-link__arrow">&rarr;</span>
+              <span>Strategy Arena</span>
+            </a>
+            <a class="quick-link" href="/plugins/findoo-trader/dashboard/trader">
+              <span class="quick-link__arrow">&rarr;</span>
+              <span>Trader Desk</span>
+            </a>
+            <a class="quick-link" href="/plugins/findoo-trader/dashboard/setting">
+              <span class="quick-link__arrow">&rarr;</span>
+              <span>Settings</span>
+            </a>
           </div>
         </div>
       </aside>
@@ -238,18 +282,14 @@
 
         <!-- Row 2: Capital Allocation (Doughnut + Pipeline) -->
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px">
-          <!-- Doughnut: Strategy Allocation -->
+          <!-- Capital Allocation: Horizontal Bar Chart -->
           <div class="panel-card fade-up d3">
             <div class="panel-card__head" style="margin-bottom: 4px">
               <div class="panel-card__title">Capital Allocation</div>
             </div>
-            <div
-              class="chart-wrap"
-              style="height: 120px; display: flex; align-items: center; justify-content: center"
-            >
-              <canvas id="allocChart" style="max-width: 120px; max-height: 120px"></canvas>
+            <div class="alloc-bars" id="allocBars">
+              <div style="font-size:10px;color:var(--text-dim);text-align:center;padding:12px 0">No allocation data</div>
             </div>
-            <div id="allocLegend" style="padding: 4px 0"></div>
           </div>
 
           <!-- Pipeline -->
@@ -282,7 +322,21 @@
           </div>
         </div>
 
-        <!-- Row 3: Top Holdings Table -->
+        <!-- Row 3: Daily Brief -->
+        <div class="panel-card fade-up d5 daily-brief-card" id="dailyBriefCard">
+          <div class="panel-card__head">
+            <div class="panel-card__title daily-brief-card__title">
+              <span class="daily-brief-card__icon">&#x1F916;</span>
+              Daily Brief
+            </div>
+            <span class="daily-brief-card__time num" id="briefTimestamp">--</span>
+          </div>
+          <div class="daily-brief-card__body" id="briefBody">
+            No brief available &mdash; Agent will generate one during next heartbeat.
+          </div>
+        </div>
+
+        <!-- Row 4: Top Holdings Table -->
         <div
           class="panel-card fade-up d5"
           style="flex: 1; display: flex; flex-direction: column; min-height: 0"
@@ -665,92 +719,47 @@
           equityChart.update("none");
         }
 
-        // ── Allocation Doughnut Chart ──
-        var allocChart = null;
-        var allocColors = [
-          "#22c55e",
-          "#3b82f6",
-          "#f59e0b",
-          "#8b5cf6",
-          "#ec4899",
-          "#06b6d4",
-          "#f97316",
-          "#10b981",
+        // ── Capital Allocation: Horizontal Bar Chart ──
+        var allocBarColors = [
+          "linear-gradient(90deg, #3b82f6, #6366f1)",
+          "linear-gradient(90deg, #a855f7, #c084fc)",
+          "linear-gradient(90deg, #f59e0b, #fbbf24)",
+          "linear-gradient(90deg, #22c55e, #4ade80)",
+          "linear-gradient(90deg, #ec4899, #f472b6)",
+          "linear-gradient(90deg, #06b6d4, #22d3ee)",
+          "linear-gradient(90deg, #f97316, #fb923c)",
+          "linear-gradient(90deg, #6b7280, #9ca3af)",
         ];
-        function initAllocChart() {
-          var ctx = $("allocChart");
-          if (!ctx || typeof Chart === "undefined") return;
-          allocChart = new Chart(ctx, {
-            type: "doughnut",
-            data: {
-              labels: [],
-              datasets: [
-                {
-                  data: [],
-                  backgroundColor: allocColors,
-                  borderWidth: 0,
-                },
-              ],
-            },
-            options: {
-              responsive: true,
-              maintainAspectRatio: true,
-              cutout: "65%",
-              plugins: {
-                legend: { display: false },
-                tooltip: {
-                  callbacks: {
-                    label: function (ctx) {
-                      return ctx.label + ": " + ctx.parsed.toFixed(1) + "%";
-                    },
-                  },
-                },
-              },
-              animation: { duration: 500 },
-            },
-          });
-        }
-
         function updateAllocChart(allocations) {
-          if (!allocChart) return;
+          var el = $("allocBars");
+          if (!el) return;
           var items =
             (allocations && allocations.byStrategy) || (allocations && allocations.byAsset) || [];
           if (!items.length) {
-            allocChart.data.labels = ["No Data"];
-            allocChart.data.datasets[0].data = [100];
-            allocChart.data.datasets[0].backgroundColor = ["rgba(255,255,255,0.05)"];
-            allocChart.update("none");
-            $("allocLegend").innerHTML =
-              '<div style="font-size:10px;color:var(--text-dim);text-align:center">No allocation data</div>';
+            el.innerHTML =
+              '<div style="font-size:10px;color:var(--text-dim);text-align:center;padding:12px 0">No allocation data</div>';
             return;
           }
-          var labels = items.map(function (a) {
-            return a.name || a.strategy || a.label || "Unknown";
-          });
-          var data = items.map(function (a) {
-            return a.pct || a.percentage || a.weight || 0;
-          });
-          allocChart.data.labels = labels;
-          allocChart.data.datasets[0].data = data;
-          allocChart.data.datasets[0].backgroundColor = allocColors.slice(0, labels.length);
-          allocChart.update("none");
-          // Legend
           var html = "";
-          labels.forEach(function (l, i) {
+          items.forEach(function (a, i) {
+            var name = a.name || a.strategy || a.label || "Unknown";
+            var pct = a.pct || a.percentage || a.weight || 0;
+            var val = a.value || a.amount || "";
+            var valStr = val ? "$" + fmt(val, 0) : pct.toFixed(1) + "%";
+            var bg = allocBarColors[i % allocBarColors.length];
+            // Last item with "cash" in name uses muted color
+            if (/cash|reserve/i.test(name)) bg = allocBarColors[allocBarColors.length - 1];
             html +=
-              '<div style="display:flex;align-items:center;gap:4px;font-size:9px;padding:1px 0">' +
-              '<span style="width:6px;height:6px;border-radius:50%;background:' +
-              allocColors[i % allocColors.length] +
-              '"></span>' +
-              '<span style="color:var(--text-hi)">' +
-              esc(l) +
-              "</span>" +
-              '<span class="num" style="margin-left:auto;color:var(--text-dim)">' +
-              data[i].toFixed(1) +
-              "%</span>" +
-              "</div>";
+              '<div class="alloc-bar-row">' +
+              '<span class="alloc-bar-row__name">' + esc(name) + '</span>' +
+              '<span class="alloc-bar-row__pct num">' + pct.toFixed(0) + '%</span>' +
+              '<div class="alloc-bar-row__track">' +
+              '<div class="alloc-bar-row__fill" style="width:' + Math.min(pct, 100) + '%;background:' + bg + '"></div>' +
+              '</div>' +
+              '<span class="alloc-bar-row__val num">' + valStr + '</span>' +
+              '</div>';
           });
-          $("allocLegend").innerHTML = html;
+          el.innerHTML = html;
         }
 
         // ── Render: Top bar equity ──
@@ -1104,6 +1113,8 @@
           renderFeed((state.events.events || []).slice().reverse(), state.feedFilter);
           updateEquityChart(t.snapshots);
           updateAllocChart(t.allocations || (state.fund && state.fund.allocations));
+          renderMarketStatus(t);
+          renderDailyBrief(state.events);
           checkEmptyState(t, state.config);
         }
 
@@ -1224,6 +1235,7 @@
           renderChartStats(data);
           updateEquityChart(data.snapshots);
           updateAllocChart(data.allocations);
+          renderMarketStatus(data);
         }
 
         function onFundData(data) {
@@ -1243,6 +1255,7 @@
             state.events = data;
           }
           renderFeed((state.events.events || []).slice().reverse(), state.feedFilter);
+          renderDailyBrief(state.events);
         }
 
         // ── Initialize SSE connections ──
@@ -1512,11 +1525,84 @@
           $("orderPrice").value = isMarket ? "Market" : "";
         });
 
+        // ── Render: Multi-Market Status ──
+        var EXCHANGE_MARKET_MAP = {
+          binance: "crypto", okx: "crypto", bybit: "crypto", huobi: "crypto", kucoin: "crypto",
+          coinbase: "crypto", kraken: "crypto", bitget: "crypto", gateio: "crypto", mexc: "crypto",
+          alpaca: "us", ibkr: "us", tdameritrade: "us", schwab: "us", robinhood: "us",
+          futu: "hk", tiger: "hk", longbridge: "hk",
+        };
+        function classifyExchange(name) {
+          var key = (name || "").toLowerCase().replace(/[^a-z]/g, "");
+          return EXCHANGE_MARKET_MAP[key] || "crypto";
+        }
+        function renderMarketStatus(data) {
+          var exchanges = (data && data.exchanges) ||
+            (data && data.liveTrading && data.liveTrading.exchanges) || [];
+          var markets = { crypto: [], us: [], hk: [] };
+          exchanges.forEach(function (ex) {
+            var mkt = classifyExchange(ex.name || ex.id || "");
+            markets[mkt].push(ex);
+          });
+          ["crypto", "us", "hk"].forEach(function (mkt) {
+            var suffix = mkt === "crypto" ? "Crypto" : mkt === "us" ? "Us" : "Hk";
+            var dotEl = $("mktDot" + suffix);
+            var stateEl = $("mktState" + suffix);
+            var latEl = $("mktLat" + suffix);
+            var exList = markets[mkt];
+            if (exList.length === 0) {
+              dotEl.className = "market-status-row__dot";
+              stateEl.textContent = "No exchange";
+              stateEl.className = "market-status-row__state";
+              latEl.textContent = "--";
+              return;
+            }
+            var anyOnline = exList.some(function (e) {
+              return e.connected || e.status === "connected" || e.status === "online" || e.online;
+            });
+            var avgLat = 0;
+            var latCount = 0;
+            exList.forEach(function (e) {
+              if (e.latency != null || e.pingMs != null) {
+                avgLat += (e.latency || e.pingMs || 0);
+                latCount++;
+              }
+            });
+            dotEl.className = "market-status-row__dot market-status-row__dot--" + (anyOnline ? "online" : "offline");
+            stateEl.textContent = anyOnline ? "Online" : "Offline";
+            stateEl.className = "market-status-row__state " + (anyOnline ? "gain" : "loss");
+            latEl.textContent = latCount > 0 ? Math.round(avgLat / latCount) + "ms" : "--";
+          });
+        }
+
+        // ── Render: Daily Brief ──
+        function renderDailyBrief(events) {
+          var evts = (events && events.events) || [];
+          var brief = null;
+          // Search from newest to oldest for a daily_brief event
+          for (var i = evts.length - 1; i >= 0; i--) {
+            var t = (evts[i].type || "").toLowerCase();
+            if (/daily.brief|daily_brief|brief/i.test(t)) {
+              brief = evts[i];
+              break;
+            }
+          }
+          var bodyEl = $("briefBody");
+          var timeEl = $("briefTimestamp");
+          if (!bodyEl) return;
+          if (brief) {
+            bodyEl.innerHTML = esc(brief.summary || brief.message || brief.description || "Brief generated.");
+            timeEl.textContent = brief.timestamp ? timeAgo(brief.timestamp) : "Today";
+          } else {
+            bodyEl.innerHTML = "No brief available &mdash; Agent will generate one during next heartbeat.";
+            timeEl.textContent = "--";
+          }
+        }
+
         // ── Boot ──
         renderAll();
         populateOrderSymbols();
         initEquityChart();
-        initAllocChart();
         initSSE();
         $("botMsg").innerHTML = "Overview online. <em>" + new Date().toLocaleString() + "</em>";
       })();

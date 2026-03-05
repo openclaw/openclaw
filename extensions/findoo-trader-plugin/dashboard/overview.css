@@ -277,3 +277,170 @@
     flex-direction: column;
   }
 }
+
+/* ════════════════════════════════════════════════════════════════
+   Multi-Market Status — left sidebar market rows
+   ════════════════════════════════════════════════════════════════ */
+
+.market-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.market-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  padding: 5px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.market-status-row__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-dim);
+}
+.market-status-row__dot--online {
+  background: var(--gain);
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
+}
+.market-status-row__dot--offline {
+  background: var(--loss);
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.3);
+}
+.market-status-row__name {
+  font-weight: 600;
+  color: var(--text-hi);
+  min-width: 56px;
+}
+.market-status-row__state {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.market-status-row__latency {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Quick Links — left sidebar navigation
+   ════════════════════════════════════════════════════════════════ */
+
+.quick-links {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.quick-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-decoration: none;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  transition: background 0.15s, color 0.15s;
+}
+.quick-link:hover {
+  background: var(--bg-card);
+  color: var(--text-hi);
+}
+.quick-link__arrow {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Daily Brief Card — gradient accent card
+   ════════════════════════════════════════════════════════════════ */
+
+.daily-brief-card {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.08), rgba(118, 75, 162, 0.06)) !important;
+  border-color: rgba(102, 126, 234, 0.2) !important;
+}
+.daily-brief-card__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.daily-brief-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(59, 130, 246, 0.15);
+  font-size: 11px;
+  line-height: 1;
+}
+.daily-brief-card__time {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.daily-brief-card__body {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.7;
+}
+.daily-brief-card__body strong {
+  color: var(--text-hi);
+  font-weight: 500;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Capital Allocation — Horizontal Bar Chart
+   ════════════════════════════════════════════════════════════════ */
+
+.alloc-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+.alloc-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.alloc-bar-row__name {
+  font-size: 10px;
+  color: var(--text-dim);
+  min-width: 80px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.alloc-bar-row__pct {
+  font-size: 10px;
+  color: var(--text);
+  min-width: 28px;
+  text-align: right;
+}
+.alloc-bar-row__track {
+  flex: 1;
+  height: 14px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.alloc-bar-row__fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.8s ease;
+  min-width: 2px;
+}
+.alloc-bar-row__val {
+  font-size: 10px;
+  color: var(--text-dim);
+  min-width: 36px;
+  text-align: right;
+}

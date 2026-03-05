@@ -1,6 +1,7 @@
 # Repository Guidelines
 
 - Repo: https://github.com/cryptoSUN2049/openFinclaw (fork of openclaw/openclaw)
+- Linear project management: read `docs/skills/linear-pm.md` for Linear API usage, issue IDs, labels, and workflow. Use when tracking UIUX progress, creating/updating issues, or querying project status. Workspace: `xdan-product`, Project: `openFinClaw`, Team key: `XDA`. API key in `$LINEAR_API_KEY`.
 - In chat replies, file references must be repo-root relative only (example: `extensions/bluebubbles/src/channel.ts:80`); never absolute paths or `~/...`.
 - GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 - GitHub comment footgun: never use `gh issue/pr comment -b "..."` when body contains backticks or shell chars. Always use single-quoted heredoc (`-F - <<'EOF'`) so no command substitution/escaping corruption.

@@ -78,3 +78,23 @@ export const approvalActionSchema = z.object({
   action: z.enum(["approve", "reject"]),
   reason: z.string().optional(),
 });
+
+/** Zod schema for POST /api/v1/finance/orders — unified order submission. */
+export const submitOrderSchema = z.object({
+  symbol: z.string().min(1),
+  side: z.enum(["buy", "sell"]),
+  type: z.enum(["market", "limit", "stop-limit"]).default("market"),
+  price: z.number().positive().optional(),
+  amount: z.number().positive(),
+  domain: z.enum(["paper", "live"]).default("paper"),
+  /** Paper-only: target account ID (defaults to first account). */
+  accountId: z.string().optional(),
+  /** Live-only: target exchange ID (defaults to first exchange). */
+  exchangeId: z.string().optional(),
+  stopLoss: z.number().positive().optional(),
+  takeProfit: z.number().positive().optional(),
+  /** Pre-approved event ID — skips risk check. */
+  approvalId: z.string().optional(),
+  reason: z.string().optional(),
+  strategyId: z.string().optional(),
+});

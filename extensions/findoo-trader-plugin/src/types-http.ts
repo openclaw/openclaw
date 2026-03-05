@@ -79,6 +79,11 @@ export type StrategyRegistryLike = {
     name: string;
     level: string;
     status?: string;
+    definition?: {
+      markets?: string[];
+      symbols?: string[];
+      timeframes?: string[];
+    };
     lastBacktest?: {
       totalReturn: number;
       sharpe: number;
@@ -92,9 +97,7 @@ export type StrategyRegistryLike = {
       strategyId: string;
     };
   }>;
-  get?: (
-    id: string,
-  ) =>
+  get?: (id: string) =>
     | {
         id: string;
         name: string;

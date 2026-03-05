@@ -68,11 +68,86 @@ type FundManagerLike = {
 
 type PaperEngineLike = {
   listAccounts(): Array<{ id: string; name: string; equity: number }>;
-  getAccountState(id: string): { equity: number; positions: Array<Record<string, unknown>> } | null;
+  getAccountState(id: string): {
+    equity: number;
+    initialCapital: number;
+    createdAt: number;
+    positions: Array<Record<string, unknown>>;
+    orders: Array<Record<string, unknown>>;
+  } | null;
+  getMetrics?(id: string): {
+    rollingSharpe7d: number;
+    rollingSharpe30d: number;
+    currentDrawdown: number;
+    consecutiveLossDays: number;
+    decayLevel: string;
+  } | null;
   getSnapshots?(
     id: string,
   ): Array<{ timestamp: number; equity: number; dailyPnl: number; dailyPnlPct: number }>;
 };
+
+// ── Paper Data Gathering (shared with fund/tools.ts) ─────────────────
+
+/** Gather per-strategy paper trading data from the paper engine. */
+export function gatherPaperData(paperEngine: PaperEngineLike): Map<
+  string,
+  {
+    metrics?: {
+      rollingSharpe7d: number;
+      rollingSharpe30d: number;
+      currentDrawdown: number;
+      consecutiveLossDays: number;
+      decayLevel: string;
+    };
+    equity?: number;
+    initialCapital?: number;
+    daysActive?: number;
+    tradeCount?: number;
+  }
+> {
+  const data = new Map<
+    string,
+    {
+      metrics?: {
+        rollingSharpe7d: number;
+        rollingSharpe30d: number;
+        currentDrawdown: number;
+        consecutiveLossDays: number;
+        decayLevel: string;
+      };
+      equity?: number;
+      initialCapital?: number;
+      daysActive?: number;
+      tradeCount?: number;
+    }
+  >();
+
+  const accounts = paperEngine.listAccounts();
+  for (const acct of accounts) {
+    const state = paperEngine.getAccountState(acct.id);
+    if (!state) continue;
+    const metrics = paperEngine.getMetrics?.(acct.id) ?? undefined;
+    const orders = state.orders ?? [];
+    // Extract strategyIds from orders (not positions — orders carry strategyId)
+    const strategyIds = new Set<string>();
+    for (const order of orders) {
+      const sid = order.strategyId as string | undefined;
+      if (sid) strategyIds.add(sid);
+    }
+    for (const sid of strategyIds) {
+      data.set(sid, {
+        metrics: metrics ?? undefined,
+        equity: state.equity,
+        initialCapital: state.initialCapital,
+        daysActive: Math.floor((Date.now() - state.createdAt) / 86_400_000),
+        tradeCount: orders.filter((o) => o.strategyId === sid).length,
+      });
+    }
+  }
+
+  return data;
+}
 
 // ── Engine ────────────────────────────────────────────────────────────
 
@@ -166,7 +241,7 @@ export class LifecycleEngine {
     demoted: number;
     errors: number;
   }> {
-    const { strategyRegistry, fundManagerResolver, activityLog } = this.deps;
+    const { strategyRegistry, fundManagerResolver, paperEngine, activityLog } = this.deps;
     const fundManager = fundManagerResolver();
 
     let promoted = 0;
@@ -182,7 +257,8 @@ export class LifecycleEngine {
 
     try {
       const allRecords = strategyRegistry.list();
-      const profiles = fundManager.buildProfiles(allRecords);
+      const paperData = gatherPaperData(paperEngine);
+      const profiles = fundManager.buildProfiles(allRecords, paperData);
 
       // ── 1. Check promotions ─────────────────────────────────
       for (const profile of profiles) {

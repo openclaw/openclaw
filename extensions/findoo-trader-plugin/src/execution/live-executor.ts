@@ -105,4 +105,18 @@ export class LiveExecutor {
     const { bridge } = await this.getBridge(exchangeId);
     return bridge.fetchBalance();
   }
+
+  async fetchOpenOrders(exchangeId?: string, symbol?: string): Promise<unknown[]> {
+    const { bridge } = await this.getBridge(exchangeId);
+    return bridge.fetchOpenOrders(symbol);
+  }
+
+  async fetchOrder(
+    exchangeId: string | undefined,
+    orderId: string,
+    symbol: string,
+  ): Promise<Record<string, unknown>> {
+    const { bridge } = await this.getBridge(exchangeId);
+    return bridge.fetchOrder(orderId, symbol);
+  }
 }

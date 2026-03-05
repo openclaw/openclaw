@@ -190,17 +190,19 @@
             <div style="display: flex; align-items: center; gap: 8px">
               <div class="rb-filter-bar" id="rbFilterBar">
                 <div class="race-filters" id="lbFilters">
-                  <button class="race-filter rb-chip active" data-lf="all" data-rbm="all">All</button>
-                  <button class="race-filter rb-chip" data-lf="l0" data-rbm="crypto">L0</button>
-                  <button class="race-filter rb-chip" data-lf="l1" data-rbm="us-stock">L1</button>
-                  <button class="race-filter rb-chip" data-lf="l2" data-rbm="hk-stock">L2</button>
-                  <button class="race-filter rb-chip" data-lf="l3" data-rbm="a-share">L3</button>
+                  <button class="race-filter rb-chip active" data-rbl="all">All</button>
+                  <button class="race-filter rb-chip" data-rbl="0">L0</button>
+                  <button class="race-filter rb-chip" data-rbl="1">L1</button>
+                  <button class="race-filter rb-chip" data-rbl="2">L2</button>
+                  <button class="race-filter rb-chip" data-rbl="3">L3</button>
                 </div>
                 <span class="rb-divider"></span>
-                <button class="rb-chip active" data-rbtf="all">All TF</button>
-                <button class="rb-chip" data-rbtf="short">Short</button>
-                <button class="rb-chip" data-rbtf="mid">Mid</button>
-                <button class="rb-chip" data-rbtf="long">Long</button>
+                <button class="rb-chip active" data-rbm="all">All Mkt</button>
+                <button class="rb-chip" data-rbm="crypto">Crypto</button>
+                <button class="rb-chip" data-rbm="equity">Equity</button>
+                <button class="rb-chip" data-rbm="us-stock">US</button>
+                <button class="rb-chip" data-rbm="hk-stock">HK</button>
+                <button class="rb-chip" data-rbm="a-share">A</button>
               </div>
               <span class="num" style="font-size: 9px; color: var(--text-dim)" id="lbCount"></span>
             </div>
@@ -375,6 +377,14 @@
       </div>
     </div>
 
+    <!-- Sort indicator + kanban meta styles -->
+    <style>
+      th.sort-asc::after { content: " \25B2"; font-size: 8px; opacity: 0.7; }
+      th.sort-desc::after { content: " \25BC"; font-size: 8px; opacity: 0.7; }
+      .kc-meta { display: flex; align-items: center; gap: 4px; margin: 2px 0; }
+      .kc-tf { font-size: 9px; }
+    </style>
+
     <!-- JAVASCRIPT -->
     <script>
       (function () {
@@ -469,7 +479,9 @@
           feedFilter: "all",
           marketFilter: "all",
           statusFilter: "all",
-          tfFilter: "all",
+          levelFilter: "all",
+          sortCol: null,
+          sortDir: "desc",
         };
 
         // ── Performance: RAF debounce (Step 6) ──
@@ -523,6 +535,8 @@
         // ── Market helpers ──
         var marketLabels = {
           crypto: "Crypto",
+          equity: "Equity",
+          commodity: "Commodity",
           "us-stock": "US Stock",
           "hk-stock": "HK Stock",
           "a-share": "A-Share",
@@ -679,12 +693,18 @@
               var ret = s.totalReturn || s.returnPct || 0;
               var st = stratStatus(s);
               var m = stratMarket(s);
+              var sym = stratSymbols(s);
+              var tf = stratTf(s);
               var ver = stratVersion(s);
               html +=
                 '<div class="kanban-card" data-market="' + esc(m) + '" data-id="' + esc(s.id || s.name || "") + '">' +
                 '<div class="kc-top"><span class="kc-name">' + esc(s.name || s.id) + "</span>" +
                 (ver ? '<span class="kc-ver">' + esc(ver) + "</span>" : "") + "</div>" +
+                '<div class="kc-meta">' +
                 (m !== "--" ? '<span class="kc-market kc-market--' + esc(m) + '">' + esc(marketLabels[m] || m) + "</span>" : "") +
+                (tf !== "--" ? '<span class="kc-tf dim">' + esc(tf) + "</span>" : "") +
+                "</div>" +
+                (sym !== "--" ? '<div class="kc-sym dim" style="font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px" title="' + esc(sym) + '">' + esc(sym) + "</div>" : "") +
                 '<div class="kc-fitness"><div class="kc-fitness-bar"><div class="kc-fitness-fill" style="width:' +
                 (fit * 100) + "%;background:" + fitnessColor(fit) + '"></div></div>' +
                 '<span class="kc-fitness-val ' + (fit >= 0.7 ? "gain" : fit >= 0.4 ? "" : "dim") + '">' +
@@ -745,13 +765,22 @@
             $("lbCount").textContent = "";
             return;
           }
+
+          // Sort by chosen column (default: fitness/sharpe descending)
+          var sc = state.sortCol;
+          var sd = state.sortDir === "asc" ? 1 : -1;
           var sorted = strategies.slice().sort(function (a, b) {
+            if (sc === "fitness") return ((b.fitness || 0) - (a.fitness || 0)) * sd;
+            if (sc === "return") return ((b.totalReturn || b.returnPct || 0) - (a.totalReturn || a.returnPct || 0)) * sd;
+            if (sc === "sharpe") return ((b.sharpe || 0) - (a.sharpe || 0)) * sd;
+            if (sc === "maxdd") return ((b.maxDrawdown || 0) - (a.maxDrawdown || 0)) * sd;
+            // default: fitness then sharpe
             return (b.fitness || b.sharpe || 0) - (a.fitness || a.sharpe || 0);
           });
 
           var mf = state.marketFilter;
           var sf = state.statusFilter;
-          var tf = state.tfFilter;
+          var lf = state.levelFilter;
 
           var visibleCount = 0;
           var html = "";
@@ -771,11 +800,11 @@
             var stf = stratTf(s);
             var st = stratStatus(s);
 
-            // filter
+            // filter: Level + Market + Status
             var hidden = false;
+            if (lf !== "all" && String(lvlNum) !== String(lf)) hidden = true;
             if (mf !== "all" && m !== mf) hidden = true;
             if (sf !== "all" && !statusMatch(s, sf)) hidden = true;
-            if (tf !== "all" && tfCategory(stf) !== tf) hidden = true;
 
             if (!hidden) visibleCount++;
 
@@ -1287,17 +1316,45 @@
           });
         });
 
-        // ── TF filter: raceboard only ──
-        $("rbFilterBar").querySelectorAll("[data-rbtf]").forEach(function (c) {
+        // ── Level filter: raceboard only ──
+        $("rbFilterBar").querySelectorAll("[data-rbl]").forEach(function (c) {
           c.addEventListener("click", function () {
-            $("rbFilterBar").querySelectorAll("[data-rbtf]").forEach(function (x) {
+            $("rbFilterBar").querySelectorAll("[data-rbl]").forEach(function (x) {
               x.classList.remove("active");
             });
             c.classList.add("active");
-            state.tfFilter = c.dataset.rbtf;
+            state.levelFilter = c.dataset.rbl;
             scheduleRender();
           });
         });
+
+        // ── Raceboard column header sort ──
+        (function () {
+          var sortableMap = { "Fitness": "fitness", "Return": "return", "Sharpe": "sharpe", "MaxDD": "maxdd" };
+          var thead = document.querySelector("#lbBody")?.closest("table")?.querySelector("thead tr");
+          if (!thead) return;
+          thead.querySelectorAll("th").forEach(function (th) {
+            var col = sortableMap[th.textContent.trim()];
+            if (!col) return;
+            th.style.cursor = "pointer";
+            th.style.userSelect = "none";
+            th.title = "Click to sort";
+            th.addEventListener("click", function () {
+              if (state.sortCol === col) {
+                state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
+              } else {
+                state.sortCol = col;
+                state.sortDir = "desc";
+              }
+              // Update sort indicators
+              thead.querySelectorAll("th").forEach(function (h) {
+                h.classList.remove("sort-asc", "sort-desc");
+              });
+              th.classList.add(state.sortDir === "asc" ? "sort-asc" : "sort-desc");
+              scheduleRender();
+            });
+          });
+        })();
 
         // ── Delegated click handlers ──
         document.addEventListener("click", function (e) {
