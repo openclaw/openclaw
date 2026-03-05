@@ -161,6 +161,7 @@ export async function sendSlackMessage(
     mediaUrl?: string;
     threadTs?: string;
     blocks?: (Block | KnownBlock)[];
+    mediaLocalRoots?: readonly string[];
   } = {},
 ) {
   return await sendMessageSlack(to, content, {
@@ -170,6 +171,7 @@ export async function sendSlackMessage(
     client: opts.client,
     threadTs: opts.threadTs,
     blocks: opts.blocks,
+    mediaLocalRoots: opts.mediaLocalRoots,
   });
 }
 

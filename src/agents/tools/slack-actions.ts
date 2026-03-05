@@ -211,6 +211,7 @@ export async function handleSlackAction(
           mediaUrl: mediaUrl ?? undefined,
           threadTs: threadTs ?? undefined,
           blocks,
+          mediaLocalRoots: context?.mediaLocalRoots,
         });
 
         if (threadTs && result.channelId && account.accountId) {

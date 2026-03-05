@@ -278,7 +278,10 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         ctx,
         includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) =>
-          await getSlackRuntime().channel.slack.handleSlackAction(action, cfg, toolContext),
+          await getSlackRuntime().channel.slack.handleSlackAction(action, cfg, {
+            ...toolContext,
+            mediaLocalRoots: ctx.mediaLocalRoots,
+          }),
       }),
   },
   setup: {

@@ -57,7 +57,10 @@ export async function handleSlackMessageAction(params: {
         threadTs: threadId ?? replyTo ?? undefined,
       },
       cfg,
-      ctx.toolContext,
+      {
+        ...ctx.toolContext,
+        mediaLocalRoots: ctx.mediaLocalRoots,
+      },
     );
   }
 
