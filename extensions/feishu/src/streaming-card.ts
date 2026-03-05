@@ -266,28 +266,35 @@ export class FeishuStreamingSession {
       return;
     }
     const apiBase = resolveApiBase(this.creds.domain);
-    this.state.sequence += 1;
-    await fetchWithSsrFGuard({
-      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
-      init: {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json",
+    const nextSequence = this.state.sequence + 1;
+    try {
+      const { response, release } = await fetchWithSsrFGuard({
+        url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
+        init: {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${await getToken(this.creds)}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            content: text,
+            sequence: nextSequence,
+            uuid: `s_${this.state.cardId}_${nextSequence}`,
+          }),
         },
-        body: JSON.stringify({
-          content: text,
-          sequence: this.state.sequence,
-          uuid: `s_${this.state.cardId}_${this.state.sequence}`,
-        }),
-      },
-      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
-      auditContext: "feishu.streaming-card.update",
-    })
-      .then(async ({ release }) => {
+        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+        auditContext: "feishu.streaming-card.update",
+      });
+      if (!response.ok) {
         await release();
-      })
-      .catch((error) => onError?.(error));
+        throw new Error(`Card element update failed with HTTP ${response.status}`);
+      }
+      await release();
+      // Only advance sequence after confirmed success
+      this.state.sequence = nextSequence;
+    } catch (error) {
+      onError?.(error);
+    }
   }
 
   async update(text: string): Promise<void> {
@@ -340,30 +347,37 @@ export class FeishuStreamingSession {
     }
 
     // Close streaming mode
-    this.state.sequence += 1;
-    await fetchWithSsrFGuard({
-      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
-      init: {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json; charset=utf-8",
-        },
-        body: JSON.stringify({
-          settings: JSON.stringify({
-            config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
+    const closeSequence = this.state.sequence + 1;
+    try {
+      const { response, release } = await fetchWithSsrFGuard({
+        url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
+        init: {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${await getToken(this.creds)}`,
+            "Content-Type": "application/json; charset=utf-8",
+          },
+          body: JSON.stringify({
+            settings: JSON.stringify({
+              config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
+            }),
+            sequence: closeSequence,
+            uuid: `c_${this.state.cardId}_${closeSequence}`,
           }),
-          sequence: this.state.sequence,
-          uuid: `c_${this.state.cardId}_${this.state.sequence}`,
-        }),
-      },
-      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
-      auditContext: "feishu.streaming-card.close",
-    })
-      .then(async ({ release }) => {
+        },
+        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+        auditContext: "feishu.streaming-card.close",
+      });
+      if (!response.ok) {
         await release();
-      })
-      .catch((e) => this.log?.(`Close failed: ${String(e)}`));
+        this.log?.(`Close failed: HTTP ${response.status}`);
+      } else {
+        await release();
+        this.state.sequence = closeSequence;
+      }
+    } catch (e) {
+      this.log?.(`Close failed: ${String(e)}`);
+    }
 
     this.log?.(`Closed streaming: cardId=${this.state.cardId}`);
   }
