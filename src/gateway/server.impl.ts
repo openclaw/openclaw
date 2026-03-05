@@ -467,7 +467,16 @@ export async function startGatewayServer(
     resolvedAuth,
     tailscaleConfig,
     tailscaleMode,
+    degradedFeatures,
   } = runtimeConfig;
+
+  if (degradedFeatures && degradedFeatures.length > 0) {
+    for (const { feature, reason } of degradedFeatures) {
+      log.warn(
+        `[gateway] Starting in degraded mode: ${feature} disabled — ${reason}`,
+      );
+    }
+  }
   let hooksConfig = runtimeConfig.hooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
 
