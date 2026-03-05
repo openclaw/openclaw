@@ -1,8 +1,12 @@
-import type { WebhookRequestBody } from "@line/bot-sdk";
+import type { MessageEvent, WebhookRequestBody } from "@line/bot-sdk";
 import { chunkMarkdownText } from "../auto-reply/chunk.js";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
+import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveChannelGroupRequireMention } from "../config/group-policy.js";
 import { danger, logVerbose } from "../globals.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { normalizePluginHttpPath } from "../plugins/http-path.js";
@@ -163,6 +167,58 @@ export async function monitorLineProvider(
       }
 
       const { ctxPayload, replyToken, route } = ctx;
+
+      // ── LINE mention gating ──
+      // Skip group messages when requireMention is configured and bot is not mentioned.
+      // This matches the gating pattern used by WhatsApp, Telegram, Discord, Slack, and Signal.
+      if (ctx.isGroup) {
+        const requireMention = resolveChannelGroupRequireMention({
+          cfg: config,
+          channel: "line",
+          groupId: ctx.groupId,
+          accountId: ctx.accountId,
+        });
+
+        if (requireMention) {
+          const messageText = ctxPayload.RawBody ?? ctxPayload.Body ?? "";
+          const mentionRegexes = buildMentionRegexes(config, route.agentId);
+          const wasMentioned = matchesMentionPatterns(messageText, mentionRegexes);
+
+          // Also check LINE-native mention objects (message.mention.mentionees)
+          const event = ctx.event as MessageEvent;
+          const lineMention =
+            event?.message?.type === "text" ? event.message.mention : undefined;
+          const hasLineMention = Boolean(
+            lineMention && lineMention.mentionees && lineMention.mentionees.length > 0,
+          );
+
+          const effectiveWasMentioned = wasMentioned || hasLineMention;
+          const hasCmd = hasControlCommand(messageText, config);
+          const canDetectMention = mentionRegexes.length > 0 || true; // LINE always supports native mentions
+
+          const mentionGate = resolveMentionGatingWithBypass({
+            isGroup: true,
+            requireMention: true,
+            canDetectMention,
+            wasMentioned: effectiveWasMentioned,
+            implicitMention: false,
+            hasAnyMention: hasLineMention,
+            allowTextCommands: true,
+            hasControlCommand: hasCmd,
+            commandAuthorized: false,
+          });
+
+          if (mentionGate.shouldSkip) {
+            logVerbose(
+              `line: skipping group message (requireMention, not mentioned) group=${ctx.groupId ?? "unknown"} account=${ctx.accountId}`,
+            );
+            return;
+          }
+
+          ctxPayload.WasMentioned = mentionGate.effectiveWasMentioned;
+        }
+      }
+      // ── end LINE mention gating ──
 
       // Record inbound activity
       recordChannelRuntimeState({
