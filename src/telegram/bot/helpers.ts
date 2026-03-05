@@ -280,19 +280,29 @@ export function buildGroupLabel(msg: Message, chatId: number | string, messageTh
   return `group:${chatId}${topicSuffix}`;
 }
 
-export function hasBotMention(msg: Message, botUsername: string) {
+export function hasBotMention(
+  msg: Message,
+  botUsername: string,
+  params?: { botUserId?: number | null },
+) {
   const text = (msg.text ?? msg.caption ?? "").toLowerCase();
   if (text.includes(`@${botUsername}`)) {
     return true;
   }
   const entities = msg.entities ?? msg.caption_entities ?? [];
   for (const ent of entities) {
-    if (ent.type !== "mention") {
+    if (ent.type === "mention") {
+      const slice = (msg.text ?? msg.caption ?? "").slice(ent.offset, ent.offset + ent.length);
+      if (slice.toLowerCase() === `@${botUsername}`) {
+        return true;
+      }
       continue;
     }
-    const slice = (msg.text ?? msg.caption ?? "").slice(ent.offset, ent.offset + ent.length);
-    if (slice.toLowerCase() === `@${botUsername}`) {
-      return true;
+    if (ent.type === "text_mention") {
+      const targetId = (ent as { user?: { id?: number } })?.user?.id;
+      if (params?.botUserId != null && targetId === params.botUserId) {
+        return true;
+      }
     }
   }
   return false;

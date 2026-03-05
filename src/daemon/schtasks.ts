@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { VERSION } from "../version.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
@@ -295,6 +296,48 @@ export async function uninstallScheduledTask({
   }
 }
 
+export async function syncTaskScriptServiceVersion(
+  env: GatewayServiceEnv,
+  version: string = VERSION,
+): Promise<void> {
+  const scriptPath = resolveTaskScriptPath(env);
+  let content: string;
+  try {
+    content = await fs.readFile(scriptPath, "utf8");
+  } catch {
+    return;
+  }
+
+  const lines = content.split(/\r?\n/);
+  const assignment = renderCmdSetAssignment("OPENCLAW_SERVICE_VERSION", version);
+  const targetKey = "openclaw_service_version";
+  let replaced = false;
+
+  for (let idx = 0; idx < lines.length; idx += 1) {
+    const line = lines[idx]?.trim();
+    if (!line || !line.toLowerCase().startsWith("set ")) {
+      continue;
+    }
+    const parsed = parseCmdSetAssignment(line.slice(4));
+    if (parsed && parsed.key.toLowerCase() === targetKey) {
+      lines[idx] = assignment;
+      replaced = true;
+      break;
+    }
+  }
+
+  if (!replaced) {
+    const echoOffIndex = lines.findIndex((line) => line.trim().toLowerCase() === "@echo off");
+    const insertAt = echoOffIndex >= 0 ? echoOffIndex + 1 : 0;
+    lines.splice(insertAt, 0, assignment);
+  }
+
+  const next = `${lines.join("\r\n").replace(/(\r\n)+$/u, "")}\r\n`;
+  if (next !== content) {
+    await fs.writeFile(scriptPath, next, "utf8");
+  }
+}
+
 function isTaskNotRunning(res: { stdout: string; stderr: string; code: number }): boolean {
   const detail = (res.stderr || res.stdout).toLowerCase();
   return detail.includes("not running");
@@ -315,7 +358,9 @@ export async function restartScheduledTask({
   env,
 }: GatewayServiceControlArgs): Promise<void> {
   await assertSchtasksAvailable();
-  const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
+  const resolvedEnv = env ?? (process.env as GatewayServiceEnv);
+  const taskName = resolveTaskName(resolvedEnv);
+  await syncTaskScriptServiceVersion(resolvedEnv);
   await execSchtasks(["/End", "/TN", taskName]);
   const res = await execSchtasks(["/Run", "/TN", taskName]);
   if (res.code !== 0) {

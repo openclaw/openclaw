@@ -26,6 +26,7 @@ function createToolHarness() {
 
 describe("wrapToolWorkspaceRootGuardWithOptions", () => {
   const root = "/tmp/root";
+  const sandboxWorkspaceRoot = "/tmp/session/workspace";
 
   beforeEach(() => {
     mocks.assertSandboxPath.mockClear();
@@ -103,6 +104,19 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       filePath: "/workspace-two/secret.txt",
       cwd: root,
       root,
+    });
+  });
+
+  it("infers /workspace mapping when containerWorkdir is missing", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, sandboxWorkspaceRoot);
+
+    await wrapped.execute("tc4", { path: "/workspace/media/inbound/upload.csv" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(sandboxWorkspaceRoot, "media", "inbound", "upload.csv"),
+      cwd: sandboxWorkspaceRoot,
+      root: sandboxWorkspaceRoot,
     });
   });
 });

@@ -359,7 +359,9 @@ function mapContainerPathToWorkspaceRoot(params: {
   root: string;
   containerWorkdir?: string;
 }): string {
-  const containerWorkdir = params.containerWorkdir?.trim();
+  const inferredWorkdir =
+    path.basename(path.resolve(params.root)) === "workspace" ? "/workspace" : undefined;
+  const containerWorkdir = params.containerWorkdir?.trim() || inferredWorkdir;
   if (!containerWorkdir) {
     return params.filePath;
   }

@@ -4,6 +4,7 @@ import {
   buildTypingThreadParams,
   describeReplyTarget,
   expandTextLinks,
+  hasBotMention,
   normalizeForwardedContext,
   resolveTelegramDirectPeerId,
   resolveTelegramForumThreadId,
@@ -65,6 +66,29 @@ describe("resolveTelegramDirectPeerId", () => {
     expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: undefined })).toBe(
       "777777777",
     );
+  });
+});
+
+describe("hasBotMention", () => {
+  it("detects classic @username mention", () => {
+    const msg = { text: "hi @openclaw_bot" } as Parameters<typeof hasBotMention>[0];
+    expect(hasBotMention(msg, "openclaw_bot")).toBe(true);
+  });
+
+  it("detects text_mention entities that target the bot id", () => {
+    const msg = {
+      text: "hi OpenClaw",
+      entities: [{ type: "text_mention", offset: 3, length: 8, user: { id: 4242 } }],
+    } as unknown as Parameters<typeof hasBotMention>[0];
+    expect(hasBotMention(msg, "openclaw_bot", { botUserId: 4242 })).toBe(true);
+  });
+
+  it("does not match text_mention when user id differs", () => {
+    const msg = {
+      text: "hi OpenClaw",
+      entities: [{ type: "text_mention", offset: 3, length: 8, user: { id: 1111 } }],
+    } as unknown as Parameters<typeof hasBotMention>[0];
+    expect(hasBotMention(msg, "openclaw_bot", { botUserId: 4242 })).toBe(false);
   });
 });
 

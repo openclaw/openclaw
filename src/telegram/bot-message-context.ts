@@ -527,7 +527,9 @@ export const buildTelegramMessageContext = async ({
   const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
     (ent) => ent.type === "mention",
   );
-  const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
+  const explicitlyMentioned = botUsername
+    ? hasBotMention(msg, botUsername, { botUserId: primaryCtx.me?.id })
+    : false;
 
   const computedWasMentioned = matchesMentionWithExplicit({
     text: msg.text ?? msg.caption ?? "",

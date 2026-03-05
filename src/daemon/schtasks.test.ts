@@ -7,6 +7,7 @@ import {
   parseSchtasksQuery,
   readScheduledTaskCommand,
   resolveTaskScriptPath,
+  syncTaskScriptServiceVersion,
 } from "./schtasks.js";
 
 describe("schtasks runtime parsing", () => {
@@ -93,6 +94,47 @@ describe("resolveTaskScriptPath", () => {
     },
   ])("$name", ({ env, expected }) => {
     expect(resolveTaskScriptPath(env)).toBe(expected);
+  });
+});
+
+describe("syncTaskScriptServiceVersion", () => {
+  it("injects OPENCLAW_SERVICE_VERSION when missing", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-version-"));
+    try {
+      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const scriptPath = resolveTaskScriptPath(env);
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(scriptPath, "@echo off\r\nnode gateway.js\r\n", "utf8");
+
+      await syncTaskScriptServiceVersion(env, "2026.3.2");
+
+      const next = await fs.readFile(scriptPath, "utf8");
+      expect(next).toContain('set "OPENCLAW_SERVICE_VERSION=2026.3.2"');
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("replaces stale OPENCLAW_SERVICE_VERSION when present", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-version-"));
+    try {
+      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const scriptPath = resolveTaskScriptPath(env);
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(
+        scriptPath,
+        "@echo off\r\nset OPENCLAW_SERVICE_VERSION=2026.2.26\r\nnode gateway.js\r\n",
+        "utf8",
+      );
+
+      await syncTaskScriptServiceVersion(env, "2026.3.2");
+
+      const next = await fs.readFile(scriptPath, "utf8");
+      expect(next).toContain('set "OPENCLAW_SERVICE_VERSION=2026.3.2"');
+      expect(next).not.toContain("2026.2.26");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 
