@@ -249,8 +249,12 @@ Rules:
       shouldStore: facts.length > 0,
       facts,
     };
-  } catch {
+  } catch (error) {
     // Smart capture is best-effort — fall back to rule-based
+    console.warn(
+      `[memory-hybrid][capture] smartCapture JSON parse failed`,
+      error instanceof Error ? error.message : String(error),
+    );
     return { shouldStore: false, facts: [] };
   }
 }

@@ -74,6 +74,46 @@ describe("Verification of Critical Fixes", () => {
     expect(vector).toHaveLength(3);
   });
 
+  it("LRU cache should evict least-recently-USED, not oldest-inserted (Bug #1)", async () => {
+    // Create embeddings with a tiny cache (maxCacheSize = 3, via private field override)
+    const embeddings = new Embeddings("fake-key", "gemini-embedding-001", "google");
+    (embeddings as any).maxCacheSize = 3;
+
+    let callCount = 0;
+    global.fetch = vi.fn().mockImplementation(async () => {
+      callCount++;
+      return {
+        ok: true,
+        json: async () => ({ embedding: { values: Array(3072).fill(callCount * 0.1) } }),
+      };
+    });
+
+    // Fill cache with 3 entries
+    await embeddings.embed("alpha"); // call 1 → cached first
+    await embeddings.embed("beta"); // call 2
+    await embeddings.embed("gamma"); // call 3 → cache is now full (3/3)
+
+    expect(callCount).toBe(3);
+
+    // ACCESS "alpha" again — should hit cache, moving it to "most recently used"
+    await embeddings.embed("alpha");
+    expect(callCount).toBe(3); // no new API call
+
+    // Add "delta" — this MUST evict the least-recently-used entry
+    // With LRU: "beta" was used longest ago → evict "beta"
+    // With old FIFO: "alpha" was inserted first → evict "alpha" (WRONG!)
+    await embeddings.embed("delta");
+    expect(callCount).toBe(4);
+
+    // Now: "alpha" should still be cached (it was accessed recently)
+    await embeddings.embed("alpha");
+    expect(callCount).toBe(4); // LRU: still cached, no API call
+
+    // "beta" should have been evicted → requires new API call
+    await embeddings.embed("beta");
+    expect(callCount).toBe(5); // had to re-fetch
+  });
+
   it("should cache redundant embedding calls (Myelination)", async () => {
     const embeddings = new Embeddings("fake-key", "gemini-embedding-001", "google");
 

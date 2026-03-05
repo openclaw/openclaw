@@ -50,10 +50,13 @@ export class Embeddings {
   }
 
   async embed(text: string): Promise<number[]> {
-    // Check cache first (Myelination: rapid recall)
+    // Check cache first (LRU: delete+re-insert moves key to end of Map order)
     const cacheKey = `${this.model}:${this.provider}:${text}`;
     if (this.cache.has(cacheKey)) {
-      return this.cache.get(cacheKey)!;
+      const val = this.cache.get(cacheKey)!;
+      this.cache.delete(cacheKey);
+      this.cache.set(cacheKey, val);
+      return val;
     }
 
     let vector: number[];

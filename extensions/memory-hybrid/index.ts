@@ -63,6 +63,13 @@ class MemoryDB {
   private table: LanceDB.Table | null = null;
   private initPromise: Promise<void> | null = null;
 
+  /**
+   * In-memory recall count deltas.
+   * Instead of doing risky DELETE+INSERT on every recall, we accumulate
+   * increments here and flush them to DB periodically in batch.
+   */
+  private recallCountDeltas: Map<string, number> = new Map();
+
   constructor(
     private readonly dbPath: string,
     private readonly vectorDim: number,
@@ -102,6 +109,12 @@ class MemoryDB {
     }
   }
 
+  /** Merge in-memory recall delta into a recallCount value */
+  private mergeRecallDelta(id: string, dbRecallCount: number): number {
+    const delta = this.recallCountDeltas.get(id) ?? 0;
+    return dbRecallCount + delta;
+  }
+
   async store(entry: Omit<MemoryEntry, "id" | "createdAt">): Promise<MemoryEntry> {
     await this.ensureInitialized();
 
@@ -125,15 +138,16 @@ class MemoryDB {
     const mapped = results.map((row) => {
       const distance = (row._distance as number) ?? 0;
       const score = 1 / (1 + distance);
+      const id = row.id as string;
       return {
         entry: {
-          id: row.id as string,
+          id,
           text: row.text as string,
           vector: row.vector as number[],
           importance: row.importance as number,
           category: row.category as MemoryCategory,
           createdAt: row.createdAt as number,
-          recallCount: (row.recallCount as number) ?? 0,
+          recallCount: this.mergeRecallDelta(id, (row.recallCount as number) ?? 0),
         },
         score,
       };
@@ -153,7 +167,7 @@ class MemoryDB {
       importance: rows[0].importance as number,
       category: rows[0].category as string,
       createdAt: rows[0].createdAt as number,
-      recallCount: (rows[0].recallCount as number) ?? 0,
+      recallCount: this.mergeRecallDelta(id, (rows[0].recallCount as number) ?? 0),
     };
   }
 
@@ -164,6 +178,8 @@ class MemoryDB {
       throw new Error(`Invalid memory ID format: ${id}`);
     }
     await this.table!.delete(`id = '${id}'`);
+    // Clean up delta for deleted memory
+    this.recallCountDeltas.delete(id);
     return true;
   }
 
@@ -176,49 +192,85 @@ class MemoryDB {
   async listAll(): Promise<MemoryEntry[]> {
     await this.ensureInitialized();
     const rows = await this.table!.query().toArray();
-    return rows.map((row) => ({
-      id: row.id as string,
-      text: row.text as string,
-      vector: row.vector as number[],
-      importance: row.importance as number,
-      category: row.category as string,
-      createdAt: row.createdAt as number,
-      recallCount: (row.recallCount as number) ?? 0,
-    }));
+    return rows.map((row) => {
+      const id = row.id as string;
+      return {
+        id,
+        text: row.text as string,
+        vector: row.vector as number[],
+        importance: row.importance as number,
+        category: row.category as string,
+        createdAt: row.createdAt as number,
+        recallCount: this.mergeRecallDelta(id, (row.recallCount as number) ?? 0),
+      };
+    });
   }
 
   /**
    * Increment recallCount for given memory IDs (Memory Reinforcement).
-   * Called after auto-recall to strengthen frequently used memories.
+   * SAFE: Only updates in-memory delta map — no DB writes, no data loss risk.
+   * Call flushRecallCounts() periodically to persist to DB.
    */
-  async incrementRecallCount(ids: string[]): Promise<void> {
-    if (ids.length === 0) return;
-    await this.ensureInitialized();
-
+  incrementRecallCount(ids: string[]): void {
     for (const id of ids) {
-      try {
-        const rows = await this.table!.query().where(`id = '${id}'`).toArray();
-        if (rows.length === 0) continue;
-        const row = rows[0];
-
-        // Homeostasis: Prevent duplicates by deleting BEFORE adding
-        // If crash happens here <--- data lost (acceptable trade-off vs duplicates)
-        await this.table!.delete(`id = '${id}'`);
-
-        await this.table!.add([
-          {
-            ...row,
-            recallCount: ((row.recallCount as number) ?? 0) + 1,
-          },
-        ]);
-      } catch {
-        // Best-effort
-      }
+      this.recallCountDeltas.set(id, (this.recallCountDeltas.get(id) ?? 0) + 1);
     }
   }
 
   /**
+   * Flush accumulated recall count deltas to the database (batch).
+   * Should be called periodically (e.g., during consolidation or pruning).
+   * Uses DELETE+INSERT per entry but only when explicitly triggered, not on every recall.
+   */
+  async flushRecallCounts(): Promise<number> {
+    if (this.recallCountDeltas.size === 0) return 0;
+    await this.ensureInitialized();
+
+    let flushed = 0;
+    const idsToFlush = Array.from(this.recallCountDeltas.entries());
+
+    for (const [id, delta] of idsToFlush) {
+      if (delta <= 0) {
+        this.recallCountDeltas.delete(id);
+        continue;
+      }
+      try {
+        const rows = await this.table!.query().where(`id = '${id}'`).toArray();
+        if (rows.length === 0) {
+          this.recallCountDeltas.delete(id);
+          continue;
+        }
+        const row = rows[0];
+
+        await this.table!.delete(`id = '${id}'`);
+        await this.table!.add([
+          {
+            ...row,
+            recallCount: ((row.recallCount as number) ?? 0) + delta,
+          },
+        ]);
+
+        this.recallCountDeltas.delete(id);
+        flushed++;
+      } catch (error) {
+        console.warn(
+          `[memory-hybrid] flushRecallCounts failed for ${id}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+
+    return flushed;
+  }
+
+  /** Number of pending recall count deltas */
+  get pendingRecallFlushCount(): number {
+    return this.recallCountDeltas.size;
+  }
+
+  /**
    * Synaptic Pruning: Remove memories that are old and never recalled.
+   * Also considers in-memory deltas (an entry with pending recalls is NOT "unused").
    * Returns count of deleted memories.
    */
   async deleteOldUnused(days: number): Promise<number> {
@@ -227,15 +279,17 @@ class MemoryDB {
 
     const where = `recallCount = 0 AND createdAt < ${cutoff}`;
 
-    // Count first
-    const toDelete = await this.table!.query().where(where).toArray();
-    const count = toDelete.length;
+    // Get candidates, but filter out any with pending recall deltas
+    const candidates = await this.table!.query().where(where).toArray();
+    const toDelete = candidates.filter((row) => !this.recallCountDeltas.has(row.id as string));
 
-    if (count > 0) {
-      await this.table!.delete(where);
+    if (toDelete.length > 0) {
+      for (const row of toDelete) {
+        await this.table!.delete(`id = '${row.id}'`);
+      }
     }
 
-    return count;
+    return toDelete.length;
   }
 }
 
@@ -524,20 +578,7 @@ const memoryPlugin = {
               };
             }
 
-            // Auto-delete if only one high-confidence match
-            if (results.length === 1 && results[0].score > 0.9) {
-              await db.delete(results[0].entry.id);
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `Forgotten: "${results[0].entry.text}"`,
-                  },
-                ],
-                details: { action: "deleted", id: results[0].entry.id },
-              };
-            }
-
+            // Always show candidates — never auto-delete by vector similarity alone
             const list = results
               .map((r) => `- [${r.entry.id.slice(0, 8)}] ${r.entry.text.slice(0, 60)}...`)
               .join("\n");
@@ -882,12 +923,10 @@ const memoryPlugin = {
             context = context.replace("</relevant-memories>", graphInfo + "\n</relevant-memories>");
           }
 
-          // Memory Reinforcement: boost recalled memories (async, non-blocking)
+          // Memory Reinforcement: boost recalled memories (sync, in-memory only)
           // Uses the SAME search results — no extra API call
           const ids = rawResults.map((r) => r.entry.id);
-          db.incrementRecallCount(ids).catch(() => {
-            /* best-effort reinforcement */
-          });
+          db.incrementRecallCount(ids);
 
           return { prependContext: context };
         } catch (err) {
@@ -1053,6 +1092,12 @@ const memoryPlugin = {
         // Like biological sleep cycles removing toxins
         if (Math.random() < 0.05) {
           try {
+            // Flush recall count deltas before pruning
+            const flushed = await db.flushRecallCounts();
+            if (flushed > 0) {
+              api.logger.info(`memory-hybrid: flushed ${flushed} recall count deltas`);
+            }
+
             const deleted = await db.deleteOldUnused(90); // 90 days TTL
             if (deleted > 0) {
               api.logger.info(`memory-hybrid: auto-pruned ${deleted} unused memories (>90 days)`);
