@@ -591,6 +591,39 @@ function computeRollingSharpe(returns: number[], window: number): number {
   return (mean / std) * Math.sqrt(252);
 }
 
+// Minimal type for cross-extension evolution service access
+type EvolutionStoreLike = {
+  getLatestGeneration(strategyId: string):
+    | {
+        generation: number;
+        fitness: number;
+        survivalTier: string;
+      }
+    | undefined;
+  getAuditLog(opts?: { limit?: number }): Array<{
+    id: string;
+    type: string;
+    strategyId: string;
+    strategyName?: string;
+    detail: string;
+    triggeredBy: string;
+    metadata?: Record<string, unknown>;
+    createdAt: string;
+  }>;
+  getNodeCountByTier(): Record<string, number>;
+  getTotalMutations(): { total: number; successful: number };
+  getActiveNodes(): Array<{
+    strategyId: string;
+    fitness: number;
+    survivalTier: string;
+    generation: number;
+  }>;
+};
+
+type EvolutionServiceLike = {
+  store: EvolutionStoreLike;
+};
+
 /** Gather Strategy Tab data (merged Arena + Lab view). */
 export function gatherStrategyData(deps: DataGatheringDeps) {
   const { runtime, eventStore, riskConfig } = deps;
@@ -603,6 +636,35 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
   const fundManager = runtime.services?.get?.("fin-fund-manager") as FundManagerLike | undefined;
   const fundState = fundManager?.getState?.() ?? { allocations: [], totalCapital: 0 };
 
+  // ── Evolution engine integration ──
+  const evoService = runtime.services?.get?.("fin-evolution-engine") as
+    | EvolutionServiceLike
+    | undefined;
+  const evoStore = evoService?.store;
+
+  // Build per-strategy evolution lookup
+  const evoLookup = new Map<
+    string,
+    { generation: number; fitness: number; survivalTier: string }
+  >();
+  if (evoStore) {
+    try {
+      const activeNodes = evoStore.getActiveNodes();
+      for (const node of activeNodes) {
+        const existing = evoLookup.get(node.strategyId);
+        if (!existing || node.generation > existing.generation) {
+          evoLookup.set(node.strategyId, {
+            generation: node.generation,
+            fitness: node.fitness,
+            survivalTier: node.survivalTier,
+          });
+        }
+      }
+    } catch {
+      // evolution engine may not be loaded
+    }
+  }
+
   // Pipeline breakdown: count by level
   const pipeline = {
     l0: strategies.filter((s) => s.level === "L0_INCUBATE").length,
@@ -613,20 +675,27 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
     total: strategies.length,
   };
 
-  // Strategy details with backtest info
-  const strategyData = strategies.map((s) => ({
-    id: s.id,
-    name: s.name,
-    level: s.level,
-    status: s.status ?? "running",
-    totalReturn: s.lastBacktest?.totalReturn,
-    sharpe: s.lastBacktest?.sharpe,
-    sortino: s.lastBacktest?.sortino,
-    maxDrawdown: s.lastBacktest?.maxDrawdown,
-    winRate: s.lastBacktest?.winRate,
-    profitFactor: s.lastBacktest?.profitFactor,
-    totalTrades: s.lastBacktest?.totalTrades,
-  }));
+  // Strategy details with backtest info + evolution enrichment
+  const strategyData = strategies.map((s) => {
+    const evo = evoLookup.get(s.id);
+    return {
+      id: s.id,
+      name: s.name,
+      level: s.level,
+      status: s.status ?? "running",
+      totalReturn: s.lastBacktest?.totalReturn,
+      sharpe: s.lastBacktest?.sharpe,
+      sortino: s.lastBacktest?.sortino,
+      maxDrawdown: s.lastBacktest?.maxDrawdown,
+      winRate: s.lastBacktest?.winRate,
+      profitFactor: s.lastBacktest?.profitFactor,
+      totalTrades: s.lastBacktest?.totalTrades,
+      // Evolution enrichment (null if engine not loaded or no data)
+      fitness: evo?.fitness ?? null,
+      generation: evo?.generation ?? null,
+      survivalTier: evo?.survivalTier ?? null,
+    };
+  });
 
   // Backtests
   const backtests = strategies.filter((s) => s.lastBacktest).map((s) => s.lastBacktest!);
@@ -651,6 +720,35 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
   // Fitness decay data for L2/L3 strategies
   const decayData = computeDecayData(deps);
 
+  // ── Evolution events + stats ──
+  let evolutionEvents: Array<Record<string, unknown>> = [];
+  let evolutionStats: {
+    byTier: Record<string, number>;
+    mutations: { total: number; successful: number };
+    activeCount: number;
+    avgFitness: number;
+  } | null = null;
+
+  if (evoStore) {
+    try {
+      evolutionEvents = evoStore.getAuditLog({ limit: 50 });
+      const byTier = evoStore.getNodeCountByTier();
+      const mutations = evoStore.getTotalMutations();
+      const activeNodes = evoStore.getActiveNodes();
+      const fitnesses = activeNodes.map((n) => n.fitness);
+      const avgFitness =
+        fitnesses.length > 0 ? fitnesses.reduce((a, b) => a + b, 0) / fitnesses.length : 0;
+      evolutionStats = {
+        byTier,
+        mutations,
+        activeCount: activeNodes.length,
+        avgFitness,
+      };
+    } catch {
+      // evolution engine query failed — non-fatal
+    }
+  }
+
   return {
     pipeline,
     strategies: strategyData,
@@ -673,6 +771,8 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
       confirmThresholdUsd: riskConfig.confirmThresholdUsd,
       maxDailyLossUsd: riskConfig.maxDailyLossUsd,
     },
+    evolutionEvents,
+    evolutionStats,
   };
 }
 

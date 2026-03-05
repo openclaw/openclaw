@@ -1528,27 +1528,51 @@
 
         // ── SSE Handlers ──
         function onEvolutionData(data) {
-          // Evolution SSE pushes strategy list + events
+          // Strategy list from gatherStrategyData — now enriched with evolution fields
           if (data.strategies) state.strategies = data.strategies;
-          if (data.events) {
-            state.evolutionEvents = data.events;
-          } else if (data.event) {
-            state.evolutionEvents.push(data.event);
-            if (state.evolutionEvents.length > 200) {
-              state.evolutionEvents = state.evolutionEvents.slice(-100);
+
+          // Evolution audit log events (from fin-evolution-engine store)
+          if (data.evolutionEvents && Array.isArray(data.evolutionEvents)) {
+            state.evolutionEvents = data.evolutionEvents;
+          }
+
+          // Evolution stats (tier counts, mutations, etc.)
+          if (data.evolutionStats) {
+            state.evolutionStats = data.evolutionStats;
+            // Update mutation pill with real data
+            if (data.evolutionStats.mutations) {
+              $("spMutations").textContent = data.evolutionStats.mutations.total || 0;
+              var mTotal = data.evolutionStats.mutations.total || 0;
+              var mSuccess = data.evolutionStats.mutations.successful || 0;
+              $("spMutRate").textContent =
+                (mTotal > 0 ? ((mSuccess / mTotal) * 100).toFixed(0) : "0") + "% success";
+            }
+            // Update tier bars with real tier counts
+            if (data.evolutionStats.byTier) {
+              var bt = data.evolutionStats.byTier;
+              var maxTier = Math.max(bt.thriving || 0, bt.healthy || 0, bt.stressed || 0, bt.critical || 0, 1);
+              ["thriving", "healthy", "stressed", "critical"].forEach(function (tier) {
+                var pct = ((bt[tier] || 0) / maxTier) * 100;
+                var fillEl = $("tier" + tier.charAt(0).toUpperCase() + tier.slice(1));
+                var countEl = $("tier" + tier.charAt(0).toUpperCase() + tier.slice(1) + "N");
+                if (fillEl) fillEl.style.width = pct.toFixed(0) + "%";
+                if (countEl) countEl.textContent = bt[tier] || 0;
+              });
             }
           }
-          if (data.stats) {
-            // merge evolution stats
-            if (data.stats.byLevel) {
-              $("pipeL0").textContent = data.stats.byLevel.L0 || 0;
-              $("pipeL1").textContent = data.stats.byLevel.L1 || 0;
-              $("pipeL2").textContent = data.stats.byLevel.L2 || 0;
-              $("pipeL3").textContent = data.stats.byLevel.L3 || 0;
-            }
+
+          // Pipeline counts from data.pipeline (gatherStrategyData returns this)
+          if (data.pipeline) {
+            $("pipeL0").textContent = data.pipeline.l0 || 0;
+            $("pipeL1").textContent = data.pipeline.l1 || 0;
+            $("pipeL2").textContent = data.pipeline.l2 || 0;
+            $("pipeL3").textContent = data.pipeline.l3 || 0;
           }
+
           renderEvoStats(state.strategies);
-          renderTierBars(state.strategies);
+          if (!data.evolutionStats || !data.evolutionStats.byTier) {
+            renderTierBars(state.strategies);
+          }
           renderLeaderboard(state.strategies);
           renderPipeline(state.strategies);
           renderFeed((state.evolutionEvents || []).slice().reverse(), state.feedFilter);
