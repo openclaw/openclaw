@@ -86,7 +86,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
 
 const randomIdempotencyKey = vi.fn(() => "rk_test");
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { defaultRuntime, resetRuntimeCapture, runtimeErrors } = createCliRuntimeCapture();
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
@@ -235,7 +235,7 @@ describe("nodes-cli coverage", () => {
 
     expect(invoke).toBeTruthy();
     const invokeCalls = callGateway.mock.calls
-      .map((call) => call[0] as NodeInvokeCall)
+      .map((call) => call[0])
       .filter((call) => call.method === "node.invoke");
     expect(invokeCalls.map((call) => call.params?.command)).toEqual(["system.run"]);
     expect(invoke?.params?.command).toBe("system.run");
@@ -278,7 +278,7 @@ describe("nodes-cli coverage", () => {
 
     expect(invoke).toBeTruthy();
     const invokeCalls = callGateway.mock.calls
-      .map((call) => call[0] as NodeInvokeCall)
+      .map((call) => call[0])
       .filter((call) => call.method === "node.invoke");
     expect(invokeCalls.map((call) => call.params?.command)).toEqual([
       "system.run.prepare",
@@ -292,6 +292,23 @@ describe("nodes-cli coverage", () => {
       agentId: "main",
       sessionKey: null,
     });
+  });
+
+  it("fails before approval when node does not support system.run", async () => {
+    nodeCommands = ["system.which"];
+
+    await expect(
+      runNodesCommand(["nodes", "run", "--node", "mac-1", "echo", "hi"]),
+    ).rejects.toThrow("__exit__:1");
+
+    const invokeCalls = callGateway.mock.calls
+      .map((call) => call[0])
+      .filter((call) => call.method === "node.invoke");
+    expect(invokeCalls).toHaveLength(0);
+    expect(getApprovalRequestCall()).toBeNull();
+    expect(runtimeErrors.join("\n")).toContain(
+      "system.run requires a companion app or node host; the selected node does not support system.run.",
+    );
   });
 
   it("invokes system.notify with provided fields", async () => {

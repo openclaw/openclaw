@@ -695,7 +695,7 @@ export function createNodesTool(options?: {
             }
             const runParams = {
               command: prepared.plan.argv,
-              rawCommand: prepared.plan.rawCommand ?? prepared.cmdText,
+              rawCommand: prepared.plan.rawCommand,
               cwd: prepared.plan.cwd ?? cwd,
               env,
               timeoutMs: commandTimeoutMs,

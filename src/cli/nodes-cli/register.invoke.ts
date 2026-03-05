@@ -152,6 +152,13 @@ async function prepareNodesRunContext(params: {
   const timeoutMs = parseTimeoutMs(params.opts.commandTimeout);
   const invokeTimeout = parseTimeoutMs(params.opts.invokeTimeout);
   const nodeRuntime = await resolveNodeRuntimeInfo(params.opts, params.nodeId);
+  const supportsSystemRun =
+    nodeRuntime.commands === null || nodeRuntime.commands.includes("system.run");
+  if (!supportsSystemRun) {
+    throw new Error(
+      "system.run requires a companion app or node host; the selected node does not support system.run.",
+    );
+  }
 
   let argv = Array.isArray(params.command) ? params.command : [];
   let rawCommand: string | undefined;

@@ -688,6 +688,36 @@ describe("nodes run", () => {
     expectFirstTextContains(result, '"stdout": "ok\\n"');
   });
 
+  it("keeps rawCommand null for shell-wrapper argv fallback", async () => {
+    callGateway.mockImplementation(async ({ method, params: gatewayParams }: GatewayCall) => {
+      if (method === "node.list") {
+        return mockNodeList({ commands: ["system.run"] });
+      }
+      if (method === "node.invoke") {
+        expect(gatewayParams).toMatchObject({
+          nodeId: NODE_ID,
+          command: "system.run",
+          params: {
+            command: ["bash", "-lc", "echo hi"],
+            rawCommand: null,
+          },
+        });
+        return {
+          payload: { stdout: "ok\n", stderr: "", exitCode: 0, success: true },
+        };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes({
+      action: "run",
+      node: NODE_ID,
+      command: ["bash", "-lc", "echo hi"],
+    });
+
+    expectFirstTextContains(result, '"stdout": "ok\\n"');
+  });
+
   it("passes invoke and command timeouts", async () => {
     setupSystemRunGateway({
       prepareCwd: "/tmp",
