@@ -99,4 +99,15 @@ describe("channels dock", () => {
 
     expect(formatted).toEqual(["user", "foo", "plain"]);
   });
+
+  it("line allowFrom formatter trims, strips prefixes, and lowercases", () => {
+    const lineDock = getChannelDock("line");
+
+    const formatted = lineDock?.config?.formatAllowFrom?.({
+      cfg: emptyConfig(),
+      allowFrom: [" LINE:user:U123 ", "line:U456", "U789"],
+    });
+
+    expect(formatted).toEqual(["u123", "u456", "u789"]);
+  });
 });

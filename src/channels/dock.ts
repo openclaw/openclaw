@@ -13,6 +13,7 @@ import {
 } from "../plugin-sdk/channel-config-helpers.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import { resolveLineAccount } from "../line/accounts.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
 import { resolveSlackAccount, resolveSlackReplyToMode } from "../slack/accounts.js";
 import { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
@@ -277,6 +278,54 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           currentMessageId,
           hasRepliedRef,
         };
+      },
+    },
+  },
+  line: {
+    id: "line",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      media: true,
+      blockStreaming: true,
+    },
+    outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
+    config: {
+      resolveAllowFrom: ({ cfg, accountId }) =>
+        stringifyAllowFrom(resolveLineAccount({ cfg, accountId }).config.allowFrom ?? []),
+      formatAllowFrom: ({ allowFrom }) =>
+        trimAllowFromEntries(allowFrom)
+          .map((entry) =>
+            entry
+              .replace(/^line:/i, "")
+              .replace(/^user:/i, ""),
+          )
+          .map((entry) => entry.toLowerCase()),
+    },
+    groups: {
+      resolveRequireMention: ({ cfg, accountId, groupId }) => {
+        if (!groupId) {
+          return true;
+        }
+        return resolveChannelGroupRequireMention({
+          cfg,
+          channel: "line",
+          groupId,
+          accountId,
+        });
+      },
+      resolveToolPolicy: ({ cfg, accountId, groupId, senderId, senderName, senderUsername }) => {
+        if (!groupId) {
+          return undefined;
+        }
+        return resolveChannelGroupToolsPolicy({
+          cfg,
+          channel: "line",
+          groupId,
+          accountId,
+          senderId,
+          senderName,
+          senderUsername,
+        });
       },
     },
   },

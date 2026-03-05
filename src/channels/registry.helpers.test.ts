@@ -11,6 +11,7 @@ describe("channel registry helpers", () => {
     expect(normalizeChatChannelId("gchat")).toBe("googlechat");
     expect(normalizeChatChannelId("google-chat")).toBe("googlechat");
     expect(normalizeChatChannelId("internet-relay-chat")).toBe("irc");
+    expect(normalizeChatChannelId("line")).toBe("line");
     expect(normalizeChatChannelId("telegram")).toBe("telegram");
     expect(normalizeChatChannelId("web")).toBeNull();
     expect(normalizeChatChannelId("nope")).toBeNull();
