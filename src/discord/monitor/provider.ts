@@ -666,6 +666,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   // Timeout to detect zombie connections where HELLO is never received.
   const HELLO_TIMEOUT_MS = 30000;
   let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  let initialConnectionDone = false;
+  let reconnectRecoveryId: ReturnType<typeof setTimeout> | undefined;
+  const RECONNECT_RECOVERY_DELAY_MS = 5000; // Wait for RESUME replay before checking
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
     if (!message.includes("WebSocket connection opened")) {
@@ -686,6 +689,38 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       }
       helloTimeoutId = undefined;
     }, HELLO_TIMEOUT_MS);
+
+    // After a reconnect (not the initial connection), run recovery to catch
+    // any messages missed during the disconnect window. We delay a few seconds
+    // to let RESUME replay events first — if RESUME succeeded, recovery will
+    // find no unanswered messages and exit cleanly.
+    if (!initialConnectionDone) {
+      initialConnectionDone = true;
+      return;
+    }
+    if (!discordCfg.startupRecovery) {
+      return;
+    }
+    if (reconnectRecoveryId) {
+      clearTimeout(reconnectRecoveryId);
+    }
+    reconnectRecoveryId = setTimeout(() => {
+      reconnectRecoveryId = undefined;
+      runtime.log?.("discord: running reconnect recovery after WebSocket reconnection");
+      runStartupRecovery({
+        rest: client.rest,
+        cfg,
+        discordConfig: discordCfg,
+        accountId: account.accountId,
+        botUserId,
+        runtime,
+        messageHandler,
+        client,
+        allowFrom,
+      }).catch((err) => {
+        runtime.log?.(`discord reconnect-recovery failed: ${formatErrorMessage(err)}`);
+      });
+    }, RECONNECT_RECOVERY_DELAY_MS);
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
   try {
@@ -716,6 +751,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     stopGatewayLogging();
     if (helloTimeoutId) {
       clearTimeout(helloTimeoutId);
+    }
+    if (reconnectRecoveryId) {
+      clearTimeout(reconnectRecoveryId);
     }
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
     abortSignal?.removeEventListener("abort", onAbort);
