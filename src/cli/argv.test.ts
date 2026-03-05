@@ -281,6 +281,26 @@ describe("argv helpers", () => {
     );
   });
 
+  it("treats OPENCLAW_VERBOSE env as verbose when no --verbose/--debug flag", () => {
+    const prev = process.env.OPENCLAW_VERBOSE;
+    try {
+      process.env.OPENCLAW_VERBOSE = "1";
+      expect(getVerboseFlag(["node", "openclaw", "status"])).toBe(true);
+      process.env.OPENCLAW_VERBOSE = "true";
+      expect(getVerboseFlag(["node", "openclaw", "status"])).toBe(true);
+      delete process.env.OPENCLAW_VERBOSE;
+      expect(getVerboseFlag(["node", "openclaw", "status"])).toBe(false);
+      process.env.OPENCLAW_VERBOSE = "0";
+      expect(getVerboseFlag(["node", "openclaw", "status"])).toBe(false);
+    } finally {
+      if (prev !== undefined) {
+        process.env.OPENCLAW_VERBOSE = prev;
+      } else {
+        delete process.env.OPENCLAW_VERBOSE;
+      }
+    }
+  });
+
   it.each([
     {
       name: "missing flag",
