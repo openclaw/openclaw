@@ -424,12 +424,27 @@ const saveSessionToMemory: HookHandler = async (event) => {
         return;
       }
     } else {
-      await writeFileWithinRoot({
-        rootDir: workspaceDir,
-        relativePath: writeRelativePath,
-        data: entry,
-        encoding: "utf-8",
-      });
+      // Non-redirect writes use memory/ as the containment root (narrower than
+      // workspace/) so a misbehaving slug generator can't write outside memory/.
+      const memoryDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      try {
+        await writeFileWithinRoot({
+          rootDir: memoryDir,
+          relativePath: filename,
+          data: entry,
+          encoding: "utf-8",
+        });
+      } catch (writeErr) {
+        if (writeErr instanceof SafeOpenError) {
+          log.warn("Non-redirect session save rejected by path validation", {
+            errorCode: writeErr.code,
+            filename,
+          });
+          return;
+        }
+        throw writeErr;
+      }
       log.debug("Memory file written successfully");
     }
 
