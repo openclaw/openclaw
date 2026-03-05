@@ -129,6 +129,26 @@ describe("lookupContextTokens", () => {
     ).toBe(200_000);
   });
 
+  it("prefers configured bare-id overrides over discovered provider-qualified windows", async () => {
+    mockDiscoveryDeps(
+      [{ provider: "customprovider", id: "llama-3.1-8b", contextWindow: 8_192 }],
+      {
+        customprovider: {
+          models: [{ id: "llama-3.1-8b", contextWindow: 131_072 }],
+        },
+      },
+    );
+
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+    expect(
+      resolveContextTokensForModel({
+        provider: "customprovider",
+        model: "llama-3.1-8b",
+        fallbackContextTokens: 4_096,
+      }),
+    ).toBe(131_072);
+  });
+
   it("only warms eagerly for real openclaw startup commands that need model metadata", async () => {
     const argvSnapshot = process.argv;
     try {
