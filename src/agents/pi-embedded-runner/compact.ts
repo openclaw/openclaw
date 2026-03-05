@@ -663,6 +663,25 @@ export async function compactEmbeddedPiSessionDirect(
           );
         }
 
+        // Early check: skip compaction entirely if no real conversation messages exist.
+        // This prevents unnecessary LLM API calls when using safeguard mode.
+        // The safeguard plugin also checks, but this local check runs earlier in the flow.
+        const hasRealMessages = session.messages.some(
+          (msg) =>
+            msg.role === "user" || msg.role === "assistant" || msg.role === "toolResult",
+        );
+        if (!hasRealMessages) {
+          log.info(
+            `[compaction-diag] skip runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+              `diagId=${diagId} trigger=${trigger} reason=no_real_messages`,
+          );
+          return {
+            ok: true,
+            compacted: false,
+            reason: "no_compactable_entries",
+          };
+        }
+
         const compactStartedAt = Date.now();
         const result = await compactWithSafetyTimeout(() =>
           session.compact(params.customInstructions),
