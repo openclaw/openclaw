@@ -64,6 +64,23 @@ describe("media store", () => {
     });
   });
 
+  it("rejects empty buffer", async () => {
+    await withTempStore(async (store) => {
+      await expect(store.saveMediaBuffer(Buffer.alloc(0), "text/plain")).rejects.toThrow(
+        "non-empty Buffer",
+      );
+    });
+  });
+
+  it('rejects 4-byte "null" literal buffer', async () => {
+    await withTempStore(async (store) => {
+      const nullBuf = Buffer.from("null");
+      await expect(store.saveMediaBuffer(nullBuf, "application/pdf")).rejects.toThrow(
+        '"null" literal',
+      );
+    });
+  });
+
   it("copies local files and cleans old media", async () => {
     await withTempStore(async (store, home) => {
       const srcFile = path.join(home, "tmp-src.txt");

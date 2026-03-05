@@ -297,6 +297,8 @@ export async function saveMediaSource(
   }
 }
 
+const NULL_LITERAL = Buffer.from("null");
+
 export async function saveMediaBuffer(
   buffer: Buffer,
   contentType?: string,
@@ -304,6 +306,12 @@ export async function saveMediaBuffer(
   maxBytes = MAX_BYTES,
   originalFilename?: string,
 ): Promise<SavedMedia> {
+  if (!Buffer.isBuffer(buffer) || buffer.byteLength === 0) {
+    throw new Error("saveMediaBuffer requires a non-empty Buffer");
+  }
+  if (buffer.byteLength <= 4 && buffer.equals(NULL_LITERAL)) {
+    throw new Error('saveMediaBuffer received a 4-byte "null" literal instead of real content');
+  }
   if (buffer.byteLength > maxBytes) {
     throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
   }
