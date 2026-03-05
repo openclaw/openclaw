@@ -2,13 +2,14 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { applyGoogleTurnOrderingFix } from "./pi-embedded-runner.js";
+import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
 describe("applyGoogleTurnOrderingFix", () => {
   const makeAssistantFirst = (): AgentMessage[] => [
-    {
+    castAgentMessage({
       role: "assistant",
       content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as unknown as AgentMessage,
+    }),
   ];
 
   it("prepends a bootstrap once and records a marker for Google models", () => {

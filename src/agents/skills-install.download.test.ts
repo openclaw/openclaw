@@ -260,12 +260,34 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
         label: "rejects archives containing symlinks",
         name: "tbz2-symlink",
         url: "https://example.invalid/evil.tbz2",
-        listOutput: "link\nlink/pwned.txt\n",
+        listOutput: "link\n",
         verboseListOutput: "lrwxr-xr-x  0 0 0 0 Jan  1 00:00 link -> ../outside\n",
         extract: "reject" as const,
         expectedOk: false,
         expectedExtract: false,
         expectedStderrSubstring: "link",
+      },
+      {
+        label: "rejects archives containing FIFO entries",
+        name: "tbz2-fifo",
+        url: "https://example.invalid/evil.tbz2",
+        listOutput: "evil-fifo\n",
+        verboseListOutput: "prw-r--r--  0 0 0 0 Jan  1 00:00 evil-fifo\n",
+        extract: "reject" as const,
+        expectedOk: false,
+        expectedExtract: false,
+        expectedStderrSubstring: "link",
+      },
+      {
+        label: "rejects oversized extracted entries",
+        name: "tbz2-oversized",
+        url: "https://example.invalid/oversized.tbz2",
+        listOutput: "big.bin\n",
+        verboseListOutput: "-rw-r--r--  0 0 0 314572800 Jan  1 00:00 big.bin\n",
+        extract: "reject" as const,
+        expectedOk: false,
+        expectedExtract: false,
+        expectedStderrSubstring: "archive entry extracted size exceeds limit",
       },
       {
         label: "extracts safe archives with stripComponents",
@@ -321,5 +343,45 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
         );
       }
     }
+  });
+
+  it("rejects tar.bz2 archives that change after preflight", async () => {
+    const entry = buildEntry("tbz2-preflight-change");
+    const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
+    const commandCallCount = runCommandWithTimeoutMock.mock.calls.length;
+
+    mockArchiveResponse(new Uint8Array([1, 2, 3]));
+
+    runCommandWithTimeoutMock.mockImplementation(async (...argv: unknown[]) => {
+      const cmd = (argv[0] ?? []) as string[];
+      if (cmd[0] === "tar" && cmd[1] === "tf") {
+        return runCommandResult({ stdout: "package/hello.txt\n" });
+      }
+      if (cmd[0] === "tar" && cmd[1] === "tvf") {
+        const archivePath = String(cmd[2] ?? "");
+        if (archivePath) {
+          await fs.appendFile(archivePath, "mutated");
+        }
+        return runCommandResult({ stdout: "-rw-r--r--  0 0 0 0 Jan  1 00:00 package/hello.txt\n" });
+      }
+      if (cmd[0] === "tar" && cmd[1] === "xf") {
+        throw new Error("should not extract");
+      }
+      return runCommandResult();
+    });
+
+    const result = await installDownloadSkill({
+      name: "tbz2-preflight-change",
+      url: "https://example.invalid/change.tbz2",
+      archive: "tar.bz2",
+      targetDir,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("changed during safety preflight");
+    const extractionAttempted = runCommandWithTimeoutMock.mock.calls
+      .slice(commandCallCount)
+      .some((call) => (call[0] as string[])[1] === "xf");
+    expect(extractionAttempted).toBe(false);
   });
 });

@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/lobster";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../../../src/plugins/types.js";
 import {
   createWindowsCmdShimFixture,
   restorePlatformPathEnv,
@@ -17,9 +17,13 @@ const spawnState = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnState.spawn(...args),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: (...args: unknown[]) => spawnState.spawn(...args),
+  };
+});
 
 let createLobsterTool: typeof import("./lobster-tool.js").createLobsterTool;
 
@@ -34,7 +38,6 @@ function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi 
     runtime: { version: "test" } as any,
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     registerTool() {},
-    registerHttpHandler() {},
     registerChannel() {},
     registerGatewayMethod() {},
     registerCli() {},

@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import type {
   EndReason,
+  GetCallStatusInput,
+  GetCallStatusResult,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
@@ -165,5 +167,13 @@ export class MockProvider implements VoiceCallProvider {
 
   async stopListening(_input: StopListeningInput): Promise<void> {
     // No-op for mock
+  }
+
+  async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
+    const id = input.providerCallId.toLowerCase();
+    if (id.includes("stale") || id.includes("ended") || id.includes("completed")) {
+      return { status: "completed", isTerminal: true };
+    }
+    return { status: "in-progress", isTerminal: false };
   }
 }
