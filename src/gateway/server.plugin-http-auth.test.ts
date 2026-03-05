@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
+import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
 import {
   AUTH_NONE,
@@ -449,6 +450,56 @@ describe("gateway plugin HTTP auth boundary", () => {
         expect(response.res.statusCode).toBe(200);
         expect(response.getBody()).toBe("plugin-webhook");
         expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
+  test("runs plugin webhooks before root-mounted canvas host method guard", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (req.method !== "POST" || pathname !== "/googlechat") {
+        return false;
+      }
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("plugin-webhook");
+      return true;
+    });
+
+    const canvasHttpHandler = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.statusCode = 405;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Method Not Allowed");
+        return true;
+      }
+      return false;
+    });
+    const rootMountedCanvasHost: CanvasHostHandler = {
+      rootDir: "/tmp/openclaw-canvas-test",
+      basePath: "/",
+      handleHttpRequest: canvasHttpHandler,
+      handleUpgrade: () => false,
+      close: async () => {},
+    };
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-canvas-root-post-test-",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        canvasHost: rootMountedCanvasHost,
+        handlePluginRequest,
+      },
+      run: async (server) => {
+        const response = await sendRequest(server, {
+          path: "/googlechat",
+          method: "POST",
+        });
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe("plugin-webhook");
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+        expect(canvasHttpHandler).not.toHaveBeenCalled();
       },
     });
   });
