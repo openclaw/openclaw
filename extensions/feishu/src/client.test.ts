@@ -43,12 +43,15 @@ import {
   createFeishuWSClient,
   clearClientCache,
   FEISHU_HTTP_TIMEOUT_MS,
+  FEISHU_HTTP_TIMEOUT_MAX_MS,
+  FEISHU_HTTP_TIMEOUT_ENV_VAR,
 } from "./client.js";
 
 const proxyEnvKeys = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] as const;
 type ProxyEnvKey = (typeof proxyEnvKeys)[number];
 
 let priorProxyEnv: Partial<Record<ProxyEnvKey, string | undefined>> = {};
+let priorFeishuTimeoutEnv: string | undefined;
 
 const baseAccount: ResolvedFeishuAccount = {
   accountId: "main",
@@ -68,6 +71,8 @@ function firstWsClientOptions(): { agent?: unknown } {
 
 beforeEach(() => {
   priorProxyEnv = {};
+  priorFeishuTimeoutEnv = process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
+  delete process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
   for (const key of proxyEnvKeys) {
     priorProxyEnv[key] = process.env[key];
     delete process.env[key];
@@ -83,6 +88,11 @@ afterEach(() => {
     } else {
       process.env[key] = value;
     }
+  }
+  if (priorFeishuTimeoutEnv === undefined) {
+    delete process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
+  } else {
+    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = priorFeishuTimeoutEnv;
   }
 });
 
@@ -135,6 +145,121 @@ describe("createFeishuClient HTTP timeout", () => {
     expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
       "https://example.com/api",
       expect.objectContaining({ timeout: 5_000 }),
+    );
+  });
+
+  it("uses config-configured default timeout when provided", async () => {
+    createFeishuClient({
+      appId: "app_4",
+      appSecret: "secret_4",
+      accountId: "timeout-config",
+      config: { httpTimeoutMs: 45_000 },
+    });
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
+    };
+    const httpInstance = lastCall.httpInstance;
+
+    await httpInstance.get("https://example.com/api");
+
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ timeout: 45_000 }),
+    );
+  });
+
+  it("falls back to default timeout when configured timeout is invalid", async () => {
+    createFeishuClient({
+      appId: "app_5",
+      appSecret: "secret_5",
+      accountId: "timeout-config-invalid",
+      config: { httpTimeoutMs: -1 },
+    });
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
+    };
+    const httpInstance = lastCall.httpInstance;
+
+    await httpInstance.get("https://example.com/api");
+
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ timeout: FEISHU_HTTP_TIMEOUT_MS }),
+    );
+  });
+
+  it("uses env timeout override when provided", async () => {
+    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = "60000";
+
+    createFeishuClient({
+      appId: "app_8",
+      appSecret: "secret_8",
+      accountId: "timeout-env-override",
+      config: { httpTimeoutMs: 45_000 },
+    });
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
+    };
+    await lastCall.httpInstance.get("https://example.com/api");
+
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ timeout: 60_000 }),
+    );
+  });
+
+  it("clamps env timeout override to max bound", async () => {
+    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = String(FEISHU_HTTP_TIMEOUT_MAX_MS + 123_456);
+
+    createFeishuClient({
+      appId: "app_9",
+      appSecret: "secret_9",
+      accountId: "timeout-env-clamp",
+    });
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
+    };
+    await lastCall.httpInstance.get("https://example.com/api");
+
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ timeout: FEISHU_HTTP_TIMEOUT_MAX_MS }),
+    );
+  });
+
+  it("recreates cached client when configured timeout changes", async () => {
+    createFeishuClient({
+      appId: "app_6",
+      appSecret: "secret_6",
+      accountId: "timeout-cache-change",
+      config: { httpTimeoutMs: 30_000 },
+    });
+    createFeishuClient({
+      appId: "app_6",
+      appSecret: "secret_6",
+      accountId: "timeout-cache-change",
+      config: { httpTimeoutMs: 45_000 },
+    });
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBe(2);
+
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
+    };
+    await lastCall.httpInstance.get("https://example.com/api");
+
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ timeout: 45_000 }),
     );
   });
 });

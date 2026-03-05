@@ -9,6 +9,8 @@ import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 
+const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
+
 export type DownloadImageResult = {
   buffer: Buffer;
   contentType?: string;
@@ -101,6 +103,7 @@ export async function downloadImageFeishu(params: {
 
   const response = await client.im.image.get({
     path: { image_key: normalizedImageKey },
+    timeout: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
   });
 
   const buffer = await readFeishuResponseBuffer({
@@ -137,6 +140,7 @@ export async function downloadMessageResourceFeishu(params: {
   const response = await client.im.messageResource.get({
     path: { message_id: messageId, file_key: normalizedFileKey },
     params: { type },
+    timeout: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
   });
 
   const buffer = await readFeishuResponseBuffer({
@@ -189,6 +193,7 @@ export async function uploadImageFeishu(params: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
       image: imageData as any,
     },
+    timeout: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
   });
 
   // SDK v1.30+ returns data directly without code wrapper on success
@@ -260,6 +265,7 @@ export async function uploadFileFeishu(params: {
       file: fileData as any,
       ...(duration !== undefined && { duration }),
     },
+    timeout: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
   });
 
   // SDK v1.30+ returns data directly without code wrapper on success

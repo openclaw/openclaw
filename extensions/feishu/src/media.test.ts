@@ -10,6 +10,7 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 
 const fileCreateMock = vi.hoisted(() => vi.fn());
+const imageCreateMock = vi.hoisted(() => vi.fn());
 const imageGetMock = vi.hoisted(() => vi.fn());
 const messageCreateMock = vi.hoisted(() => vi.fn());
 const messageResourceGetMock = vi.hoisted(() => vi.fn());
@@ -75,6 +76,7 @@ describe("sendMediaFeishu msg_type routing", () => {
           create: fileCreateMock,
         },
         image: {
+          create: imageCreateMock,
           get: imageGetMock,
         },
         message: {
@@ -90,6 +92,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     fileCreateMock.mockResolvedValue({
       code: 0,
       data: { file_key: "file_key_1" },
+    });
+    imageCreateMock.mockResolvedValue({
+      code: 0,
+      data: { image_key: "image_key_1" },
     });
 
     messageCreateMock.mockResolvedValue({
@@ -172,6 +178,26 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ msg_type: "file" }),
+      }),
+    );
+  });
+
+  it("uses image upload timeout override for image media", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("image"),
+      fileName: "photo.png",
+    });
+
+    expect(imageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeout: 120_000,
+      }),
+    );
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "image" }),
       }),
     );
   });
@@ -291,6 +317,12 @@ describe("sendMediaFeishu msg_type routing", () => {
       imageKey,
     });
 
+    expect(imageGetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { image_key: imageKey },
+        timeout: 120_000,
+      }),
+    );
     expect(result.buffer).toEqual(Buffer.from("image-data"));
     expect(capturedPath).toBeDefined();
     expectPathIsolatedToTmpRoot(capturedPath as string, imageKey);
@@ -476,10 +508,13 @@ describe("downloadMessageResourceFeishu", () => {
       type: "file",
     });
 
-    expect(messageResourceGetMock).toHaveBeenCalledWith({
-      path: { message_id: "om_audio_msg", file_key: "file_key_audio" },
-      params: { type: "file" },
-    });
+    expect(messageResourceGetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { message_id: "om_audio_msg", file_key: "file_key_audio" },
+        params: { type: "file" },
+        timeout: 120_000,
+      }),
+    );
     expect(result.buffer).toBeInstanceOf(Buffer);
   });
 
@@ -493,10 +528,13 @@ describe("downloadMessageResourceFeishu", () => {
       type: "image",
     });
 
-    expect(messageResourceGetMock).toHaveBeenCalledWith({
-      path: { message_id: "om_img_msg", file_key: "img_key_1" },
-      params: { type: "image" },
-    });
+    expect(messageResourceGetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { message_id: "om_img_msg", file_key: "img_key_1" },
+        params: { type: "image" },
+        timeout: 120_000,
+      }),
+    );
     expect(result.buffer).toBeInstanceOf(Buffer);
   });
 });
