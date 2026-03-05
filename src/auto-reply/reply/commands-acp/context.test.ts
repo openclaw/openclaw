@@ -27,8 +27,49 @@ describe("commands-acp context", () => {
       accountId: "work",
       threadId: "thread-42",
       conversationId: "thread-42",
+      parentConversationId: "parent-1",
     });
     expect(isAcpCommandDiscordChannel(params)).toBe(true);
+  });
+
+  it("resolves discord thread parent from ParentSessionKey when targets point at the thread", () => {
+    const params = buildCommandTestParams("/acp sessions", baseCfg, {
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:thread-42",
+      AccountId: "work",
+      MessageThreadId: "thread-42",
+      ParentSessionKey: "agent:codex:discord:channel:parent-9",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "discord",
+      accountId: "work",
+      threadId: "thread-42",
+      conversationId: "thread-42",
+      parentConversationId: "parent-9",
+    });
+  });
+
+  it("resolves discord thread parent from native context when ParentSessionKey is absent", () => {
+    const params = buildCommandTestParams("/acp sessions", baseCfg, {
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:thread-42",
+      AccountId: "work",
+      MessageThreadId: "thread-42",
+      ThreadParentId: "parent-11",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "discord",
+      accountId: "work",
+      threadId: "thread-42",
+      conversationId: "thread-42",
+      parentConversationId: "parent-11",
+    });
   });
 
   it("falls back to default account and target-derived conversation id", () => {
@@ -47,5 +88,24 @@ describe("commands-acp context", () => {
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
     expect(isAcpCommandDiscordChannel(params)).toBe(false);
+  });
+
+  it("builds canonical telegram topic conversation ids from originating chat + thread", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:-1001234567890",
+      MessageThreadId: "42",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      threadId: "42",
+      conversationId: "-1001234567890:topic:42",
+      parentConversationId: "-1001234567890",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("-1001234567890:topic:42");
   });
 });
