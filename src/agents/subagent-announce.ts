@@ -149,6 +149,9 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
+  /request failed with status code 400/i,
+  /invalid\s+(?:open_id|user_id|chat_id|receive_id)/i,
+  /receive_id\s+.*\s+not\s+exist/i,
 ];
 
 function isTransientAnnounceDeliveryError(error: unknown): boolean {
