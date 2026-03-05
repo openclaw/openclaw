@@ -30,6 +30,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How long does install and onboarding usually take?](#how-long-does-install-and-onboarding-usually-take)
   - [Installer stuck? How do I get more feedback?](#installer-stuck-how-do-i-get-more-feedback)
   - [Windows install says git not found or openclaw not recognized](#windows-install-says-git-not-found-or-openclaw-not-recognized)
+  - [Windows exec output shows garbled Chinese text what should I do](#windows-exec-output-shows-garbled-chinese-text-what-should-i-do)
   - [The docs didn't answer my question - how do I get a better answer?](#the-docs-didnt-answer-my-question-how-do-i-get-a-better-answer)
   - [How do I install OpenClaw on Linux?](#how-do-i-install-openclaw-on-linux)
   - [How do I install OpenClaw on a VPS?](#how-do-i-install-openclaw-on-a-vps)
@@ -100,6 +101,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [I set `gateway.bind: "lan"` (or `"tailnet"`) and now nothing listens / the UI says unauthorized](#i-set-gatewaybind-lan-or-tailnet-and-now-nothing-listens-the-ui-says-unauthorized)
   - [Why do I need a token on localhost now?](#why-do-i-need-a-token-on-localhost-now)
   - [Do I have to restart after changing config?](#do-i-have-to-restart-after-changing-config)
+  - [How do I disable funny CLI taglines?](#how-do-i-disable-funny-cli-taglines)
   - [How do I enable web search (and web fetch)?](#how-do-i-enable-web-search-and-web-fetch)
   - [config.apply wiped my config. How do I recover and avoid this?](#configapply-wiped-my-config-how-do-i-recover-and-avoid-this)
   - [How do I run a central Gateway with specialized workers across devices?](#how-do-i-run-a-central-gateway-with-specialized-workers-across-devices)
@@ -146,7 +148,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I switch models on the fly (without restarting)?](#how-do-i-switch-models-on-the-fly-without-restarting)
   - [Can I use GPT 5.2 for daily tasks and Codex 5.3 for coding](#can-i-use-gpt-52-for-daily-tasks-and-codex-53-for-coding)
   - [Why do I see "Model … is not allowed" and then no reply?](#why-do-i-see-model-is-not-allowed-and-then-no-reply)
-  - [Why do I see "Unknown model: minimax/MiniMax-M2.1"?](#why-do-i-see-unknown-model-minimaxminimaxm21)
+  - [Why do I see "Unknown model: minimax/MiniMax-M2.5"?](#why-do-i-see-unknown-model-minimaxminimaxm25)
   - [Can I use MiniMax as my default and OpenAI for complex tasks?](#can-i-use-minimax-as-my-default-and-openai-for-complex-tasks)
   - [Are opus / sonnet / gpt built-in shortcuts?](#are-opus-sonnet-gpt-builtin-shortcuts)
   - [How do I define/override model shortcuts (aliases)?](#how-do-i-defineoverride-model-shortcuts-aliases)
@@ -578,11 +580,39 @@ Two common Windows issues:
   npm config get prefix
   ```
 
-- Ensure `<prefix>\\bin` is on PATH (on most systems it is `%AppData%\\npm`).
+- Add that directory to your user PATH (no `\bin` suffix needed on Windows; on most systems it is `%AppData%\npm`).
 - Close and reopen PowerShell after updating PATH.
 
 If you want the smoothest Windows setup, use **WSL2** instead of native Windows.
 Docs: [Windows](/platforms/windows).
+
+### Windows exec output shows garbled Chinese text what should I do
+
+This is usually a console code page mismatch on native Windows shells.
+
+Symptoms:
+
+- `system.run`/`exec` output renders Chinese as mojibake
+- The same command looks fine in another terminal profile
+
+Quick workaround in PowerShell:
+
+```powershell
+chcp 65001
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+```
+
+Then restart the Gateway and retry your command:
+
+```powershell
+openclaw gateway restart
+```
+
+If you still reproduce this on latest OpenClaw, track/report it in:
+
+- [Issue #30640](https://github.com/openclaw/openclaw/issues/30640)
 
 ### The docs didn't answer my question how do I get a better answer
 
@@ -659,7 +689,7 @@ Docs: [Update](/cli/update), [Updating](/install/updating).
 
 `openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
 
-- **Model/auth setup** (Anthropic **setup-token** recommended for Claude subscriptions, OpenAI Codex OAuth supported, API keys optional, LM Studio local models supported)
+- **Model/auth setup** (provider OAuth/setup-token flows and API keys supported, plus local model options such as LM Studio)
 - **Workspace** location + bootstrap files
 - **Gateway settings** (bind/port/auth/tailscale)
 - **Providers** (WhatsApp, Telegram, Discord, Mattermost (plugin), Signal, iMessage)
@@ -674,6 +704,10 @@ No. You can run OpenClaw with **API keys** (Anthropic/OpenAI/others) or with
 **local-only models** so your data stays on your device. Subscriptions (Claude
 Pro/Max or OpenAI Codex) are optional ways to authenticate those providers.
 
+If you choose Anthropic subscription auth, decide for yourself whether to use it:
+Anthropic has blocked some subscription usage outside Claude Code in the past.
+OpenAI Codex OAuth is explicitly supported for external tools like OpenClaw.
+
 Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
 [Local models](/gateway/local-models), [Models](/concepts/models).
 
@@ -683,9 +717,9 @@ Yes. You can authenticate with a **setup-token**
 instead of an API key. This is the subscription path.
 
 Claude Pro/Max subscriptions **do not include an API key**, so this is the
-correct approach for subscription accounts. Important: you must verify with
-Anthropic that this usage is allowed under their subscription policy and terms.
-If you want the most explicit, supported path, use an Anthropic API key.
+technical path for subscription accounts. But this is your decision: Anthropic
+has blocked some subscription usage outside Claude Code in the past.
+If you want the clearest and safest supported path for production, use an Anthropic API key.
 
 ### How does Anthropic setuptoken auth work
 
@@ -705,17 +739,27 @@ Copy the token it prints, then choose **Anthropic token (paste setup-token)** in
 
 Yes - via **setup-token**. OpenClaw no longer reuses Claude Code CLI OAuth tokens; use a setup-token or an Anthropic API key. Generate the token anywhere and paste it on the gateway host. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
-Note: Claude subscription access is governed by Anthropic's terms. For production or multi-user workloads, API keys are usually the safer choice.
+Important: this is technical compatibility, not a policy guarantee. Anthropic
+has blocked some subscription usage outside Claude Code in the past.
+You need to decide whether to use it and verify Anthropic's current terms.
+For production or multi-user workloads, Anthropic API key auth is the safer, recommended choice.
 
 ### Why am I seeing HTTP 429 ratelimiterror from Anthropic
 
 That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
-use a **Claude subscription** (setup-token or Claude Code OAuth), wait for the window to
+use a **Claude subscription** (setup-token), wait for the window to
 reset or upgrade your plan. If you use an **Anthropic API key**, check the Anthropic Console
 for usage/billing and raise limits as needed.
 
+If the message is specifically:
+`Extra usage is required for long context requests`, the request is trying to use
+Anthropic's 1M context beta (`context1m: true`). That only works when your
+credential is eligible for long-context billing (API key billing or subscription
+with Extra Usage enabled).
+
 Tip: set a **fallback model** so OpenClaw can keep replying while a provider is rate-limited.
-See [Models](/cli/models) and [OAuth](/concepts/oauth).
+See [Models](/cli/models), [OAuth](/concepts/oauth), and
+[/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context](/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context).
 
 ### Is AWS Bedrock supported
 
@@ -727,8 +771,9 @@ OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). The wizar
 
 ### Do you support OpenAI subscription auth Codex OAuth
 
-Yes. OpenClaw fully supports **OpenAI Code (Codex) subscription OAuth**. The onboarding wizard
-can run the OAuth flow for you.
+Yes. OpenClaw fully supports **OpenAI Code (Codex) subscription OAuth**.
+OpenAI explicitly allows subscription OAuth usage in external tools/workflows
+like OpenClaw. The onboarding wizard can run the OAuth flow for you.
 
 See [OAuth](/concepts/oauth), [Model providers](/concepts/model-providers), and [Wizard](/start/wizard).
 
@@ -745,7 +790,7 @@ This stores OAuth tokens in auth profiles on the gateway host. Details: [Model p
 
 ### Is a local model OK for casual chats
 
-Usually no. OpenClaw needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** MiniMax M2.1 build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk - see [Security](/gateway/security).
+Usually no. OpenClaw needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** MiniMax M2.5 build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk - see [Security](/gateway/security).
 
 ### How do I keep hosted model traffic in a specific region
 
@@ -1050,13 +1095,13 @@ Basic flow:
 - Spawn with `sessions_spawn` using `thread: true` (and optionally `mode: "session"` for persistent follow-up).
 - Or manually bind with `/focus <target>`.
 - Use `/agents` to inspect binding state.
-- Use `/session ttl <duration|off>` to control auto-unfocus.
+- Use `/session idle <duration|off>` and `/session max-age <duration|off>` to control auto-unfocus.
 - Use `/unfocus` to detach the thread.
 
 Required config:
 
-- Global defaults: `session.threadBindings.enabled`, `session.threadBindings.ttlHours`.
-- Discord overrides: `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.ttlHours`.
+- Global defaults: `session.threadBindings.enabled`, `session.threadBindings.idleHours`, `session.threadBindings.maxAgeHours`.
+- Discord overrides: `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.idleHours`, `channels.discord.threadBindings.maxAgeHours`.
 - Auto-bind on spawn: set `channels.discord.threadBindings.spawnSubagentSessions: true`.
 
 Docs: [Sub-agents](/tools/subagents), [Discord](/channels/discord), [Configuration Reference](/gateway/configuration-reference), [Slash commands](/tools/slash-commands).
@@ -1422,6 +1467,25 @@ The Gateway watches the config and supports hot-reload:
 - `gateway.reload.mode: "hybrid"` (default): hot-apply safe changes, restart for critical ones
 - `hot`, `restart`, `off` are also supported
 
+### How do I disable funny CLI taglines
+
+Set `cli.banner.taglineMode` in config:
+
+```json5
+{
+  cli: {
+    banner: {
+      taglineMode: "off", // random | default | off
+    },
+  },
+}
+```
+
+- `off`: hides tagline text but keeps the banner title/version line.
+- `default`: uses `All your chats, one OpenClaw.` every time.
+- `random`: rotating funny/seasonal taglines (default behavior).
+- If you want no banner at all, set env `OPENCLAW_HIDE_BANNER=1`.
+
 ### How do I enable web search and web fetch
 
 `web_fetch` works without an API key. `web_search` requires a Brave Search API
@@ -1520,8 +1584,8 @@ Typical setup:
 5. Approve the node on the Gateway:
 
    ```bash
-   openclaw nodes pending
-   openclaw nodes approve <requestId>
+   openclaw devices list
+   openclaw devices approve <requestId>
    ```
 
 No separate TCP bridge is required; nodes connect over the Gateway WebSocket.
@@ -1690,8 +1754,8 @@ Recommended setup:
 3. **Approve the node** on the gateway:
 
    ```bash
-   openclaw nodes pending
-   openclaw nodes approve <requestId>
+   openclaw devices list
+   openclaw devices approve <requestId>
    ```
 
 Docs: [Gateway protocol](/gateway/protocol), [Discovery](/gateway/discovery), [macOS remote mode](/platforms/mac/remote).
@@ -1992,12 +2056,11 @@ Models are referenced as `provider/model` (example: `anthropic/claude-opus-4-6`)
 
 ### What model do you recommend
 
-**Recommended default:** `anthropic/claude-opus-4-6`.
-**Good alternative:** `anthropic/claude-sonnet-4-5`.
-**Reliable (less character):** `openai/gpt-5.2` - nearly as good as Opus, just less personality.
-**Budget:** `zai/glm-4.7`.
+**Recommended default:** use the strongest latest-generation model available in your provider stack.
+**For tool-enabled or untrusted-input agents:** prioritize model strength over cost.
+**For routine/low-stakes chat:** use cheaper fallback models and route by agent role.
 
-MiniMax M2.1 has its own docs: [MiniMax](/providers/minimax) and
+MiniMax M2.5 has its own docs: [MiniMax](/providers/minimax) and
 [Local models](/gateway/local-models).
 
 Rule of thumb: use the **best model you can afford** for high-stakes work, and a cheaper
@@ -2041,8 +2104,9 @@ Docs: [Models](/concepts/models), [Configure](/cli/configure), [Config](/cli/con
 
 ### What do OpenClaw, Flawd, and Krill use for models
 
-- **OpenClaw + Flawd:** Anthropic Opus (`anthropic/claude-opus-4-6`) - see [Anthropic](/providers/anthropic).
-- **Krill:** MiniMax M2.1 (`minimax/MiniMax-M2.1`) - see [MiniMax](/providers/minimax).
+- These deployments can differ and may change over time; there is no fixed provider recommendation.
+- Check the current runtime setting on each gateway with `openclaw models status`.
+- For security-sensitive/tool-enabled agents, use the strongest latest-generation model available.
 
 ### How do I switch models on the fly without restarting
 
@@ -2109,7 +2173,7 @@ Model "provider/model" is not allowed. Use /model to list available models.
 That error is returned **instead of** a normal reply. Fix: add the model to
 `agents.defaults.models`, remove the allowlist, or pick a model from `/model list`.
 
-### Why do I see Unknown model minimaxMiniMaxM21
+### Why do I see Unknown model minimaxMiniMaxM25
 
 This means the **provider isn't configured** (no MiniMax provider config or auth
 profile was found), so the model can't be resolved. A fix for this detection is
@@ -2120,8 +2184,8 @@ Fix checklist:
 1. Upgrade to **2026.1.12** (or run from source `main`), then restart the gateway.
 2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
    exists in env/auth profiles so the provider can be injected.
-3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.1` or
-   `minimax/MiniMax-M2.1-lightning`.
+3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.5` or
+   `minimax/MiniMax-M2.5-highspeed` (legacy: `minimax/MiniMax-M2.5-Lightning`).
 4. Run:
 
    ```bash
@@ -2144,9 +2208,9 @@ Fallbacks are for **errors**, not "hard tasks," so use `/model` or a separate ag
   env: { MINIMAX_API_KEY: "sk-...", OPENAI_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "minimax/MiniMax-M2.1" },
+      model: { primary: "minimax/MiniMax-M2.5" },
       models: {
-        "minimax/MiniMax-M2.1": { alias: "minimax" },
+        "minimax/MiniMax-M2.5": { alias: "minimax" },
         "openai/gpt-5.2": { alias: "gpt" },
       },
     },
@@ -2224,8 +2288,8 @@ Z.AI (GLM models):
 {
   agents: {
     defaults: {
-      model: { primary: "zai/glm-4.7" },
-      models: { "zai/glm-4.7": {} },
+      model: { primary: "zai/glm-5" },
+      models: { "zai/glm-5": {} },
     },
   },
   env: { ZAI_API_KEY: "..." },

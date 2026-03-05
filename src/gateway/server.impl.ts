@@ -18,6 +18,7 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
@@ -100,6 +101,7 @@ import {
 } from "./server/health-state.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { ensureGatewayStartupAuth } from "./startup-auth.js";
+import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 
@@ -236,9 +238,7 @@ export async function startGatewayServer(
   if (configSnapshot.exists && !configSnapshot.valid) {
     const issues =
       configSnapshot.issues.length > 0
-        ? configSnapshot.issues
-            .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
-            .join("\n")
+        ? formatConfigIssueLines(configSnapshot.issues, "", { normalizeRoot: true }).join("\n")
         : "Unknown validation issue.";
     throw new Error(
       `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
@@ -331,9 +331,7 @@ export async function startGatewayServer(
     if (!freshSnapshot.valid) {
       const issues =
         freshSnapshot.issues.length > 0
-          ? freshSnapshot.issues
-              .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
-              .join("\n")
+          ? formatConfigIssueLines(freshSnapshot.issues, "", { normalizeRoot: true }).join("\n")
           : "Unknown validation issue.";
       throw new Error(`Invalid config at ${freshSnapshot.path}.\n${issues}`);
     }
@@ -377,6 +375,14 @@ export async function startGatewayServer(
   setPreRestartDeferralCheck(
     () => getTotalQueueSize() + getTotalPendingReplies() + getActiveEmbeddedRunCount(),
   );
+  // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
+  // non-loopback installs that upgraded to v2026.2.26+ without required origins.
+  cfgAtStart = await maybeSeedControlUiAllowedOriginsAtStartup({
+    config: cfgAtStart,
+    writeConfig: writeConfigFile,
+    log,
+  });
+
   initSubagentRegistry();
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
@@ -681,7 +687,7 @@ export async function startGatewayServer(
 
   const healthCheckMinutes = cfgAtStart.gateway?.channelHealthCheckMinutes;
   const healthCheckDisabled = healthCheckMinutes === 0;
-  const channelHealthMonitor = healthCheckDisabled
+  let channelHealthMonitor = healthCheckDisabled
     ? null
     : startChannelHealthMonitor({
         channelManager,
@@ -866,6 +872,7 @@ export async function startGatewayServer(
             heartbeatRunner,
             cronState,
             browserControl,
+            channelHealthMonitor,
           }),
           setState: (nextState) => {
             hooksConfig = nextState.hooksConfig;
@@ -874,6 +881,7 @@ export async function startGatewayServer(
             cron = cronState.cron;
             cronStorePath = cronState.storePath;
             browserControl = nextState.browserControl;
+            channelHealthMonitor = nextState.channelHealthMonitor;
           },
           startChannel,
           stopChannel,
@@ -882,6 +890,8 @@ export async function startGatewayServer(
           logChannels,
           logCron,
           logReload,
+          createHealthMonitor: (checkIntervalMs: number) =>
+            startChannelHealthMonitor({ channelManager, checkIntervalMs }),
         });
 
         return startGatewayConfigReloader({

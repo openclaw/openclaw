@@ -18,6 +18,7 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
+import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -363,6 +364,11 @@ export async function handleToolExecutionEnd(
     startData?.args && typeof startData.args === "object"
       ? (startData.args as Record<string, unknown>)
       : {};
+  const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId);
+  const afterToolCallArgs =
+    adjustedArgs && typeof adjustedArgs === "object"
+      ? (adjustedArgs as Record<string, unknown>)
+      : startArgs;
   const isMessagingSend =
     pendingMediaUrls.length > 0 ||
     (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
@@ -415,10 +421,9 @@ export async function handleToolExecutionEnd(
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
-    const toolArgs = startData?.args;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
-      params: (toolArgs && typeof toolArgs === "object" ? toolArgs : {}) as Record<string, unknown>,
+      params: afterToolCallArgs,
       result: sanitizedResult,
       error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
       durationMs,
@@ -426,8 +431,9 @@ export async function handleToolExecutionEnd(
     void hookRunnerAfter
       .runAfterToolCall(hookEvent, {
         toolName,
-        agentId: undefined,
-        sessionKey: undefined,
+        agentId: ctx.params.agentId,
+        sessionKey: ctx.params.sessionKey,
+        sessionId: ctx.params.sessionId,
       })
       .catch((err) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);

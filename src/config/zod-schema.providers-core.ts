@@ -57,6 +57,7 @@ const TelegramCapabilitiesSchema = z.union([
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
@@ -68,6 +69,7 @@ export const TelegramTopicSchema = z
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
@@ -76,6 +78,20 @@ export const TelegramGroupSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+  })
+  .strict();
+
+export const TelegramDirectSchema = z
+  .object({
+    dmPolicy: DmPolicySchema.optional(),
+    tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
+    skills: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    systemPrompt: z.string().optional(),
+    topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+    requireTopic: z.boolean().optional(),
   })
   .strict();
 
@@ -148,6 +164,7 @@ export const TelegramAccountSchemaBase = z
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+    direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
@@ -229,6 +246,7 @@ export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((valu
 
 export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   accounts: z.record(z.string(), TelegramAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   normalizeTelegramStreamingConfig(value);
   requireOpenAllowFrom({
@@ -484,7 +502,8 @@ export const DiscordAccountSchema = z
     threadBindings: z
       .object({
         enabled: z.boolean().optional(),
-        ttlHours: z.number().nonnegative().optional(),
+        idleHours: z.number().nonnegative().optional(),
+        maxAgeHours: z.number().nonnegative().optional(),
         spawnSubagentSessions: z.boolean().optional(),
         spawnAcpSessions: z.boolean().optional(),
       })
@@ -507,12 +526,23 @@ export const DiscordAccountSchema = z
       .optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    ackReactionScope: z
+      .enum(["group-mentions", "group-all", "direct", "all", "off", "none"])
+      .optional(),
     activity: z.string().optional(),
     status: z.enum(["online", "dnd", "idle", "invisible"]).optional(),
     activityType: z
       .union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
       .optional(),
     activityUrl: z.string().url().optional(),
+    eventQueue: z
+      .object({
+        listenerTimeout: z.number().int().positive().optional(),
+        maxQueueSize: z.number().int().positive().optional(),
+        maxConcurrency: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -554,6 +584,7 @@ export const DiscordAccountSchema = z
 
 export const DiscordConfigSchema = DiscordAccountSchema.extend({
   accounts: z.record(z.string(), DiscordAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
   const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
@@ -816,6 +847,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   webhookPath: z.string().optional().default("/slack/events"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
   const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
@@ -944,6 +976,7 @@ export const SignalAccountSchema = SignalAccountSchemaBase;
 
 export const SignalConfigSchema = SignalAccountSchemaBase.extend({
   accounts: z.record(z.string(), SignalAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({
     policy: value.dmPolicy,
@@ -1092,6 +1125,7 @@ export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) =>
 
 export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   accounts: z.record(z.string(), IrcAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   refineIrcAllowFromAndNickserv(value, ctx);
   if (!value.accounts) {
@@ -1182,6 +1216,7 @@ export const IMessageAccountSchema = IMessageAccountSchemaBase;
 
 export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
   accounts: z.record(z.string(), IMessageAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({
     policy: value.dmPolicy,
@@ -1292,6 +1327,7 @@ export const BlueBubblesAccountSchema = BlueBubblesAccountSchemaBase;
 
 export const BlueBubblesConfigSchema = BlueBubblesAccountSchemaBase.extend({
   accounts: z.record(z.string(), BlueBubblesAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
   actions: BlueBubblesActionSchema,
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({

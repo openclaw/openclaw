@@ -188,6 +188,8 @@ export function createOpenClawCodingTools(options?: {
   messageThreadId?: string | number;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
+  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  sessionId?: string;
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;
@@ -359,14 +361,14 @@ export function createOpenClawCodingTools(options?: {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceWriteTool(workspaceRoot);
+      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceEditTool(workspaceRoot);
+      const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     return [tool];
@@ -493,6 +495,7 @@ export function createOpenClawCodingTools(options?: {
       requesterAgentIdOverride: agentId,
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
+      sessionId: options?.sessionId,
     }),
   ];
   const toolsForMessageProvider = applyMessageProviderToolPolicy(tools, options?.messageProvider);
@@ -524,12 +527,16 @@ export function createOpenClawCodingTools(options?: {
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   // Provider-specific cleaning: Gemini needs constraint keywords stripped, but Anthropic expects them.
   const normalized = subagentFiltered.map((tool) =>
-    normalizeToolParameters(tool, { modelProvider: options?.modelProvider }),
+    normalizeToolParameters(tool, {
+      modelProvider: options?.modelProvider,
+      modelId: options?.modelId,
+    }),
   );
   const withHooks = normalized.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
       sessionKey: options?.sessionKey,
+      sessionId: options?.sessionId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     }),
   );
