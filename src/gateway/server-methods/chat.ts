@@ -1135,6 +1135,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    // Use createIfMissing: true so ACP oneshot/run sessions (where the transcript
+    // file is not pre-created) can receive injected messages without erroring. (#36170)
     const appended = appendAssistantTranscriptMessage({
       message: p.message,
       label: p.label,
@@ -1142,7 +1144,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       storePath,
       sessionFile: entry?.sessionFile,
       agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
-      createIfMissing: false,
+      createIfMissing: true,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {
       respond(

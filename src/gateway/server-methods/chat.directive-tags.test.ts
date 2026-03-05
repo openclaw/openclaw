@@ -723,4 +723,37 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }),
     );
   });
+
+  it("chat.inject succeeds and creates transcript when file is missing (#36170)", async () => {
+    // Regression: chat.inject was using createIfMissing: false, causing ENOENT to
+    // hard-fail for ACP oneshot/run sessions where the transcript is not pre-created.
+    const rawDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-inject-missing-"));
+    // Use realpath to avoid macOS /tmp -> /private/tmp symlink skew that confuses
+    // resolvePathWithinSessionsDir's containment check.
+    const dir = fs.realpathSync(rawDir);
+    // Set transcriptPath to a nonexistent file — DO NOT create it.
+    mockState.transcriptPath = path.join(dir, "nonexistent-sess.jsonl");
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    try {
+      await chatHandlers["chat.inject"]({
+        params: { sessionKey: "main", message: "hello from ACP" },
+        respond,
+        req: {} as never,
+        client: null as never,
+        isWebchatConnect: () => false,
+        context: context as GatewayRequestContext,
+      });
+
+      expect(respond).toHaveBeenCalled();
+      const [ok] = respond.mock.calls.at(-1) ?? [];
+      expect(ok).toBe(true);
+
+      // Transcript file should have been created automatically.
+      expect(fs.existsSync(mockState.transcriptPath)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
