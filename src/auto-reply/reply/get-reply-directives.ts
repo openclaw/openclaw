@@ -4,6 +4,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -83,6 +84,25 @@ function resolveExecOverrides(params: {
 export type ReplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | { kind: "continue"; result: ReplyDirectiveContinuation };
+
+export function resolveMessageProviderKey(params: {
+  commandChannelId?: string;
+  sessionCtx: TemplateContext;
+  ctx: MsgContext;
+}): string {
+  if (params.commandChannelId?.trim()) {
+    return params.commandChannelId.trim().toLowerCase();
+  }
+  return (
+    normalizeMessageChannel(params.sessionCtx.OriginatingChannel) ??
+    normalizeMessageChannel(params.ctx.OriginatingChannel) ??
+    normalizeMessageChannel(params.sessionCtx.Surface) ??
+    normalizeMessageChannel(params.ctx.Surface) ??
+    normalizeMessageChannel(params.sessionCtx.Provider) ??
+    normalizeMessageChannel(params.ctx.Provider) ??
+    ""
+  );
+}
 
 export async function resolveReplyDirectives(params: {
   ctx: MsgContext;
@@ -303,8 +323,11 @@ export async function resolveReplyDirectives(params: {
   sessionCtx.Body = cleanedBody;
   sessionCtx.BodyStripped = cleanedBody;
 
-  const messageProviderKey =
-    sessionCtx.Provider?.trim().toLowerCase() ?? ctx.Provider?.trim().toLowerCase() ?? "";
+  const messageProviderKey = resolveMessageProviderKey({
+    commandChannelId: command.channelId,
+    sessionCtx,
+    ctx,
+  });
   const elevated = resolveElevatedPermissions({
     cfg,
     agentId,
