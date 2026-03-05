@@ -292,6 +292,16 @@ export type OpenClawPluginApi = {
     handler: PluginHookHandlerMap[K],
     opts?: { priority?: number },
   ) => void;
+  /**
+   * Invoke an agent directly without going through the HTTP gateway.
+   * Returns the agent's response text.
+   */
+  invokeAgent: (opts: {
+    message: string;
+    sessionKey?: string;
+    systemPrompt?: string;
+    timeout?: number;
+  }) => Promise<string>;
 };
 
 export type PluginOrigin = "bundled" | "global" | "workspace" | "config";

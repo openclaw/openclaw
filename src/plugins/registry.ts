@@ -1,4 +1,5 @@
 import path from "node:path";
+import { agentCommand } from "../commands/agent.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
@@ -527,6 +528,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerCommand: (command) => registerCommand(record, command),
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) => registerTypedHook(record, hookName, handler, opts),
+      invokeAgent: async (opts) => {
+        const result = await agentCommand({
+          message: opts.message,
+          sessionKey: opts.sessionKey,
+          extraSystemPrompt: opts.systemPrompt,
+          deliver: false,
+          timeout: opts.timeout?.toString(),
+        });
+        const payloads = result.payloads ?? [];
+        return payloads
+          .map((p) => (typeof p.text === "string" ? p.text : ""))
+          .filter(Boolean)
+          .join("\n\n");
+      },
     };
   };
 
