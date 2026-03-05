@@ -907,6 +907,8 @@ export const SignalAccountSchemaBase = z
     ignoreAttachments: z.boolean().optional(),
     ignoreStories: z.boolean().optional(),
     sendReadReceipts: z.boolean().optional(),
+    injectLinkPreviews: z.boolean().optional(),
+    preserveTextStyles: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     defaultTo: z.string().optional(),
@@ -925,6 +927,10 @@ export const SignalAccountSchemaBase = z
     actions: z
       .object({
         reactions: z.boolean().optional(),
+        poll: z.boolean().optional(),
+        unsend: z.boolean().optional(),
+        pollVote: z.boolean().optional(),
+        pollTerminate: z.boolean().optional(),
       })
       .strict()
       .optional(),

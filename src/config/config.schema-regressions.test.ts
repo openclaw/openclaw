@@ -2,6 +2,31 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./config.js";
 
 describe("config schema regressions", () => {
+  it("accepts Signal action toggles for unsend and poll lifecycle actions", () => {
+    const res = validateConfigObject({
+      channels: {
+        signal: {
+          actions: {
+            reactions: true,
+            poll: true,
+            unsend: true,
+            pollVote: true,
+            pollTerminate: true,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.config.channels?.signal?.actions?.poll).toBe(true);
+    expect(res.config.channels?.signal?.actions?.unsend).toBe(true);
+    expect(res.config.channels?.signal?.actions?.pollVote).toBe(true);
+    expect(res.config.channels?.signal?.actions?.pollTerminate).toBe(true);
+  });
+
   it("accepts nested telegram groupPolicy overrides", () => {
     const res = validateConfigObject({
       channels: {
