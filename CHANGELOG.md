@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 
 - Agents/context pruning: guard assistant thinking/text char estimation against malformed blocks (missing `thinking`/`text` strings or null entries) so pruning no longer crashes with malformed provider content. (openclaw#35146) thanks @Sid-Qin.
 - Security/audit Windows ACL locale handling: recognize Russian `NT AUTHORITY\\СИСТЕМА` principal as trusted SYSTEM so localized Windows installs no longer report false-positive `perms_writable` findings for SYSTEM-only ACL entries. (#35834)
+- Telegram/native command topic routing: treat `is_topic_message=true` as forum context even when `chat.is_forum` is absent, so `/new` and `/reset` in forum topics keep topic-scoped session targeting instead of falling back to General. (#35963)
 - Agents/schema cleaning: detect Venice + Grok model IDs as xAI-proxied targets so unsupported JSON Schema keywords are stripped before requests, preventing Venice/Grok `Invalid arguments` failures. (openclaw#35355) thanks @Sid-Qin.
 - Skills/native command deduplication: centralize skill command dedupe by canonical `skillName` in `listSkillCommandsForAgents` so duplicate suffixed variants (for example `_2`) are no longer surfaced across interfaces outside Discord. (#27521) thanks @shivama205.
 - Agents/xAI tool-call argument decoding: decode HTML-entity encoded xAI/Grok tool-call argument values (`&amp;`, `&quot;`, `&lt;`, `&gt;`, numeric entities) before tool execution so commands with shell operators and quotes no longer fail with parse errors. (#35276) Thanks @Sid-Qin.

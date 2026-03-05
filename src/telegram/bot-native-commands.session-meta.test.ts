@@ -102,6 +102,25 @@ function buildStatusTopicCommandContext() {
   };
 }
 
+function buildStatusTopicCommandContextWithoutChatForumFlag() {
+  return {
+    match: "",
+    message: {
+      message_id: 3,
+      date: Math.floor(Date.now() / 1000),
+      chat: {
+        id: -1001234567890,
+        type: "supergroup" as const,
+        title: "OpenClaw",
+      },
+      // Telegram topic messages can include this even when chat.is_forum is absent.
+      is_topic_message: true,
+      message_thread_id: 42,
+      from: { id: 200, username: "bob" },
+    },
+  };
+}
+
 function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
   allowFrom?: string[];
@@ -265,6 +284,22 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       >
     )[0]?.[0];
     expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(boundSessionKey);
+  });
+
+  it("keeps topic routing for native commands when chat.is_forum is absent but message is topic-scoped", async () => {
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      allowFrom: ["200"],
+      groupAllowFrom: ["200"],
+    });
+    await handler(buildStatusTopicCommandContextWithoutChatForumFlag());
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandTargetSessionKey?: string } }]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toContain(":topic:42");
   });
 
   it("aborts native command dispatch when configured ACP topic binding cannot initialize", async () => {
