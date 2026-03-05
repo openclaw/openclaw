@@ -248,6 +248,17 @@ export function isTransientHttpError(raw: string): boolean {
   return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
 }
 
+const STREAM_EVENT_ORDER_RE = /unexpected event order/i;
+
+/**
+ * Detects stream protocol errors from the Anthropic SDK (e.g., receiving
+ * `message_start` before the previous `message_stop`). These are transient
+ * server-side issues and safe to retry.
+ */
+export function isStreamEventOrderError(raw: string): boolean {
+  return STREAM_EVENT_ORDER_RE.test(raw);
+}
+
 function stripFinalTagsFromText(text: string): string {
   if (!text) {
     return text;
