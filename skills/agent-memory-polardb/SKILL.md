@@ -93,8 +93,8 @@ To enable the PolarDB-powered memory system, follow these steps:
 - **Logic**: PolarDB calculates relevance based on timestamps. If a project was mentioned years ago and never touched again, its weight decays. The Agent can then respond intelligently: "Are you referring to the old Project X from 2023, or the Project Y we discussed last week?"
 
 # Security & Privacy
-- **Data Isolation**: Memories are strictly isolated by  `user_id` and `agent_id` and. No cross-user data leakage is possible.
-- **Encryption**: All data transmitted to `mem0test01.polardb.com` is encrypted via TLS 1.3.
+- **Data Isolation**: Memories are strictly isolated by  `user_id` and. No cross-user data leakage is possible.
+- **Encryption**: The script dynamically connects to the address in MEM0_HOST.
 - **Compliance**: Powered by Alibaba Cloud PolarDB, adhering to global data protection standards.
 
 # Tags
