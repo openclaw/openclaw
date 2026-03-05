@@ -2,6 +2,14 @@ import OpenClawProtocol
 import Foundation
 import OSLog
 
+private extension NSLock {
+    func withLock<T>(_ body: () -> T) -> T {
+        self.lock()
+        defer { self.unlock() }
+        return body()
+    }
+}
+
 public protocol WebSocketTasking: AnyObject {
     var state: URLSessionTask.State { get }
     func resume()
@@ -44,8 +52,19 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 
     public func sendPing() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let lock = NSLock()
+            var didResume = false
             self.task.sendPing { error in
-                ThrowingContinuationSupport.resumeVoid(continuation, error: error)
+                let result: Result<Void, Error>? = lock.withLock {
+                    guard !didResume else { return nil }
+                    didResume = true
+                    if let error {
+                        return .failure(error)
+                    }
+                    return .success(())
+                }
+                guard let result else { return }
+                continuation.resume(with: result)
             }
         }
     }

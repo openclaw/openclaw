@@ -138,6 +138,30 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 }
 
+private final class FakePingWebSocketTask: WebSocketTasking, @unchecked Sendable {
+    var state: URLSessionTask.State = .running
+    private var pongReceiveHandler: (@Sendable (Error?) -> Void)?
+
+    func resume() {}
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) { _ = (closeCode, reason) }
+    func send(_ message: URLSessionWebSocketTask.Message) async throws { _ = message }
+    func receive() async throws -> URLSessionWebSocketTask.Message { throw URLError(.badServerResponse) }
+    func receive(
+        completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
+    {
+        _ = completionHandler
+    }
+
+    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
+        self.pongReceiveHandler = pongReceiveHandler
+        pongReceiveHandler(nil)
+    }
+
+    func fireSecondPingCallback(error: Error?) {
+        self.pongReceiveHandler?(error)
+    }
+}
+
 private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked Sendable {
     private let lock = NSLock()
     private var tasks: [FakeGatewayWebSocketTask] = []
@@ -169,6 +193,16 @@ private actor SeqGapProbe {
 }
 
 struct GatewayNodeSessionTests {
+    @Test
+    func webSocketTaskBoxSendPingIgnoresDuplicateCompletionCallbacks() async throws {
+        let task = FakePingWebSocketTask()
+        let box = WebSocketTaskBox(task: task)
+
+        try await box.sendPing()
+
+        task.fireSecondPingCallback(error: URLError(.networkConnectionLost))
+    }
+
     @Test
     func invokeWithTimeoutReturnsUnderlyingResponseBeforeTimeout() async {
         let request = BridgeInvokeRequest(id: "1", command: "x", paramsJSON: nil)
