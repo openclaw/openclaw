@@ -270,6 +270,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Wide-area discovery configuration group for exposing discovery signals beyond local-link scopes. Enable only in deployments that intentionally aggregate gateway presence across sites.",
   "discovery.wideArea.enabled":
     "Enables wide-area discovery signaling when your environment needs non-local gateway discovery. Keep disabled unless cross-network discovery is operationally required.",
+  "discovery.wideArea.domain":
+    "Discovery DNS zone used for unicast DNS-SD (for example `openclaw.internal`). Set this when wide-area discovery is enabled so clients can resolve `_openclaw._tcp` records.",
   "discovery.mdns":
     "mDNS discovery configuration group for local network advertisement and discovery behavior tuning. Keep minimal mode for routine LAN discovery unless extra metadata is required.",
   tools:

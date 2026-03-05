@@ -602,6 +602,7 @@ export const FIELD_LABELS: Record<string, string> = {
   discovery: "Discovery",
   "discovery.wideArea": "Wide-area Discovery",
   "discovery.wideArea.enabled": "Wide-area Discovery Enabled",
+  "discovery.wideArea.domain": "Wide-area Discovery Domain",
   "discovery.mdns": "mDNS Discovery",
   canvasHost: "Canvas Host",
   "canvasHost.enabled": "Canvas Host Enabled",
