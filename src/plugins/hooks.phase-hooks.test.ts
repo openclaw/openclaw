@@ -72,4 +72,33 @@ describe("phase hooks merger", () => {
     expect(result?.prependContext).toBe("context A\n\ncontext B");
     expect(result?.systemPrompt).toBe("system A");
   });
+
+  it("before_prompt_build concatenates prependSystemContext and appendSystemContext", async () => {
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "first",
+      () => ({
+        prependSystemContext: "prepend A",
+        appendSystemContext: "append A",
+      }),
+      10,
+    );
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "second",
+      () => ({
+        prependSystemContext: "prepend B",
+        appendSystemContext: "append B",
+      }),
+      1,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.prependSystemContext).toBe("prepend A\n\nprepend B");
+    expect(result?.appendSystemContext).toBe("append A\n\nappend B");
+  });
 });
