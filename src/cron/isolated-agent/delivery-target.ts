@@ -64,6 +64,9 @@ export async function resolveDeliveryTarget(
   const sessionRouteKey = threadSessionKey || mainSessionKey;
   const sessionMainKey = cfg.session?.mainKey;
 
+  // Intentionally do not set `failClosedMainSessionLastRoute` here. Cron target
+  // resolution may inherit main-session route metadata; strict fail-closed
+  // behavior is enforced later in dispatch based on delivery intent.
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
     requestedChannel,

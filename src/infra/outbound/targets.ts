@@ -341,6 +341,10 @@ export function resolveSessionRouteDecision(params: {
     };
   }
 
+  // Keep this check before `main_alias_blocked`: when a caller provides an
+  // explicit turn-source channel but omits `to`, the most actionable failure
+  // is "missing_turn_source_to" even if the session key also matches a blocked
+  // main alias under fail-closed mode.
   if (params.turnSourceChannel && !params.turnSourceTo) {
     return {
       status: "missing",
