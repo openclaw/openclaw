@@ -101,7 +101,7 @@ describe("checkBrowserOrigin", () => {
     expect(result.ok).toBe(true);
   });
   describe("Tailscale Serve (x-forwarded-host)", () => {
-    it("accepts forwarded-host when it matches allowlist", () => {
+    it("accepts forwarded-host when origin matches and is in allowlist", () => {
       const result = checkBrowserOrigin({
         requestHost: "127.0.0.1:18789",
         requestForwardedHost: "gateway.tailnet.ts.net",
@@ -114,21 +114,20 @@ describe("checkBrowserOrigin", () => {
       }
     });
 
-    it("accepts forwarded-host even without host-header fallback enabled", () => {
+    it("rejects when origin does not match forwarded-host (cross-validation)", () => {
       const result = checkBrowserOrigin({
         requestHost: "127.0.0.1:18789",
         requestForwardedHost: "gateway.tailnet.ts.net",
-        origin: "https://gateway.tailnet.ts.net",
+        origin: "https://attacker.com",
         allowedOrigins: ["https://gateway.tailnet.ts.net"],
-        allowHostHeaderOriginFallback: false,
       });
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.matchedBy).toBe("allowlist");
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe("origin does not match forwarded host");
       }
     });
 
-    it("rejects forwarded-host not in allowlist", () => {
+    it("rejects forwarded-host not in allowlist even with matching origin", () => {
       const result = checkBrowserOrigin({
         requestHost: "127.0.0.1:18789",
         requestForwardedHost: "attacker.tailnet.ts.net",
@@ -136,31 +135,44 @@ describe("checkBrowserOrigin", () => {
         allowedOrigins: ["https://gateway.tailnet.ts.net"],
       });
       expect(result.ok).toBe(false);
-      expect(result.reason).toBe("origin not allowed");
+      if (!result.ok) {
+        expect(result.reason).toBe("origin not allowed");
+      }
     });
 
-    it("accepts forwarded-host with full URL in allowlist and host-only origin", () => {
+    it("rejects protocol downgrade (http vs https)", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "http://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("accepts forwarded-host with fallback flag when not in allowlist", () => {
       const result = checkBrowserOrigin({
         requestHost: "127.0.0.1:18789",
         requestForwardedHost: "gateway.tailnet.ts.net",
         origin: "https://gateway.tailnet.ts.net",
-        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        allowedOrigins: ["https://other.example.com"],
+        allowHostHeaderOriginFallback: true,
       });
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.matchedBy).toBe("allowlist");
+        expect(result.matchedBy).toBe("host-header-fallback");
       }
     });
 
-    it("rejects forwarded-host partial match (host part only)", () => {
+    it("rejects forwarded-host without fallback flag when not in allowlist", () => {
       const result = checkBrowserOrigin({
         requestHost: "127.0.0.1:18789",
-        requestForwardedHost: "evilhost.com:8443",
-        origin: "https://evilhost.com:8443",
-        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "https://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://other.example.com"],
+        allowHostHeaderOriginFallback: false,
       });
       expect(result.ok).toBe(false);
-      expect(result.reason).toBe("origin not allowed");
     });
 
     it("works without forwarded-host (direct request still passes)", () => {
@@ -172,15 +184,31 @@ describe("checkBrowserOrigin", () => {
       expect(result.ok).toBe(true);
     });
 
-    it("non-Tailscale proxy headers don't bypass allowlist", () => {
+    it("prevents CSRF attack via spoofed X-Forwarded-Host", () => {
+      // Attacker tries to bypass by spoofing X-Forwarded-Host
+      // but Origin doesn't match
       const result = checkBrowserOrigin({
         requestHost: "127.0.0.1:18789",
-        requestForwardedHost: "attacker.tailnet.ts.net",
-        origin: "https://attacker.tailnet.ts.net",
-        allowedOrigins: ["https://allowed.com"],
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "https://evil.com",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
       });
       expect(result.ok).toBe(false);
-      expect(result.reason).toBe("origin not allowed");
+      if (!result.ok) {
+        expect(result.reason).toBe("origin does not match forwarded host");
+      }
+    });
+
+    it("prevents attack even with compromised proxy (scheme mismatch)", () => {
+      // Even if attacker controls proxy and sets valid X-Forwarded-Host,
+      // the Origin scheme must match
+      const result = checkBrowserOrigin({
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "http://gateway.tailnet.ts.net", // http instead of https
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+      });
+      expect(result.ok).toBe(false);
     });
   });
 });

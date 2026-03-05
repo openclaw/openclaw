@@ -44,16 +44,6 @@ export function checkBrowserOrigin(params: {
     .filter(Boolean);
   const allowlist = new Set(allowlistOrigins);
 
-  const allowedHosts = new Set(
-    allowlistOrigins.map((origin) => {
-      try {
-        return new URL(origin).host.toLowerCase();
-      } catch {
-        return origin;
-      }
-    }),
-  );
-
   if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
     return { ok: true, matchedBy: "allowlist" };
   }
@@ -61,17 +51,21 @@ export function checkBrowserOrigin(params: {
   const requestForwardedHost = normalizeHostHeader(params.requestForwardedHost);
   if (requestForwardedHost) {
     const normalizedForwardedHost = requestForwardedHost.toLowerCase();
-    if (allowedHosts.has(normalizedForwardedHost)) {
+
+    // Security: Origin MUST match the forwarded host (cross-validation)
+    if (parsedOrigin.host !== normalizedForwardedHost) {
+      return { ok: false, reason: "origin does not match forwarded host" };
+    }
+
+    // Security: Check the full origin (with scheme) is in allowlist
+    if (allowlist.has(parsedOrigin.origin)) {
       return { ok: true, matchedBy: "allowlist" };
     }
-  }
 
-  if (
-    requestForwardedHost &&
-    params.allowHostHeaderOriginFallback === true &&
-    parsedOrigin.host === requestForwardedHost
-  ) {
-    return { ok: true, matchedBy: "host-header-fallback" };
+    // Legacy fallback for forwarded host with explicit opt-in
+    if (params.allowHostHeaderOriginFallback === true) {
+      return { ok: true, matchedBy: "host-header-fallback" };
+    }
   }
 
   const directRequestHost = normalizeHostHeader(params.requestHost);
