@@ -24,6 +24,7 @@ const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
+const GEMINI_3_1_ELIGIBLE_PROVIDERS = new Set(["google-gemini-cli", "google"]);
 
 function cloneFirstTemplateModel(params: {
   normalizedProvider: string;
@@ -176,7 +177,8 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
-  if (normalizeProviderId(provider) !== "google-gemini-cli") {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!GEMINI_3_1_ELIGIBLE_PROVIDERS.has(normalizedProvider)) {
     return undefined;
   }
   const trimmed = modelId.trim();
@@ -192,7 +194,7 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   }
 
   return cloneFirstTemplateModel({
-    normalizedProvider: "google-gemini-cli",
+    normalizedProvider,
     trimmedModelId: trimmed,
     templateIds: [...templateIds],
     modelRegistry,
