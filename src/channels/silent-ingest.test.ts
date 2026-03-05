@@ -7,7 +7,7 @@ describe("runSilentMessageIngest", () => {
     vi.useRealTimers();
   });
 
-  it("sanitizes from and invokes message_ingest", async () => {
+  it("sanitizes from while preserving multiline content for message_ingest", async () => {
     const runMessageIngest = vi.fn(async () => {});
     const runner = {
       hasHooks: vi.fn(() => true),
@@ -18,7 +18,7 @@ describe("runSilentMessageIngest", () => {
       enabled: true,
       event: {
         from: "evil\nname",
-        content: "  hello  ",
+        content: "line1\n\tline2",
       },
       ctx: {
         channelId: "telegram",
@@ -33,7 +33,7 @@ describe("runSilentMessageIngest", () => {
     const calls = runMessageIngest.mock.calls as unknown[][];
     const event = calls[0]?.[0] as { from: string; content: string } | undefined;
     expect(event?.from).toBe("evilname");
-    expect(event?.content).toBe("hello");
+    expect(event?.content).toBe("line1\n\tline2");
   });
 
   it("skips work when no message_ingest hooks are registered", async () => {

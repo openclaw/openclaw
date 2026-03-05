@@ -572,7 +572,7 @@ export const buildTelegramMessageContext = async ({
           content: bodyText,
           timestamp: msg.date ? msg.date * 1000 : undefined,
           metadata: {
-            to: String(chatId),
+            to: `telegram:${chatId}`,
             provider: "telegram",
             surface: "telegram",
             threadId: resolvedThreadId,
