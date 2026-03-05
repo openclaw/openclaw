@@ -201,7 +201,7 @@ function normalizeLineEndings(text: string): string {
 }
 
 function normalizeTrailingNewlines(text: string): string {
-  return text.replace(/\n+$/g, "\n");
+  return text.replace(/\n+$/g, "");
 }
 
 function normalizeTextForDedup(text: string, role: string): string {

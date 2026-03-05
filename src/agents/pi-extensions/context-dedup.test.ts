@@ -90,6 +90,18 @@ describe("context-dedup", () => {
     expect(String(result.messages[0].content)).toBe(withExtraTrailing);
     expect(String(result.messages[1].content)).toContain("[1 repeat of content omitted]");
     expect(String(result.messages[1].content)).toContain("context message #0");
+
+    const withoutTrailing = base.replace(/\n+$/g, "");
+    const result2 = deduplicateMessages(
+      [
+        { role: "toolResult", content: base },
+        { role: "toolResult", content: withoutTrailing },
+      ],
+      DEDUP_ON,
+    );
+
+    expect(String(result2.messages[1].content)).toContain("[1 repeat of content omitted]");
+    expect(String(result2.messages[1].content)).toContain("context message #0");
   });
 
   it("preserves scalar string content shape after replacement", () => {
