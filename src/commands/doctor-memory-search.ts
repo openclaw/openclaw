@@ -118,7 +118,7 @@ export async function noteMemorySearchHealth(
   if (hasLocalEmbeddings(resolved.local)) {
     return;
   }
-  for (const provider of ["openai", "gemini", "voyage", "mistral"] as const) {
+  for (const provider of ["openai", "gemini", "voyage", "mistral", "bedrock"] as const) {
     if (hasRemoteApiKey || (await hasApiKeyForProvider(provider, cfg, agentDir))) {
       return;
     }
@@ -187,7 +187,7 @@ function hasLocalEmbeddings(local: { modelPath?: string }, useDefaultFallback = 
 }
 
 async function hasApiKeyForProvider(
-  provider: "openai" | "gemini" | "voyage" | "mistral" | "ollama",
+  provider: "openai" | "gemini" | "voyage" | "mistral" | "ollama" | "bedrock",
   cfg: OpenClawConfig,
   agentDir: string,
 ): Promise<boolean> {

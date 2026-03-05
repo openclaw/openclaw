@@ -17,7 +17,7 @@ export type ResolvedMemorySearchConfig = {
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
   multimodal: MemoryMultimodalSettings;
-  provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "auto";
+  provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "bedrock" | "auto";
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -33,7 +33,7 @@ export type ResolvedMemorySearchConfig = {
   experimental: {
     sessionMemory: boolean;
   };
-  fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "bedrock" | "none";
   model: string;
   outputDimensionality?: number;
   local: {

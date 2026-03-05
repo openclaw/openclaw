@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createEmbeddingProvider,
+  type BedrockEmbeddingClient,
   type EmbeddingProvider,
   type EmbeddingProviderResult,
   type GeminiEmbeddingClient,
@@ -72,8 +73,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     | "voyage"
     | "mistral"
     | "ollama"
+    | "bedrock"
     | "auto";
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+  protected fallbackFrom?:
+    | "openai"
+    | "local"
+    | "gemini"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "bedrock";
   protected fallbackReason?: string;
   private readonly providerUnavailableReason?: string;
   protected openAi?: OpenAiEmbeddingClient;
@@ -81,6 +90,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected voyage?: VoyageEmbeddingClient;
   protected mistral?: MistralEmbeddingClient;
   protected ollama?: OllamaEmbeddingClient;
+  protected bedrock?: BedrockEmbeddingClient;
   protected batch: {
     enabled: boolean;
     wait: boolean;
@@ -214,6 +224,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.voyage = params.providerResult.voyage;
     this.mistral = params.providerResult.mistral;
     this.ollama = params.providerResult.ollama;
+    this.bedrock = params.providerResult.bedrock;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();

@@ -34,6 +34,9 @@ importers:
       '@aws-sdk/client-bedrock':
         specifier: ^3.1011.0
         version: 3.1011.0
+      '@aws-sdk/client-bedrock-runtime':
+        specifier: ^3.1011.0
+        version: 3.1011.0
       '@clack/prompts':
         specifier: ^1.1.0
         version: 1.1.0

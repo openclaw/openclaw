@@ -676,7 +676,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "0.16.1",
     "@aws-sdk/client-bedrock": "^3.1011.0",
-    "@aws-sdk/client-bedrock-runtime": "^3.1000.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1011.0",
     "@clack/prompts": "^1.1.0",
     "@homebridge/ciao": "^1.3.5",
     "@line/bot-sdk": "^10.6.0",
