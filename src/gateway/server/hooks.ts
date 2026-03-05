@@ -52,7 +52,7 @@ export function createGatewayHooksRequestHandler(params: {
       ) {
         notifySessionKey = `agent:${targetAgentId}:${sessionKey}`;
       } else {
-        notifySessionKey = requestedSessionKey;
+        notifySessionKey = sessionKey || mainSessionKey;
       }
     }
     const jobId = randomUUID();
