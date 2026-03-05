@@ -328,7 +328,7 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
       break;
     }
-    if (entry.retryCount >= MAX_RETRIES) {
+    if (entry.retryCount > MAX_RETRIES) {
       opts.log.warn(
         `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
       );
