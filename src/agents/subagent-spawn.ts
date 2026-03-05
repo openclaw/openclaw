@@ -15,7 +15,7 @@ import {
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
-import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
+import { normalizeModelSelection, resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
@@ -386,6 +386,24 @@ export async function spawnSubagentDirect(
   const childDepth = callerDepth + 1;
   const spawnedByKey = requesterInternalKey;
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+  const requestedModelSelection = normalizeModelSelection(modelOverride);
+  const lockedTargetModelSelection =
+    normalizeModelSelection(targetAgentConfig?.subagents?.model) ??
+    normalizeModelSelection(targetAgentConfig?.model);
+
+  if (
+    requestedModelSelection &&
+    lockedTargetModelSelection &&
+    requestedModelSelection !== lockedTargetModelSelection
+  ) {
+    return {
+      status: "forbidden",
+      error:
+        `agentId "${targetAgentId}" is model-locked to "${lockedTargetModelSelection}"; ` +
+        `model override "${requestedModelSelection}" is not allowed`,
+    };
+  }
+
   const resolvedModel = resolveSubagentSpawnModelSelection({
     cfg,
     agentId: targetAgentId,

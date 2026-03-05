@@ -245,6 +245,32 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     });
   });
 
+  it("sessions_spawn blocks cross-model override for model-locked target agent", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: { subagents: { model: "anthropic/claude-sonnet-4-5" } },
+        list: [{ id: "research", model: { primary: "google-gemini-cli/gemini-3.1-pro-preview" } }],
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-model-lock", {
+      task: "do thing",
+      model: "anthropic/claude-opus-4-6",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+    });
+    expect(String((result.details as { error?: string }).error ?? "")).toContain("model-locked");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("sessions_spawn fails when model patch is rejected", async () => {
     const calls: GatewayCall[] = [];
     mockLongRunningSpawnFlow({
