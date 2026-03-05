@@ -242,6 +242,37 @@ function resolveZaiGlm5ForwardCompatModel(
   } as Model<Api>);
 }
 
+const ANTIGRAVITY_31_PRO_TEMPLATE_IDS = ["gemini-3-pro-low", "gemini-3-pro-high"] as const;
+const ANTIGRAVITY_31_FLASH_TEMPLATE_IDS = ["gemini-3-flash"] as const;
+
+function resolveGoogleAntigravityForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  if (normalizeProviderId(provider) !== "google-antigravity") {
+    return undefined;
+  }
+  const trimmed = modelId.trim();
+  const lower = trimmed.toLowerCase();
+
+  let templateIds: readonly string[];
+  if (lower.startsWith(GEMINI_3_1_PRO_PREFIX)) {
+    templateIds = ANTIGRAVITY_31_PRO_TEMPLATE_IDS;
+  } else if (lower.startsWith(GEMINI_3_1_FLASH_PREFIX)) {
+    templateIds = ANTIGRAVITY_31_FLASH_TEMPLATE_IDS;
+  } else {
+    return undefined;
+  }
+
+  return cloneFirstTemplateModel({
+    normalizedProvider: "google-antigravity",
+    trimmedModelId: trimmed,
+    templateIds: [...templateIds],
+    modelRegistry,
+  });
+}
+
 export function resolveForwardCompatModel(
   provider: string,
   modelId: string,
@@ -252,6 +283,7 @@ export function resolveForwardCompatModel(
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry)
+    resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveGoogleAntigravityForwardCompatModel(provider, modelId, modelRegistry)
   );
 }
