@@ -1315,6 +1315,36 @@ describe("createTelegramBot", () => {
     const payload = replySpy.mock.calls[0][0];
     expect(payload.WasMentioned).toBe(true);
   });
+  it("blocks unauthorized /command@bot after getMe fallback resolves bot username", async () => {
+    resetHarnessSpies();
+    getMeSpy.mockResolvedValue({
+      username: "openclaw_bot",
+      has_topics_enabled: true,
+    });
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groupAllowFrom: ["123456789"],
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+
+    await dispatchMessage({
+      message: {
+        chat: { id: 7, type: "group", title: "Test Group" },
+        text: "/status@openclaw_bot",
+        date: 1_736_381_000,
+        message_id: 201,
+        from: { id: 9, first_name: "Ada", username: "ada" },
+      },
+      me: {},
+    });
+
+    expect(getMeSpy).toHaveBeenCalledTimes(1);
+    expect(replySpy).not.toHaveBeenCalled();
+  });
   it("includes reply-to context when a Telegram reply is received", async () => {
     resetHarnessSpies();
 
