@@ -5,8 +5,9 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  hono: 4.11.10
-  fast-xml-parser: 5.3.6
+  hono: 4.12.5
+  '@hono/node-server': 1.19.10
+  fast-xml-parser: 5.3.8
   request: npm:@cypress/request@3.0.10
   request-promise: npm:@cypress/request-promise@5.0.0
   form-data: 2.5.4
@@ -14,7 +15,7 @@ overrides:
   qs: 6.14.2
   node-domexception: npm:@nolyfill/domexception@^1.0.28
   '@sinclair/typebox': 0.34.48
-  tar: 7.5.9
+  tar: 7.5.10
   tough-cookie: 4.1.3
 
 importers:
@@ -181,8 +182,8 @@ importers:
         specifier: ^7.2.0
         version: 7.2.0
       tar:
-        specifier: 7.5.9
-        version: 7.5.9
+        specifier: 7.5.10
+        version: 7.5.10
       tslog:
         specifier: ^4.10.2
         version: 4.10.2
@@ -344,8 +345,8 @@ importers:
         specifier: ^10.6.1
         version: 10.6.1
       openclaw:
-        specifier: '>=2026.3.1'
-        version: 2026.3.1(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.10)(node-llama-cpp@3.16.2(typescript@5.9.3))
+        specifier: '>=2026.3.2'
+        version: 2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.12.5)(node-llama-cpp@3.16.2(typescript@5.9.3))
 
   extensions/imessage: {}
 
@@ -405,8 +406,8 @@ importers:
   extensions/memory-core:
     dependencies:
       openclaw:
-        specifier: '>=2026.3.1'
-        version: 2026.3.1(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.10)(node-llama-cpp@3.16.2(typescript@5.9.3))
+        specifier: '>=2026.3.2'
+        version: 2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.12.5)(node-llama-cpp@3.16.2(typescript@5.9.3))
 
   extensions/memory-lancedb:
     dependencies:
@@ -463,8 +464,8 @@ importers:
   extensions/tlon:
     dependencies:
       '@tloncorp/api':
-        specifier: github:tloncorp/api-beta#7eede1c1a756977b09f96aa14a92e2b06318ae87
-        version: https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87
+        specifier: git+https://github.com/tloncorp/api-beta.git#7eede1c1a756977b09f96aa14a92e2b06318ae87
+        version: git+https://github.com/tloncorp/api-beta.git#7eede1c1a756977b09f96aa14a92e2b06318ae87
       '@tloncorp/tlon-skill':
         specifier: 0.1.9
         version: 0.1.9
@@ -1151,11 +1152,11 @@ packages:
     resolution: {integrity: sha512-f7MAw7YuoEYgJEQ1VyRcLHGuVmCpmXi65GVR8CAtPWPqIZf/HFr4vHzVpOfQMpEQw9Pt5uh07guuLt5HE8ruog==}
     hasBin: true
 
-  '@hono/node-server@1.19.9':
-    resolution: {integrity: sha512-vHL6w3ecZsky+8P5MD+eFfaGTyCeOHUIFYMGpQGbrBTSmNNoxv0if69rEZ5giu36weC5saFuznL411gRX7bJDw==}
+  '@hono/node-server@1.19.10':
+    resolution: {integrity: sha512-hZ7nOssGqRgyV3FVVQdfi+U4q02uB23bpnYpdvNXkYTRRyWx84b7yf1ans+dnJ/7h41sGL3CeQTfO+ZGxuO+Iw==}
     engines: {node: '>=18.14.1'}
     peerDependencies:
-      hono: 4.11.10
+      hono: 4.12.5
 
   '@huggingface/jinja@0.5.5':
     resolution: {integrity: sha512-xRlzazC+QZwr6z4ixEqYHo9fgwhTZ3xNSdljlKfUFGZSdlvt166DljRELFUfFytlYOYvo3vTisA/AFOuOAzFQQ==}
@@ -2944,8 +2945,8 @@ packages:
     resolution: {integrity: sha512-5Kc5CM2Ysn3vTTArBs2vESUt0AQiWZA86yc1TI3B+lxXmtEq133C1nxXNOgnzhrivdPZIh3zLj5gDnZjoLL5GA==}
     engines: {node: '>=12.17.0'}
 
-  '@tloncorp/api@https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87':
-    resolution: {tarball: https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87}
+  '@tloncorp/api@git+https://github.com/tloncorp/api-beta.git#7eede1c1a756977b09f96aa14a92e2b06318ae87':
+    resolution: {commit: 7eede1c1a756977b09f96aa14a92e2b06318ae87, repo: https://github.com/tloncorp/api-beta.git, type: git}
     version: 0.0.2
 
   '@tloncorp/tlon-skill-darwin-arm64@0.1.9':
@@ -4005,8 +4006,8 @@ packages:
   fast-uri@3.1.0:
     resolution: {integrity: sha512-iPeeDKJSWf4IEOasVVrknXpaBV0IApz/gp7S2bb7Z4Lljbl2MGJRqInZiUrQwV16cpzw/D3S5j5Julj/gT52AA==}
 
-  fast-xml-parser@5.3.6:
-    resolution: {integrity: sha512-QNI3sAvSvaOiaMl8FYU4trnEzCwiRr8XMWgAHzlrWpTSj+QaCSvOf1h82OEP1s4hiAXhnbXSyFWCf4ldZzZRVA==}
+  fast-xml-parser@5.3.8:
+    resolution: {integrity: sha512-53jIF4N6u/pxvaL1eb/hEZts/cFLWZ92eCfLrNyCI0k38lettCG/Bs40W9pPwoPXyHQlKu2OUbQtiEIZK/J6Vw==}
     hasBin: true
 
   fd-slicer@1.1.0:
@@ -4246,8 +4247,8 @@ packages:
   highlight.js@10.7.3:
     resolution: {integrity: sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A==}
 
-  hono@4.11.10:
-    resolution: {integrity: sha512-kyWP5PAiMooEvGrA9jcD3IXF7ATu8+o7B3KCbPXid5se52NPqnOpM/r9qeW2heMnOekF4kqR1fXJqCYeCLKrZg==}
+  hono@4.12.5:
+    resolution: {integrity: sha512-3qq+FUBtlTHhtYxbxheZgY8NIFnkkC/MR8u5TTsr7YZ3wixryQ3cCwn3iZbg8p8B88iDBBAYSfZDS75t8MN7Vg==}
     engines: {node: '>=16.9.0'}
 
   hookable@6.0.1:
@@ -5004,8 +5005,8 @@ packages:
       zod:
         optional: true
 
-  openclaw@2026.3.1:
-    resolution: {integrity: sha512-7Pt5ykhaYa8TYpLWnBhaMg6Lp6kfk3rMKgqJ3WWESKM9BizYu1fkH/rF9BLeXlsNASgZdLp4oR8H0XfvIIoXIg==}
+  openclaw@2026.3.2:
+    resolution: {integrity: sha512-Gkqx24m7PF1DUXPI968DuC9n52lTZ5hI3X5PIi0HosC7J7d6RLkgVppj1mxvgiQAWMp41E41elvoi/h4KBjFcQ==}
     engines: {node: '>=22.12.0'}
     hasBin: true
     peerDependencies:
@@ -5726,10 +5727,9 @@ packages:
   tar-stream@3.1.7:
     resolution: {integrity: sha512-qJj60CXt7IU1Ffyc3NJMjh6EkuCFej46zUqJ4J7pqYlThyd9bO0XBTmcOIhSzZJVWfsLks0+nle/j538YAW9RQ==}
 
-  tar@7.5.9:
-    resolution: {integrity: sha512-BTLcK0xsDh2+PUe9F6c2TlRp4zOOBMTkoQHQIWSIzI0R7KG46uEwq4OPk2W7bZcprBMsuaeFsqwYr7pjh6CuHg==}
+  tar@7.5.10:
+    resolution: {integrity: sha512-8mOPs1//5q/rlkNSPcCegA6hiHJYDmSLEI8aMH/CdSQJNWztHC9WHNam5zdQlfpTwB9Xp7IBEsHfV5LKMJGVAw==}
     engines: {node: '>=18'}
-    deprecated: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   text-decoder@1.2.7:
     resolution: {integrity: sha512-vlLytXkeP4xvEq2otHeJfSQIRyWxo/oZGEbXrtEEF9Hnmrdly59sUbzZ/QgyWuLYHctCHxFF4tRQZNQ9k60ExQ==}
@@ -6777,7 +6777,7 @@ snapshots:
   '@aws-sdk/xml-builder@3.972.8':
     dependencies:
       '@smithy/types': 4.13.0
-      fast-xml-parser: 5.3.6
+      fast-xml-parser: 5.3.8
       tslib: 2.8.1
 
   '@aws/lambda-invoke-store@0.2.3': {}
@@ -6992,7 +6992,16 @@ snapshots:
       npmlog: 5.0.1
       rimraf: 3.0.2
       semver: 7.7.4
-      tar: 7.5.9
+      tar: 7.5.10
+    transitivePeerDependencies:
+      - encoding
+      - supports-color
+    optional: true
+
+  '@discordjs/opus@0.10.0':
+    dependencies:
+      '@discordjs/node-pre-gyp': 0.4.5
+      node-addon-api: 8.5.0
     transitivePeerDependencies:
       - encoding
       - supports-color
@@ -7176,9 +7185,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@hono/node-server@1.19.9(hono@4.11.10)':
+  '@hono/node-server@1.19.10(hono@4.12.5)':
     dependencies:
-      hono: 4.11.10
+      hono: 4.12.5
     optional: true
 
   '@huggingface/jinja@0.5.5': {}
@@ -8945,7 +8954,7 @@ snapshots:
 
   '@tinyhttp/content-disposition@2.2.4': {}
 
-  '@tloncorp/api@https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87':
+  '@tloncorp/api@git+https://github.com/tloncorp/api-beta.git#7eede1c1a756977b09f96aa14a92e2b06318ae87':
     dependencies:
       '@aws-sdk/client-s3': 3.1000.0
       '@aws-sdk/s3-request-presigner': 3.1000.0
@@ -9766,7 +9775,7 @@ snapshots:
       node-api-headers: 1.8.0
       rc: 1.2.8
       semver: 7.7.4
-      tar: 7.5.9
+      tar: 7.5.10
       url-join: 4.0.1
       which: 6.0.1
       yargs: 17.7.2
@@ -10155,7 +10164,7 @@ snapshots:
 
   fast-uri@3.1.0: {}
 
-  fast-xml-parser@5.3.6:
+  fast-xml-parser@5.3.8:
     dependencies:
       strnum: 2.2.0
 
@@ -10475,7 +10484,7 @@ snapshots:
 
   highlight.js@10.7.3: {}
 
-  hono@4.11.10:
+  hono@4.12.5:
     optional: true
 
   hookable@6.0.1: {}
@@ -11269,7 +11278,7 @@ snapshots:
       ws: 8.19.0
       zod: 4.3.6
 
-  openclaw@2026.3.1(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.10)(node-llama-cpp@3.16.2(typescript@5.9.3)):
+  openclaw@2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.12.5)(node-llama-cpp@3.16.2(typescript@5.9.3)):
     dependencies:
       '@agentclientprotocol/sdk': 0.14.1(zod@4.3.6)
       '@aws-sdk/client-bedrock': 3.1000.0
@@ -11324,7 +11333,8 @@ snapshots:
       qrcode-terminal: 0.12.0
       sharp: 0.34.5
       sqlite-vec: 0.1.7-alpha.2
-      tar: 7.5.9
+      strip-ansi: 7.2.0
+      tar: 7.5.10
       tslog: 4.10.2
       undici: 7.22.0
       ws: 8.19.0
@@ -12269,7 +12279,7 @@ snapshots:
       - bare-abort-controller
       - react-native-b4a
 
-  tar@7.5.9:
+  tar@7.5.10:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0
