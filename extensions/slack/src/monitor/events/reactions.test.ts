@@ -236,5 +236,35 @@ describe("registerSlackReactionEvents", () => {
       await handler!({ event: buildReactionEventWithItemUser(), body: {} });
       expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
     });
+
+    it("calls requestHeartbeatNow for 'allowlist' when user is in reactionAllowlist", async () => {
+      reactionQueueMock.mockReset();
+      reactionAllowMock.mockReset().mockResolvedValue([]);
+      requestHeartbeatNowMock.mockReset();
+      const harness = createSlackSystemEventTestHarness({
+        reactionTrigger: "allowlist",
+        reactionAllowlist: ["U123", "U456"],
+      });
+      registerSlackReactionEvents({ ctx: harness.ctx });
+      const handler = harness.getHandler("reaction_added");
+      await handler!({ event: buildReactionEventWithItemUser({ user: "U123" }), body: {} });
+      expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "reaction" }),
+      );
+    });
+
+    it("does NOT call requestHeartbeatNow for 'allowlist' when user is not in list", async () => {
+      reactionQueueMock.mockReset();
+      reactionAllowMock.mockReset().mockResolvedValue([]);
+      requestHeartbeatNowMock.mockReset();
+      const harness = createSlackSystemEventTestHarness({
+        reactionTrigger: "allowlist",
+        reactionAllowlist: ["U456"],
+      });
+      registerSlackReactionEvents({ ctx: harness.ctx });
+      const handler = harness.getHandler("reaction_added");
+      await handler!({ event: buildReactionEventWithItemUser({ user: "U123" }), body: {} });
+      expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    });
   });
 });

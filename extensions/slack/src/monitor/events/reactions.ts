@@ -63,8 +63,11 @@ export function registerSlackReactionEvents(params: {
       const reactionTrigger = ctx.cfg.channels?.slack?.reactionTrigger ?? "off";
       if (reactionTrigger !== "off") {
         const isBotMessage = event.item_user === ctx.botUserId;
+        const isAllowlisted =
+          reactionTrigger === "allowlist" &&
+          ctx.reactionAllowlist?.some((id) => String(id) === String(event.user));
         const shouldTrigger =
-          reactionTrigger === "all" || (reactionTrigger === "own" && isBotMessage);
+          reactionTrigger === "all" || (reactionTrigger === "own" && isBotMessage) || isAllowlisted;
         if (shouldTrigger) {
           logVerbose(`slack: reaction trigger wake for session ${ingressContext.sessionKey}`);
           requestHeartbeatNow({
