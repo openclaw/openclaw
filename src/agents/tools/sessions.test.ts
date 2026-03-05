@@ -9,6 +9,11 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+const runSessionsSendA2AFlowMock = vi.fn();
+vi.mock("./sessions-send-tool.a2a.js", () => ({
+  runSessionsSendA2AFlow: (opts: unknown) => runSessionsSendA2AFlowMock(opts),
+}));
+
 type SessionsToolTestConfig = {
   session: { scope: "per-sender"; mainKey: string };
   tools: {
@@ -417,6 +422,7 @@ describe("sessions_list transcriptPath resolution", () => {
 describe("sessions_send gating", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
+    runSessionsSendA2AFlowMock.mockClear();
   });
 
   it("returns an error when neither sessionKey nor label is provided", async () => {
@@ -466,5 +472,55 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
     expect(result.details).toMatchObject({ status: "forbidden" });
+  });
+
+  it("sessions_send delivers reply via A2A when wait times out", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+
+    const targetKey = "agent:main:discord:dm:user1";
+    const fakeRunId = "run-timeout-123";
+
+    // sessions.list for visibility check
+    callGatewayMock.mockImplementation((opts: { method: string }) => {
+      if (opts.method === "sessions.list") {
+        return Promise.resolve({
+          path: "/tmp/sessions.json",
+          sessions: [
+            { key: targetKey, kind: "direct" },
+            { key: MAIN_AGENT_SESSION_KEY, kind: "direct" },
+          ],
+        });
+      }
+      if (opts.method === "agent") {
+        return Promise.resolve({ runId: fakeRunId });
+      }
+      if (opts.method === "agent.wait") {
+        return Promise.resolve({ status: "timeout", error: "timed out" });
+      }
+      return Promise.resolve({});
+    });
+
+    const tool = createMainSessionsSendTool();
+    const result = await tool.execute("call-timeout", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 5,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "timeout",
+      runId: fakeRunId,
+    });
+
+    expect(runSessionsSendA2AFlowMock).toHaveBeenCalledTimes(1);
+    const a2aArgs = runSessionsSendA2AFlowMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(a2aArgs.waitRunId).toBe(fakeRunId);
+    expect(a2aArgs.roundOneReply).toBeUndefined();
   });
 });

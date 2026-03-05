@@ -217,7 +217,7 @@ export function createSessionsSendTool(opts?: {
       const timeoutSeconds =
         typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
           ? Math.max(0, Math.floor(params.timeoutSeconds))
-          : 30;
+          : 90;
       const timeoutMs = timeoutSeconds * 1000;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
@@ -321,15 +321,21 @@ export function createSessionsSendTool(opts?: {
       } catch (err) {
         const messageText =
           err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+        const isTimeout = messageText.includes("gateway timeout");
+        if (isTimeout) {
+          // Same late-reply fix: deliver via A2A when gateway-level timeout fires
+          startA2AFlow(undefined, runId);
+        }
         return jsonResult({
           runId,
-          status: messageText.includes("gateway timeout") ? "timeout" : "error",
+          status: isTimeout ? "timeout" : "error",
           error: messageText,
           sessionKey: displayKey,
         });
       }
 
       if (waitStatus === "timeout") {
+        startA2AFlow(undefined, runId);
         return jsonResult({
           runId,
           status: "timeout",
