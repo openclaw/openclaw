@@ -119,8 +119,8 @@ describe("applyAppendOnlyStreamUpdate", () => {
 
 describe("buildStatusFinalPreviewText", () => {
   it("cycles status dots", () => {
-    expect(buildStatusFinalPreviewText(1)).toBe("Status: thinking..");
-    expect(buildStatusFinalPreviewText(2)).toBe("Status: thinking...");
-    expect(buildStatusFinalPreviewText(3)).toBe("Status: thinking.");
+    expect(buildStatusFinalPreviewText(1)).toBe("*Status update*\nstate: thinking..");
+    expect(buildStatusFinalPreviewText(2)).toBe("*Status update*\nstate: thinking...");
+    expect(buildStatusFinalPreviewText(3)).toBe("*Status update*\nstate: thinking.");
   });
 });

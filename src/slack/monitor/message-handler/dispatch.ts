@@ -47,18 +47,27 @@ function buildSlackReasoningProgressText(text?: string): string | undefined {
     .map((line) => {
       const stripped = line.trim();
       if (stripped.startsWith("_") && stripped.endsWith("_") && stripped.length > 1) {
-        return stripped.slice(1, -1);
+        return stripped.slice(1, -1).trim();
       }
       return stripped;
     })
+    .map((line) => line.replace(/\s+/g, " ").replace(/^[-*]\s+/, ""))
+    .filter(Boolean)
     .join("\n")
     .trim();
   if (!normalized) {
     return undefined;
   }
-  const truncated = truncateUtf16Safe(normalized, REASONING_PROGRESS_MAX_CHARS).trimEnd();
-  const ellipsis = normalized.length > truncated.length ? "\n..." : "";
-  return `Status: analyzing\n${truncated}${ellipsis}`;
+  const bulletLines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => `- ${line}`)
+    .join("\n");
+  const structured = `*Status update*\nstate: analyzing\nprogress:\n${bulletLines}`;
+  const truncated = truncateUtf16Safe(structured, REASONING_PROGRESS_MAX_CHARS).trimEnd();
+  const ellipsis = structured.length > truncated.length ? "\n..." : "";
+  return `${truncated}${ellipsis}`;
 }
 
 export function isSlackStreamingEnabled(params: {
