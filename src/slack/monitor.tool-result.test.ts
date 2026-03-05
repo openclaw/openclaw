@@ -440,7 +440,7 @@ describe("monitorSlackProvider tool results", () => {
       await opts?.onReasoningStream?.({
         text: "Reasoning:\n_checking Grafana dashboards for matching alerts_",
       });
-      return { text: "final reply" };
+      return { text: "Chinese food today." };
     });
 
     setDirectMessageReplyMode("all");
@@ -459,7 +459,7 @@ describe("monitorSlackProvider tool results", () => {
     };
 
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: makeSlackMessageEvent(),
+      event: makeSlackMessageEvent({ text: "Indian or Chinese food?" }),
     });
 
     expect(reactMock).toHaveBeenCalledTimes(1);
@@ -469,9 +469,10 @@ describe("monitorSlackProvider tool results", () => {
     );
     expect(statusCall?.[1]).toContain("progress:");
     expect(statusCall?.[1]).toContain("- checking Grafana dashboards for matching alerts");
+    expect(statusCall?.[1]).not.toContain("Direct answer:");
     expect(statusCall?.[2]).toMatchObject({ threadTs: "123" });
     const sentTexts = sendMock.mock.calls.map((call) => String(call[1]));
-    expect(sentTexts).toContain("PFX final reply");
+    expect(sentTexts).toContain("PFX Chinese food today.");
   });
 
   it("falls back to thread emoji ack when progress reaction is missing_scope", async () => {
