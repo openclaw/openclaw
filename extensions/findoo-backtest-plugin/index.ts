@@ -19,15 +19,18 @@ function formatSummary(r: RemoteReport): Record<string, unknown> {
   const p = r.performance;
   return {
     task_id: r.task_id,
-    total_return: p?.totalReturn != null ? `${(p.totalReturn * 100).toFixed(2)}%` : "N/A",
-    sharpe: p?.sharpeRatio?.toFixed(3) ?? "N/A",
-    max_drawdown: p?.maxDrawdown != null ? `${(p.maxDrawdown * 100).toFixed(2)}%` : "N/A",
+    total_return: p?.totalReturn != null ? `${p.totalReturn.toFixed(2)}%` : "N/A",
+    sharpe: p?.sharpe?.toFixed(3) ?? "N/A",
+    max_drawdown: p?.maxDrawdown != null ? `${p.maxDrawdown.toFixed(2)}%` : "N/A",
     total_trades: p?.totalTrades ?? 0,
-    ...(p?.sortinoRatio != null ? { sortino: p.sortinoRatio.toFixed(3) } : {}),
-    ...(p?.calmarRatio != null ? { calmar: p.calmarRatio.toFixed(3) } : {}),
+    ...(p?.sortino != null ? { sortino: p.sortino.toFixed(3) } : {}),
+    ...(p?.calmar != null ? { calmar: p.calmar.toFixed(3) } : {}),
     ...(p?.winRate != null ? { win_rate: `${(p.winRate * 100).toFixed(1)}%` } : {}),
     ...(p?.profitFactor != null ? { profit_factor: p.profitFactor.toFixed(2) } : {}),
     ...(p?.finalEquity != null ? { final_equity: p.finalEquity.toFixed(2) } : {}),
+    ...(p?.annualizedReturn != null
+      ? { annualized_return: `${p.annualizedReturn.toFixed(2)}%` }
+      : {}),
   };
 }
 

@@ -13,16 +13,15 @@ function makeTask(status: string, message?: string): RemoteTask {
 
 const MOCK_REPORT: RemoteReport = {
   task_id: "t1",
-  metadata: null,
   performance: {
-    totalReturn: 0.15,
-    sharpeRatio: 1.2,
-    maxDrawdown: -0.08,
+    totalReturn: 15.0,
+    sharpe: 1.2,
+    maxDrawdown: 8.0,
     totalTrades: 42,
   },
   alpha: null,
-  equity_curve: [],
-  trade_journal: [],
+  equity_curve: null,
+  trade_journal: null,
 };
 
 function mockClient(taskSequence: RemoteTask[], report = MOCK_REPORT) {

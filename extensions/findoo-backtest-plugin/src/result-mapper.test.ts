@@ -2,19 +2,25 @@ import { describe, expect, it } from "vitest";
 import { toBacktestResult } from "./result-mapper.js";
 import type { RemoteReport } from "./types.js";
 
+// Mock report matching real API v1.1 format:
+// - performance uses short names (sharpe, not sharpeRatio)
+// - values are percentage (15.0 = 15%), not decimal (0.15)
+// - equity_curve/trade_journal may be null
 const MOCK_REPORT: RemoteReport = {
   task_id: "t-42",
-  metadata: { strategy_name: "momentum_v1" },
   performance: {
-    totalReturn: 0.15,
-    sharpeRatio: 1.23,
-    sortinoRatio: 1.56,
-    maxDrawdown: -0.082,
-    calmarRatio: 1.83,
-    winRate: 0.55,
+    totalReturn: 15.0, // 15%
+    sharpe: 1.23,
+    sortino: 1.56,
+    maxDrawdown: 8.2, // 8.2%
+    calmar: 1.83,
+    winRate: 55.0, // 55%
     profitFactor: 1.78,
     totalTrades: 24,
     finalEquity: 115000,
+    annualizedReturn: 14.5,
+    maxDrawdownStart: "2024-03-01",
+    maxDrawdownEnd: "2024-04-15",
   },
   alpha: null,
   trade_journal: [
@@ -41,16 +47,19 @@ describe("toBacktestResult", () => {
     initialCapital: 100000,
   });
 
-  it("maps performance fields correctly (camelCase)", () => {
+  it("maps performance fields and converts percentages to decimals", () => {
     expect(result.strategyId).toBe("momentum_v1");
     expect(result.initialCapital).toBe(100000);
     expect(result.finalEquity).toBe(115000);
-    expect(result.totalReturn).toBe(0.15);
+    // totalReturn: 15.0% → 0.15
+    expect(result.totalReturn).toBeCloseTo(0.15, 6);
     expect(result.sharpe).toBe(1.23);
     expect(result.sortino).toBe(1.56);
-    expect(result.maxDrawdown).toBe(-0.082);
+    // maxDrawdown: 8.2% → 0.082
+    expect(result.maxDrawdown).toBeCloseTo(0.082, 6);
     expect(result.calmar).toBe(1.83);
-    expect(result.winRate).toBe(0.55);
+    // winRate: 55.0% → 0.55
+    expect(result.winRate).toBeCloseTo(0.55, 6);
     expect(result.profitFactor).toBe(1.78);
     expect(result.totalTrades).toBe(24);
   });
@@ -81,46 +90,50 @@ describe("toBacktestResult", () => {
     expect(result.endDate).toBe(new Date("2024-01-05").getTime());
   });
 
-  it("handles empty trade_journal and equity_curve", () => {
-    const emptyReport: RemoteReport = {
-      task_id: "t-empty",
-      metadata: null,
+  it("handles null trade_journal and equity_curve", () => {
+    const nullReport: RemoteReport = {
+      task_id: "t-null",
       performance: {
-        totalReturn: 0,
-        sharpeRatio: 0,
-        maxDrawdown: 0,
-        totalTrades: 0,
+        totalReturn: -23.91,
+        sharpe: -1.63,
+        sortino: -2.26,
+        maxDrawdown: 25.21,
+        calmar: -0.95,
+        winRate: 51.06,
+        profitFactor: 0.74,
+        totalTrades: 47,
+        finalEquity: 7608.55,
       },
       alpha: null,
-      trade_journal: [],
-      equity_curve: [],
+      trade_journal: null,
+      equity_curve: null,
     };
 
-    const r = toBacktestResult(emptyReport, {
-      strategyId: "empty",
-      initialCapital: 100000,
+    const r = toBacktestResult(nullReport, {
+      strategyId: "real-api",
+      initialCapital: 10000,
     });
 
     expect(r.trades).toEqual([]);
     expect(r.equityCurve).toEqual([]);
     expect(r.dailyReturns).toEqual([]);
-    expect(r.startDate).toBe(0);
-    expect(r.endDate).toBe(0);
+    expect(r.totalReturn).toBeCloseTo(-0.2391, 4);
+    expect(r.maxDrawdown).toBeCloseTo(0.2521, 4);
+    expect(r.winRate).toBeCloseTo(0.5106, 4);
+    expect(r.finalEquity).toBe(7608.55);
   });
 
   it("computes finalEquity from totalReturn when not in performance", () => {
     const minimalReport: RemoteReport = {
       task_id: "t-min",
-      metadata: null,
       performance: {
-        totalReturn: 0.25,
-        sharpeRatio: 1.0,
-        maxDrawdown: -0.05,
+        totalReturn: 25.0, // 25%
+        maxDrawdown: 5.0,
         totalTrades: 10,
       },
       alpha: null,
-      trade_journal: [],
-      equity_curve: [],
+      trade_journal: null,
+      equity_curve: null,
     };
 
     const r = toBacktestResult(minimalReport, {
@@ -128,7 +141,7 @@ describe("toBacktestResult", () => {
       initialCapital: 50000,
     });
 
-    // finalEquity = 50000 * (1 + 0.25) = 62500
+    // finalEquity = 50000 * (1 + 25/100) = 62500
     expect(r.finalEquity).toBe(62500);
   });
 });

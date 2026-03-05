@@ -5,9 +5,9 @@ import type { RemoteReport, RemoteTradeEntry } from "./types.js";
  * Convert a remote backtest report (v1.1) into the local BacktestResult format.
  *
  * v1.1 changes:
- * - performance fields are camelCase (totalReturn, sharpeRatio, etc.)
+ * - performance fields use short names: sharpe (not sharpeRatio), sortino, calmar
  * - trades live in trade_journal[] with {date, action, amount, price, reason}
- * - equity_curve[] still {date, equity}
+ * - equity_curve[] still {date, equity} (may be null)
  */
 export function toBacktestResult(
   report: RemoteReport,
@@ -28,13 +28,15 @@ export function toBacktestResult(
     startDate,
     endDate,
     initialCapital: meta.initialCapital,
-    finalEquity: p?.finalEquity ?? meta.initialCapital * (1 + (p?.totalReturn ?? 0)),
-    totalReturn: p?.totalReturn ?? 0,
-    sharpe: p?.sharpeRatio ?? 0,
-    sortino: p?.sortinoRatio ?? 0,
-    maxDrawdown: p?.maxDrawdown ?? 0,
-    calmar: p?.calmarRatio ?? 0,
-    winRate: p?.winRate ?? 0,
+    // v1.1: totalReturn/maxDrawdown/winRate are already percentage values (e.g. -23.91 = -23.91%)
+    // Convert to decimal ratio for local BacktestResult (e.g. -0.2391)
+    finalEquity: p?.finalEquity ?? meta.initialCapital * (1 + (p?.totalReturn ?? 0) / 100),
+    totalReturn: (p?.totalReturn ?? 0) / 100,
+    sharpe: p?.sharpe ?? 0,
+    sortino: p?.sortino ?? 0,
+    maxDrawdown: (p?.maxDrawdown ?? 0) / 100,
+    calmar: p?.calmar ?? 0,
+    winRate: (p?.winRate ?? 0) / 100,
     profitFactor: p?.profitFactor ?? 0,
     totalTrades: p?.totalTrades ?? 0,
     trades,

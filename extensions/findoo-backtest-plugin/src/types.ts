@@ -44,12 +44,11 @@ export interface RemoteTask {
 }
 
 // ---------------------------------------------------------------------------
-// result_summary — camelCase, 4 core fields
+// result_summary — camelCase, 3 core fields (inline in task response)
 // ---------------------------------------------------------------------------
 
 export interface RemoteResultSummary {
   totalReturn: number;
-  sharpeRatio: number;
   maxDrawdown: number;
   totalTrades: number;
 }
@@ -60,23 +59,27 @@ export interface RemoteResultSummary {
 
 export interface RemoteReport {
   task_id: string;
-  metadata: Record<string, unknown> | null;
   performance: RemotePerformance | null;
   alpha: Record<string, unknown> | null;
-  equity_curve: RemoteEquityPoint[];
-  trade_journal: RemoteTradeEntry[];
+  equity_curve: RemoteEquityPoint[] | null;
+  trade_journal: RemoteTradeEntry[] | null;
 }
 
+/** Performance fields use short names (sharpe, not sharpeRatio). */
 export interface RemotePerformance {
   totalReturn: number;
-  sharpeRatio?: number;
+  sharpe?: number;
+  sortino?: number;
+  calmar?: number;
   maxDrawdown?: number;
   totalTrades?: number;
-  sortinoRatio?: number;
-  calmarRatio?: number;
   winRate?: number;
   profitFactor?: number;
   finalEquity?: number;
+  annualizedReturn?: number;
+  maxDrawdownStart?: string;
+  maxDrawdownEnd?: string;
+  monthlyReturns?: Record<string, number>;
   [key: string]: unknown;
 }
 
