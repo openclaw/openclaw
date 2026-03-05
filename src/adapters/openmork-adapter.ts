@@ -19,12 +19,15 @@ class OpenMorkAdapterImpl implements OpenMorkAdapter {
     try {
       const controller = new AbortController();
       const t = setTimeout(() => controller.abort(), this.config.timeoutMs ?? 3000);
-      const res = await fetch(`${this.config.baseUrl.replace(/\/$/, '')}/health`, {
-        method: 'GET',
-        signal: controller.signal,
-      });
-      clearTimeout(t);
-      return res.ok;
+      try {
+        const res = await fetch(`${this.config.baseUrl.replace(/\/$/, '')}/health`, {
+          method: 'GET',
+          signal: controller.signal,
+        });
+        return res.ok;
+      } finally {
+        clearTimeout(t);
+      }
     } catch {
       return false;
     }
