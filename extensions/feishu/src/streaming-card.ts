@@ -216,14 +216,15 @@ export class FeishuStreamingSession {
     // message.create with root_id may silently ignore root_id for card
     // references (card_id format).
     let sendRes;
-    const sendMode = resolveStreamingCardSendMode(options);
+    const sendOptions = options ?? {};
+    const sendMode = resolveStreamingCardSendMode(sendOptions);
     if (sendMode === "reply") {
       sendRes = await this.client.im.message.reply({
-        path: { message_id: options.replyToMessageId },
+        path: { message_id: sendOptions.replyToMessageId! },
         data: {
           msg_type: "interactive",
           content: cardContent,
-          ...(options.replyInThread ? { reply_in_thread: true } : {}),
+          ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
         },
       });
     } else if (sendMode === "root_create") {
@@ -232,7 +233,7 @@ export class FeishuStreamingSession {
         params: { receive_id_type: receiveIdType },
         data: Object.assign(
           { receive_id: receiveId, msg_type: "interactive", content: cardContent },
-          { root_id: options.rootId },
+          { root_id: sendOptions.rootId },
         ),
       });
     } else {
