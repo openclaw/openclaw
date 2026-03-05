@@ -281,9 +281,10 @@ function createOpenAIResponsesContextManagementWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    const shouldDefaultToolChoice = model.api === "openai-responses";
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
-    if (!forceStore && !useServerCompaction) {
+    if (!shouldDefaultToolChoice && !forceStore && !useServerCompaction) {
       return underlying(model, context, options);
     }
 
@@ -296,6 +297,14 @@ function createOpenAIResponsesContextManagementWrapper(
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
+          if (
+            shouldDefaultToolChoice &&
+            Array.isArray(payloadObj.tools) &&
+            payloadObj.tools.length > 0 &&
+            payloadObj.tool_choice == null
+          ) {
+            payloadObj.tool_choice = "auto";
+          }
           if (forceStore) {
             payloadObj.store = true;
           }

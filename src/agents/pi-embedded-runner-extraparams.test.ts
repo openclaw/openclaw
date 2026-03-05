@@ -1059,6 +1059,58 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(false);
   });
 
+  it("defaults tool_choice to auto for OpenAI Responses payloads with tools", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api-gpt",
+      applyModelId: "gpt-5.3-codex",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api-gpt",
+        id: "gpt-5.3-codex",
+        baseUrl: "https://proxy.example.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        tools: [{ type: "function", name: "exec" }],
+      },
+    });
+    expect(payload.tool_choice).toBe("auto");
+  });
+
+  it("preserves explicit tool_choice for OpenAI Responses payloads with tools", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api-gpt",
+      applyModelId: "gpt-5.3-codex",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api-gpt",
+        id: "gpt-5.3-codex",
+        baseUrl: "https://proxy.example.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        tools: [{ type: "function", name: "exec" }],
+        tool_choice: "required",
+      },
+    });
+    expect(payload.tool_choice).toBe("required");
+  });
+
+  it("does not set tool_choice when OpenAI Responses payload has no tools", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api-gpt",
+      applyModelId: "gpt-5.3-codex",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api-gpt",
+        id: "gpt-5.3-codex",
+        baseUrl: "https://proxy.example.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        tools: [],
+      },
+    });
+    expect(payload).not.toHaveProperty("tool_choice");
+  });
+
   it("does not force store for OpenAI Responses when baseUrl is empty", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
