@@ -50,8 +50,12 @@ Output modes:
 - **TTY sessions**: pretty, colorized, structured log lines.
 - **Non-TTY sessions**: plain text.
 - `--json`: line-delimited JSON (one log event per line).
+- `--human`: human-readable activity timeline view.
+- `--human-full`: activity timeline with internal IDs/details.
 - `--plain`: force plain text in TTY sessions.
 - `--no-color`: disable ANSI colors.
+
+`--human`/`--human-full` cannot be combined with `--json`.
 
 In JSON mode, the CLI emits `type`-tagged objects:
 
@@ -129,6 +133,10 @@ You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g
 - `pretty`: human-friendly, colored, with timestamps.
 - `compact`: tighter output (best for long sessions).
 - `json`: JSON per line (for log processors).
+- `activity`: human-readable activity timeline.
+
+`openclaw gateway --human` and `openclaw gateway --human-full` force
+`consoleStyle: "activity"` for that process only.
 
 ### Redaction
 

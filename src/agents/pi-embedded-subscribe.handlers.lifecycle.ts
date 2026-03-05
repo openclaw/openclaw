@@ -1,4 +1,5 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { buildActivityMeta } from "../logging/activity/build.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { formatAssistantErrorText } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
@@ -10,7 +11,14 @@ export {
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
-  ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
+  ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`, {
+    activity: buildActivityMeta({
+      kind: "run",
+      summary: "agent start",
+      runId: ctx.params.runId,
+      status: "start",
+    }),
+  });
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "lifecycle",
@@ -39,6 +47,15 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
     ctx.log.warn(
       `embedded run agent end: runId=${ctx.params.runId} isError=true error=${errorText}`,
+      {
+        activity: buildActivityMeta({
+          kind: "run",
+          summary: "agent end error",
+          runId: ctx.params.runId,
+          status: "error",
+          preview: errorText,
+        }),
+      },
     );
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -57,7 +74,14 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       },
     });
   } else {
-    ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
+    ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`, {
+      activity: buildActivityMeta({
+        kind: "run",
+        summary: "agent end",
+        runId: ctx.params.runId,
+        status: isError ? "error" : "ok",
+      }),
+    });
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",

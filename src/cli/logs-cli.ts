@@ -1,6 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import { extractActivityMeta } from "../logging/activity/extract.js";
+import { renderActivityLine } from "../logging/activity/render.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { formatLocalIsoWithOffset, isValidTimeZone } from "../logging/timestamps.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -25,6 +27,8 @@ type LogsCliOptions = {
   follow?: boolean;
   interval?: string;
   json?: boolean;
+  human?: boolean;
+  humanFull?: boolean;
   plain?: boolean;
   color?: boolean;
   localTime?: boolean;
@@ -92,9 +96,45 @@ function formatLogLine(
     pretty: boolean;
     rich: boolean;
     localTime: boolean;
+    human: boolean;
+    humanFull: boolean;
   },
 ): string {
   const parsed = parseLogLine(raw);
+  if (opts.human) {
+    if (parsed) {
+      const activity = extractActivityMeta({
+        activity: parsed.activity,
+        message: parsed.message,
+      });
+      if (activity) {
+        const mode = opts.humanFull ? "full" : "normal";
+        const time = formatLogTimestamp(
+          parsed.time,
+          opts.pretty ? "pretty" : "plain",
+          opts.localTime,
+        );
+        return renderActivityLine(activity, {
+          mode,
+          time,
+          level: parsed.level,
+          subsystem: parsed.subsystem,
+        });
+      }
+
+      const level = (parsed.level ?? "").toLowerCase();
+      if (!opts.humanFull && (level === "debug" || level === "trace")) {
+        return "";
+      }
+    } else {
+      const activity = extractActivityMeta({ message: raw });
+      if (activity) {
+        return renderActivityLine(activity, { mode: opts.humanFull ? "full" : "normal" });
+      }
+      return raw;
+    }
+  }
+
   if (!parsed) {
     return raw;
   }
@@ -204,6 +244,8 @@ export function registerLogsCli(program: Command) {
     .option("--follow", "Follow log output", false)
     .option("--interval <ms>", "Polling interval in ms", "1000")
     .option("--json", "Emit JSON log lines", false)
+    .option("--human", "Render human-readable activity timelines", false)
+    .option("--human-full", "Show human timelines with internal IDs/details", false)
     .option("--plain", "Plain text output (no ANSI styling)", false)
     .option("--no-color", "Disable ANSI colors")
     .option("--local-time", "Display timestamps in local timezone", false)
@@ -220,7 +262,14 @@ export function registerLogsCli(program: Command) {
     const interval = parsePositiveInt(opts.interval, 1000);
     let cursor: number | undefined;
     let first = true;
+    const humanFull = Boolean(opts.humanFull);
+    const humanMode = humanFull || Boolean(opts.human);
     const jsonMode = Boolean(opts.json);
+    if (humanMode && jsonMode) {
+      errorLine("Cannot combine --human/--human-full with --json.");
+      process.exit(1);
+      return;
+    }
     const pretty = !jsonMode && Boolean(process.stdout.isTTY) && !opts.plain;
     const rich = isRich() && opts.color !== false;
     const localTime =
@@ -291,15 +340,17 @@ export function registerLogsCli(program: Command) {
           }
         }
         for (const line of lines) {
-          if (
-            !logLine(
-              formatLogLine(line, {
-                pretty,
-                rich,
-                localTime,
-              }),
-            )
-          ) {
+          const formatted = formatLogLine(line, {
+            pretty,
+            rich,
+            localTime,
+            human: humanMode,
+            humanFull,
+          });
+          if (!formatted) {
+            continue;
+          }
+          if (!logLine(formatted)) {
             return;
           }
         }

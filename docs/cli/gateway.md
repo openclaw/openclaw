@@ -33,6 +33,15 @@ Foreground alias:
 openclaw gateway run
 ```
 
+Human-readable activity timelines:
+
+```bash
+openclaw gateway --verbose --human
+openclaw gateway --verbose --human-full
+```
+
+`--human-full` implies `--human` and shows internal IDs/details.
+
 Notes:
 
 - By default, the Gateway refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs.
@@ -54,6 +63,8 @@ Notes:
 - `--reset`: reset dev config + credentials + sessions + workspace (requires `--dev`).
 - `--force`: kill any existing listener on the selected port before starting.
 - `--verbose`: verbose logs.
+- `--human`: render human-readable activity timelines in console output.
+- `--human-full`: activity timelines with internal IDs/details.
 - `--claude-cli-logs`: only show claude-cli logs in the console (and enable its stdout/stderr).
 - `--ws-log <auto|full|compact>`: websocket log style (default `auto`).
 - `--compact`: alias for `--ws-log compact`.

@@ -8,6 +8,8 @@ export const loggingState = {
   forceConsoleToStderr: false,
   consoleTimestampPrefix: false,
   consoleSubsystemFilter: null as string[] | null,
+  consoleStyleOverride: null as "pretty" | "compact" | "json" | "activity" | null,
+  consoleActivityFullDetails: false,
   resolvingConsoleSettings: false,
   streamErrorHandlersInstalled: false,
   rawConsole: null as {
