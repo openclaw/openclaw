@@ -38,6 +38,9 @@ function extractSignatureHex(raw: string, format: HookSignatureFormat): string |
 
 /**
  * Verify an HMAC signature using constant-time comparison.
+ * When `timestampValue` is provided it is prepended to the body before
+ * hashing so the timestamp is authenticated and cannot be tampered with
+ * for replay attacks.
  */
 export function verifyHmacSignature(params: {
   body: string;
@@ -45,12 +48,16 @@ export function verifyHmacSignature(params: {
   algorithm: HookSignatureAlgorithm;
   secret: string;
   format: HookSignatureFormat;
+  timestampValue?: string;
 }): boolean {
   const signatureHex = extractSignatureHex(params.signatureHeader, params.format);
   if (!signatureHex) {
     return false;
   }
-  const expected = createHmac(params.algorithm, params.secret).update(params.body).digest("hex");
+  // Include timestamp in HMAC input so it is authenticated and cannot be
+  // changed by an attacker to bypass replay protection.
+  const payload = params.timestampValue ? `${params.timestampValue}.${params.body}` : params.body;
+  const expected = createHmac(params.algorithm, params.secret).update(payload).digest("hex");
   // Constant-time comparison to prevent timing attacks.
   const expectedBuf = Buffer.from(expected, "utf-8");
   const providedBuf = Buffer.from(signatureHex.toLowerCase(), "utf-8");
@@ -92,6 +99,9 @@ export function resolveSignatureProviders(
 ): HookSignatureProvider[] {
   const providers: HookSignatureProvider[] = [];
   for (const [name, cfg] of Object.entries(signatures)) {
+    if (!cfg.secret?.trim()) {
+      continue; // Skip providers with empty secrets (defense-in-depth; schema also validates)
+    }
     providers.push({
       name,
       header: cfg.header.toLowerCase(),
@@ -136,12 +146,14 @@ export function verifyHookSignature(params: {
         continue;
       }
     }
+    const timestampValue = provider.timestampHeader ? headers[provider.timestampHeader] : undefined;
     const valid = verifyHmacSignature({
       body: rawBody,
       signatureHeader,
       algorithm: provider.algorithm,
       secret: provider.secret,
       format: provider.format,
+      timestampValue,
     });
     if (valid) {
       return { ok: true, provider: provider.name };

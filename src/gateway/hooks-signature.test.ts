@@ -176,8 +176,8 @@ describe("hooks-signature", () => {
     });
 
     test("selects matching provider from multiple", () => {
-      const sig = computeHmac("sha256", "stripe-secret", body, "hex");
       const now = Math.floor(Date.now() / 1000);
+      const sig = computeHmac("sha256", "stripe-secret", `${now}.${body}`, "hex");
       const result = verifyHookSignature({
         rawBody: body,
         headers: {
@@ -217,8 +217,8 @@ describe("hooks-signature", () => {
     });
 
     test("accepts timestamp within window", () => {
-      const sig = computeHmac("sha256", "stripe-secret", body, "hex");
       const now = Math.floor(Date.now() / 1000) - 100;
+      const sig = computeHmac("sha256", "stripe-secret", `${now}.${body}`, "hex");
       const result = verifyHookSignature({
         rawBody: body,
         headers: {
@@ -229,46 +229,85 @@ describe("hooks-signature", () => {
       });
       expect(result).toEqual({ ok: true, provider: "stripe" });
     });
+
+    test("rejects replayed request with tampered timestamp", () => {
+      const originalTs = Math.floor(Date.now() / 1000) - 400; // outside window
+      const sig = computeHmac("sha256", "stripe-secret", `${originalTs}.${body}`, "hex");
+      // Attacker replays with fresh timestamp but same body+sig
+      const freshTs = Math.floor(Date.now() / 1000);
+      const result = verifyHookSignature({
+        rawBody: body,
+        headers: {
+          "stripe-signature": sig,
+          "stripe-timestamp": String(freshTs),
+        },
+        providers: [stripeProvider],
+      });
+      expect(result).toEqual({ ok: false, error: "signature verification failed" });
+    });
+
+    test("provider without timestamp does not include timestamp in HMAC", () => {
+      // GitHub-style provider has no timestampHeader, so HMAC is body-only
+      const sig = computeHmac("sha256", secret, body, "hex");
+      const result = verifyHookSignature({
+        rawBody: body,
+        headers: { "x-hub-signature-256": `sha256=${sig}` },
+        providers: [githubProvider],
+      });
+      expect(result).toEqual({ ok: true, provider: "github" });
+    });
   });
 
   describe("resolveSignatureProviders", () => {
     test("resolves with defaults", () => {
       const providers = resolveSignatureProviders({
-        github: { header: "X-Hub-Signature-256", secret: "s3cret" },
+        github: { header: "X-Hub-Signature-256", secret: "test-secret" },
       });
-      expect(providers).toHaveLength(1);
-      expect(providers[0]).toEqual({
-        name: "github",
-        header: "x-hub-signature-256",
-        algorithm: "sha256",
-        secret: "s3cret",
-        format: "hex",
-        timestampHeader: undefined,
-        timestampMaxAgeSeconds: 300,
-      });
+      expect(providers).toEqual([
+        {
+          name: "github",
+          header: "x-hub-signature-256",
+          algorithm: "sha256",
+          secret: "test-secret",
+          format: "hex",
+          timestampHeader: undefined,
+          timestampMaxAgeSeconds: 300,
+        },
+      ]);
     });
 
     test("resolves explicit values", () => {
       const providers = resolveSignatureProviders({
-        custom: {
-          header: "X-Custom-Sig",
-          algorithm: "sha1",
-          secret: "key",
+        stripe: {
+          header: "Stripe-Signature",
+          algorithm: "sha256",
+          secret: "whsec_xxx",
           format: "prefixed",
-          timestampHeader: "X-Timestamp",
-          timestampMaxAgeSeconds: 60,
+          timestampHeader: "Stripe-Timestamp",
+          timestampMaxAgeSeconds: 600,
         },
       });
-      expect(providers).toHaveLength(1);
-      expect(providers[0]).toEqual({
-        name: "custom",
-        header: "x-custom-sig",
-        algorithm: "sha1",
-        secret: "key",
-        format: "prefixed",
-        timestampHeader: "x-timestamp",
-        timestampMaxAgeSeconds: 60,
+      expect(providers).toEqual([
+        {
+          name: "stripe",
+          header: "stripe-signature",
+          algorithm: "sha256",
+          secret: "whsec_xxx",
+          format: "prefixed",
+          timestampHeader: "stripe-timestamp",
+          timestampMaxAgeSeconds: 600,
+        },
+      ]);
+    });
+
+    test("skips providers with empty secret", () => {
+      const providers = resolveSignatureProviders({
+        valid: { header: "x-sig", secret: "real-secret" },
+        empty: { header: "x-sig2", secret: "" },
+        whitespace: { header: "x-sig3", secret: "   " },
       });
+      expect(providers).toHaveLength(1);
+      expect(providers[0].name).toBe("valid");
     });
   });
 });
