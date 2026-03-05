@@ -256,6 +256,63 @@ describe("registerFeishuChatTools", () => {
     expect(result.details).toEqual(expect.objectContaining({ error: "permission denied" }));
   });
 
+  it("handles history action — multi-locale post picks single locale without duplication", async () => {
+    const registerTool = vi.fn();
+    registerFeishuChatTools({
+      config: {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "app_id",
+            appSecret: "app_secret",
+            tools: { chat: true },
+          },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const tool = registerTool.mock.calls[0]?.[0];
+
+    messageListMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        has_more: false,
+        items: [
+          {
+            message_id: "om_multi",
+            msg_type: "post",
+            create_time: "1709625900",
+            sender: { id: "ou_1", id_type: "open_id", sender_type: "user" },
+            body: {
+              content: JSON.stringify({
+                zh_cn: {
+                  title: "中文标题",
+                  content: [[{ tag: "text", text: "中文内容" }]],
+                },
+                en_us: {
+                  title: "English Title",
+                  content: [[{ tag: "text", text: "English content" }]],
+                },
+              }),
+            },
+            deleted: false,
+            updated: false,
+          },
+        ],
+      },
+    });
+
+    const result = await tool.execute("tc_multi_locale", {
+      action: "history",
+      chat_id: "oc_1",
+    });
+
+    // Should pick zh_cn only, not duplicate
+    expect(result.details.messages[0].content).toBe("中文标题\n中文内容");
+  });
+
   it("skips registration when chat tool is disabled", () => {
     const registerTool = vi.fn();
     registerFeishuChatTools({

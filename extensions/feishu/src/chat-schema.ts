@@ -11,7 +11,12 @@ export const FeishuChatSchema = Type.Object({
     description: "Action to run: members | info | history",
   }),
   chat_id: Type.String({ description: "Chat ID (from URL or event payload)" }),
-  page_size: Type.Optional(Type.Number({ description: "Page size (1-100, default 50)" })),
+  page_size: Type.Optional(
+    Type.Number({
+      description:
+        "Page size. For 'members': 1-100 (default 50). For 'history': 1-50 (default 20).",
+    }),
+  ),
   page_token: Type.Optional(Type.String({ description: "Pagination token" })),
   member_id_type: Type.Optional(
     Type.Unsafe<(typeof MEMBER_ID_TYPE_VALUES)[number]>({
@@ -22,17 +27,22 @@ export const FeishuChatSchema = Type.Object({
   ),
   start_time: Type.Optional(
     Type.String({
-      description: "Start timestamp in seconds (inclusive). Omit for no lower bound.",
+      description:
+        "Start timestamp in Unix seconds (inclusive). Only used with the 'history' action. Omit for no lower bound.",
     }),
   ),
   end_time: Type.Optional(
-    Type.String({ description: "End timestamp in seconds (inclusive). Omit for no upper bound." }),
+    Type.String({
+      description:
+        "End timestamp in Unix seconds (inclusive). Only used with the 'history' action. Omit for no upper bound.",
+    }),
   ),
   sort_type: Type.Optional(
     Type.Unsafe<(typeof SORT_TYPE_VALUES)[number]>({
       type: "string",
       enum: [...SORT_TYPE_VALUES],
-      description: "Sort order: ByCreateTimeAsc | ByCreateTimeDesc (default: ByCreateTimeDesc)",
+      description:
+        "Sort order. Only used with the 'history' action. ByCreateTimeAsc | ByCreateTimeDesc (default: ByCreateTimeDesc)",
     }),
   ),
 });
