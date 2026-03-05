@@ -326,7 +326,7 @@ async function probeImage(
 }
 
 function ensureImageInput(model: OpenAIModel): OpenAIModel {
-  if (model.input.includes("image")) {
+  if ((model.input || []).includes("image")) {
     return model;
   }
   return {
@@ -472,7 +472,7 @@ export async function scanOpenRouterModels(
       };
 
       const toolResult = await probeTool(model, apiKey, timeoutMs);
-      const imageResult = model.input.includes("image")
+      const imageResult = (model.input || []).includes("image")
         ? await probeImage(ensureImageInput(model), apiKey, timeoutMs)
         : { ok: false, latencyMs: null, skipped: true };
 

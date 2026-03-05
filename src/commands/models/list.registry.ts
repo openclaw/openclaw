@@ -144,7 +144,7 @@ export function toModelRow(params: {
     };
   }
 
-  const input = model.input.join("+") || "text";
+  const input = (model.input || []).join("+") || "text";
   const local = isLocalBaseUrl(model.baseUrl);
   // Prefer model-level registry availability when present.
   // Fall back to provider-level auth heuristics only if registry availability isn't available.
