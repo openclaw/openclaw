@@ -527,15 +527,32 @@ export async function finalizeOnboardingWizard(
       );
     }
   } else {
-    await prompter.note(
-      [
-        "Web search was skipped. You can enable it later:",
-        `  ${formatCliCommand("openclaw configure --section web")}`,
-        "",
-        "Docs: https://docs.openclaw.ai/tools/web",
-      ].join("\n"),
-      "Web search",
+    // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
+    // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
+    const { SEARCH_PROVIDER_OPTIONS, hasExistingKey, hasKeyInEnv } =
+      await import("../commands/onboard-search.js");
+    const legacyDetected = SEARCH_PROVIDER_OPTIONS.find(
+      (e) => hasExistingKey(nextConfig, e.value) || hasKeyInEnv(e),
     );
+    if (legacyDetected) {
+      await prompter.note(
+        [
+          `Web search is available via ${legacyDetected.label} (auto-detected).`,
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    } else {
+      await prompter.note(
+        [
+          "Web search was skipped. You can enable it later:",
+          `  ${formatCliCommand("openclaw configure --section web")}`,
+          "",
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    }
   }
 
   await prompter.note(
