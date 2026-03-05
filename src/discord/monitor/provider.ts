@@ -126,7 +126,6 @@ function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
   return label === "disabled" ? "off" : label;
 }
 
-
 function appendPluginCommandSpecs(params: {
   commandSpecs: NativeCommandSpec[];
   runtime: RuntimeEnv;

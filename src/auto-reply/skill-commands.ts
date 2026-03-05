@@ -46,10 +46,6 @@ export function listSkillCommandsForWorkspace(params: {
   });
 }
 
-// Deduplicate skill commands by skillName, keeping the first registration.
-// When multiple agents have a skill with the same name (e.g. one with a
-// workspace override and one from bundled), the suffix-renamed entries
-// (github_2, github_3…) are dropped so every interface sees a clean list.
 function dedupeBySkillName(commands: SkillCommandSpec[]): SkillCommandSpec[] {
   const seen = new Set<string>();
   const out: SkillCommandSpec[] = [];
@@ -129,9 +125,6 @@ export function listSkillCommandsForAgents(params: {
       entries.push(command);
     }
   }
-  // Dedupe by skillName across workspaces so every interface (Discord, TUI,
-  // Slack, text) sees a consistent command list without platform-specific
-  // workarounds.
   return dedupeBySkillName(entries);
 }
 
