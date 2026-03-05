@@ -14,21 +14,42 @@
 
 ## Current State
 
-| Agent  | Department  | Current State                                                | Status                         |
-| ------ | ----------- | ------------------------------------------------------------ | ------------------------------ |
-| Tank   | Engineering | Basic SOUL.md with personality, role = Backend Engineer      | 🟡 Needs deeper specialization |
-| Dozer  | Engineering | Basic SOUL.md with personality, role = DevOps Engineer       | 🟡 Needs deeper specialization |
-| Mouse  | Engineering | Basic SOUL.md with personality, role = Research Analyst      | 🟡 Needs deeper specialization |
-| Niobe  | Marketing   | Basic SOUL.md with personality, role = Content Strategist    | 🟡 Needs deeper specialization |
-| Switch | Marketing   | Basic SOUL.md with personality, role = Creative Director     | 🟡 Needs deeper specialization |
-| Rex    | Marketing   | Basic SOUL.md with personality, role = PR & Communications   | 🟡 Needs deeper specialization |
-| Oracle | Finance     | Basic SOUL.md with personality, role = Data Analyst          | 🟡 Needs deeper specialization |
-| Seraph | Finance     | Basic SOUL.md with personality, role = Security & Compliance | 🟡 Needs deeper specialization |
-| Zee    | Finance     | Basic SOUL.md with personality, role = Financial Analyst     | 🟡 Needs deeper specialization |
+All 34 agents (4 department heads + 30 tier-3 workers) are deployed and operational. Models are dynamically inherited from the user's configured provider — no hardcoded model values in the template.
 
-All 9 agents have basic SOUL.md files with personality and role assignments (from the config template), but lack deep domain specialization, detailed AGENTS.md, and structured memory templates.
+| Agent  | Department  | Workspace | Status         |
+| ------ | ----------- | --------- | -------------- |
+| Tank   | Engineering | Minimal   | ✅ Implemented |
+| Dozer  | Engineering | Minimal   | ✅ Implemented |
+| Mouse  | Engineering | Minimal   | ✅ Implemented |
+| Spark  | Engineering | Minimal   | ✅ Implemented |
+| Cipher | Engineering | Ephemeral | ✅ Implemented |
+| Relay  | Engineering | Ephemeral | ✅ Implemented |
+| Ghost  | Engineering | Ephemeral | ✅ Implemented |
+| Binary | Engineering | Ephemeral | ✅ Implemented |
+| Kernel | Engineering | Ephemeral | ✅ Implemented |
+| Prism  | Engineering | Ephemeral | ✅ Implemented |
+| Niobe  | Marketing   | Minimal   | ✅ Implemented |
+| Switch | Marketing   | Minimal   | ✅ Implemented |
+| Rex    | Marketing   | Minimal   | ✅ Implemented |
+| Ink    | Marketing   | Minimal   | ✅ Implemented |
+| Vibe   | Marketing   | Minimal   | ✅ Implemented |
+| Lens   | Marketing   | Ephemeral | ✅ Implemented |
+| Echo   | Marketing   | Ephemeral | ✅ Implemented |
+| Nova   | Marketing   | Ephemeral | ✅ Implemented |
+| Pulse  | Marketing   | Ephemeral | ✅ Implemented |
+| Blaze  | Marketing   | Ephemeral | ✅ Implemented |
+| Oracle | Finance     | Minimal   | ✅ Implemented |
+| Seraph | Finance     | Ephemeral | ✅ Implemented |
+| Zee    | Finance     | Minimal   | ✅ Implemented |
+| Ledger | Finance     | Minimal   | ✅ Implemented |
+| Vault  | Finance     | Ephemeral | ✅ Implemented |
+| Shield | Finance     | Ephemeral | ✅ Implemented |
+| Trace  | Finance     | Ephemeral | ✅ Implemented |
+| Quota  | Finance     | Minimal   | ✅ Implemented |
+| Merit  | Finance     | Ephemeral | ✅ Implemented |
+| Beacon | Finance     | Ephemeral | ✅ Implemented |
 
-> **Note — role alignment:** The roles listed above match `matrix-agents.template.json` (the source of truth). Some SOUL.md narrative descriptions in `docs/reference/templates/matrix/` use older titles (e.g., "Revenue Analyst" for Oracle, "Product Lead" for Seraph, "Growth Lead" for Zee). Phase 1 will update those SOUL.md files to align with the config roles.
+> **Implementation date:** March 4, 2026. All 30 tier-3 agents created, template JSON updated (34 entries), department head SOUL.md and AGENTS.md expanded with full delegation tables and decision trees, `openclaw matrix init` deployed all agents.
 
 ---
 
@@ -286,17 +307,17 @@ Neo routes technical tasks to the appropriate specialist. **All engineering agen
 | dozer | Dozer | DevOps Engineer — Infrastructure, CI/CD, deployment | ACP → Claude Code / Codex                       | Config role matches; deepen SOUL.md                         |
 | mouse | Mouse | QA + Research — Testing, audits, library evaluation | ACP → Claude Code (test writing, audit scripts) | Config role = "Research Analyst"; update to "QA + Research" |
 
-### New Agents (7 more)
+### Additional Agents (7 more)
 
-| ID     | Name   | Specialization       | Model Tier             | Preferred ACP Harness | Use Cases                                               |
-| ------ | ------ | -------------------- | ---------------------- | --------------------- | ------------------------------------------------------- |
-| spark  | Spark  | Frontend Engineer    | Coding (zai/glm-4.7)   | Claude Code / Codex   | UI components, React/Vue, CSS, user-facing code         |
-| cipher | Cipher | Security Engineer    | Reasoning (zai/glm-5)  | Claude Code           | Vulnerability scanning, auth, encryption, pen testing   |
-| relay  | Relay  | Integration Engineer | Standard (zai/glm-4.7) | Claude Code / Codex   | API integrations, webhooks, third-party services        |
-| ghost  | Ghost  | Data Engineer        | Standard (zai/glm-4.7) | Claude Code           | Pipelines, ETL, data modeling, analytics infrastructure |
-| binary | Binary | Mobile Engineer      | Coding (zai/glm-4.7)   | Claude Code           | iOS, Android, React Native, mobile-specific issues      |
-| kernel | Kernel | Systems Engineer     | Reasoning (zai/glm-5)  | Claude Code           | Low-level code, performance, optimization, OS-level     |
-| prism  | Prism  | AI/ML Engineer       | Reasoning (zai/glm-5)  | Claude Code / Pi      | Model integration, prompt engineering, embeddings       |
+| ID     | Name   | Specialization       | Preferred ACP Harness | Use Cases                                               |
+| ------ | ------ | -------------------- | --------------------- | ------------------------------------------------------- |
+| spark  | Spark  | Frontend Engineer    | Claude Code / Codex   | UI components, React/Vue, CSS, user-facing code         |
+| cipher | Cipher | Security Engineer    | Claude Code           | Vulnerability scanning, auth, encryption, pen testing   |
+| relay  | Relay  | Integration Engineer | Claude Code / Codex   | API integrations, webhooks, third-party services        |
+| ghost  | Ghost  | Data Engineer        | Claude Code           | Pipelines, ETL, data modeling, analytics infrastructure |
+| binary | Binary | Mobile Engineer      | Claude Code           | iOS, Android, React Native, mobile-specific issues      |
+| kernel | Kernel | Systems Engineer     | Claude Code           | Low-level code, performance, optimization, OS-level     |
+| prism  | Prism  | AI/ML Engineer       | Claude Code / Pi      | Model integration, prompt engineering, embeddings       |
 
 > **Naming note:** This agent was originally proposed as `link`, but `Link` is already reserved as an independent ops-monitoring gateway agent (Phase 4, port 20789) in the main implementation doc. Renamed to `relay` to avoid collision.
 
@@ -384,17 +405,17 @@ Morpheus routes content and communication tasks.
 | switch | Switch | Creative Director — Visual concepts, design briefs, brand assets                         | Config role matches                                            |
 | rex    | Rex    | PR & Communications — Press releases, announcements, newsletter strategy, media outreach | Config role matches; narrowed scope (see Rex/Echo split below) |
 
-### New Agents (7 more)
+### Additional Agents (7 more)
 
-| ID    | Name  | Specialization       | Model Tier             | Use Cases                                                          |
-| ----- | ----- | -------------------- | ---------------------- | ------------------------------------------------------------------ |
-| ink   | Ink   | Copywriter           | Writing (zai/glm-4.7)  | Headlines, taglines, short-form copy, landing pages                |
-| vibe  | Vibe  | Social Media Manager | Standard (zai/glm-4.7) | Posts, threads, engagement, platform strategy                      |
-| lens  | Lens  | Video Producer       | Standard (zai/glm-4.7) | Scripts, storyboards, video editing briefs, thumbnails             |
-| echo  | Echo  | Email Marketing      | Standard (zai/glm-4.7) | Sequences, drip campaigns, automation, deliverability, A/B testing |
-| nova  | Nova  | SEO Specialist       | Standard (zai/glm-4.7) | Keyword research, on-page optimization, technical SEO              |
-| pulse | Pulse | Community Manager    | Standard (zai/glm-4.7) | Forums, user engagement, feedback loops, community strategy        |
-| blaze | Blaze | Brand Strategist     | Reasoning (zai/glm-5)  | Positioning, messaging frameworks, competitive analysis            |
+| ID    | Name  | Specialization       | Use Cases                                                          |
+| ----- | ----- | -------------------- | ------------------------------------------------------------------ |
+| ink   | Ink   | Copywriter           | Headlines, taglines, short-form copy, landing pages                |
+| vibe  | Vibe  | Social Media Manager | Posts, threads, engagement, platform strategy                      |
+| lens  | Lens  | Video Producer       | Scripts, storyboards, video editing briefs, thumbnails             |
+| echo  | Echo  | Email Marketing      | Sequences, drip campaigns, automation, deliverability, A/B testing |
+| nova  | Nova  | SEO Specialist       | Keyword research, on-page optimization, technical SEO              |
+| pulse | Pulse | Community Manager    | Forums, user engagement, feedback loops, community strategy        |
+| blaze | Blaze | Brand Strategist     | Positioning, messaging frameworks, competitive analysis            |
 
 #### Rex vs Echo: Clear Boundary
 
@@ -449,17 +470,17 @@ Trinity routes money and operations tasks.
 | seraph | Seraph | Security & Compliance — Vendor risk, compliance, regulatory  | Config role matches; replaces older "Product Lead" narrative |
 | zee    | Zee    | Financial Analyst — Tracking, audits, KPI updates            | Config role matches; replaces older "Growth Lead" narrative  |
 
-### New Agents (7 more)
+### Additional Agents (7 more)
 
-| ID     | Name   | Specialization     | Model Tier             | Use Cases                                           |
-| ------ | ------ | ------------------ | ---------------------- | --------------------------------------------------- |
-| ledger | Ledger | Bookkeeper         | Standard (zai/glm-4.7) | Transactions, categorization, reconciliation        |
-| vault  | Vault  | Investment Analyst | Reasoning (zai/glm-5)  | Portfolio tracking, investment research, allocation |
-| shield | Shield | Insurance & Risk   | Standard (zai/glm-4.7) | Coverage review, claims, risk assessment            |
-| trace  | Trace  | Expense Tracker    | Standard (zai/glm-4.7) | Receipts, reimbursements, expense reports           |
-| quota  | Quota  | Budget Manager     | Standard (zai/glm-4.7) | Envelope budgeting, alerts, spending limits         |
-| merit  | Merit  | Procurement        | Standard (zai/glm-4.7) | Vendor comparison, contracts, negotiations          |
-| beacon | Beacon | Tax Specialist     | Reasoning (zai/glm-5)  | Deductions, filings, tax optimization               |
+| ID     | Name   | Specialization     | Use Cases                                           |
+| ------ | ------ | ------------------ | --------------------------------------------------- |
+| ledger | Ledger | Bookkeeper         | Transactions, categorization, reconciliation        |
+| vault  | Vault  | Investment Analyst | Portfolio tracking, investment research, allocation |
+| shield | Shield | Insurance & Risk   | Coverage review, claims, risk assessment            |
+| trace  | Trace  | Expense Tracker    | Receipts, reimbursements, expense reports           |
+| quota  | Quota  | Budget Manager     | Envelope budgeting, alerts, spending limits         |
+| merit  | Merit  | Procurement        | Vendor comparison, contracts, negotiations          |
+| beacon | Beacon | Tax Specialist     | Deductions, filings, tax optimization               |
 
 ### Finance Decision Tree
 
@@ -548,70 +569,74 @@ User: "Add rate limiting to our API"
 
 ## Full Sub-Agent Inventory
 
+All 30 agents are deployed. Models are **dynamically inherited** from the user's configured model provider (see "Dynamic Model Assignment" below).
+
 ### Engineering (10 agents)
 
-| ID     | Name   | Role                 | Model       | Status                   |
-| ------ | ------ | -------------------- | ----------- | ------------------------ |
-| tank   | Tank   | Backend Engineer     | zai/glm-4.7 | 🟡 Deepen specialization |
-| dozer  | Dozer  | DevOps Engineer      | zai/glm-4.7 | 🟡 Deepen specialization |
-| mouse  | Mouse  | QA + Research        | zai/glm-4.7 | 🟡 Deepen specialization |
-| spark  | Spark  | Frontend Engineer    | zai/glm-4.7 | ⚪ To create             |
-| cipher | Cipher | Security Engineer    | zai/glm-5   | ⚪ To create             |
-| relay  | Relay  | Integration Engineer | zai/glm-4.7 | ⚪ To create             |
-| ghost  | Ghost  | Data Engineer        | zai/glm-4.7 | ⚪ To create             |
-| binary | Binary | Mobile Engineer      | zai/glm-4.7 | ⚪ To create             |
-| kernel | Kernel | Systems Engineer     | zai/glm-5   | ⚪ To create             |
-| prism  | Prism  | AI/ML Engineer       | zai/glm-5   | ⚪ To create             |
+| ID     | Name   | Role                 | Workspace | Status      |
+| ------ | ------ | -------------------- | --------- | ----------- |
+| tank   | Tank   | Backend Engineer     | Minimal   | ✅ Deployed |
+| dozer  | Dozer  | DevOps Engineer      | Minimal   | ✅ Deployed |
+| mouse  | Mouse  | QA + Research        | Minimal   | ✅ Deployed |
+| spark  | Spark  | Frontend Engineer    | Minimal   | ✅ Deployed |
+| cipher | Cipher | Security Engineer    | Ephemeral | ✅ Deployed |
+| relay  | Relay  | Integration Engineer | Ephemeral | ✅ Deployed |
+| ghost  | Ghost  | Data Engineer        | Ephemeral | ✅ Deployed |
+| binary | Binary | Mobile Engineer      | Ephemeral | ✅ Deployed |
+| kernel | Kernel | Systems Engineer     | Ephemeral | ✅ Deployed |
+| prism  | Prism  | AI/ML Engineer       | Ephemeral | ✅ Deployed |
 
 ### Marketing (10 agents)
 
-| ID     | Name   | Role                 | Model       | Status                   |
-| ------ | ------ | -------------------- | ----------- | ------------------------ |
-| niobe  | Niobe  | Content Strategist   | zai/glm-4.7 | 🟡 Deepen specialization |
-| switch | Switch | Creative Director    | zai/glm-4.7 | 🟡 Deepen specialization |
-| rex    | Rex    | PR & Communications  | zai/glm-4.7 | 🟡 Deepen specialization |
-| ink    | Ink    | Copywriter           | zai/glm-4.7 | ⚪ To create             |
-| vibe   | Vibe   | Social Media Manager | zai/glm-4.7 | ⚪ To create             |
-| lens   | Lens   | Video Producer       | zai/glm-4.7 | ⚪ To create             |
-| echo   | Echo   | Email Marketing      | zai/glm-4.7 | ⚪ To create             |
-| nova   | Nova   | SEO Specialist       | zai/glm-4.7 | ⚪ To create             |
-| pulse  | Pulse  | Community Manager    | zai/glm-4.7 | ⚪ To create             |
-| blaze  | Blaze  | Brand Strategist     | zai/glm-5   | ⚪ To create             |
+| ID     | Name   | Role                 | Workspace | Status      |
+| ------ | ------ | -------------------- | --------- | ----------- |
+| niobe  | Niobe  | Content Strategist   | Minimal   | ✅ Deployed |
+| switch | Switch | Creative Director    | Minimal   | ✅ Deployed |
+| rex    | Rex    | PR & Communications  | Minimal   | ✅ Deployed |
+| ink    | Ink    | Copywriter           | Minimal   | ✅ Deployed |
+| vibe   | Vibe   | Social Media Manager | Minimal   | ✅ Deployed |
+| lens   | Lens   | Video Producer       | Ephemeral | ✅ Deployed |
+| echo   | Echo   | Email Marketing      | Ephemeral | ✅ Deployed |
+| nova   | Nova   | SEO Specialist       | Ephemeral | ✅ Deployed |
+| pulse  | Pulse  | Community Manager    | Ephemeral | ✅ Deployed |
+| blaze  | Blaze  | Brand Strategist     | Ephemeral | ✅ Deployed |
 
 ### Finance (10 agents)
 
-| ID     | Name   | Role                  | Model       | Status                   |
-| ------ | ------ | --------------------- | ----------- | ------------------------ |
-| oracle | Oracle | Data Analyst          | zai/glm-4.7 | 🟡 Deepen specialization |
-| seraph | Seraph | Security & Compliance | zai/glm-4.7 | 🟡 Deepen specialization |
-| zee    | Zee    | Financial Analyst     | zai/glm-4.7 | 🟡 Deepen specialization |
-| ledger | Ledger | Bookkeeper            | zai/glm-4.7 | ⚪ To create             |
-| vault  | Vault  | Investment Analyst    | zai/glm-5   | ⚪ To create             |
-| shield | Shield | Insurance & Risk      | zai/glm-4.7 | ⚪ To create             |
-| trace  | Trace  | Expense Tracker       | zai/glm-4.7 | ⚪ To create             |
-| quota  | Quota  | Budget Manager        | zai/glm-4.7 | ⚪ To create             |
-| merit  | Merit  | Procurement           | zai/glm-4.7 | ⚪ To create             |
-| beacon | Beacon | Tax Specialist        | zai/glm-5   | ⚪ To create             |
+| ID     | Name   | Role                  | Workspace | Status      |
+| ------ | ------ | --------------------- | --------- | ----------- |
+| oracle | Oracle | Data Analyst          | Minimal   | ✅ Deployed |
+| seraph | Seraph | Security & Compliance | Ephemeral | ✅ Deployed |
+| zee    | Zee    | Financial Analyst     | Minimal   | ✅ Deployed |
+| ledger | Ledger | Bookkeeper            | Minimal   | ✅ Deployed |
+| vault  | Vault  | Investment Analyst    | Ephemeral | ✅ Deployed |
+| shield | Shield | Insurance & Risk      | Ephemeral | ✅ Deployed |
+| trace  | Trace  | Expense Tracker       | Ephemeral | ✅ Deployed |
+| quota  | Quota  | Budget Manager        | Minimal   | ✅ Deployed |
+| merit  | Merit  | Procurement           | Ephemeral | ✅ Deployed |
+| beacon | Beacon | Tax Specialist        | Ephemeral | ✅ Deployed |
 
-**Legend:**
+### Dynamic Model Assignment
 
-- 🟡 Exists with basic SOUL.md — needs deeper specialization
-- ⚪ Does not exist yet
+Models are **not hardcoded** in the template. Instead, all agents inherit the user's configured model from `agents.defaults.model.primary` at runtime.
 
-### Model Assignment Rationale
+| Aspect                 | Detail                                                                                                          |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **How it works**       | `matrix-agents.template.json` contains no `model` or `models` fields — agents inherit from `agents.defaults`    |
+| **Code change**        | `applyMatrixDefaults()` in `matrix-init.ts` excludes `model`/`models` from template defaults via destructuring  |
+| **Runtime resolution** | `resolveAgentEffectiveModelPrimary()` falls back to `agents.defaults.model.primary` when no per-agent model set |
+| **User control**       | User sets their model during `openclaw init` or via `openclaw config set` — all agents use it automatically     |
+| **Per-agent override** | Users can still set per-agent models via `openclaw config set agents.<id>.model` if they want differentiation   |
 
-| Tier      | Model       | Cost   | Assigned To                                 | Why                                                                                                                                 |
-| --------- | ----------- | ------ | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Reasoning | zai/glm-5   | Higher | Cipher, Kernel, Prism, Blaze, Vault, Beacon | Security analysis, systems optimization, AI/ML, brand strategy, investment analysis, and tax optimization require complex reasoning |
-| Standard  | zai/glm-4.7 | Lower  | All other tier-3 agents                     | Execution-focused tasks (code, copy, tracking, data entry) where speed and cost matter more than deep reasoning                     |
+This approach ensures agents work with whatever provider/model the user configured (GLM, Anthropic, OpenAI, etc.) without template coupling.
 
 ---
 
-## Configuration Changes Required
+## Configuration Changes (Implemented)
 
-### New Agent Entries
+### Agent Entries — ✅ Done
 
-Each new agent needs an entry in `matrix-agents.template.json`. **Workspace is optional** — only include for minimal agents, omit for ephemeral.
+All 34 agents are in `matrix-agents.template.json`. **No hardcoded model fields** — agents inherit from user config.
 
 **Minimal agent (has workspace):**
 
@@ -620,7 +645,7 @@ Each new agent needs an entry in `matrix-agents.template.json`. **Workspace is o
   "id": "spark",
   "name": "Spark",
   "workspace": "~/.openclaw/workspace-spark",
-  "model": "zai/glm-4.7",
+  "agentDir": "~/.openclaw/workspace-spark",
   "identity": { "emoji": "✨", "name": "Spark" },
   "role": "Frontend Engineer",
   "department": "engineering"
@@ -633,16 +658,13 @@ Each new agent needs an entry in `matrix-agents.template.json`. **Workspace is o
 {
   "id": "cipher",
   "name": "Cipher",
-  "model": "zai/glm-5",
   "identity": { "emoji": "🔐", "name": "Cipher" },
   "role": "Security Engineer",
   "department": "engineering"
 }
 ```
 
-Note: `agentDir` is optional — only needed if the agent has persistent workspace files.
-
-All 21 new agents follow this pattern. Proposed emoji assignments:
+Emoji assignments:
 
 | Agent  | Emoji | Agent | Emoji | Agent  | Emoji |
 | ------ | ----- | ----- | ----- | ------ | ----- |
@@ -654,55 +676,39 @@ All 21 new agents follow this pattern. Proposed emoji assignments:
 | Kernel | ⚙️    | Pulse | 💬    | Merit  | 📋    |
 | Prism  | 🤖    | Blaze | 🔥    | Beacon | 📊    |
 
-### Update `allowAgents` for Department Heads
+### Dynamic Model Assignment — ✅ Done (Code Change)
 
-The current config already uses a shared-pool model (each head lists all 9 workers). Add all 21 new agents to each head's `allowAgents`:
+**Problem:** The original template hardcoded model values (e.g., `"model": "zai/glm-5"`). `applyMatrixDefaults()` would overwrite the user's configured model with template values.
 
-```json
-{
-  "id": "neo",
-  "subagents": {
-    "allowAgents": [
-      "tank",
-      "dozer",
-      "mouse",
-      "spark",
-      "cipher",
-      "relay",
-      "ghost",
-      "binary",
-      "kernel",
-      "prism",
-      "niobe",
-      "switch",
-      "rex",
-      "ink",
-      "vibe",
-      "lens",
-      "echo",
-      "nova",
-      "pulse",
-      "blaze",
-      "oracle",
-      "seraph",
-      "zee",
-      "ledger",
-      "vault",
-      "shield",
-      "trace",
-      "quota",
-      "merit",
-      "beacon"
-    ]
-  }
-}
+**Fix:** Modified `src/commands/matrix-init.ts` — `applyMatrixDefaults()` now destructures out `model` and `models` from template defaults:
+
+```typescript
+const { model: _model, models: _models, ...operationalDefaults } = templateDefaults;
 ```
 
-Same list for Morpheus and Trinity. Also add all 30 agents to Operator1's `allowAgents` so Operator1 can spawn any specialist directly when needed.
+This ensures:
 
-### Update `maxConcurrent`
+- Template only sets operational defaults (`maxConcurrent`, `maxSpawnDepth`, etc.)
+- User's model (set during `openclaw init`) is never overwritten
+- All agents inherit from `agents.defaults.model.primary` at runtime
+- Per-agent model overrides are still possible via `openclaw config set`
 
-Current: `maxConcurrent: 8`. With 30 agents and multi-specialist tasks, consider increasing to `12` or `16`. The department-head-as-gatekeeper model provides natural throttling, but complex cross-department tasks (product launch = engineering + marketing + finance) can saturate 8 slots quickly.
+Test added: `"applies matrix defaults without overwriting user model"` — verifies user's model survives matrix init.
+
+### `allowAgents` — ✅ Done
+
+Shared pool model: all department heads have access to all 30 tier-3 agents.
+
+- **Operator1:** 33 agents (3 heads + 30 workers)
+- **Neo, Morpheus, Trinity:** 30 agents each (all workers)
+
+### Operational Defaults — ✅ Done
+
+| Setting                   | Value | Rationale                                                 |
+| ------------------------- | ----- | --------------------------------------------------------- |
+| `maxConcurrent`           | 4     | Per-agent concurrent limit                                |
+| `subagents.maxConcurrent` | 12    | Supports multi-specialist parallel tasks                  |
+| `subagents.maxSpawnDepth` | 4     | Required for User → Operator1 → Head → Worker → ACP chain |
 
 ### ACP Configuration (Required for Engineering Agents)
 
@@ -731,124 +737,32 @@ Engineering agents need ACP enabled to spawn coding agents. Ensure this is in `o
 - `allowedAgents` — all supported harnesses; agents choose based on task profile
 - `stream.deliveryMode: "live"` — engineering agents see coding output in real-time for review
 
-**Spawn depth consideration:** With ACP, the effective depth is: User → Operator1 → Neo → Tank → ACP Session = **depth 4**. Ensure `maxSpawnDepth` is set to at least `4` (currently `3` in template). Update to:
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "subagents": {
-        "maxSpawnDepth": 4
-      }
-    }
-  }
-}
-```
-
-### Update `openclaw matrix init`
-
-The `src/commands/matrix-init.ts` CLI must be updated to:
-
-- Create workspace directories and template files for all 21 new agents
-- Set `maxSpawnDepth: 4` (up from 3) to support the ACP orchestration layer
-- Configure ACP defaults for engineering agents
-
-This is a Phase 2/3 implementation task.
-
 ---
 
-## Implementation Priority
+## Implementation Status
 
-### Phase 1: Deepen Existing 9 Agents
+All phases were implemented on **March 4, 2026** in a single pass.
 
-1. Tank, Dozer, Mouse (Engineering)
-2. Niobe, Switch, Rex (Marketing)
-3. Oracle, Seraph, Zee (Finance)
+### Phase 1: Existing 9 Agents — ✅ Complete
 
-**Each agent gets:**
+Tank, Dozer, Mouse, Niobe, Switch, Rex, Oracle, Seraph, Zee — all received specialized SOUL.md + IDENTITY.md templates. Mouse role updated from "Research Analyst" to "QA + Research".
 
-- Specialized SOUL.md (deep domain expertise, not just role title)
-- AGENTS.md (session startup, memory, escalation, delegation awareness)
-- IDENTITY.md (emoji, creature, vibe, reporting chain)
-- BOOTSTRAP.md (first-run onboarding conversation)
-- Memory file templates (`memory/` directory structure)
-- Config JSON entry update (if role title changed)
+### Phase 2: High-Value New Agents (6) — ✅ Complete
 
-**Deliverables:**
+Spark, Cipher, Ink, Vibe, Ledger, Quota — all created with specialized templates, config entries, and appropriate workspace tiers.
 
-- 9 updated workspace template directories under `docs/reference/templates/matrix/`
-- Updated SOUL.md narratives aligned with config roles
-- Updated `matrix-agents.template.json` if any role fields change
+### Phase 3: Complete Roster (15) — ✅ Complete
 
-### Phase 2: Create High-Value New Agents (6 agents)
+All remaining agents created: Relay, Ghost, Binary, Kernel, Prism (engineering), Lens, Echo, Nova, Pulse, Blaze (marketing), Vault, Shield, Trace, Merit, Beacon (finance).
 
-**Engineering:**
+### Department Head Updates — ✅ Complete
 
-- Spark (Frontend) — complements Tank (Backend); high-frequency use
-- Cipher (Security) — critical for any real project; requires reasoning model
+Neo, Morpheus, and Trinity SOUL.md and AGENTS.md files expanded with:
 
-**Marketing:**
-
-- Ink (Copy) — high-frequency use for any content operation
-- Vibe (Social) — social media is constant and time-sensitive
-
-**Finance:**
-
-- Ledger (Bookkeeper) — foundational for all financial tracking
-- Quota (Budget) — everyday use for spending decisions
-
-**Each agent gets** (same as Phase 1):
-
-- SOUL.md, AGENTS.md, IDENTITY.md, BOOTSTRAP.md
-- Workspace template directory
-- Config JSON entry in `matrix-agents.template.json`
-- Added to all department heads' `allowAgents`
-- `openclaw matrix init` updated to create these workspaces
-
-**Deliverables:**
-
-- 6 new workspace template directories
-- Updated `matrix-agents.template.json` with 6 new entries
-- Updated `allowAgents` for Operator1, Neo, Morpheus, Trinity
-- Updated `src/commands/matrix-init.ts`
-
-### Phase 3: Complete the Roster (15 agents)
-
-Remaining specialists, in suggested priority order by department:
-
-**Engineering (5 agents):**
-
-| Priority | Agent  | Rationale                                                |
-| -------- | ------ | -------------------------------------------------------- |
-| 1        | Relay  | API integrations are frequent; unblocks third-party work |
-| 2        | Binary | Mobile work requires specialized context (Xcode, Gradle) |
-| 3        | Ghost  | Data pipelines grow in importance as data accumulates    |
-| 4        | Kernel | Systems-level work is less frequent but high-impact      |
-| 5        | Prism  | AI/ML integration is growing but still emerging          |
-
-**Marketing (5 agents):**
-
-| Priority | Agent | Rationale                                                        |
-| -------- | ----- | ---------------------------------------------------------------- |
-| 1        | Echo  | Email marketing is measurable and high-ROI                       |
-| 2        | Nova  | SEO compounds over time; start early                             |
-| 3        | Lens  | Video content grows in importance                                |
-| 4        | Pulse | Community management (strategy layer; Sati handles live Discord) |
-| 5        | Blaze | Brand strategy is important but less frequent                    |
-
-**Marketing dependency:** Create Pulse only after Sati (Phase 4 independent agent) is operational, so the boundary between live Discord bot and community strategy is clear in practice.
-
-**Finance (5 agents):**
-
-| Priority | Agent  | Rationale                                           |
-| -------- | ------ | --------------------------------------------------- |
-| 1        | Beacon | Tax optimization has clear deadlines and high value |
-| 2        | Trace  | Expense tracking is high-frequency                  |
-| 3        | Merit  | Procurement/vendor comparison grows with scale      |
-| 4        | Shield | Insurance/risk is important but lower frequency     |
-| 5        | Vault  | Investment analysis is valuable but less urgent     |
-
-**Activation criteria:** Create each agent when its domain tasks appear more than 2-3 times per week, or when a specific project requires it. No need to create all 15 at once.
+- Full 10-worker delegation tables
+- Complete decision trees
+- Updated cross-department protocol for shared pool model
+- ACP orchestration chain documentation (Neo)
 
 ---
 
@@ -1387,7 +1301,7 @@ Neo needs copy for a feature announcement
   → Neo reviews and delivers
 ```
 
-This works within `maxSpawnDepth: 3` (User → Operator1 → Neo → Ink).
+This works within `maxSpawnDepth: 4` (User → Operator1 → Neo → Ink).
 
 ### When Operator1 Coordination Is Needed
 
@@ -1415,13 +1329,13 @@ Full product launch (engineering + marketing strategy + budget approval)
 
 With 30 agents, workspace sprawl is a concern. The lightweight model addresses this:
 
-### Workspace Creation
+### Workspace Creation (Current State)
 
-| Phase       | What Gets Created                                                                    | When         |
-| ----------- | ------------------------------------------------------------------------------------ | ------------ |
-| **Phase 1** | Minimal workspaces for existing 9 agents (SOUL + IDENTITY)                           | Immediately  |
-| **Phase 2** | Minimal workspaces for 6 high-priority new agents                                    | When created |
-| **Phase 3** | On-demand — create minimal workspace only when an ephemeral agent is used frequently | As needed    |
+| Tier          | Agents                                                  | Contents                   | Count |
+| ------------- | ------------------------------------------------------- | -------------------------- | ----- |
+| **Full**      | Neo, Morpheus, Trinity + original 9 (Tank, Dozer, etc.) | Full workspace (8-9 files) | 12    |
+| **Minimal**   | Spark, Ink, Vibe, Ledger, Quota                         | SOUL.md + IDENTITY.md      | 5     |
+| **Ephemeral** | Cipher, Relay, Ghost, Binary, Kernel, Prism + 10 more   | None (role in spawn task)  | 16    |
 
 ### Promotion Path
 
@@ -1451,14 +1365,14 @@ If a Tier 3 agent hasn't been spawned in 30+ days:
 
 ### Disk Budget
 
-| Workspace Type   | Size               | 30 Agents Total   |
-| ---------------- | ------------------ | ----------------- |
-| Full (Tier 2)    | ~500KB with memory | 3 × 500KB = 1.5MB |
-| Minimal (Tier 3) | ~5KB (2 files)     | 12 × 5KB = 60KB   |
-| Ephemeral        | 0                  | 0                 |
-| **Total**        |                    | **~1.6MB**        |
+| Workspace Type   | Size               | Count  | Total    |
+| ---------------- | ------------------ | ------ | -------- |
+| Full (Tier 2+)   | ~500KB with memory | 12     | ~6MB     |
+| Minimal (Tier 3) | ~5KB (2 files)     | 5      | ~25KB    |
+| Ephemeral        | 0                  | 16     | 0        |
+| **Total**        |                    | **33** | **~6MB** |
 
-Compare to the old model: 30 full workspaces × 500KB = 15MB. The lightweight model is 10× smaller.
+Note: The original 9 tier-3 agents have full workspaces from the initial deploy. New minimal agents have only SOUL.md + IDENTITY.md. Ephemeral agents have no workspace at all.
 
 ---
 
@@ -1487,14 +1401,16 @@ All Tier 3 agents are **domain-expert**, not context-specific:
 
 ## Verification Plan
 
-### Phase 1 Verification (After Deepening Existing 9)
+### Static Verification — ✅ Complete
 
-For each redefined agent:
+1. **Template check:** All 30 agent template dirs have SOUL.md + IDENTITY.md ✅
+2. **Config check:** 34 agents in `matrix-agents.template.json`, all roles match ✅
+3. **Init test:** `openclaw matrix init` creates workspaces correctly (21 added, 13 preserved) ✅
+4. **Model test:** User model NOT overwritten by template (unit test added) ✅
+5. **Unit tests:** All 15 matrix-init tests passing ✅
+6. **Workspace cleanup:** Ephemeral dirs deleted, minimal trimmed to 2 files ✅
 
-1. **Template check:** Verify SOUL.md, AGENTS.md, IDENTITY.md, BOOTSTRAP.md, TOOLS.md exist and are populated
-2. **Config check:** Verify `matrix-agents.template.json` role field matches SOUL.md
-3. **Spawn test:** `openclaw matrix init` creates the workspace correctly
-4. **Delegation test:** Department head spawns the agent with a domain-specific task; agent responds in-role
+### Runtime Verification — Pending
 
 **ACP verification (engineering agents — Tank, Dozer, Mouse):**
 
@@ -1508,92 +1424,85 @@ For each redefined agent:
 
 **End-to-end test (ACP):** "Operator1, have Neo add a health check endpoint" → Operator1 → Neo → Tank → ACP Claude Code → Tank reviews → Neo reviews → Operator1 reports.
 
-### Phase 2 Verification (After Creating 6 New Agents)
+### Suggested Runtime Tests
 
-1. **Config check:** All 6 new entries in `matrix-agents.template.json`
-2. **allowAgents check:** All 6 added to Neo, Morpheus, Trinity, and Operator1's `allowAgents`
-3. **Init test:** `openclaw matrix init` creates all 6 new workspaces with correct templates
-4. **Cross-department test:** Trinity spawns Spark (Frontend) directly — should succeed (shared pool)
-5. **Decision tree test:** Send ambiguous tasks to each department head; verify correct routing
-
-**ACP verification (new engineering agents — Spark, Cipher):**
-
-1. **Spark ACP test:** Spark spawns Claude Code to build a simple React component → Spark reviews → reports
-2. **Cipher ACP test:** Cipher spawns Claude Code to audit a test file for security issues → Cipher reviews → reports
-3. **Parallel ACP test:** Neo spawns Tank + Spark simultaneously, each spawns their own ACP session → both complete independently
-
-**End-to-end test:** "Build a landing page with SEO" → Morpheus → spawns Ink (copy) + Nova (SEO) → reviews combined output → returns synthesized result.
-
-### Phase 3 Verification (Rolling)
-
-Each new agent added: run spawn test + delegation test + ACP spawn test (for engineering agents). After every 5 agents added, run the full cross-department end-to-end test.
-
-**ACP concurrency test (after 5+ engineering agents exist):** Spawn a complex task requiring 3+ engineering agents, each with their own ACP session running concurrently. Verify `maxConcurrentSessions` is sufficient and no session collisions occur.
+1. **Cross-department test:** Trinity spawns Spark (Frontend) directly — should succeed (shared pool)
+2. **Decision tree test:** Send ambiguous tasks to each department head; verify correct routing
+3. **Spark ACP test:** Spark spawns Claude Code to build a simple React component → Spark reviews → reports
+4. **Cipher ACP test:** Cipher spawns Claude Code to audit a test file for security issues → Cipher reviews → reports
+5. **Parallel ACP test:** Neo spawns Tank + Spark simultaneously, each spawns their own ACP session → both complete independently
+6. **End-to-end test (non-ACP):** "Operator1, have Morpheus draft a press release" → Operator1 → Morpheus → Rex produces a draft directly
+7. **End-to-end test (ACP):** "Operator1, have Neo add a health check endpoint" → Operator1 → Neo → Tank → ACP Claude Code → Tank reviews → Neo reviews → Operator1 reports
+8. **ACP concurrency test:** Spawn a complex task requiring 3+ engineering agents with concurrent ACP sessions
 
 ---
 
-## Org Chart (Expanded)
+## Org Chart
 
 ```
 CEO (You)
   ↓
 Operator1 (COO) 🏛️
   ├─ Neo (CTO) 🥋 — Engineering
-  │   ├─ Tank 🔧    Backend Engineer
-  │   ├─ Dozer 🏗️    DevOps Engineer
-  │   ├─ Mouse 🐭    QA + Research
-  │   ├─ Spark ✨    Frontend Engineer        [Phase 2]
-  │   ├─ Cipher 🔐   Security Engineer        [Phase 2]
-  │   ├─ Relay 🔗    Integration Engineer     [Phase 3]
-  │   ├─ Ghost 👻    Data Engineer            [Phase 3]
-  │   ├─ Binary 📲   Mobile Engineer          [Phase 3]
-  │   ├─ Kernel ⚙️    Systems Engineer         [Phase 3]
-  │   └─ Prism 🤖    AI/ML Engineer           [Phase 3]
+  │   ├─ Tank 🔧    Backend Engineer          (ACP orchestrator)
+  │   ├─ Dozer 🏗️    DevOps Engineer           (ACP orchestrator)
+  │   ├─ Mouse 🐭    QA + Research             (ACP orchestrator)
+  │   ├─ Spark ✨    Frontend Engineer         (ACP orchestrator)
+  │   ├─ Cipher 🔐   Security Engineer         (ACP orchestrator)
+  │   ├─ Relay 🔗    Integration Engineer      (ACP orchestrator)
+  │   ├─ Ghost 👻    Data Engineer             (ACP orchestrator)
+  │   ├─ Binary 📲   Mobile Engineer           (ACP orchestrator)
+  │   ├─ Kernel ⚙️    Systems Engineer          (ACP orchestrator)
+  │   └─ Prism 🤖    AI/ML Engineer            (ACP orchestrator)
   │
   ├─ Morpheus (CMO) 🕶️ — Marketing
-  │   ├─ Niobe ✍️    Content Strategist
-  │   ├─ Switch 🎨   Creative Director
-  │   ├─ Rex 📰      PR & Communications
-  │   ├─ Ink 🖊️      Copywriter               [Phase 2]
-  │   ├─ Vibe 📱     Social Media Manager     [Phase 2]
-  │   ├─ Lens 🎬     Video Producer           [Phase 3]
-  │   ├─ Echo 📧     Email Marketing          [Phase 3]
-  │   ├─ Nova 🔍     SEO Specialist           [Phase 3]
-  │   ├─ Pulse 💬    Community Manager        [Phase 3]
-  │   └─ Blaze 🔥    Brand Strategist         [Phase 3]
+  │   ├─ Niobe ✍️    Content Strategist        (direct execution)
+  │   ├─ Switch 🎨   Creative Director         (direct execution)
+  │   ├─ Rex 📰      PR & Communications       (direct execution)
+  │   ├─ Ink 🖊️      Copywriter                (direct execution)
+  │   ├─ Vibe 📱     Social Media Manager      (direct execution)
+  │   ├─ Lens 🎬     Video Producer            (direct execution)
+  │   ├─ Echo 📧     Email Marketing           (direct execution)
+  │   ├─ Nova 🔍     SEO Specialist            (direct execution)
+  │   ├─ Pulse 💬    Community Manager         (direct execution)
+  │   └─ Blaze 🔥    Brand Strategist          (direct execution)
   │
   └─ Trinity (CFO) ⚡ — Finance
-      ├─ Oracle 🔮   Data Analyst
-      ├─ Seraph 🛡️    Security & Compliance
-      ├─ Zee 📈      Financial Analyst
-      ├─ Ledger 📒   Bookkeeper               [Phase 2]
-      ├─ Quota 💰    Budget Manager           [Phase 2]
-      ├─ Beacon 📊   Tax Specialist           [Phase 3]
-      ├─ Trace 🧾    Expense Tracker          [Phase 3]
-      ├─ Merit 📋    Procurement              [Phase 3]
-      ├─ Shield 🛡️    Insurance & Risk         [Phase 3]
-      └─ Vault 🏦    Investment Analyst       [Phase 3]
+      ├─ Oracle 🔮   Data Analyst              (direct execution)
+      ├─ Seraph 🛡️    Security & Compliance     (direct execution)
+      ├─ Zee 📈      Financial Analyst          (direct execution)
+      ├─ Ledger 📒   Bookkeeper                (direct execution)
+      ├─ Quota 💰    Budget Manager            (direct execution)
+      ├─ Beacon 📊   Tax Specialist            (direct execution)
+      ├─ Trace 🧾    Expense Tracker           (direct execution)
+      ├─ Merit 📋    Procurement               (direct execution)
+      ├─ Shield 🛡️    Insurance & Risk          (direct execution)
+      └─ Vault 🏦    Investment Analyst        (direct execution)
 
 Independent Agents (own gateways, not part of tier-3 pool):
   ├─ Sati — Community Discord Bot (port 19789)
   └─ Link — Ops Monitor (port 20789)
 ```
 
-> **Note:** Tier-3 agents are a shared pool. The department grouping above shows primary affinity, not access restriction. Any department head can spawn any tier-3 agent.
+> **Note:** Tier-3 agents are a shared pool. The department grouping above shows primary affinity, not access restriction. Any department head can spawn any tier-3 agent. All agents inherit the user's configured model dynamically.
 
 ---
 
 ## Next Steps
 
-1. **Review and approve** this sub-agent plan
-2. **Phase 1:** Deepen existing 9 agents with specialized SOUL.md, AGENTS.md, IDENTITY.md, BOOTSTRAP.md
-3. **Phase 2:** Create 6 high-priority new agents + config updates + `matrix init` update
-4. **Phase 3:** Roll out remaining 15 agents based on activation criteria
-5. **Update department head AGENTS.md** with expanded delegation decision trees
-6. **Run verification tests** at each phase gate
+1. ~~Review and approve this sub-agent plan~~ ✅
+2. ~~Phase 1: Deepen existing 9 agents~~ ✅
+3. ~~Phase 2: Create 6 high-priority new agents~~ ✅
+4. ~~Phase 3: Complete the roster (all 30)~~ ✅
+5. ~~Update department head SOUL.md + AGENTS.md~~ ✅
+6. ~~Dynamic model assignment code change~~ ✅
+7. ~~Deploy via `openclaw matrix init`~~ ✅
+8. ~~Clean up deployment (ephemeral dirs, minimal trimming, hardcoded models)~~ ✅
+9. **Run end-to-end verification tests** — spawn delegation chain, ACP orchestration, cross-department
+10. **Promote ephemeral → minimal** as agents see frequent use
 
 ---
 
 _Document created: March 3, 2026_
-_Last updated: March 3, 2026_
-_Status: Planning — awaiting approval_
+_Last updated: March 4, 2026_
+_Status: Implemented — deployed and operational_
