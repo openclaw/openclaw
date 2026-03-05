@@ -10,7 +10,7 @@ import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
-type ModelEntry = { id: string; contextWindow?: number };
+type ModelEntry = { id: string; provider?: string; contextWindow?: number };
 type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
@@ -29,6 +29,27 @@ const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   jitter: 0,
 };
 
+function setSmallerContextWindow(
+  cache: Map<string, number>,
+  key: string,
+  contextWindow: number,
+): void {
+  const existing = cache.get(key);
+  // Prefer the smaller window so token budgeting stays fail-safe.
+  if (existing === undefined || contextWindow < existing) {
+    cache.set(key, contextWindow);
+  }
+}
+
+function toProviderQualifiedModelKey(model: ModelEntry): string | undefined {
+  const provider = model.provider?.trim().toLowerCase();
+  const id = model.id?.trim();
+  if (!provider || !id || id.includes("/")) {
+    return undefined;
+  }
+  return `${provider}/${id}`;
+}
+
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
   models: ModelEntry[];
@@ -37,21 +58,26 @@ export function applyDiscoveredContextWindows(params: {
     if (!model?.id) {
       continue;
     }
+    const modelId = model.id.trim();
+    if (!modelId) {
+      continue;
+    }
     const contextWindow =
       typeof model.contextWindow === "number" ? Math.trunc(model.contextWindow) : undefined;
     if (!contextWindow || contextWindow <= 0) {
       continue;
     }
-    const existing = params.cache.get(model.id);
-    // When the same bare model id appears under multiple providers with different
-    // limits, keep the smaller window. This cache feeds both display paths and
-    // runtime paths (flush thresholds, session context-token persistence), so
-    // overestimating the limit could delay compaction and cause context overflow.
-    // Callers that know the active provider should use resolveContextTokensForModel,
-    // which tries the provider-qualified key first and falls back here.
-    if (existing === undefined || contextWindow < existing) {
-      params.cache.set(model.id, contextWindow);
+    // If discovery reports a provider separately from a bare model id, cache a
+    // provider-qualified entry too (e.g. anthropic/claude-sonnet) so callers that
+    // know the provider can avoid collisions on shared bare ids.
+    const providerQualifiedModelId = toProviderQualifiedModelKey(model);
+    if (providerQualifiedModelId) {
+      setSmallerContextWindow(params.cache, providerQualifiedModelId, contextWindow);
     }
+
+    // Keep a conservative bare-id fallback by storing the minimum window seen
+    // across providers for the same model id.
+    setSmallerContextWindow(params.cache, modelId, contextWindow);
   }
 }
 

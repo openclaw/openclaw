@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type DiscoveredModel = { id: string; contextWindow: number };
+type DiscoveredModel = { id: string; provider?: string; contextWindow: number };
 
 function mockContextDeps(params: {
   loadConfig: () => unknown;
@@ -99,6 +99,34 @@ describe("lookupContextTokens", () => {
     ).toBeUndefined();
     await flushAsyncWarmup();
     expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
+  it("prefers provider-qualified discovered context windows when provider is known", async () => {
+    mockDiscoveryDeps([
+      { provider: "anthropic", id: "claude-sonnet", contextWindow: 1_000_000 },
+      { provider: "openrouter", id: "claude-sonnet", contextWindow: 200_000 },
+    ]);
+
+    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    lookupContextTokens("anthropic/claude-sonnet");
+    await flushAsyncWarmup();
+
+    expect(lookupContextTokens("anthropic/claude-sonnet")).toBe(1_000_000);
+    expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(200_000);
+    expect(
+      resolveContextTokensForModel({
+        provider: "anthropic",
+        model: "claude-sonnet",
+        fallbackContextTokens: 128_000,
+      }),
+    ).toBe(1_000_000);
+    expect(
+      resolveContextTokensForModel({
+        provider: "openrouter",
+        model: "claude-sonnet",
+        fallbackContextTokens: 128_000,
+      }),
+    ).toBe(200_000);
   });
 
   it("only warms eagerly for real openclaw startup commands that need model metadata", async () => {
