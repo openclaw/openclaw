@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
+import { sessionsSwitchModelCommand } from "../../commands/sessions-switch-model.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
 import { setVerbose } from "../../globals.js";
@@ -208,6 +209,56 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             fixMissing: Boolean(opts.fixMissing),
             activeKey: opts.activeKey as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
+    .command("switch-model <providerModel>")
+    .description("Bulk-switch runtime model/provider across matching sessions")
+    .option("--all", "Update every session in the selected store(s)", false)
+    .option(
+      "--slack-channel <name>",
+      "Update sessions whose groupChannel matches #name (case-insensitive)",
+    )
+    .option("--dry-run", "Preview changes without writing", false)
+    .option("--yes", "Skip confirmation prompt", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw sessions switch-model --all venice/minimax-m25", "Update every session."],
+          [
+            "openclaw sessions switch-model --slack-channel bots venice/minimax-m25",
+            "Update one Slack channel/thread set.",
+          ],
+          [
+            "openclaw sessions --agent work switch-model --all --dry-run venice/minimax-m25",
+            "Preview changes in one agent store.",
+          ],
+        ])}`,
+    )
+    .action(async (providerModel, opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            allAgents?: boolean;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsSwitchModelCommand(
+          {
+            providerModel: String(providerModel),
+            store: parentOpts?.store,
+            agent: parentOpts?.agent,
+            allAgents: Boolean(parentOpts?.allAgents),
+            all: Boolean(opts.all),
+            slackChannel: opts.slackChannel as string | undefined,
+            dryRun: Boolean(opts.dryRun),
+            yes: Boolean(opts.yes),
           },
           defaultRuntime,
         );

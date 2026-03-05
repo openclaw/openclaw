@@ -5,6 +5,7 @@ const statusCommand = vi.fn();
 const healthCommand = vi.fn();
 const sessionsCommand = vi.fn();
 const sessionsCleanupCommand = vi.fn();
+const sessionsSwitchModelCommand = vi.fn();
 const setVerbose = vi.fn();
 
 const runtime = {
@@ -27,6 +28,10 @@ vi.mock("../../commands/sessions.js", () => ({
 
 vi.mock("../../commands/sessions-cleanup.js", () => ({
   sessionsCleanupCommand,
+}));
+
+vi.mock("../../commands/sessions-switch-model.js", () => ({
+  sessionsSwitchModelCommand,
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -56,6 +61,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     healthCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
+    sessionsSwitchModelCommand.mockResolvedValue(undefined);
   });
 
   it("runs status command with timeout and debug-derived verbose", async () => {
@@ -198,6 +204,43 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(sessionsCleanupCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         allAgents: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs sessions switch-model subcommand with forwarded options", async () => {
+    await runCli(["sessions", "switch-model", "--all", "--dry-run", "--yes", "venice/minimax-m25"]);
+
+    expect(sessionsSwitchModelCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerModel: "venice/minimax-m25",
+        all: true,
+        slackChannel: undefined,
+        dryRun: true,
+        yes: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("forwards parent session store selectors to switch-model", async () => {
+    await runCli([
+      "sessions",
+      "--agent",
+      "work",
+      "switch-model",
+      "--slack-channel",
+      "#bots",
+      "venice/minimax-m25",
+    ]);
+
+    expect(sessionsSwitchModelCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerModel: "venice/minimax-m25",
+        agent: "work",
+        allAgents: false,
+        slackChannel: "#bots",
       }),
       runtime,
     );
