@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
 import { migrateLegacyConfig, validateConfigObject } from "./config.js";
+import { WHISPER_BASE_AUDIO_MODEL } from "./legacy-migrate.test-helpers.js";
 
 function getLegacyRouting(config: unknown) {
   return (config as { routing?: Record<string, unknown> } | undefined)?.routing;
@@ -137,17 +138,7 @@ describe("legacy config detection", () => {
       mode: "queue",
       cap: 3,
     });
-    expect(res.config?.tools?.media?.audio).toEqual({
-      enabled: true,
-      models: [
-        {
-          command: "whisper",
-          type: "cli",
-          args: ["--model", "base"],
-          timeoutSeconds: 2,
-        },
-      ],
-    });
+    expect(res.config?.tools?.media?.audio).toEqual(WHISPER_BASE_AUDIO_MODEL);
     expect(getLegacyRouting(res.config)).toBeUndefined();
   });
   it("migrates audio.transcription with custom script names", async () => {
@@ -365,13 +356,61 @@ describe("legacy config detection", () => {
       gateway: { bind: "tailnet" as const },
     });
     expect(res.changes).not.toContain("Migrated gateway.bind from 'tailnet' to 'auto'.");
-    expect(res.config).toBeNull();
+    expect(res.config?.gateway?.bind).toBe("tailnet");
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+    ]);
 
     const validated = validateConfigObject({ gateway: { bind: "tailnet" as const } });
     expect(validated.ok).toBe(true);
     if (validated.ok) {
       expect(validated.config.gateway?.bind).toBe("tailnet");
     }
+  });
+  it("normalizes gateway.bind host aliases to supported bind modes", async () => {
+    const cases = [
+      { input: "0.0.0.0", expected: "lan" },
+      { input: "::", expected: "lan" },
+      { input: "127.0.0.1", expected: "loopback" },
+      { input: "localhost", expected: "loopback" },
+      { input: "::1", expected: "loopback" },
+    ] as const;
+
+    for (const testCase of cases) {
+      const res = migrateLegacyConfig({
+        gateway: { bind: testCase.input },
+      });
+      expect(res.changes).toContain(
+        `Normalized gateway.bind "${testCase.input}" → "${testCase.expected}".`,
+      );
+      expect(res.config?.gateway?.bind).toBe(testCase.expected);
+
+      const validated = validateConfigObject(res.config);
+      expect(validated.ok).toBe(true);
+      if (validated.ok) {
+        expect(validated.config.gateway?.bind).toBe(testCase.expected);
+      }
+    }
+  });
+  it("flags gateway.bind host aliases as legacy to trigger auto-migration paths", async () => {
+    const cases = ["0.0.0.0", "::", "127.0.0.1", "localhost", "::1"] as const;
+    for (const bind of cases) {
+      const validated = validateConfigObject({ gateway: { bind } });
+      expect(validated.ok, bind).toBe(false);
+      if (!validated.ok) {
+        expect(
+          validated.issues.some((issue) => issue.path === "gateway.bind"),
+          bind,
+        ).toBe(true);
+      }
+    }
+  });
+  it("escapes control characters in gateway.bind migration change text", async () => {
+    const res = migrateLegacyConfig({
+      gateway: { bind: "\r\n0.0.0.0\r\n" },
+    });
+    expect(res.changes).toContain('Normalized gateway.bind "\\r\\n0.0.0.0\\r\\n" → "lan".');
   });
   it('enforces dmPolicy="open" allowFrom wildcard for supported providers', async () => {
     const cases = [
@@ -433,7 +472,7 @@ describe("legacy config detection", () => {
         expect(channel?.dmPolicy, provider).toBe("pairing");
         expect(channel?.groupPolicy, provider).toBe("allowlist");
         if (provider === "telegram") {
-          expect(channel?.streaming, provider).toBe("off");
+          expect(channel?.streaming, provider).toBe("partial");
           expect(channel?.streamMode, provider).toBeUndefined();
         }
       }
@@ -597,7 +636,7 @@ describe("legacy config detection", () => {
           },
         },
         assert: (config: NonNullable<OpenClawConfig>) => {
-          expect(config.channels?.slack?.streaming).toBe("partial");
+          expect(config.channels?.slack?.streaming).toBe("off");
           expect(config.channels?.slack?.nativeStreaming).toBe(false);
         },
       },

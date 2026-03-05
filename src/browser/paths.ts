@@ -54,6 +54,9 @@ async function validateCanonicalPathWithinRoot(params: {
     if (params.expect === "file" && !candidateLstat.isFile()) {
       return "invalid";
     }
+    if (params.expect === "file" && candidateLstat.nlink > 1) {
+      return "invalid";
+    }
     const candidateRealPath = await fs.realpath(params.candidatePath);
     return isPathInside(params.rootRealPath, candidateRealPath) ? "ok" : "invalid";
   } catch (err) {
@@ -234,6 +237,12 @@ async function resolveCheckedPathsWithinRoot(params: {
         // Preserve historical behavior for paths that do not exist yet.
         resolvedPaths.push(pathResult.fallbackPath);
         continue;
+      }
+      if (err instanceof SafeOpenError && err.code === "outside-workspace") {
+        return {
+          ok: false,
+          error: `File is outside ${params.scopeLabel}`,
+        };
       }
       return {
         ok: false,
