@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCronStoreHarness } from "./service.test-harness.js";
+import { expectPosixMode } from "../config/config.backup-rotation.test-helpers.js";
 import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
@@ -74,6 +75,9 @@ describe("cron store", () => {
     await saveCronStore(store.storePath, first);
     await saveCronStore(store.storePath, second);
 
+    expectPosixMode((await fs.stat(store.storePath)).mode, 0o600);
+    expectPosixMode((await fs.stat(`${store.storePath}.bak`)).mode, 0o600);
+
     const currentRaw = await fs.readFile(store.storePath, "utf-8");
     const backupRaw = await fs.readFile(`${store.storePath}.bak`, "utf-8");
     expect(JSON.parse(currentRaw)).toEqual(second);
@@ -87,6 +91,7 @@ describe("saveCronStore", () => {
   it("persists and round-trips a store file", async () => {
     const { storePath } = await makeStorePath();
     await saveCronStore(storePath, dummyStore);
+    expectPosixMode((await fs.stat(storePath)).mode, 0o600);
     const loaded = await loadCronStore(storePath);
     expect(loaded).toEqual(dummyStore);
   });

@@ -11,6 +11,7 @@ import {
   resolveCronRunLogPruneOptions,
   resolveCronRunLogPath,
 } from "./run-log.js";
+import { expectPosixMode } from "../config/config.backup-rotation.test-helpers.js";
 
 describe("cron run log", () => {
   it("resolves prune options from config with defaults", () => {
@@ -83,6 +84,9 @@ describe("cron run log", () => {
           { maxBytes: 1, keepLines: 3 },
         );
       }
+
+      const mode = (await fs.stat(logPath)).mode;
+      expectPosixMode(mode, 0o600);
 
       const raw = await fs.readFile(logPath, "utf-8");
       const lines = raw

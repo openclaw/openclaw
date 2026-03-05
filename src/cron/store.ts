@@ -83,15 +83,24 @@ export async function saveCronStore(
     return;
   }
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.promises.writeFile(tmp, json, "utf-8");
+  // Hardening: ensure cron job store contents aren't accidentally made world-readable.
+  // Note: chmod may still be impacted by a permissive umask on some filesystems,
+  // so we set explicit mode and re-chmod after copy/rename best-effort.
+  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
   if (previous !== null && !opts?.skipBackup) {
     try {
       await fs.promises.copyFile(storePath, `${storePath}.bak`);
+      await fs.promises.chmod(`${storePath}.bak`, 0o600).catch(() => {
+        // best-effort
+      });
     } catch {
       // best-effort
     }
   }
   await renameWithRetry(tmp, storePath);
+  await fs.promises.chmod(storePath, 0o600).catch(() => {
+    // best-effort
+  });
   serializedStoreCache.set(storePath, json);
 }
 
