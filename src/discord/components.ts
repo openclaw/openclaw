@@ -275,6 +275,37 @@ function normalizeBlockType(raw: string) {
   return BLOCK_ALIASES.get(lowered) ?? (lowered as DiscordComponentBlock["type"]);
 }
 
+const ATTACHMENT_PREFIX = "attachment://";
+
+function normalizeAttachmentRef(value: string, label: string): `attachment://${string}` {
+  const trimmed = value.trim();
+  if (!trimmed.toLowerCase().startsWith(ATTACHMENT_PREFIX)) {
+    throw new Error(
+      `${label} must be an attachment reference (attachment://<filename>). Got: ${trimmed.slice(0, 50)}${trimmed.length > 50 ? "..." : ""}`,
+    );
+  }
+  const filename = trimmed.slice(ATTACHMENT_PREFIX.length).trim();
+  if (!filename) {
+    throw new Error(`${label} attachment reference must include a filename after attachment://`);
+  }
+  return `${ATTACHMENT_PREFIX}${filename}`;
+}
+
+/** Extracts the filename from a validated attachment reference. Throws if format is invalid. */
+export function resolveDiscordComponentAttachmentName(fileRef: string): string {
+  const trimmed = fileRef.trim();
+  if (!trimmed.toLowerCase().startsWith(ATTACHMENT_PREFIX)) {
+    throw new Error(
+      `File block reference must use attachment://<filename> format. Got: ${trimmed.slice(0, 60)}${trimmed.length > 60 ? "..." : ""}`,
+    );
+  }
+  const name = trimmed.slice(ATTACHMENT_PREFIX.length).trim();
+  if (!name) {
+    throw new Error("File block attachment reference must include a filename");
+  }
+  return name;
+}
+
 function parseSelectOptions(
   raw: unknown,
   label: string,
@@ -496,9 +527,10 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
       };
     }
     case "file": {
+      const raw = readString(obj.file, `${label}.file`);
       return {
         type: "file",
-        file: readString(obj.file, `${label}.file`) as `attachment://${string}`,
+        file: normalizeAttachmentRef(raw, `${label}.file`),
         spoiler: typeof obj.spoiler === "boolean" ? obj.spoiler : undefined,
       };
     }
@@ -643,9 +675,13 @@ function createButtonComponent(params: {
   const style = mapButtonStyle(params.spec.style);
   const isLink = style === ButtonStyle.Link || Boolean(params.spec.url);
   if (isLink) {
+    const url = params.spec.url?.trim();
+    if (!url) {
+      throw new Error("Link buttons require a url");
+    }
     class DynamicLinkButton extends LinkButton {
       label = params.spec.label;
-      url = params.spec.url ?? "";
+      url = url;
     }
     return { component: new DynamicLinkButton() };
   }

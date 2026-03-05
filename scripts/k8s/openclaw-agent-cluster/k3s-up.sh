@@ -202,7 +202,7 @@ if [[ "$has_provider_key" -eq 0 ]]; then
   echo "No provider API keys supplied in env; preserved any existing provider keys in openclaw-secrets."
 fi
 
-echo "==> Applying config + storage + gateway"
+echo "==> Applying config + storage + gateway (token from openclaw-secrets Secret, not ConfigMap)"
 gateway_sts_exists=0
 if kubectl -n "$NAMESPACE" get statefulset openclaw-gateway >/dev/null 2>&1; then
   gateway_sts_exists=1
@@ -222,8 +222,7 @@ data:
         "bind": "loopback",
         "port": 18789,
         "auth": {
-          "mode": "token",
-          "token": "${gateway_token}"
+          "mode": "token"
         },
         "controlUi": {
           "dangerouslyAllowHostHeaderOriginFallback": true
