@@ -4,6 +4,13 @@ export type ReplyMode = "text" | "command";
 export type TypingMode = "never" | "instant" | "thinking" | "message";
 export type SessionScope = "per-sender" | "global";
 export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+
+/**
+ * Safe default for dmScope when not explicitly configured.
+ * Matches the onboarding default ("per-channel-peer") to prevent
+ * cross-channel reply leakage after upgrades that don't preserve the setting.
+ */
+export const DEFAULT_DM_SCOPE: DmScope = "per-channel-peer";
 export type ReplyToMode = "off" | "first" | "all";
 export type GroupPolicy = "open" | "disabled" | "allowlist";
 export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";

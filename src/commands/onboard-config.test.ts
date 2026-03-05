@@ -1,16 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  applyOnboardingLocalWorkspaceConfig,
-  ONBOARDING_DEFAULT_DM_SCOPE,
-} from "./onboard-config.js";
+import { DEFAULT_DM_SCOPE } from "../config/types.base.js";
+import { applyOnboardingLocalWorkspaceConfig } from "./onboard-config.js";
 
 describe("applyOnboardingLocalWorkspaceConfig", () => {
   it("sets secure dmScope default when unset", () => {
     const baseConfig: OpenClawConfig = {};
     const result = applyOnboardingLocalWorkspaceConfig(baseConfig, "/tmp/workspace");
 
-    expect(result.session?.dmScope).toBe(ONBOARDING_DEFAULT_DM_SCOPE);
+    expect(result.session?.dmScope).toBe(DEFAULT_DM_SCOPE);
     expect(result.gateway?.mode).toBe("local");
     expect(result.agents?.defaults?.workspace).toBe("/tmp/workspace");
   });

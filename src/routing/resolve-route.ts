@@ -2,6 +2,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { DEFAULT_DM_SCOPE } from "../config/types.base.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
@@ -304,7 +305,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
   const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
 
-  const dmScope = input.cfg.session?.dmScope ?? "main";
+  const dmScope = input.cfg.session?.dmScope ?? DEFAULT_DM_SCOPE;
   const identityLinks = input.cfg.session?.identityLinks;
 
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {

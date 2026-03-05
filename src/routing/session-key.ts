@@ -1,4 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
+import { DEFAULT_DM_SCOPE } from "../config/types.base.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./account-id.js";
 
@@ -124,7 +125,7 @@ export function buildAgentPeerSessionKey(params: {
 }): string {
   const peerKind = params.peerKind ?? "direct";
   if (peerKind === "direct") {
-    const dmScope = params.dmScope ?? "main";
+    const dmScope = params.dmScope ?? DEFAULT_DM_SCOPE;
     let peerId = (params.peerId ?? "").trim();
     const linkedPeerId =
       dmScope === "main"
