@@ -4,6 +4,10 @@ import type { ActivityMeta, ActivityRenderOptions } from "./types.js";
 const PREVIEW_LIMIT_NORMAL = 120;
 const PREVIEW_LIMIT_FULL = 240;
 
+function escapeQuotedTokenValue(value: string): string {
+  return value.replace(/"/g, '\\"');
+}
+
 function formatDuration(durationMs?: number): string {
   if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) {
     return "";
@@ -113,7 +117,7 @@ export function renderActivityLine(activity: ActivityMeta, opts: ActivityRenderO
   if (activity.preview) {
     const preview = formatPreview(activity.preview, opts.mode);
     if (preview) {
-      parts.push(`preview="${preview}"`);
+      parts.push(`preview="${escapeQuotedTokenValue(preview)}"`);
     }
   }
 

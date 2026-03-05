@@ -72,6 +72,19 @@ describe("activity rendering", () => {
 
     expect(rendered).toContain("status=warn");
   });
+
+  it("escapes quoted preview values", () => {
+    const rendered = renderActivityLine(
+      {
+        kind: "reply",
+        summary: "policy message",
+        preview: 'groupPolicy to "allowlist"',
+      },
+      { mode: "normal" },
+    );
+
+    expect(rendered).toContain('preview="groupPolicy to \\"allowlist\\""');
+  });
 });
 
 describe("activity heuristics", () => {
