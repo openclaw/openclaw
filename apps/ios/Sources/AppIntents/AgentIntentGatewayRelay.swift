@@ -54,7 +54,7 @@ enum AgentIntentGatewayRelay {
         let gateway = GatewayNodeSession()
         defer { Task { await gateway.disconnect() } }
 
-        try await Self.connectGateway(gateway, url: url, config: config, clientId: "openclaw-ios")
+        try await Self.connectGateway(gateway, url: url, config: config, clientId: "openclaw-ios", isRetry: false)
 
         let requestPayload = AgentRequestPayload(
             message: params.message,
@@ -81,7 +81,8 @@ enum AgentIntentGatewayRelay {
         _ gateway: GatewayNodeSession,
         url: URL,
         config: ShareGatewayRelayConfig,
-        clientId: String) async throws
+        clientId: String,
+        isRetry: Bool) async throws
     {
         let options = GatewayConnectOptions(
             role: "node",
@@ -112,8 +113,9 @@ enum AgentIntentGatewayRelay {
                             message: "AppIntents does not support node invoke"))
                 })
         } catch {
-            guard Self.shouldRetryWithLegacyClientId(error) else { throw error }
-            try await connectGateway(gateway, url: url, config: config, clientId: "moltbot-ios")
+            // Only attempt the legacy clientId once; propagate on second failure.
+            guard !isRetry, Self.shouldRetryWithLegacyClientId(error) else { throw error }
+            try await connectGateway(gateway, url: url, config: config, clientId: "moltbot-ios", isRetry: true)
         }
     }
 
