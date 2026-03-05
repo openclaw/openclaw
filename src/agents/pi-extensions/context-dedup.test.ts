@@ -121,6 +121,29 @@ describe("context-dedup", () => {
     expect(Object.keys(result.refTable)).toHaveLength(0);
   });
 
+  it("deduplicates equivalent nested text-parts blocks", () => {
+    const repeated = "nested payload ".repeat(40);
+
+    const result = deduplicateMessages(
+      [
+        { role: "toolResult", content: [{ type: "text", text: repeated }] },
+        {
+          role: "toolResult",
+          content: [
+            {
+              type: "text",
+              parts: [{ type: "text", text: repeated }],
+            },
+          ],
+        },
+      ],
+      DEDUP_ON,
+    );
+
+    expect(JSON.stringify(result.messages[1].content)).toContain("[1 repeat of content omitted]");
+    expect(JSON.stringify(result.messages[1].content)).toContain("context message #0");
+  });
+
   it("keeps protected lineage source messages expanded", () => {
     const repeated = "E".repeat(260);
 

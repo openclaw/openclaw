@@ -93,7 +93,51 @@ function isDedupEligibleMessage(msg: any): boolean {
   return role === "user" || role === "assistant" || role === "tool" || role === "toolresult";
 }
 
-type TextLikeBlock = string | { type?: string; text?: string; content?: string; [key: string]: unknown };
+type TextLikeBlock = string | {
+  type?: string;
+  text?: string;
+  content?: string;
+  parts?: unknown[];
+  [key: string]: unknown;
+};
+
+function extractTextValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((part) => extractTextValue(part))
+      .filter((part): part is string => typeof part === "string" && part.length > 0);
+
+    if (parts.length === 0) {
+      return undefined;
+    }
+
+    return parts.join("\n");
+  }
+
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const obj = value as { text?: unknown; content?: unknown; parts?: unknown[] };
+
+  if (typeof obj.text === "string") {
+    return obj.text;
+  }
+
+  if (typeof obj.content === "string") {
+    return obj.content;
+  }
+
+  if (Array.isArray(obj.parts)) {
+    return extractTextValue(obj.parts);
+  }
+
+  return undefined;
+}
 
 function getBlockText(block: TextLikeBlock): string | undefined {
   if (typeof block === "string") {
@@ -109,15 +153,7 @@ function getBlockText(block: TextLikeBlock): string | undefined {
     return undefined;
   }
 
-  if (typeof block.text === "string") {
-    return block.text;
-  }
-
-  if (typeof block.content === "string") {
-    return block.content;
-  }
-
-  return undefined;
+  return extractTextValue(block);
 }
 
 function replaceBlockText(block: TextLikeBlock, nextText: string): TextLikeBlock {
@@ -135,6 +171,13 @@ function replaceBlockText(block: TextLikeBlock, nextText: string): TextLikeBlock
 
   if (typeof block.content === "string") {
     return { ...block, content: nextText };
+  }
+
+  if (Array.isArray(block.parts)) {
+    return {
+      ...block,
+      parts: [{ type: "text", text: nextText }],
+    };
   }
 
   return block;
