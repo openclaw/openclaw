@@ -8,6 +8,7 @@ export type SanitizeSessionHistoryFn = (params: {
   messages: AgentMessage[];
   modelApi: string;
   provider: string;
+  allowedToolNames?: Iterable<string>;
   sessionManager: SessionManager;
   sessionId: string;
   modelId?: string;
@@ -150,4 +151,16 @@ export function makeSnapshotChangedOpenAIReasoningScenario() {
     messages: makeReasoningAssistantMessages({ thinkingSignature: "object" }),
     modelId: "gpt-5.2-codex",
   };
+}
+
+export async function sanitizeSnapshotChangedOpenAIReasoning(params: {
+  sanitizeSessionHistory: SanitizeSessionHistoryFn;
+}) {
+  const { sessionManager, messages, modelId } = makeSnapshotChangedOpenAIReasoningScenario();
+  return await sanitizeWithOpenAIResponses({
+    sanitizeSessionHistory: params.sanitizeSessionHistory,
+    messages,
+    modelId,
+    sessionManager,
+  });
 }

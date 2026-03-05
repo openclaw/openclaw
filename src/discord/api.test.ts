@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { fetchDiscord } from "./api.js";
-
-function jsonResponse(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status });
-}
+import { jsonResponse } from "./test-http-helpers.js";
 
 describe("fetchDiscord", () => {
   it("formats rate limit payloads without raw JSON", async () => {

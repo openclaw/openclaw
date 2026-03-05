@@ -1,5 +1,6 @@
 import {
   applyAccountNameToChannelSection,
+  buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
@@ -17,6 +18,8 @@ import {
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   resolveDefaultSignalAccountId,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveSignalAccount,
   setAccountEnabledInConfigSection,
   signalOnboardingAdapter,
@@ -24,7 +27,7 @@ import {
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type ResolvedSignalAccount,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/signal";
 import { getSignalRuntime } from "./runtime.js";
 
 const signalMessageActions: ChannelMessageActionAdapter = {
@@ -41,6 +44,49 @@ const signalMessageActions: ChannelMessageActionAdapter = {
 };
 
 const meta = getChatChannelMeta("signal");
+
+function buildSignalSetupPatch(input: {
+  signalNumber?: string;
+  cliPath?: string;
+  httpUrl?: string;
+  httpHost?: string;
+  httpPort?: string;
+}) {
+  return {
+    ...(input.signalNumber ? { account: input.signalNumber } : {}),
+    ...(input.cliPath ? { cliPath: input.cliPath } : {}),
+    ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
+    ...(input.httpHost ? { httpHost: input.httpHost } : {}),
+    ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
+  };
+}
+
+type SignalSendFn = ReturnType<typeof getSignalRuntime>["channel"]["signal"]["sendMessageSignal"];
+
+async function sendSignalOutbound(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  to: string;
+  text: string;
+  mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
+  accountId?: string;
+  deps?: { sendSignal?: SignalSendFn };
+}) {
+  const send = params.deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
+  const maxBytes = resolveChannelMediaMaxBytes({
+    cfg: params.cfg,
+    resolveChannelLimitMb: ({ cfg, accountId }) =>
+      cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ?? cfg.channels?.signal?.mediaMaxMb,
+    accountId: params.accountId,
+  });
+  return await send(params.to, params.text, {
+    cfg: params.cfg,
+    ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    maxBytes,
+    accountId: params.accountId ?? undefined,
+  });
+}
 
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   id: "signal",
@@ -103,6 +149,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         .filter(Boolean)
         .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
         .filter(Boolean),
+    resolveDefaultTo: ({ cfg, accountId }) =>
+      resolveSignalAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -121,8 +169,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       };
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.signal !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy !== "open") {
         return [];
       }
@@ -181,11 +233,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
             signal: {
               ...next.channels?.signal,
               enabled: true,
-              ...(input.signalNumber ? { account: input.signalNumber } : {}),
-              ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-              ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
-              ...(input.httpHost ? { httpHost: input.httpHost } : {}),
-              ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
+              ...buildSignalSetupPatch(input),
             },
           },
         };
@@ -202,11 +250,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
               [accountId]: {
                 ...next.channels?.signal?.accounts?.[accountId],
                 enabled: true,
-                ...(input.signalNumber ? { account: input.signalNumber } : {}),
-                ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-                ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
-                ...(input.httpHost ? { httpHost: input.httpHost } : {}),
-                ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
+                ...buildSignalSetupPatch(input),
               },
             },
           },
@@ -220,33 +264,24 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     chunkerMode: "text",
     textChunkLimit: 4000,
     sendText: async ({ cfg, to, text, accountId, deps }) => {
-      const send = deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
-      const maxBytes = resolveChannelMediaMaxBytes({
+      const result = await sendSignalOutbound({
         cfg,
-        resolveChannelLimitMb: ({ cfg, accountId }) =>
-          cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ??
-          cfg.channels?.signal?.mediaMaxMb,
-        accountId,
-      });
-      const result = await send(to, text, {
-        maxBytes,
+        to,
+        text,
         accountId: accountId ?? undefined,
+        deps,
       });
       return { channel: "signal", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps }) => {
-      const send = deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
-      const maxBytes = resolveChannelMediaMaxBytes({
+    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps }) => {
+      const result = await sendSignalOutbound({
         cfg,
-        resolveChannelLimitMb: ({ cfg, accountId }) =>
-          cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ??
-          cfg.channels?.signal?.mediaMaxMb,
-        accountId,
-      });
-      const result = await send(to, text, {
+        to,
+        text,
         mediaUrl,
-        maxBytes,
+        mediaLocalRoots,
         accountId: accountId ?? undefined,
+        deps,
       });
       return { channel: "signal", ...result };
     },
@@ -265,18 +300,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
+      ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),
       baseUrl: account.baseUrl,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      probe,
-      lastInboundAt: runtime?.lastInboundAt ?? null,
-      lastOutboundAt: runtime?.lastOutboundAt ?? null,
     }),
   },
   gateway: {

@@ -1,4 +1,5 @@
 import { normalizeIMessageHandle } from "../../../imessage/targets.js";
+import { looksLikeHandleOrPhoneTarget, trimMessagingTarget } from "./shared.js";
 
 // Service prefixes that indicate explicit delivery method; must be preserved during normalization
 const SERVICE_PREFIXES = ["imessage:", "sms:", "auto:"] as const;
@@ -6,7 +7,7 @@ const CHAT_TARGET_PREFIX_RE =
   /^(chat_id:|chatid:|chat:|chat_guid:|chatguid:|guid:|chat_identifier:|chatidentifier:|chatident:)/i;
 
 export function normalizeIMessageMessagingTarget(raw: string): string | undefined {
-  const trimmed = raw.trim();
+  const trimmed = trimMessagingTarget(raw);
   if (!trimmed) {
     return undefined;
   }
@@ -32,18 +33,15 @@ export function normalizeIMessageMessagingTarget(raw: string): string | undefine
 }
 
 export function looksLikeIMessageTargetId(raw: string): boolean {
-  const trimmed = raw.trim();
+  const trimmed = trimMessagingTarget(raw);
   if (!trimmed) {
     return false;
-  }
-  if (/^(imessage:|sms:|auto:)/i.test(trimmed)) {
-    return true;
   }
   if (CHAT_TARGET_PREFIX_RE.test(trimmed)) {
     return true;
   }
-  if (trimmed.includes("@")) {
-    return true;
-  }
-  return /^\+?\d{3,}$/.test(trimmed);
+  return looksLikeHandleOrPhoneTarget({
+    raw: trimmed,
+    prefixPattern: /^(imessage:|sms:|auto:)/i,
+  });
 }

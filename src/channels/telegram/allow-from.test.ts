@@ -3,14 +3,24 @@ import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allo
 
 describe("telegram allow-from helpers", () => {
   it("normalizes tg/telegram prefixes", () => {
-    expect(normalizeTelegramAllowFromEntry(" TG:123 ")).toBe("123");
-    expect(normalizeTelegramAllowFromEntry("telegram:@someone")).toBe("@someone");
+    const cases = [
+      { value: " TG:123 ", expected: "123" },
+      { value: "telegram:@someone", expected: "@someone" },
+    ] as const;
+    for (const testCase of cases) {
+      expect(normalizeTelegramAllowFromEntry(testCase.value)).toBe(testCase.expected);
+    }
   });
 
   it("accepts signed numeric IDs", () => {
-    expect(isNumericTelegramUserId("123456789")).toBe(true);
-    expect(isNumericTelegramUserId("-1001234567890")).toBe(true);
-    expect(isNumericTelegramUserId("@someone")).toBe(false);
-    expect(isNumericTelegramUserId("12 34")).toBe(false);
+    const cases = [
+      { value: "123456789", expected: true },
+      { value: "-1001234567890", expected: true },
+      { value: "@someone", expected: false },
+      { value: "12 34", expected: false },
+    ] as const;
+    for (const testCase of cases) {
+      expect(isNumericTelegramUserId(testCase.value)).toBe(testCase.expected);
+    }
   });
 });

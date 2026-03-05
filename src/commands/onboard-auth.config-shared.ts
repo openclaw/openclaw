@@ -71,35 +71,27 @@ export function applyProviderConfigWithDefaultModels(
     defaultModelId?: string;
   },
 ): OpenClawConfig {
-  const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
-  const existingProvider = providers[params.providerId] as ModelProviderConfig | undefined;
-
-  const existingModels: ModelDefinitionConfig[] = Array.isArray(existingProvider?.models)
-    ? existingProvider.models
-    : [];
+  const providerState = resolveProviderModelMergeState(cfg, params.providerId);
 
   const defaultModels = params.defaultModels;
   const defaultModelId = params.defaultModelId ?? defaultModels[0]?.id;
   const hasDefaultModel = defaultModelId
-    ? existingModels.some((model) => model.id === defaultModelId)
+    ? providerState.existingModels.some((model) => model.id === defaultModelId)
     : true;
   const mergedModels =
-    existingModels.length > 0
+    providerState.existingModels.length > 0
       ? hasDefaultModel || defaultModels.length === 0
-        ? existingModels
-        : [...existingModels, ...defaultModels]
+        ? providerState.existingModels
+        : [...providerState.existingModels, ...defaultModels]
       : defaultModels;
-  providers[params.providerId] = buildProviderConfig({
-    existingProvider,
+  return applyProviderConfigWithMergedModels(cfg, {
+    agentModels: params.agentModels,
+    providerId: params.providerId,
+    providerState,
     api: params.api,
     baseUrl: params.baseUrl,
     mergedModels,
     fallbackModels: defaultModels,
-  });
-
-  return applyOnboardAuthAgentModelsAndProviders(cfg, {
-    agentModels: params.agentModels,
-    providers,
   });
 }
 
@@ -134,33 +126,68 @@ export function applyProviderConfigWithModelCatalog(
     catalogModels: ModelDefinitionConfig[];
   },
 ): OpenClawConfig {
-  const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
-  const existingProvider = providers[params.providerId] as ModelProviderConfig | undefined;
-  const existingModels: ModelDefinitionConfig[] = Array.isArray(existingProvider?.models)
-    ? existingProvider.models
-    : [];
-
+  const providerState = resolveProviderModelMergeState(cfg, params.providerId);
   const catalogModels = params.catalogModels;
   const mergedModels =
-    existingModels.length > 0
+    providerState.existingModels.length > 0
       ? [
-          ...existingModels,
+          ...providerState.existingModels,
           ...catalogModels.filter(
-            (model) => !existingModels.some((existing) => existing.id === model.id),
+            (model) => !providerState.existingModels.some((existing) => existing.id === model.id),
           ),
         ]
       : catalogModels;
-  providers[params.providerId] = buildProviderConfig({
-    existingProvider,
+  return applyProviderConfigWithMergedModels(cfg, {
+    agentModels: params.agentModels,
+    providerId: params.providerId,
+    providerState,
     api: params.api,
     baseUrl: params.baseUrl,
     mergedModels,
     fallbackModels: catalogModels,
   });
+}
 
+type ProviderModelMergeState = {
+  providers: Record<string, ModelProviderConfig>;
+  existingProvider?: ModelProviderConfig;
+  existingModels: ModelDefinitionConfig[];
+};
+
+function resolveProviderModelMergeState(
+  cfg: OpenClawConfig,
+  providerId: string,
+): ProviderModelMergeState {
+  const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
+  const existingProvider = providers[providerId] as ModelProviderConfig | undefined;
+  const existingModels: ModelDefinitionConfig[] = Array.isArray(existingProvider?.models)
+    ? existingProvider.models
+    : [];
+  return { providers, existingProvider, existingModels };
+}
+
+function applyProviderConfigWithMergedModels(
+  cfg: OpenClawConfig,
+  params: {
+    agentModels: Record<string, AgentModelEntryConfig>;
+    providerId: string;
+    providerState: ProviderModelMergeState;
+    api: ModelApi;
+    baseUrl: string;
+    mergedModels: ModelDefinitionConfig[];
+    fallbackModels: ModelDefinitionConfig[];
+  },
+): OpenClawConfig {
+  params.providerState.providers[params.providerId] = buildProviderConfig({
+    existingProvider: params.providerState.existingProvider,
+    api: params.api,
+    baseUrl: params.baseUrl,
+    mergedModels: params.mergedModels,
+    fallbackModels: params.fallbackModels,
+  });
   return applyOnboardAuthAgentModelsAndProviders(cfg, {
     agentModels: params.agentModels,
-    providers,
+    providers: params.providerState.providers,
   });
 }
 

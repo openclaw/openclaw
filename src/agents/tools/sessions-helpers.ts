@@ -15,6 +15,7 @@ export {
 export type { SessionReferenceResolution } from "./sessions-resolution.js";
 export {
   isRequesterSpawnedSessionVisible,
+  isResolvedSessionVisibleToRequester,
   listSpawnedSessionKeys,
   looksLikeSessionId,
   looksLikeSessionKey,
@@ -22,7 +23,9 @@ export {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
   resolveSessionReference,
+  resolveVisibleSessionReference,
   shouldResolveSessionIdInput,
+  shouldVerifyRequesterSpawnedSessionVisibility,
 } from "./sessions-resolution.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.fn();
 
@@ -9,6 +9,15 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 async function waitForMicrotaskTurn(): Promise<void> {
   await new Promise<void>((resolve) => queueMicrotask(resolve));
 }
+
+let fetchWithGuard: typeof import("./input-files.js").fetchWithGuard;
+let extractImageContentFromSource: typeof import("./input-files.js").extractImageContentFromSource;
+let extractFileContentFromSource: typeof import("./input-files.js").extractFileContentFromSource;
+
+beforeAll(async () => {
+  ({ fetchWithGuard, extractImageContentFromSource, extractFileContentFromSource } =
+    await import("./input-files.js"));
+});
 
 describe("fetchWithGuard", () => {
   it("rejects oversized streamed payloads and cancels the stream", async () => {
@@ -40,7 +49,6 @@ describe("fetchWithGuard", () => {
       finalUrl: "https://example.com/file.bin",
     });
 
-    const { fetchWithGuard } = await import("./input-files.js");
     await expect(
       fetchWithGuard({
         url: "https://example.com/file.bin",
@@ -64,7 +72,6 @@ describe("base64 size guards", () => {
       kind: "images",
       expectedError: "Image too large",
       run: async (data: string) => {
-        const { extractImageContentFromSource } = await import("./input-files.js");
         return await extractImageContentFromSource(
           { type: "base64", data, mediaType: "image/png" },
           {
@@ -81,7 +88,6 @@ describe("base64 size guards", () => {
       kind: "files",
       expectedError: "File too large",
       run: async (data: string) => {
-        const { extractFileContentFromSource } = await import("./input-files.js");
         return await extractFileContentFromSource({
           source: { type: "base64", data, mediaType: "text/plain", filename: "x.txt" },
           limits: {
@@ -105,5 +111,44 @@ describe("base64 size guards", () => {
     const base64Calls = fromSpy.mock.calls.filter((args) => (args as unknown[])[1] === "base64");
     expect(base64Calls).toHaveLength(0);
     fromSpy.mockRestore();
+  });
+});
+
+describe("input image base64 validation", () => {
+  it("rejects malformed base64 payloads", async () => {
+    await expect(
+      extractImageContentFromSource(
+        {
+          type: "base64",
+          data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2N4j8AAAAASUVORK5CYII=" onerror="alert(1)',
+          mediaType: "image/png",
+        },
+        {
+          allowUrl: false,
+          allowedMimes: new Set(["image/png"]),
+          maxBytes: 1024 * 1024,
+          maxRedirects: 0,
+          timeoutMs: 1,
+        },
+      ),
+    ).rejects.toThrow("invalid 'data' field");
+  });
+
+  it("normalizes whitespace in valid base64 payloads", async () => {
+    const image = await extractImageContentFromSource(
+      {
+        type: "base64",
+        data: " aGVs bG8= \n",
+        mediaType: "image/png",
+      },
+      {
+        allowUrl: false,
+        allowedMimes: new Set(["image/png"]),
+        maxBytes: 1024 * 1024,
+        maxRedirects: 0,
+        timeoutMs: 1,
+      },
+    );
+    expect(image.data).toBe("aGVsbG8=");
   });
 });

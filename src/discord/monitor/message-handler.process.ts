@@ -1,5 +1,6 @@
 import { ChannelType } from "@buape/carbon";
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
+import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js";
 import { resolveChunkMode } from "../../auto-reply/chunk.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
@@ -14,15 +15,29 @@ import { shouldAckReaction as shouldAckReactionGate } from "../../channels/ack-r
 import { logTypingFailure, logAckFailure } from "../../channels/logging.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
+import {
+  createStatusReactionController,
+  DEFAULT_TIMING,
+  type StatusReactionAdapter,
+} from "../../channels/status-reactions.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
+import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-streaming.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { convertMarkdownTables } from "../../markdown/tables.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
+import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { chunkDiscordTextWithMode } from "../chunk.js";
+import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
+import { createDiscordDraftStream } from "../draft-stream.js";
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
+import { editMessageDiscord } from "../send.messages.js";
 import { normalizeDiscordSlug, resolveDiscordOwnerAllowFrom } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
@@ -37,238 +52,16 @@ import { deliverDiscordReply } from "./reply-delivery.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import { sendTyping } from "./typing.js";
 
-const DISCORD_STATUS_THINKING_EMOJI = "🧠";
-const DISCORD_STATUS_TOOL_EMOJI = "🛠️";
-const DISCORD_STATUS_CODING_EMOJI = "💻";
-const DISCORD_STATUS_WEB_EMOJI = "🌐";
-const DISCORD_STATUS_DONE_EMOJI = "✅";
-const DISCORD_STATUS_ERROR_EMOJI = "❌";
-const DISCORD_STATUS_STALL_SOFT_EMOJI = "⏳";
-const DISCORD_STATUS_STALL_HARD_EMOJI = "⚠️";
-const DISCORD_STATUS_DONE_HOLD_MS = 1500;
-const DISCORD_STATUS_ERROR_HOLD_MS = 2500;
-const DISCORD_STATUS_DEBOUNCE_MS = 700;
-const DISCORD_STATUS_STALL_SOFT_MS = 10_000;
-const DISCORD_STATUS_STALL_HARD_MS = 30_000;
-
-const CODING_STATUS_TOOL_TOKENS = [
-  "exec",
-  "process",
-  "read",
-  "write",
-  "edit",
-  "session_status",
-  "bash",
-];
-
-const WEB_STATUS_TOOL_TOKENS = ["web_search", "web-search", "web_fetch", "web-fetch", "browser"];
-
-function resolveToolStatusEmoji(toolName?: string): string {
-  const normalized = toolName?.trim().toLowerCase() ?? "";
-  if (!normalized) {
-    return DISCORD_STATUS_TOOL_EMOJI;
-  }
-  if (WEB_STATUS_TOOL_TOKENS.some((token) => normalized.includes(token))) {
-    return DISCORD_STATUS_WEB_EMOJI;
-  }
-  if (CODING_STATUS_TOOL_TOKENS.some((token) => normalized.includes(token))) {
-    return DISCORD_STATUS_CODING_EMOJI;
-  }
-  return DISCORD_STATUS_TOOL_EMOJI;
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
 }
 
-function createDiscordStatusReactionController(params: {
-  enabled: boolean;
-  channelId: string;
-  messageId: string;
-  initialEmoji: string;
-  rest: unknown;
-}) {
-  let activeEmoji: string | null = null;
-  let chain: Promise<void> = Promise.resolve();
-  let pendingEmoji: string | null = null;
-  let pendingTimer: ReturnType<typeof setTimeout> | null = null;
-  let finished = false;
-  let softStallTimer: ReturnType<typeof setTimeout> | null = null;
-  let hardStallTimer: ReturnType<typeof setTimeout> | null = null;
+const DISCORD_TYPING_MAX_DURATION_MS = 20 * 60_000;
 
-  const enqueue = (work: () => Promise<void>) => {
-    chain = chain.then(work).catch((err) => {
-      logAckFailure({
-        log: logVerbose,
-        channel: "discord",
-        target: `${params.channelId}/${params.messageId}`,
-        error: err,
-      });
-    });
-    return chain;
-  };
-
-  const clearStallTimers = () => {
-    if (softStallTimer) {
-      clearTimeout(softStallTimer);
-      softStallTimer = null;
-    }
-    if (hardStallTimer) {
-      clearTimeout(hardStallTimer);
-      hardStallTimer = null;
-    }
-  };
-
-  const clearPendingDebounce = () => {
-    if (pendingTimer) {
-      clearTimeout(pendingTimer);
-      pendingTimer = null;
-    }
-    pendingEmoji = null;
-  };
-
-  const applyEmoji = (emoji: string) =>
-    enqueue(async () => {
-      if (!params.enabled || !emoji || activeEmoji === emoji) {
-        return;
-      }
-      const previousEmoji = activeEmoji;
-      await reactMessageDiscord(params.channelId, params.messageId, emoji, {
-        rest: params.rest as never,
-      });
-      activeEmoji = emoji;
-      if (previousEmoji && previousEmoji !== emoji) {
-        await removeReactionDiscord(params.channelId, params.messageId, previousEmoji, {
-          rest: params.rest as never,
-        });
-      }
-    });
-
-  const requestEmoji = (emoji: string, options?: { immediate?: boolean }) => {
-    if (!params.enabled || !emoji) {
-      return Promise.resolve();
-    }
-    if (options?.immediate) {
-      clearPendingDebounce();
-      return applyEmoji(emoji);
-    }
-    pendingEmoji = emoji;
-    if (pendingTimer) {
-      clearTimeout(pendingTimer);
-    }
-    pendingTimer = setTimeout(() => {
-      pendingTimer = null;
-      const emojiToApply = pendingEmoji;
-      pendingEmoji = null;
-      if (!emojiToApply || emojiToApply === activeEmoji) {
-        return;
-      }
-      void applyEmoji(emojiToApply);
-    }, DISCORD_STATUS_DEBOUNCE_MS);
-    return Promise.resolve();
-  };
-
-  const scheduleStallTimers = () => {
-    if (!params.enabled || finished) {
-      return;
-    }
-    clearStallTimers();
-    softStallTimer = setTimeout(() => {
-      if (finished) {
-        return;
-      }
-      void requestEmoji(DISCORD_STATUS_STALL_SOFT_EMOJI, { immediate: true });
-    }, DISCORD_STATUS_STALL_SOFT_MS);
-    hardStallTimer = setTimeout(() => {
-      if (finished) {
-        return;
-      }
-      void requestEmoji(DISCORD_STATUS_STALL_HARD_EMOJI, { immediate: true });
-    }, DISCORD_STATUS_STALL_HARD_MS);
-  };
-
-  const setPhase = (emoji: string) => {
-    if (!params.enabled || finished) {
-      return Promise.resolve();
-    }
-    scheduleStallTimers();
-    return requestEmoji(emoji);
-  };
-
-  const setTerminal = async (emoji: string) => {
-    if (!params.enabled) {
-      return;
-    }
-    finished = true;
-    clearStallTimers();
-    await requestEmoji(emoji, { immediate: true });
-  };
-
-  const clear = async () => {
-    if (!params.enabled) {
-      return;
-    }
-    finished = true;
-    clearStallTimers();
-    clearPendingDebounce();
-    await enqueue(async () => {
-      const cleanupCandidates = new Set<string>([
-        params.initialEmoji,
-        activeEmoji ?? "",
-        DISCORD_STATUS_THINKING_EMOJI,
-        DISCORD_STATUS_TOOL_EMOJI,
-        DISCORD_STATUS_CODING_EMOJI,
-        DISCORD_STATUS_WEB_EMOJI,
-        DISCORD_STATUS_DONE_EMOJI,
-        DISCORD_STATUS_ERROR_EMOJI,
-        DISCORD_STATUS_STALL_SOFT_EMOJI,
-        DISCORD_STATUS_STALL_HARD_EMOJI,
-      ]);
-      activeEmoji = null;
-      for (const emoji of cleanupCandidates) {
-        if (!emoji) {
-          continue;
-        }
-        try {
-          await removeReactionDiscord(params.channelId, params.messageId, emoji, {
-            rest: params.rest as never,
-          });
-        } catch (err) {
-          logAckFailure({
-            log: logVerbose,
-            channel: "discord",
-            target: `${params.channelId}/${params.messageId}`,
-            error: err,
-          });
-        }
-      }
-    });
-  };
-
-  const restoreInitial = async () => {
-    if (!params.enabled) {
-      return;
-    }
-    finished = true;
-    clearStallTimers();
-    clearPendingDebounce();
-    await requestEmoji(params.initialEmoji, { immediate: true });
-  };
-
-  return {
-    setQueued: () => {
-      scheduleStallTimers();
-      return requestEmoji(params.initialEmoji, { immediate: true });
-    },
-    setThinking: () => setPhase(DISCORD_STATUS_THINKING_EMOJI),
-    setTool: (toolName?: string) => setPhase(resolveToolStatusEmoji(toolName)),
-    setDone: () => setTerminal(DISCORD_STATUS_DONE_EMOJI),
-    setError: () => setTerminal(DISCORD_STATUS_ERROR_EMOJI),
-    clear,
-    restoreInitial,
-  };
+function isProcessAborted(abortSignal?: AbortSignal): boolean {
+  return Boolean(abortSignal?.aborted);
 }
 
 export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
@@ -311,23 +104,48 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     guildSlug,
     channelConfig,
     baseSessionKey,
+    boundSessionKey,
+    threadBindings,
     route,
     commandAuthorized,
+    discordRestFetch,
+    abortSignal,
   } = ctx;
+  if (isProcessAborted(abortSignal)) {
+    return;
+  }
 
-  const mediaList = await resolveMediaList(message, mediaMaxBytes);
-  const forwardedMediaList = await resolveForwardedMediaList(message, mediaMaxBytes);
+  const ssrfPolicy = cfg.browser?.ssrfPolicy;
+  const mediaList = await resolveMediaList(message, mediaMaxBytes, discordRestFetch, ssrfPolicy);
+  if (isProcessAborted(abortSignal)) {
+    return;
+  }
+  const forwardedMediaList = await resolveForwardedMediaList(
+    message,
+    mediaMaxBytes,
+    discordRestFetch,
+    ssrfPolicy,
+  );
+  if (isProcessAborted(abortSignal)) {
+    return;
+  }
   mediaList.push(...forwardedMediaList);
   const text = messageText;
   if (!text) {
-    logVerbose(`discord: drop message ${message.id} (empty content)`);
+    logVerbose("discord: drop message " + message.id + " (empty content)");
     return;
+  }
+
+  const boundThreadId = ctx.threadBinding?.conversation?.conversationId?.trim();
+  if (boundThreadId && typeof threadBindings.touchThread === "function") {
+    threadBindings.touchThread({ threadId: boundThreadId });
   }
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "discord",
     accountId,
   });
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const shouldAckReaction = () =>
     Boolean(
       ackReaction &&
@@ -343,12 +161,32 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       }),
     );
   const statusReactionsEnabled = shouldAckReaction();
-  const statusReactions = createDiscordStatusReactionController({
+  const discordAdapter: StatusReactionAdapter = {
+    setReaction: async (emoji) => {
+      await reactMessageDiscord(messageChannelId, message.id, emoji, {
+        rest: client.rest as never,
+      });
+    },
+    removeReaction: async (emoji) => {
+      await removeReactionDiscord(messageChannelId, message.id, emoji, {
+        rest: client.rest as never,
+      });
+    },
+  };
+  const statusReactions = createStatusReactionController({
     enabled: statusReactionsEnabled,
-    channelId: messageChannelId,
-    messageId: message.id,
+    adapter: discordAdapter,
     initialEmoji: ackReaction,
-    rest: client.rest,
+    emojis: cfg.messages?.statusReactions?.emojis,
+    timing: cfg.messages?.statusReactions?.timing,
+    onError: (err) => {
+      logAckFailure({
+        log: logVerbose,
+        channel: "discord",
+        target: `${messageChannelId}/${message.id}`,
+        error: err,
+      });
+    },
   });
   if (statusReactionsEnabled) {
     void statusReactions.setQueued();
@@ -395,6 +233,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     channelConfig,
     guildInfo,
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
+    allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
   });
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
@@ -523,7 +362,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     CommandBody: baseText,
     From: effectiveFrom,
     To: effectiveTo,
-    SessionKey: autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
+    SessionKey: boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
     AccountId: route.accountId,
     ChatType: isDirectMessage ? "direct" : "channel",
     ConversationLabel: fromLabel,
@@ -545,6 +384,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ReplyToBody: replyContext?.body,
     ReplyToSender: replyContext?.sender,
     ParentSessionKey: autoThreadContext?.ParentSessionKey ?? threadKeys.parentSessionKey,
+    MessageThreadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     ThreadStarterBody: threadStarterBody,
     ThreadLabel: threadLabel,
     Timestamp: resolveTimestampMs(message.timestamp),
@@ -594,6 +434,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     channel: "discord",
     accountId,
   });
+  const chunkMode = resolveChunkMode(cfg, "discord", accountId);
 
   const typingCallbacks = createTypingCallbacks({
     start: () => sendTyping({ client, channelId: typingChannelId }),
@@ -605,80 +446,383 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         error: err,
       });
     },
+    // Long tool-heavy runs are expected on Discord; keep heartbeats alive.
+    maxDurationMs: DISCORD_TYPING_MAX_DURATION_MS,
   });
 
-  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-    ...prefixOptions,
-    humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-    deliver: async (payload: ReplyPayload) => {
-      const replyToId = replyReference.use();
-      await deliverDiscordReply({
-        replies: [payload],
-        target: deliverTarget,
-        token,
-        accountId,
+  // --- Discord draft stream (edit-based preview streaming) ---
+  const discordStreamMode = resolveDiscordPreviewStreamMode(discordConfig);
+  const draftMaxChars = Math.min(textLimit, 2000);
+  const accountBlockStreamingEnabled =
+    typeof discordConfig?.blockStreaming === "boolean"
+      ? discordConfig.blockStreaming
+      : cfg.agents?.defaults?.blockStreamingDefault === "on";
+  const canStreamDraft = discordStreamMode !== "off" && !accountBlockStreamingEnabled;
+  const draftReplyToMessageId = () => replyReference.use();
+  const deliverChannelId = deliverTarget.startsWith("channel:")
+    ? deliverTarget.slice("channel:".length)
+    : messageChannelId;
+  const draftStream = canStreamDraft
+    ? createDiscordDraftStream({
         rest: client.rest,
-        runtime,
-        replyToId,
-        textLimit,
-        maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
-        tableMode,
-        chunkMode: resolveChunkMode(cfg, "discord", accountId),
+        channelId: deliverChannelId,
+        maxChars: draftMaxChars,
+        replyToMessageId: draftReplyToMessageId,
+        minInitialChars: 30,
+        throttleMs: 1200,
+        log: logVerbose,
+        warn: logVerbose,
+      })
+    : undefined;
+  const draftChunking =
+    draftStream && discordStreamMode === "block"
+      ? resolveDiscordDraftStreamingChunking(cfg, accountId)
+      : undefined;
+  const shouldSplitPreviewMessages = discordStreamMode === "block";
+  const draftChunker = draftChunking ? new EmbeddedBlockChunker(draftChunking) : undefined;
+  let lastPartialText = "";
+  let draftText = "";
+  let hasStreamedMessage = false;
+  let finalizedViaPreviewMessage = false;
+
+  const resolvePreviewFinalText = (text?: string) => {
+    if (typeof text !== "string") {
+      return undefined;
+    }
+    const formatted = convertMarkdownTables(text, tableMode);
+    const chunks = chunkDiscordTextWithMode(formatted, {
+      maxChars: draftMaxChars,
+      maxLines: discordConfig?.maxLinesPerMessage,
+      chunkMode,
+    });
+    if (!chunks.length && formatted) {
+      chunks.push(formatted);
+    }
+    if (chunks.length !== 1) {
+      return undefined;
+    }
+    const trimmed = chunks[0].trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const currentPreviewText = discordStreamMode === "block" ? draftText : lastPartialText;
+    if (
+      currentPreviewText &&
+      currentPreviewText.startsWith(trimmed) &&
+      trimmed.length < currentPreviewText.length
+    ) {
+      return undefined;
+    }
+    return trimmed;
+  };
+
+  const updateDraftFromPartial = (text?: string) => {
+    if (!draftStream || !text) {
+      return;
+    }
+    // Strip reasoning/thinking tags that may leak through the stream.
+    const cleaned = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
+    // Skip pure-reasoning messages (e.g. "Reasoning:\n…") that contain no answer text.
+    if (!cleaned || cleaned.startsWith("Reasoning:\n")) {
+      return;
+    }
+    if (cleaned === lastPartialText) {
+      return;
+    }
+    hasStreamedMessage = true;
+    if (discordStreamMode === "partial") {
+      // Keep the longer preview to avoid visible punctuation flicker.
+      if (
+        lastPartialText &&
+        lastPartialText.startsWith(cleaned) &&
+        cleaned.length < lastPartialText.length
+      ) {
+        return;
+      }
+      lastPartialText = cleaned;
+      draftStream.update(cleaned);
+      return;
+    }
+
+    let delta = cleaned;
+    if (cleaned.startsWith(lastPartialText)) {
+      delta = cleaned.slice(lastPartialText.length);
+    } else {
+      // Streaming buffer reset (or non-monotonic stream). Start fresh.
+      draftChunker?.reset();
+      draftText = "";
+    }
+    lastPartialText = cleaned;
+    if (!delta) {
+      return;
+    }
+    if (!draftChunker) {
+      draftText = cleaned;
+      draftStream.update(draftText);
+      return;
+    }
+    draftChunker.append(delta);
+    draftChunker.drain({
+      force: false,
+      emit: (chunk) => {
+        draftText += chunk;
+        draftStream.update(draftText);
+      },
+    });
+  };
+
+  const flushDraft = async () => {
+    if (!draftStream) {
+      return;
+    }
+    if (draftChunker?.hasBuffered()) {
+      draftChunker.drain({
+        force: true,
+        emit: (chunk) => {
+          draftText += chunk;
+        },
       });
-      replyReference.markSent();
-    },
-    onError: (err, info) => {
-      runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));
-    },
-    onReplyStart: async () => {
-      await typingCallbacks.onReplyStart();
-      await statusReactions.setThinking();
-    },
-  });
+      draftChunker.reset();
+      if (draftText) {
+        draftStream.update(draftText);
+      }
+    }
+    await draftStream.flush();
+  };
+
+  // When draft streaming is active, suppress block streaming to avoid double-streaming.
+  const disableBlockStreamingForDraft = draftStream ? true : undefined;
+
+  const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
+    createReplyDispatcherWithTyping({
+      ...prefixOptions,
+      humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+      typingCallbacks,
+      deliver: async (payload: ReplyPayload, info) => {
+        if (isProcessAborted(abortSignal)) {
+          return;
+        }
+        const isFinal = info.kind === "final";
+        if (payload.isReasoning) {
+          // Reasoning/thinking payloads should not be delivered to Discord.
+          return;
+        }
+        if (draftStream && isFinal) {
+          await flushDraft();
+          const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+          const finalText = payload.text;
+          const previewFinalText = resolvePreviewFinalText(finalText);
+          const previewMessageId = draftStream.messageId();
+
+          // Try to finalize via preview edit (text-only, fits in 2000 chars, not an error)
+          const canFinalizeViaPreviewEdit =
+            !finalizedViaPreviewMessage &&
+            !hasMedia &&
+            typeof previewFinalText === "string" &&
+            typeof previewMessageId === "string" &&
+            !payload.isError;
+
+          if (canFinalizeViaPreviewEdit) {
+            await draftStream.stop();
+            if (isProcessAborted(abortSignal)) {
+              return;
+            }
+            try {
+              await editMessageDiscord(
+                deliverChannelId,
+                previewMessageId,
+                { content: previewFinalText },
+                { rest: client.rest },
+              );
+              finalizedViaPreviewMessage = true;
+              replyReference.markSent();
+              return;
+            } catch (err) {
+              logVerbose(
+                `discord: preview final edit failed; falling back to standard send (${String(err)})`,
+              );
+            }
+          }
+
+          // Check if stop() flushed a message we can edit
+          if (!finalizedViaPreviewMessage) {
+            await draftStream.stop();
+            if (isProcessAborted(abortSignal)) {
+              return;
+            }
+            const messageIdAfterStop = draftStream.messageId();
+            if (
+              typeof messageIdAfterStop === "string" &&
+              typeof previewFinalText === "string" &&
+              !hasMedia &&
+              !payload.isError
+            ) {
+              try {
+                await editMessageDiscord(
+                  deliverChannelId,
+                  messageIdAfterStop,
+                  { content: previewFinalText },
+                  { rest: client.rest },
+                );
+                finalizedViaPreviewMessage = true;
+                replyReference.markSent();
+                return;
+              } catch (err) {
+                logVerbose(
+                  `discord: post-stop preview edit failed; falling back to standard send (${String(err)})`,
+                );
+              }
+            }
+          }
+
+          // Clear the preview and fall through to standard delivery
+          if (!finalizedViaPreviewMessage) {
+            await draftStream.clear();
+          }
+        }
+        if (isProcessAborted(abortSignal)) {
+          return;
+        }
+
+        const replyToId = replyReference.use();
+        await deliverDiscordReply({
+          replies: [payload],
+          target: deliverTarget,
+          token,
+          accountId,
+          rest: client.rest,
+          runtime,
+          replyToId,
+          replyToMode,
+          textLimit,
+          maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+          tableMode,
+          chunkMode,
+          sessionKey: ctxPayload.SessionKey,
+          threadBindings,
+          mediaLocalRoots,
+        });
+        replyReference.markSent();
+      },
+      onError: (err, info) => {
+        runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));
+      },
+      onReplyStart: async () => {
+        if (isProcessAborted(abortSignal)) {
+          return;
+        }
+        await typingCallbacks.onReplyStart();
+        await statusReactions.setThinking();
+      },
+    });
 
   let dispatchResult: Awaited<ReturnType<typeof dispatchInboundMessage>> | null = null;
   let dispatchError = false;
+  let dispatchAborted = false;
   try {
+    if (isProcessAborted(abortSignal)) {
+      dispatchAborted = true;
+      return;
+    }
     dispatchResult = await dispatchInboundMessage({
       ctx: ctxPayload,
       cfg,
       dispatcher,
       replyOptions: {
         ...replyOptions,
+        abortSignal,
         skillFilter: channelConfig?.skills,
         disableBlockStreaming:
-          typeof discordConfig?.blockStreaming === "boolean"
+          disableBlockStreamingForDraft ??
+          (typeof discordConfig?.blockStreaming === "boolean"
             ? !discordConfig.blockStreaming
-            : undefined,
+            : undefined),
+        onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
+        onAssistantMessageStart: draftStream
+          ? () => {
+              if (shouldSplitPreviewMessages && hasStreamedMessage) {
+                logVerbose("discord: calling forceNewMessage() for draft stream");
+                draftStream.forceNewMessage();
+              }
+              lastPartialText = "";
+              draftText = "";
+              draftChunker?.reset();
+            }
+          : undefined,
+        onReasoningEnd: draftStream
+          ? () => {
+              if (shouldSplitPreviewMessages && hasStreamedMessage) {
+                logVerbose("discord: calling forceNewMessage() for draft stream");
+                draftStream.forceNewMessage();
+              }
+              lastPartialText = "";
+              draftText = "";
+              draftChunker?.reset();
+            }
+          : undefined,
         onModelSelected,
         onReasoningStream: async () => {
           await statusReactions.setThinking();
         },
         onToolStart: async (payload) => {
+          if (isProcessAborted(abortSignal)) {
+            return;
+          }
           await statusReactions.setTool(payload.name);
         },
       },
     });
+    if (isProcessAborted(abortSignal)) {
+      dispatchAborted = true;
+      return;
+    }
   } catch (err) {
+    if (isProcessAborted(abortSignal)) {
+      dispatchAborted = true;
+      return;
+    }
     dispatchError = true;
     throw err;
   } finally {
-    markDispatchIdle();
-    if (statusReactionsEnabled) {
-      if (dispatchError) {
-        await statusReactions.setError();
-      } else {
-        await statusReactions.setDone();
+    try {
+      // Must stop() first to flush debounced content before clear() wipes state.
+      await draftStream?.stop();
+      if (!finalizedViaPreviewMessage) {
+        await draftStream?.clear();
       }
-      if (removeAckAfterReply) {
-        void (async () => {
-          await sleep(dispatchError ? DISCORD_STATUS_ERROR_HOLD_MS : DISCORD_STATUS_DONE_HOLD_MS);
-          await statusReactions.clear();
-        })();
+    } catch (err) {
+      // Draft cleanup should never keep typing alive.
+      logVerbose(`discord: draft cleanup failed: ${String(err)}`);
+    } finally {
+      markRunComplete();
+      markDispatchIdle();
+    }
+    if (statusReactionsEnabled) {
+      if (dispatchAborted) {
+        if (removeAckAfterReply) {
+          void statusReactions.clear();
+        } else {
+          void statusReactions.restoreInitial();
+        }
       } else {
-        void statusReactions.restoreInitial();
+        if (dispatchError) {
+          await statusReactions.setError();
+        } else {
+          await statusReactions.setDone();
+        }
+        if (removeAckAfterReply) {
+          void (async () => {
+            await sleep(dispatchError ? DEFAULT_TIMING.errorHoldMs : DEFAULT_TIMING.doneHoldMs);
+            await statusReactions.clear();
+          })();
+        } else {
+          void statusReactions.restoreInitial();
+        }
       }
     }
+  }
+  if (dispatchAborted) {
+    return;
   }
 
   if (!dispatchResult?.queuedFinal) {
