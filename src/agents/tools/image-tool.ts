@@ -13,7 +13,6 @@ import {
 } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
-  buildTextToolResult,
   resolveModelFromRegistry,
   resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
@@ -505,7 +504,32 @@ export function createImageTool(options?: {
               })),
             };
 
-      return buildTextToolResult(result, imageDetails);
+      // Build content blocks for TUI inline image rendering.
+      // - Local files: emit MEDIA:<hostPath> so the TUI can read/render the file.
+      // - Web/data images: emit { type: "image" } blocks with base64 data so the
+      //   TUI can render directly without needing a file path.
+      const content: (
+        | { type: "text"; text: string }
+        | { type: "image"; data: string; mimeType: string }
+      )[] = [];
+      for (const img of loadedImages) {
+        const src = img.resolvedImage;
+        const isLocal = src && !src.startsWith("data:") && !/^https?:\/\//i.test(src);
+        if (isLocal) {
+          content.push({ type: "text" as const, text: `MEDIA:${src}` });
+        }
+        content.push({ type: "image" as const, data: img.base64, mimeType: img.mimeType });
+      }
+      content.push({ type: "text" as const, text: result.text });
+
+      return {
+        content,
+        details: {
+          model: `${result.provider}/${result.model}`,
+          ...imageDetails,
+          attempts: result.attempts,
+        },
+      };
     },
   };
 }

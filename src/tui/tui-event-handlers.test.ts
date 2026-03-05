@@ -403,6 +403,65 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBe("run-active");
   });
 
+  it("bypasses verbose filter for MEDIA: tool results", () => {
+    const { chatLog, tui, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-123",
+        sessionInfo: { verboseLevel: "off" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-123",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolCallId: "tc-media",
+        name: "view_image",
+        args: {},
+        result: {
+          content: [{ type: "text", text: "MEDIA:/tmp/photo.png" }],
+        },
+        isError: false,
+      },
+    });
+
+    expect(chatLog.startTool).toHaveBeenCalledWith("tc-media", "view_image", {});
+    expect(chatLog.updateToolResult).toHaveBeenCalledWith(
+      "tc-media",
+      { content: [{ type: "text", text: "MEDIA:/tmp/photo.png" }] },
+      { isError: false },
+    );
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("does not bypass verbose filter for non-MEDIA tool results", () => {
+    const { chatLog, tui, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-123",
+        sessionInfo: { verboseLevel: "off" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-123",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolCallId: "tc-plain",
+        name: "exec",
+        result: {
+          content: [{ type: "text", text: "just text" }],
+        },
+        isError: false,
+      },
+    });
+
+    expect(chatLog.startTool).not.toHaveBeenCalled();
+    expect(chatLog.updateToolResult).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
   it("drops streaming assistant when chat final has no message", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },

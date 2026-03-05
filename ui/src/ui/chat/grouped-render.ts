@@ -19,6 +19,67 @@ type ImageBlock = {
   alt?: string;
 };
 
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/bmp",
+]);
+
+function sanitizeMediaType(raw: unknown): string {
+  if (typeof raw !== "string" || !ALLOWED_IMAGE_MIME_TYPES.has(raw)) {
+    return "image/png";
+  }
+  return raw;
+}
+
+function sanitizeDataUrl(raw: string): string | null {
+  // Only allow data: URLs with an approved image MIME type prefix.
+  const match = raw.match(/^data:(image\/[a-z+]+);base64,/);
+  if (!match || !ALLOWED_IMAGE_MIME_TYPES.has(match[1])) {
+    return null;
+  }
+  return raw;
+}
+
+function extractImageFromBlock(b: Record<string, unknown>, images: ImageBlock[]) {
+  if (b.type === "image") {
+    // Handle source object format (from sendChatMessage)
+    const source = b.source as Record<string, unknown> | undefined;
+    if (source?.type === "base64" && typeof source.data === "string") {
+      const data = source.data;
+      const mediaType = sanitizeMediaType(source.media_type);
+      const url = data.startsWith("data:")
+        ? sanitizeDataUrl(data)
+        : `data:${mediaType};base64,${data}`;
+      if (url) {
+        images.push({ url });
+      }
+    } else if (typeof b.data === "string") {
+      // Handle bare data format (from tool result image blocks).
+      // image-tool.ts emits `mimeType` (camelCase), gateway may use `media_type`.
+      const data = b.data;
+      const mediaType = sanitizeMediaType(b.media_type ?? b.mimeType);
+      const url = data.startsWith("data:")
+        ? sanitizeDataUrl(data)
+        : `data:${mediaType};base64,${data}`;
+      if (url) {
+        images.push({ url });
+      }
+    } else if (typeof b.url === "string") {
+      images.push({ url: b.url });
+    }
+  } else if (b.type === "image_url") {
+    // OpenAI format
+    const imageUrl = b.image_url as Record<string, unknown> | undefined;
+    if (typeof imageUrl?.url === "string") {
+      images.push({ url: imageUrl.url });
+    }
+  }
+}
+
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
@@ -31,23 +92,14 @@ function extractImages(message: unknown): ImageBlock[] {
       }
       const b = block as Record<string, unknown>;
 
-      if (b.type === "image") {
-        // Handle source object format (from sendChatMessage)
-        const source = b.source as Record<string, unknown> | undefined;
-        if (source?.type === "base64" && typeof source.data === "string") {
-          const data = source.data;
-          const mediaType = (source.media_type as string) || "image/png";
-          // If data is already a data URL, use it directly
-          const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-          images.push({ url });
-        } else if (typeof b.url === "string") {
-          images.push({ url: b.url });
-        }
-      } else if (b.type === "image_url") {
-        // OpenAI format
-        const imageUrl = b.image_url as Record<string, unknown> | undefined;
-        if (typeof imageUrl?.url === "string") {
-          images.push({ url: imageUrl.url });
+      extractImageFromBlock(b, images);
+
+      // Also look inside tool_result blocks for nested images
+      if ((b.type === "tool_result" || b.type === "toolresult") && Array.isArray(b.content)) {
+        for (const nested of b.content as unknown[]) {
+          if (typeof nested === "object" && nested !== null) {
+            extractImageFromBlock(nested as Record<string, unknown>, images);
+          }
         }
       }
     }
@@ -258,7 +310,7 @@ function renderGroupedMessage(
     .join(" ");
 
   if (!markdown && hasToolCards && isToolResult) {
-    return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
+    return html`${renderMessageImages(images)}${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 
   if (!markdown && !hasToolCards && !hasImages) {

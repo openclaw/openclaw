@@ -7,7 +7,12 @@ import {
 } from "../routing/session-key.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  isCommandMessage,
+  resultHasMedia,
+} from "./tui-formatters.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionContext = {
@@ -328,7 +333,9 @@ export function createSessionActions(context: SessionActionContext) {
           continue;
         }
         if (message.role === "toolResult") {
-          if (!showTools) {
+          // Always show tool results containing MEDIA: image paths,
+          // even when verbose/showTools is off.
+          if (!showTools && !resultHasMedia(message)) {
             continue;
           }
           const toolCallId = asString(message.toolCallId, "");

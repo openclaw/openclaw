@@ -28,6 +28,7 @@ export type ToolStreamEntry = {
 type ToolStreamHost = {
   sessionKey: string;
   chatRunId: string | null;
+  chatRunHasMedia: boolean;
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
@@ -234,6 +235,7 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamById.clear();
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
+  host.chatRunHasMedia = false;
   flushToolStreamSync(host);
 }
 
@@ -452,4 +454,54 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   entry.message = buildToolStreamMessage(entry);
   trimToolStream(host);
   scheduleToolStreamSync(host, phase === "result");
+
+  // Flag when a tool result contains MEDIA: image paths so the chat reload
+  // knows to fetch server-injected images.  This avoids reloading on every
+  // turn — only turns that actually produced images trigger the reload.
+  if (phase === "result" && !host.chatRunHasMedia) {
+    const result = data.result;
+    if (
+      result &&
+      typeof result === "object" &&
+      Array.isArray((result as Record<string, unknown>).content)
+    ) {
+      const content = (result as Record<string, unknown>).content as unknown[];
+      for (const b of content) {
+        if (!b || typeof b !== "object") {
+          continue;
+        }
+        const block = b as Record<string, unknown>;
+        if (
+          (block.type === "text" &&
+            typeof block.text === "string" &&
+            /^MEDIA:\s*`?.*\.(?:png|jpe?g|gif|webp)/im.test(block.text)) ||
+          (block.type === "image" && typeof block.data === "string")
+        ) {
+          host.chatRunHasMedia = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // Detect image-viewer exec commands at the start phase.  The server-side
+  // injection (Strategy 2) extracts images from these commands, but in
+  // verbose=off mode the exec result is stripped before reaching the client.
+  // Without this heuristic the reload that fetches the server-injected images
+  // would never fire for native image-viewer runs.
+  if (phase === "start" && !host.chatRunHasMedia && name === "exec") {
+    const cmdStr = (() => {
+      if (typeof args === "string") {
+        return args;
+      }
+      if (args && typeof args === "object") {
+        const a = args as Record<string, unknown>;
+        return typeof a.command === "string" ? a.command : "";
+      }
+      return "";
+    })();
+    if (/\.(?:png|jpe?g|gif|webp)\b/i.test(cmdStr)) {
+      host.chatRunHasMedia = true;
+    }
+  }
 }
