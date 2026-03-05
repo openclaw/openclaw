@@ -293,6 +293,15 @@ export function applyJobResult(
   },
 ): boolean {
   const prevLastRunAtMs = job.state.lastRunAtMs;
+  const computeNextWithPreservedLastRun = (nowMs: number) => {
+    const saved = job.state.lastRunAtMs;
+    job.state.lastRunAtMs = prevLastRunAtMs;
+    try {
+      return computeJobNextRunAtMs(job, nowMs);
+    } finally {
+      job.state.lastRunAtMs = saved;
+    }
+  };
   job.state.runningAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
   job.state.lastRunStatus = result.status;
@@ -390,16 +399,10 @@ export function applyJobResult(
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
       let normalNext: number | undefined;
       try {
-        if (opts?.preserveSchedule && job.schedule.kind === "every") {
-          job.state.lastRunAtMs = prevLastRunAtMs;
-          try {
-            normalNext = computeJobNextRunAtMs(job, result.endedAt);
-          } finally {
-            job.state.lastRunAtMs = result.startedAt;
-          }
-        } else {
-          normalNext = computeJobNextRunAtMs(job, result.endedAt);
-        }
+        normalNext =
+          opts?.preserveSchedule && job.schedule.kind === "every"
+            ? computeNextWithPreservedLastRun(result.endedAt)
+            : computeJobNextRunAtMs(job, result.endedAt);
       } catch (err) {
         // If the schedule expression/timezone throws (croner edge cases),
         // record the schedule error (auto-disables after repeated failures)
@@ -422,16 +425,10 @@ export function applyJobResult(
     } else if (job.enabled) {
       let naturalNext: number | undefined;
       try {
-        if (opts?.preserveSchedule && job.schedule.kind === "every") {
-          job.state.lastRunAtMs = prevLastRunAtMs;
-          try {
-            naturalNext = computeJobNextRunAtMs(job, result.endedAt);
-          } finally {
-            job.state.lastRunAtMs = result.startedAt;
-          }
-        } else {
-          naturalNext = computeJobNextRunAtMs(job, result.endedAt);
-        }
+        naturalNext =
+          opts?.preserveSchedule && job.schedule.kind === "every"
+            ? computeNextWithPreservedLastRun(result.endedAt)
+            : computeJobNextRunAtMs(job, result.endedAt);
       } catch (err) {
         // If the schedule expression/timezone throws (croner edge cases),
         // record the schedule error (auto-disables after repeated failures)

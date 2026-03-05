@@ -423,10 +423,11 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
-  it("does not advance unrelated due jobs after manual cron.run", async () => {
+  it("manual cron.run preserves unrelated due jobs but advances already-executed stale slots", async () => {
     const store = makeStorePath();
     const nowMs = Date.now();
     const dueNextRunAtMs = nowMs - 1_000;
+    const staleExecutedNextRunAtMs = nowMs - 2_000;
 
     await writeCronJobs(store.storePath, [
       createIsolatedRegressionJob({
@@ -445,6 +446,17 @@ describe("Cron issue regressions", () => {
         payload: { kind: "agentTurn", message: "unrelated due" },
         state: { nextRunAtMs: dueNextRunAtMs },
       }),
+      createIsolatedRegressionJob({
+        id: "unrelated-stale-executed",
+        name: "unrelated stale executed",
+        scheduledAt: nowMs,
+        schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
+        payload: { kind: "agentTurn", message: "unrelated stale executed" },
+        state: {
+          nextRunAtMs: staleExecutedNextRunAtMs,
+          lastRunAtMs: staleExecutedNextRunAtMs + 1,
+        },
+      }),
     ]);
 
     const cron = await startCronForStore({
@@ -458,8 +470,11 @@ describe("Cron issue regressions", () => {
 
     const jobs = await cron.list({ includeDisabled: true });
     const unrelated = jobs.find((entry) => entry.id === "unrelated-due");
+    const staleExecuted = jobs.find((entry) => entry.id === "unrelated-stale-executed");
     expect(unrelated).toBeDefined();
     expect(unrelated?.state.nextRunAtMs).toBe(dueNextRunAtMs);
+    expect(staleExecuted).toBeDefined();
+    expect((staleExecuted?.state.nextRunAtMs ?? 0) > nowMs).toBe(true);
 
     cron.stop();
   });

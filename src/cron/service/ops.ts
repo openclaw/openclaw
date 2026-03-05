@@ -455,7 +455,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       snapshot: postRunSnapshot,
       removed: postRunRemoved,
     });
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
     await persist(state);
     armTimer(state);
   });
