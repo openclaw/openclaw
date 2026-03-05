@@ -34,6 +34,7 @@ describe("sticker-cache", () => {
     if (fs.existsSync(TEST_CACHE_FILE)) {
       fs.unlinkSync(TEST_CACHE_FILE);
     }
+    vi.unstubAllEnvs();
   });
 
   describe("getCachedSticker", () => {
@@ -112,6 +113,58 @@ describe("sticker-cache", () => {
       const result = getCachedSticker("unique789");
       expect(result?.description).toBe("Updated description");
       expect(result?.fileId).toBe("file789-new");
+    });
+  });
+
+  describe("cache bounds", () => {
+    it("keeps only the newest entries when max cache size is exceeded", () => {
+      vi.stubEnv("OPENCLAW_TELEGRAM_STICKER_CACHE_MAX", "3");
+
+      cacheSticker({
+        fileId: "s1",
+        fileUniqueId: "unique-1",
+        description: "Sticker 1",
+        cachedAt: "2026-01-26T10:00:00.000Z",
+      });
+      cacheSticker({
+        fileId: "s2",
+        fileUniqueId: "unique-2",
+        description: "Sticker 2",
+        cachedAt: "2026-01-26T11:00:00.000Z",
+      });
+      cacheSticker({
+        fileId: "s3",
+        fileUniqueId: "unique-3",
+        description: "Sticker 3",
+        cachedAt: "2026-01-26T12:00:00.000Z",
+      });
+      cacheSticker({
+        fileId: "s4",
+        fileUniqueId: "unique-4",
+        description: "Sticker 4",
+        cachedAt: "2026-01-26T13:00:00.000Z",
+      });
+
+      expect(getCachedSticker("unique-1")).toBeNull();
+      expect(getCachedSticker("unique-2")).not.toBeNull();
+      expect(getCachedSticker("unique-3")).not.toBeNull();
+      expect(getCachedSticker("unique-4")).not.toBeNull();
+      expect(getCacheStats().count).toBe(3);
+    });
+
+    it("falls back to default max entries when env is invalid", () => {
+      vi.stubEnv("OPENCLAW_TELEGRAM_STICKER_CACHE_MAX", "invalid");
+
+      for (let i = 0; i < 5; i += 1) {
+        cacheSticker({
+          fileId: `sticker-${i}`,
+          fileUniqueId: `unique-${i}`,
+          description: `Sticker ${i}`,
+          cachedAt: `2026-01-26T1${i}:00:00.000Z`,
+        });
+      }
+
+      expect(getCacheStats().count).toBe(5);
     });
   });
 
