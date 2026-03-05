@@ -71,7 +71,9 @@ export function stripAnsi(value: string): string {
   // Based on the widely-used strip-ansi patterns (CSI + OSC).
   // - CSI: ESC [ ... cmd
   // - OSC: ESC ] ... BEL or ST
+  // eslint-disable-next-line no-control-regex
   const csi = /[\u001B\u009B][[\]()#;?]*(?:\d{1,4}(?:;\d{0,4})*)?[0-9A-ORZcf-nq-uy=><]/g;
+  // eslint-disable-next-line no-control-regex
   const osc = /\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g;
   return value.replace(osc, "").replace(csi, "");
 }
@@ -89,6 +91,7 @@ export function normalizeTerminalText(value: string): string {
   out = out.replace(/\[(?:\d{1,4}(?:;\d{0,4})*)[A-Za-z]/g, "");
 
   // Drop other control chars (keep \n and \t).
+  // eslint-disable-next-line no-control-regex
   out = out.replace(/[\u0000-\u0008\u000B-\u001A\u001C-\u001F\u007F]/g, "");
   return out;
 }

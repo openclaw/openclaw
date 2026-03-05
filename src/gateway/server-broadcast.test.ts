@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "./protocol/client-info.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 
 function createFakeClient(params?: {
   caps?: string[];
@@ -14,7 +15,8 @@ function createFakeClient(params?: {
       sent.push(JSON.parse(frame));
     }),
     close: vi.fn(),
-  };
+  } as unknown as import("ws").WebSocket;
+
   const client = {
     connId: "c1",
     connect: {
@@ -23,23 +25,23 @@ function createFakeClient(params?: {
       caps: params?.caps ?? [],
     },
     socket,
-  };
+  } as unknown as GatewayWsClient;
   return { client, socket, sent };
 }
 
 describe("server-broadcast", () => {
   it("does not sequence agent tool events", () => {
     const { client, sent } = createFakeClient({ caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS] });
-    const clients = new Set([client as any]);
-    const { broadcast } = createGatewayBroadcaster({ clients: clients as any });
+    const clients = new Set<GatewayWsClient>([client]);
+    const { broadcast } = createGatewayBroadcaster({ clients });
 
     broadcast("chat", { hello: true });
     broadcast("agent", { stream: "tool", data: { phase: "start" } });
     broadcast("chat", { ok: true });
 
-    const chat1 = sent[0] as any;
-    const tool = sent[1] as any;
-    const chat2 = sent[2] as any;
+    const chat1 = sent[0] as Record<string, unknown>;
+    const tool = sent[1] as Record<string, unknown>;
+    const chat2 = sent[2] as Record<string, unknown>;
 
     expect(chat1.seq).toBe(1);
     expect(tool.seq).toBeUndefined();
@@ -50,8 +52,8 @@ describe("server-broadcast", () => {
     const a = createFakeClient({ caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS] });
     const b = createFakeClient({ caps: [] });
 
-    const clients = new Set([a.client as any, b.client as any]);
-    const { broadcast } = createGatewayBroadcaster({ clients: clients as any });
+    const clients = new Set<GatewayWsClient>([a.client, b.client]);
+    const { broadcast } = createGatewayBroadcaster({ clients });
 
     broadcast("agent", { stream: "tool", data: { phase: "result" } });
 

@@ -288,7 +288,7 @@ export type AgentEventHandlerOptions = {
 
 export function createAgentEventHandler({
   broadcast,
-  broadcastToConnIds,
+  broadcastToConnIds: _broadcastToConnIds,
   nodeSendToSession,
   agentRunSeq,
   chatRunState,

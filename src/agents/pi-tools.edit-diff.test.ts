@@ -4,16 +4,19 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createHostWorkspaceEditTool } from "./pi-tools.read.js";
 
-function extractFirstText(result: any): string {
-  const blocks = Array.isArray(result?.content) ? result.content : [];
+function extractFirstText(result: unknown): string {
+  if (!result || typeof result !== "object") {
+    return "";
+  }
+  const record = result as Record<string, unknown>;
+  const blocks = Array.isArray(record.content) ? record.content : [];
   for (const b of blocks) {
-    if (
-      b &&
-      typeof b === "object" &&
-      (b as any).type === "text" &&
-      typeof (b as any).text === "string"
-    ) {
-      return (b as any).text;
+    if (!b || typeof b !== "object") {
+      continue;
+    }
+    const block = b as Record<string, unknown>;
+    if (block.type === "text" && typeof block.text === "string") {
+      return block.text;
     }
   }
   return "";

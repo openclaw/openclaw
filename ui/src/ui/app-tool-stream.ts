@@ -501,15 +501,16 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   // Some tools (notably `edit`) often return empty output even on success.
-  // To keep the UI informative, synthesize a diff-like preview from args.
-  if (
-    phase === "result" &&
-    (!entry.output || entry.output.trim() === "") &&
-    entry.name === "edit"
-  ) {
-    const diff = formatEditDiff(entry.args);
-    if (diff) {
-      entry.output = diff;
+  // Additionally, `edit` typically has no update frames, which can make it feel
+  // like it "doesn't stream" in the UI.
+  // To improve perceived streaming, synthesize a diff-like preview as soon as we
+  // have args (on start), then keep/refresh it on result.
+  if (entry.name === "edit" && (phase === "start" || phase === "result")) {
+    if (!entry.output || entry.output.trim() === "") {
+      const diff = formatEditDiff(entry.args);
+      if (diff) {
+        entry.output = diff;
+      }
     }
   }
 
