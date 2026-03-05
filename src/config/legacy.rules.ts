@@ -131,6 +131,11 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     message: "routing.queue was moved; use messages.queue instead (auto-migrated on load).",
   },
   {
+    path: ["messages", "queue", "byProvider"],
+    message:
+      "messages.queue.byProvider was renamed; use messages.queue.byChannel instead (auto-migrated on load).",
+  },
+  {
     path: ["routing", "transcribeAudio"],
     message:
       "routing.transcribeAudio was moved; use tools.media.audio.models instead (auto-migrated on load).",

@@ -313,6 +313,58 @@ export function validateConfigObjectRawWithPlugins(raw: unknown):
   return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false });
 }
 
+/**
+ * Strip Zod-identified unrecognized keys from a raw config object.
+ * Returns the stripped config and a list of warnings for the removed keys.
+ * Used to allow gateway startup when config has stale/unknown keys from older versions.
+ */
+function stripUnrecognizedKeysFromRaw(raw: unknown): {
+  stripped: unknown;
+  warnings: ConfigValidationIssue[];
+} {
+  const probe = OpenClawSchema.safeParse(raw);
+  if (probe.success) {
+    return { stripped: raw, warnings: [] };
+  }
+  const unrecognizedIssues = probe.error.issues.filter((iss) => iss.code === "unrecognized_keys");
+  if (unrecognizedIssues.length === 0) {
+    return { stripped: raw, warnings: [] };
+  }
+  // Deep-clone the raw config and delete each unrecognized key.
+  const next = JSON.parse(JSON.stringify(raw)) as Record<string, unknown>;
+  const warnings: ConfigValidationIssue[] = [];
+  for (const issue of unrecognizedIssues) {
+    const path = issue.path.filter(
+      (seg): seg is string | number => typeof seg === "string" || typeof seg === "number",
+    );
+    let target: unknown = next;
+    for (const seg of path) {
+      if (!target || typeof target !== "object" || Array.isArray(target)) {
+        target = null;
+        break;
+      }
+      target = (target as Record<string | number, unknown>)[seg];
+    }
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      continue;
+    }
+    const record = target as Record<string, unknown>;
+    const keys: PropertyKey[] = (issue as unknown as { keys?: PropertyKey[] }).keys ?? [];
+    for (const key of keys) {
+      if (typeof key !== "string" || !(key in record)) {
+        continue;
+      }
+      const fullPath = path.length > 0 ? `${path.join(".")}.${key}` : key;
+      delete record[key];
+      warnings.push({
+        path: fullPath,
+        message: `Unknown config key "${fullPath}" ignored. Remove it to suppress this warning.`,
+      });
+    }
+  }
+  return { stripped: next, warnings };
+}
+
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
   opts: { applyDefaults: boolean },
@@ -327,14 +379,28 @@ function validateConfigObjectWithPluginsBase(
       issues: ConfigValidationIssue[];
       warnings: ConfigValidationIssue[];
     } {
-  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
+  // Check for legacy config issues first — these must be errors, not silently stripped.
+  // Only strip truly unknown keys (not legacy ones) to allow startup with stale config
+  // from older versions that had keys removed (issue #35957).
+  const legacyIssues = findLegacyConfigIssues(raw);
+  if (legacyIssues.length > 0) {
+    return {
+      ok: false,
+      issues: legacyIssues.map((iss) => ({ path: iss.path, message: iss.message })),
+      warnings: [],
+    };
+  }
+  const { stripped: strippedRaw, warnings: unknownKeyWarnings } = stripUnrecognizedKeysFromRaw(raw);
+  const base = opts.applyDefaults
+    ? validateConfigObject(strippedRaw)
+    : validateConfigObjectRaw(strippedRaw);
   if (!base.ok) {
-    return { ok: false, issues: base.issues, warnings: [] };
+    return { ok: false, issues: base.issues, warnings: unknownKeyWarnings };
   }
 
   const config = base.config;
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = [...unknownKeyWarnings];
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 
