@@ -340,6 +340,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
     let resolvedSessionKey = requestedSessionKey;
     let skipTimestampInjection = false;
+    let queuedChatRunSessionId: string | undefined;
+    let queuedChatRunSessionKey: string | undefined;
 
     const resetCommandMatch = message.match(RESET_COMMAND_RE);
     if (resetCommandMatch && requestedSessionKey) {
@@ -479,6 +481,8 @@ export const agentHandlers: GatewayRequestHandlers = {
           sessionKey: canonicalSessionKey,
           clientRunId: idem,
         });
+        queuedChatRunSessionId = idem;
+        queuedChatRunSessionKey = canonicalSessionKey;
         if (requestedBestEffortDeliver === undefined) {
           bestEffortDeliver = true;
         }
@@ -610,6 +614,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       loadGatewayModelCatalog: context.loadGatewayModelCatalog,
     });
     if (modelState.status === "blocked") {
+      if (queuedChatRunSessionId) {
+        context.removeChatRun(queuedChatRunSessionId, idem, queuedChatRunSessionKey);
+      }
       respond(
         false,
         undefined,

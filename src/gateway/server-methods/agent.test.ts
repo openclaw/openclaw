@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentHandlers } from "./agent.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   registerAgentRunContext: vi.fn(),
   sessionsResetHandler: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
+  resolveGatewayAgentModelState: vi.fn(),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -74,6 +75,16 @@ vi.mock("../../sessions/send-policy.js", () => ({
   resolveSendPolicy: () => "allow",
 }));
 
+vi.mock("../agent-model-blocking.js", async () => {
+  const actual = await vi.importActual<typeof import("../agent-model-blocking.js")>(
+    "../agent-model-blocking.js",
+  );
+  return {
+    ...actual,
+    resolveGatewayAgentModelState: mocks.resolveGatewayAgentModelState,
+  };
+});
+
 vi.mock("../../utils/delivery-context.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils/delivery-context.js")>(
     "../../utils/delivery-context.js",
@@ -88,6 +99,7 @@ const makeContext = (): GatewayRequestContext =>
   ({
     dedupe: new Map(),
     addChatRun: vi.fn(),
+    removeChatRun: vi.fn(),
     logGateway: { info: vi.fn(), error: vi.fn() },
   }) as unknown as GatewayRequestContext;
 
@@ -272,6 +284,16 @@ async function invokeAgentIdentityGet(
 }
 
 describe("gateway agent handler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadConfigReturn = {};
+    mocks.resolveGatewayAgentModelState.mockReset();
+    mocks.resolveGatewayAgentModelState.mockResolvedValue({
+      status: "ready",
+      reason: undefined,
+    });
+  });
+
   it("preserves ACP metadata from the current stored session entry", async () => {
     const existingAcpMeta = {
       backend: "acpx",
@@ -408,6 +430,46 @@ describe("gateway agent handler", () => {
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(callArgs.bestEffortDeliver).toBe(false);
+  });
+
+  it("removes queued chat runs when strict model resolution blocks the run", async () => {
+    primeMainAgentRun();
+    mocks.resolveGatewayAgentModelState.mockResolvedValue({
+      status: "blocked",
+      reason: "model_not_found",
+    });
+    const context = makeContext();
+
+    const respond = await invokeAgent(
+      {
+        message: "blocked run",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "blocked-idem-1",
+      },
+      {
+        context,
+        reqId: "blocked-model-1",
+      },
+    );
+
+    expect(context.addChatRun).toHaveBeenCalledWith("blocked-idem-1", {
+      sessionKey: "agent:main:main",
+      clientRunId: "blocked-idem-1",
+    });
+    expect(context.removeChatRun).toHaveBeenCalledWith(
+      "blocked-idem-1",
+      "blocked-idem-1",
+      "agent:main:main",
+    );
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("blocked"),
+      }),
+    );
   });
 
   it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {
