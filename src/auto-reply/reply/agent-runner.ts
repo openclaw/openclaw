@@ -449,10 +449,14 @@ export async function runReplyAgent(params: {
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta?.agentMeta?.sessionId?.trim()
       : undefined;
+    // Only fall back to the session's cached contextTokens when the model hasn't
+    // changed; otherwise the stale value from a previous model gets stuck (#35372).
+    const sessionContextTokensFallback =
+      modelUsed === activeSessionEntry?.model ? activeSessionEntry?.contextTokens : undefined;
     const contextTokensUsed =
       agentCfgContextTokens ??
       lookupContextTokens(modelUsed) ??
-      activeSessionEntry?.contextTokens ??
+      sessionContextTokensFallback ??
       DEFAULT_CONTEXT_TOKENS;
 
     await persistRunSessionUsage({
