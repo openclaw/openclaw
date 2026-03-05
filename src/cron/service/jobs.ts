@@ -46,6 +46,9 @@ function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
   const cacheKey = `${staggerMs}:${jobId}`;
   const cached = staggerOffsetCache.get(cacheKey);
   if (cached !== undefined) {
+    // Refresh insertion order so eviction prefers stale entries.
+    staggerOffsetCache.delete(cacheKey);
+    staggerOffsetCache.set(cacheKey, cached);
     return cached;
   }
   const digest = crypto.createHash("sha256").update(jobId).digest();
@@ -58,6 +61,10 @@ function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
   }
   staggerOffsetCache.set(cacheKey, offset);
   return offset;
+}
+
+export function clearStaggerOffsetCacheForTest(): void {
+  staggerOffsetCache.clear();
 }
 
 function computeStaggeredCronNextRunAtMs(job: CronJob, nowMs: number) {

@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
-import { computeJobNextRunAtMs } from "./service/jobs.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearStaggerOffsetCacheForTest, computeJobNextRunAtMs } from "./service/jobs.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob } from "./types.js";
+
+const STAGGER_OFFSET_CACHE_MAX = 4096;
 
 function stableOffsetMs(jobId: string, windowMs: number) {
   const digest = crypto.createHash("sha256").update(jobId).digest();
@@ -31,6 +33,10 @@ function createCronJob(params: {
 }
 
 describe("computeJobNextRunAtMs top-of-hour staggering", () => {
+  beforeEach(() => {
+    clearStaggerOffsetCacheForTest();
+  });
+
   it("applies deterministic 0..5m stagger for recurring top-of-hour schedules", () => {
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     const job = createCronJob({ id: "hourly-job-a", expr: "0 * * * *", tz: "UTC" });
@@ -101,6 +107,30 @@ describe("computeJobNextRunAtMs top-of-hour staggering", () => {
 
     expect(second).toBe(first);
     expect(hashSpy).toHaveBeenCalledTimes(1);
+    hashSpy.mockRestore();
+  });
+
+  it("keeps recently used stagger offsets when cache hits capacity", () => {
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const expr = "0 * * * *";
+    const tz = "UTC";
+    const hot = createCronJob({ id: "hourly-job-hot", expr, tz });
+    const hashSpy = vi.spyOn(crypto, "createHash");
+
+    computeJobNextRunAtMs(hot, now);
+
+    for (let i = 0; i < STAGGER_OFFSET_CACHE_MAX - 1; i += 1) {
+      computeJobNextRunAtMs(createCronJob({ id: `hourly-job-fill-${i}`, expr, tz }), now);
+    }
+
+    // Mark the hot key as recently used before we overflow capacity.
+    computeJobNextRunAtMs(hot, now);
+    computeJobNextRunAtMs(createCronJob({ id: "hourly-job-overflow", expr, tz }), now);
+
+    hashSpy.mockClear();
+    computeJobNextRunAtMs(hot, now);
+
+    expect(hashSpy).toHaveBeenCalledTimes(0);
     hashSpy.mockRestore();
   });
 });
