@@ -46,8 +46,13 @@ export function createAgentsListTool(opts?: {
           DEFAULT_AGENT_ID,
       );
 
-      const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
-      const allowAny = allowAgents.some((value) => value.trim() === "*");
+      const rawAllowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents;
+      // If allowAgents is undefined or empty, treat as allowAny (show all configured agents)
+      const allowAny =
+        !rawAllowAgents ||
+        rawAllowAgents.length === 0 ||
+        rawAllowAgents.some((value) => value.trim() === "*");
+      const allowAgents = Array.isArray(rawAllowAgents) ? rawAllowAgents : [];
       const allowSet = new Set(
         allowAgents
           .filter((value) => value.trim() && value.trim() !== "*")
