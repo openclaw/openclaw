@@ -12,6 +12,7 @@ __pycache__/
 .tsbuildinfo
 .pnpm-store
 .worktrees/
+build/
 .DS_Store
 **/.DS_Store
 ui/src/ui/__screenshots__/
