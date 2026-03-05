@@ -283,6 +283,11 @@ export function classifyFailoverReasonFromHttpStatus(
     return "rate_limit";
   }
   if (status === 400) {
+    // Some providers return quota/balance errors under HTTP 400, so do not
+    // let the generic format fallback mask an explicit billing signal.
+    if (message && isBillingErrorMessage(message)) {
+      return "billing";
+    }
     return "format";
   }
   return null;
