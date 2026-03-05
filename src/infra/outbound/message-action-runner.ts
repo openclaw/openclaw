@@ -528,6 +528,8 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       toolContext: input.toolContext,
       deps: input.deps,
       dryRun,
+      // Carry session key so message:sent internal hooks fire even when no outbound route is resolved.
+      sessionKey: input.sessionKey ?? outboundRoute?.sessionKey,
       mirror:
         outboundRoute && !dryRun
           ? {

@@ -47,6 +47,8 @@ type MessageSendParams = {
   cfg?: OpenClawConfig;
   gateway?: MessageGatewayOptions;
   idempotencyKey?: string;
+  /** Session key for internal hook dispatch when mirror is absent. */
+  sessionKey?: string;
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -211,7 +213,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: params.agentId,
-      sessionKey: params.mirror?.sessionKey,
+      sessionKey: params.mirror?.sessionKey ?? params.sessionKey,
     });
     const results = await deliverOutboundPayloads({
       cfg,

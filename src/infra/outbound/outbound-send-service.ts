@@ -31,6 +31,8 @@ export type OutboundSendContext = {
   toolContext?: ChannelThreadingToolContext;
   deps?: OutboundSendDeps;
   dryRun: boolean;
+  /** Session key for internal hook dispatch when mirror is absent. */
+  sessionKey?: string;
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -139,6 +141,7 @@ export async function executeSendAction(params: {
     bestEffort: params.bestEffort ?? undefined,
     deps: params.ctx.deps,
     gateway: params.ctx.gateway,
+    sessionKey: params.ctx.sessionKey,
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
