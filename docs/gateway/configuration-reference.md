@@ -2295,6 +2295,9 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.5 via LM Studio
     entries: {
       "voice-call": {
         enabled: true,
+        hooks: {
+          allowPromptInjection: false,
+        },
         config: { provider: "twilio" },
       },
     },
@@ -2307,6 +2310,7 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.5 via LM Studio
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
+- `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks `before_prompt_build` and ignores prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride`.
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by plugin schema).
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.installs`: CLI-managed install metadata used by `openclaw plugins update`.
