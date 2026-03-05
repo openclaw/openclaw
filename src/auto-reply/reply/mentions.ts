@@ -136,7 +136,15 @@ export function stripStructuralPrefixes(text: string): string {
     ? text.slice(text.indexOf(CURRENT_MESSAGE_MARKER) + CURRENT_MESSAGE_MARKER.length).trimStart()
     : text;
 
-  return afterMarker
+  // Collect-mode batches prefix each queued message with
+  // "---" + "Queued #N" lines; strip them so commands like /stop
+  // remain detectable even after batching.
+  const withoutQueuedMarkers = afterMarker.replace(
+    /(?:^|\n)---\s*\nQueued #[0-9]+\s*\n/g,
+    "\n",
+  );
+
+  return withoutQueuedMarkers
     .replace(/\[[^\]]+\]\s*/g, "")
     .replace(/^[ \t]*[A-Za-z0-9+()\-_. ]+:\s*/gm, "")
     .replace(/\\n/g, " ")
