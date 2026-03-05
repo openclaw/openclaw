@@ -61,6 +61,22 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain("CRITICAL");
   });
 
+  it("treats SecretRef token config as authenticated for exposure warning level", async () => {
+    const cfg = {
+      gateway: {
+        bind: "lan",
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("WARNING");
+    expect(message).not.toContain("CRITICAL");
+  });
+
   it("treats whitespace token as missing", async () => {
     const cfg = {
       gateway: { bind: "lan", auth: { mode: "token", token: "   " } },
