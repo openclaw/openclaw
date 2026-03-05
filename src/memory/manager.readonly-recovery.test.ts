@@ -86,6 +86,13 @@ describe("memory manager readonly recovery", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
+  it("opens database with WAL journal mode", async () => {
+    const currentManager = await createManager();
+    const db = (currentManager as unknown as { db: DatabaseSync }).db;
+    const row = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
+    expect(row.journal_mode).toBe("wal");
+  });
+
   it("reopens sqlite and retries once when sync hits SQLITE_READONLY", async () => {
     await expectReadonlyRetry({
       firstError: new Error("attempt to write a readonly database"),
