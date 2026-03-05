@@ -110,11 +110,20 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     }
     return sanitized;
   }
-  const rendered = marked.parse(`${truncated.text}${suffix}`, {
-    renderer: htmlEscapeRenderer,
-    gfm: true,
-    breaks: true,
-  }) as string;
+  // Wrap in try/catch: certain message content can trigger infinite recursion
+  // in marked.js (Firefox: "InternalError: too much recursion").  Rather than
+  // crashing the entire Control UI we fall back to showing the raw content as
+  // escaped plain text so the session remains usable.  Fixes #36213.
+  let rendered: string;
+  try {
+    rendered = marked.parse(`${truncated.text}${suffix}`, {
+      renderer: htmlEscapeRenderer,
+      gfm: true,
+      breaks: true,
+    }) as string;
+  } catch {
+    rendered = `<pre class="code-block">${escapeHtml(`${truncated.text}${suffix}`)}</pre>`;
+  }
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     setCachedMarkdown(input, sanitized);

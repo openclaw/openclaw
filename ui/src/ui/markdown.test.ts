@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 describe("toSanitizedMarkdownHtml", () => {
@@ -81,5 +81,28 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("Col2");
     // Pipes from table delimiters must not appear as raw text
     expect(html).not.toContain("|------|");
+  });
+
+  it("falls back to escaped plain text when marked throws (e.g. too much recursion, refs #36213)", async () => {
+    // Simulate the Firefox "InternalError: too much recursion" that certain chat
+    // content can trigger inside marked.js.  The UI must not crash — it should
+    // display the raw content as escaped text instead.
+    const { marked } = await import("marked");
+    const parseSpy = vi.spyOn(marked, "parse").mockImplementation(() => {
+      throw new Error("too much recursion");
+    });
+
+    const input = "Hello **world** <b>test</b>";
+    const html = toSanitizedMarkdownHtml(input);
+
+    // Raw content must be escaped (not rendered as HTML) and shown in a <pre>.
+    expect(html).toContain("<pre");
+    expect(html).toContain("Hello **world**");
+    // HTML special chars must be escaped to prevent XSS.
+    expect(html).toContain("&lt;b&gt;test&lt;/b&gt;");
+    // No unescaped tags from the input.
+    expect(html).not.toContain("<b>");
+
+    parseSpy.mockRestore();
   });
 });
