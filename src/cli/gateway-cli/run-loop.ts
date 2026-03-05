@@ -188,7 +188,17 @@ export async function runGatewayLoop(params: {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       onIteration();
-      server = await params.start();
+      try {
+        server = await params.start();
+      } catch (err) {
+        // If the server fails to start (e.g. invalid config after a restart),
+        // exit gracefully instead of crashing. An unhandled crash causes the
+        // OS to respawn a new process which on macOS loses TCC permissions
+        // (Full Disk Access) granted to the original process.
+        gatewayLog.error(`gateway failed to start: ${String(err)}`);
+        exitProcess(1);
+        return;
+      }
       await new Promise<void>((resolve) => {
         restartResolver = resolve;
       });
