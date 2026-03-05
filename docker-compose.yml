@@ -45,7 +45,7 @@ services:
         chown node:node /home/node /home/node/.openclaw /home/node/.openclaw/workspace /home/node/.openclaw/workspace/data /home/node/.cache /home/node/.cache/ms-playwright
         chmod 755 /home/node
 
-        test -e /home/node/.openclaw/openclaw.json || cp /tmp/openclaw-seed.json /home/node/.openclaw/openclaw.json
+        cp /tmp/openclaw-seed.json /home/node/.openclaw/openclaw.json
         chmod 600 /home/node/.openclaw/openclaw.json
         if [ -d /tmp/workspace-seed ]; then
           cp -rn /tmp/workspace-seed/. /home/node/.openclaw/workspace/ 2>/dev/null || true
