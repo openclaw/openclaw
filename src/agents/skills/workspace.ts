@@ -205,6 +205,8 @@ function resolveNestedSkillsRoot(
   return { baseDir: dir };
 }
 
+type SkillDiagnostic = { type: string; message: string; path?: string };
+
 function unwrapLoadedSkills(loaded: unknown): Skill[] {
   if (Array.isArray(loaded)) {
     return loaded as Skill[];
@@ -216,6 +218,26 @@ function unwrapLoadedSkills(loaded: unknown): Skill[] {
     }
   }
   return [];
+}
+
+function unwrapLoadedDiagnostics(loaded: unknown): SkillDiagnostic[] {
+  if (loaded && typeof loaded === "object" && "diagnostics" in loaded) {
+    const diagnostics = (loaded as { diagnostics?: unknown }).diagnostics;
+    if (Array.isArray(diagnostics)) {
+      return diagnostics as SkillDiagnostic[];
+    }
+  }
+  return [];
+}
+
+function logSkillDiagnostics(diagnostics: SkillDiagnostic[]): void {
+  for (const diag of diagnostics) {
+    if (diag.type === "error") {
+      skillsLogger.error(diag.message, { path: diag.path });
+    } else if (diag.type === "warning") {
+      skillsLogger.warn(diag.message, { path: diag.path });
+    }
+  }
 }
 
 function loadSkillEntries(
@@ -253,6 +275,7 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
+      logSkillDiagnostics(unwrapLoadedDiagnostics(loaded));
       return unwrapLoadedSkills(loaded);
     }
 
@@ -304,6 +327,7 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
+      logSkillDiagnostics(unwrapLoadedDiagnostics(loaded));
       loadedSkills.push(...unwrapLoadedSkills(loaded));
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
