@@ -386,6 +386,79 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("resolves openai web search provider refs", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "openai",
+              openai: {
+                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_OPENAI_API_KEY" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        WEB_SEARCH_OPENAI_API_KEY: "web-search-openai-ref",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.web?.search?.openai?.apiKey).toBe("web-search-openai-ref");
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "tools.web.search.openai.apiKey",
+    );
+  });
+
+  it("treats non-selected refs as inactive when openai is selected", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "openai",
+              openai: {
+                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_OPENAI_API_KEY" },
+              },
+              gemini: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        WEB_SEARCH_OPENAI_API_KEY: "web-search-openai-ref",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.web?.search?.openai?.apiKey).toBe("web-search-openai-ref");
+    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
+    });
+    expect(snapshot.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "tools.web.search.gemini.apiKey",
+        }),
+      ]),
+    );
+  });
+
   it("resolves file refs via configured file provider", async () => {
     if (process.platform === "win32") {
       return;

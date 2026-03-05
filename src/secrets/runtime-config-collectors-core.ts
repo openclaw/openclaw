@@ -278,7 +278,8 @@ function collectToolsWebSearchAssignments(params: {
     rawProvider === "gemini" ||
     rawProvider === "grok" ||
     rawProvider === "kimi" ||
-    rawProvider === "perplexity"
+    rawProvider === "perplexity" ||
+    rawProvider === "openai"
       ? rawProvider
       : undefined;
   const paths = [
@@ -287,6 +288,7 @@ function collectToolsWebSearchAssignments(params: {
     "grok.apiKey",
     "kimi.apiKey",
     "perplexity.apiKey",
+    "openai.apiKey",
   ] as const;
   for (const path of paths) {
     const [scope, field] = path.includes(".") ? path.split(".", 2) : [undefined, path];

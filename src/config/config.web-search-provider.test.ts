@@ -48,6 +48,38 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts openai provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "openai",
+        providerConfig: {
+          apiKey: "sk-test-key",
+          model: "gpt-5.2",
+          baseUrl: "https://api.openai.com",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts openai provider config with SecretRef apiKey", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "openai",
+        providerConfig: {
+          apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          model: "gpt-5.2",
+          baseUrl: "https://api.openai.com",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("web search provider auto-detection", () => {
@@ -63,6 +95,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.XAI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
+    delete process.env.OPENAI_API_KEY;
   });
 
   afterEach(() => {
@@ -129,5 +162,24 @@ describe("web search provider auto-detection", () => {
         typeof resolveSearchProvider
       >[0]),
     ).toBe("gemini");
+  });
+
+  it("auto-detects openai when only OPENAI_API_KEY is set", () => {
+    process.env.OPENAI_API_KEY = "sk-test-openai-key";
+    expect(resolveSearchProvider({})).toBe("openai");
+  });
+
+  it("grok wins over openai in auto-detection priority", () => {
+    process.env.XAI_API_KEY = "test-xai-key";
+    process.env.OPENAI_API_KEY = "sk-test-openai-key";
+    expect(resolveSearchProvider({})).toBe("grok");
+  });
+
+  it("accepts openai as explicit provider", () => {
+    expect(
+      resolveSearchProvider({ provider: "openai" } as unknown as Parameters<
+        typeof resolveSearchProvider
+      >[0]),
+    ).toBe("openai");
   });
 });

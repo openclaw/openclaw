@@ -440,8 +440,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
-      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+      /** Search provider ("brave", "perplexity", "grok", "gemini", "kimi", or "openai"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "openai";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -483,6 +483,15 @@ export type ToolsConfig = {
         baseUrl?: string;
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
+      };
+      /** OpenAI-specific configuration (used when provider="openai"). */
+      openai?: {
+        /** OpenAI API key (defaults to OPENAI_API_KEY env var). */
+        apiKey?: string;
+        /** Model to use (defaults to "gpt-5.2"). */
+        model?: string;
+        /** Base URL override for Azure OpenAI or proxy (defaults to "https://api.openai.com"). */
+        baseUrl?: string;
       };
     };
     fetch?: {
