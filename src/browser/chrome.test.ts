@@ -14,6 +14,7 @@ import {
   isChromeCdpReady,
   isChromeReachable,
   resolveBrowserExecutableForPlatform,
+  buildOpenClawChromeArgs,
   stopOpenClawChrome,
 } from "./chrome.js";
 import {
@@ -202,6 +203,23 @@ describe("browser chrome profile decoration", () => {
 });
 
 describe("browser chrome helpers", () => {
+  it("supports best-effort negation of OpenClaw-injected args via !-- prefix", () => {
+    const args = buildOpenClawChromeArgs(
+      {
+        headless: false,
+        noSandbox: false,
+        extraArgs: ["!--disable-blink-features=AutomationControlled"],
+      },
+      { cdpPort: 9222, name: "openclaw" },
+      "/tmp/openclaw-profile",
+    );
+
+    // negation directive is not forwarded
+    expect(args).not.toContain("!--disable-blink-features=AutomationControlled");
+    // OpenClaw default arg is removed
+    expect(args).not.toContain("--disable-blink-features=AutomationControlled");
+  });
+
   function mockExistsSync(match: (pathValue: string) => boolean) {
     return vi.spyOn(fs, "existsSync").mockImplementation((p) => match(String(p)));
   }
