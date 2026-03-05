@@ -323,6 +323,7 @@ function runAgentAttempt(params: {
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
     inputProvenance: params.opts.inputProvenance,
+    userMessageExtras: params.opts.userMessageExtras,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowRateLimitCooldownProbe: params.allowRateLimitCooldownProbe,

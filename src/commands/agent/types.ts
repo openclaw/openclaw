@@ -78,6 +78,8 @@ export type AgentCommandOpts = {
   extraSystemPrompt?: string;
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;
+  /** Extra fields from the original user message to persist alongside the user entry in the JSONL transcript. */
+  userMessageExtras?: Record<string, unknown>;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
 };
