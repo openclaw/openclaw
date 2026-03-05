@@ -329,20 +329,31 @@ describe("bedrock discovery", () => {
     );
   });
 
-  it("does not cache partial discovery results", async () => {
+  it("caches partial discovery results briefly before retrying failed sources", async () => {
     const { discoverBedrockModels } = await loadDiscovery();
+    let nowMs = 1_000_000;
     setupDiscoveryResponses({
       foundationError: new Error("foundation-model discovery failed"),
       inferencePages: [
         { inferenceProfileSummaries: [baseInferenceProfileSummary] },
         { inferenceProfileSummaries: [baseInferenceProfileSummary] },
+        { inferenceProfileSummaries: [baseInferenceProfileSummary] },
       ],
     });
 
-    await discoverBedrockModels({ region: "us-east-1", clientFactory });
-    await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    await discoverBedrockModels({ region: "us-east-1", clientFactory, now: () => nowMs });
+    await discoverBedrockModels({ region: "us-east-1", clientFactory, now: () => nowMs });
 
-    // Each call should re-run both source queries when the previous result was partial.
+    // Partial results are cached for a short TTL to avoid repeated retries/log spam.
+    expect(sendMock).toHaveBeenCalledTimes(2);
+
+    nowMs += 59_000;
+    await discoverBedrockModels({ region: "us-east-1", clientFactory, now: () => nowMs });
+    expect(sendMock).toHaveBeenCalledTimes(2);
+
+    // After short partial-TTL expiry, discovery retries both sources.
+    nowMs += 2_000;
+    await discoverBedrockModels({ region: "us-east-1", clientFactory, now: () => nowMs });
     expect(sendMock).toHaveBeenCalledTimes(4);
   });
 

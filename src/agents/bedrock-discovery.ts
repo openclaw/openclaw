@@ -11,6 +11,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 const log = createSubsystemLogger("bedrock-discovery");
 
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
+const PARTIAL_FAILURE_CACHE_TTL_SECONDS = 60;
 const DEFAULT_CONTEXT_WINDOW = 32000;
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_COST = {
@@ -360,7 +361,18 @@ export async function discoverBedrockModels(params: {
     const value = await discoveryPromise;
     if (refreshIntervalSeconds > 0) {
       if (hadPartialFailure) {
-        discoveryCache.delete(cacheKey);
+        const partialTtlSeconds = Math.min(
+          refreshIntervalSeconds,
+          PARTIAL_FAILURE_CACHE_TTL_SECONDS,
+        );
+        if (partialTtlSeconds > 0) {
+          discoveryCache.set(cacheKey, {
+            expiresAt: now + partialTtlSeconds * 1000,
+            value,
+          });
+        } else {
+          discoveryCache.delete(cacheKey);
+        }
       } else {
         discoveryCache.set(cacheKey, {
           expiresAt: now + refreshIntervalSeconds * 1000,
