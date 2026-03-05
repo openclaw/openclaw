@@ -267,7 +267,9 @@ export function createWorkflowStoreManager(agentId: string): WorkflowStoreManage
       plan.startedAt = plan.startedAt ?? now;
     }
 
-    if (allDone && plan.status === "in_progress") {
+    // Auto-complete plan when all tasks reach terminal states
+    // This handles both in_progress plans and pending plans where tasks were updated directly
+    if (allDone && (plan.status === "in_progress" || plan.status === "pending")) {
       const hasFailed = plan.tasks.some((t) => t.status === "failed");
       plan.status = hasFailed ? "failed" : "completed";
       plan.completedAt = now;

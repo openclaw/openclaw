@@ -42,13 +42,19 @@ export type WorkflowDeliveryResult = {
   error?: string;
 };
 
+export type GatewayOptions = {
+  gatewayUrl?: string;
+  gatewayToken?: string;
+};
+
 export async function deliverWorkflowReport(params: {
   plan: WorkflowPlan;
   channel?: string;
   to?: string;
   accountId?: string;
+  gatewayOptions?: GatewayOptions;
 }): Promise<WorkflowDeliveryResult> {
-  const { plan, channel, to } = params;
+  const { plan, channel, to, gatewayOptions } = params;
 
   if (!to) {
     const defaultConfig = resolveWorkflowDeliveryConfig();
@@ -83,17 +89,13 @@ export async function deliverWorkflowReport(params: {
     // Generate idempotency key for deduplication
     const idempotencyKey = `workflow-report:${plan.id}:${crypto.randomUUID()}`;
 
-    await callGatewayTool(
-      "send",
-      {},
-      {
-        to: effectiveTo,
-        message: summary,
-        idempotencyKey,
-        channel: effectiveChannel,
-        accountId: params.accountId,
-      },
-    );
+    await callGatewayTool("send", gatewayOptions ?? {}, {
+      to: effectiveTo,
+      message: summary,
+      idempotencyKey,
+      channel: effectiveChannel,
+      accountId: params.accountId,
+    });
 
     log.info("workflow report delivered", { planId: plan.id });
     return { delivered: true };
