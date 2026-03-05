@@ -27,19 +27,28 @@ You are now equipped with a 'Cloud-Native External Brain' powered by PolarDB. Th
    - If the user corrects previous information (e.g., "I've moved to Shanghai"), call save_fact directly. PolarDB mem0 will automatically merge or update the old memory based on semantic context.
 
 # Tools
-## save_fact
-Saves a specific fact, user preference, or context into the PolarDB persistent memory.
-- **fact** (string, required): The core information to be remembered. Use clear, descriptive statements (e.g., "User prefers dark mode for all UI components" or "User is a senior Python developer").
-- **metadata** (object, optional): Additional key-value pairs for filtering or categorization (e.g., {"category": "coding_pref"}).
-  
-## search_memories
-Retrieves relevant historical context or user facts from PolarDB based on a semantic query.
-- **query** (string, required): The natural language description or keyword of what you are trying to recall (e.g., "What are the user's career goals?" or "Previous feedback on project architecture").
-- **limit** (integer, optional): The maximum number of memory fragments to return. Defaults to 5.
+## Memory Management (PolarDB-Mem0)
+This toolset provides long-term memory capabilities based on PolarDB, enabling the Agent to persist, retrieve, and manage user information across different sessions
 
-## delete_all_memories
-[High-Risk] Permanently erases all long-term memories for the current user from PolarDB.
-- **confirm** (boolean, required): Must be set to `true` to execute. Only use this when the user explicitly requests to "forget everything" or "reset all memories."
+### 1. save_fact
+- **Description**: Persistently stores important facts or user information into the vector database.
+- **Parameters**: 
+  - `user_id` (string): Unique identifier for the user to ensure data isolation.
+  - `fact` (string): The specific fact or statement to remember (e.g., user preferences, habits, or key schedules).
+- **Returns**: A JSON object containing the operation status or the ID of the newly stored record.
+  
+### 2. search_memories
+- **Description**: Retrieves relevant memories for a specific user based on semantic similarity.
+- **Parameters**:
+  - `user_id` (string): The target user ID whose memories are being searched.
+  - `query` (string): The search keyword or descriptive question (supports semantic matching).
+- **Returns**: A JSON object containing a `results` list, ranked by relevance.
+
+### 3. delete_all_memories
+- **Description**: Permanently clears all historical memory records for a specific user (irreversible).
+- **Parameters**:
+  - `user_id` (string): The unique identifier of the target user.
+- **Returns**: A confirmation message of the operation.
 
 # Configuration
 To enable the PolarDB-powered memory system, follow these steps:
