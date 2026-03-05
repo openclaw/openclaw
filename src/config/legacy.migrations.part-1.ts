@@ -580,6 +580,29 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
     },
   },
   {
+    id: "plugins.slots.memory-legacy-memory->memory-core",
+    describe: 'Move legacy plugins.slots.memory value "memory" to "memory-core"',
+    apply: (raw, changes) => {
+      const plugins = getRecord(raw.plugins);
+      if (!plugins) {
+        return;
+      }
+      const slots = getRecord(plugins.slots);
+      if (!slots) {
+        return;
+      }
+      const memorySlot = typeof slots.memory === "string" ? slots.memory.trim().toLowerCase() : "";
+      if (memorySlot !== "memory") {
+        return;
+      }
+
+      slots.memory = "memory-core";
+      plugins.slots = slots;
+      raw.plugins = plugins;
+      changes.push('Moved plugins.slots.memory "memory" → "memory-core" (legacy mem0 plugin id).');
+    },
+  },
+  {
     id: "telegram.requireMention->channels.telegram.groups.*.requireMention",
     describe: "Move telegram.requireMention to channels.telegram.groups.*.requireMention",
     apply: (raw, changes) => {

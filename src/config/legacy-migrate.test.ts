@@ -345,3 +345,33 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
     ]);
   });
 });
+
+describe("legacy migrate memory plugin slot", () => {
+  it('moves plugins.slots.memory from "memory" to "memory-core"', () => {
+    const res = migrateLegacyConfig({
+      plugins: {
+        slots: {
+          memory: "memory",
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Moved plugins.slots.memory "memory" → "memory-core" (legacy mem0 plugin id).',
+    );
+    expect(res.config?.plugins?.slots?.memory).toBe("memory-core");
+  });
+
+  it("returns no migration when plugins.slots.memory already uses memory-core", () => {
+    const res = migrateLegacyConfig({
+      plugins: {
+        slots: {
+          memory: "memory-core",
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toHaveLength(0);
+  });
+});
