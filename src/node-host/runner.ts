@@ -276,5 +276,20 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   }, pathEnv);
 
   client.start();
+
+  // Keep the process alive. The GatewayClient reconnect timer no longer uses
+  // .unref(), but an explicit keepalive interval guarantees the event loop
+  // never drains during transient disconnections or backoff delays.
+  const keepalive = setInterval(() => {}, 60_000);
+
+  // Graceful shutdown: clean up on SIGTERM/SIGINT.
+  const shutdown = () => {
+    clearInterval(keepalive);
+    client.stop();
+    process.exit(0);
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
+
   await new Promise(() => {});
 }

@@ -498,18 +498,37 @@ export async function authorizeGatewayConnect(
       limiter?.recordFailure(ip, rateLimitScope);
       return { ok: false, reason: "iam_token_missing" };
     }
+
+    // Try IAM JWT validation first.
+    let iamReason: string | undefined;
     try {
       const iamResult = await validateIamToken(rawToken, auth.iam);
       if (iamResult.ok) {
         limiter?.reset(ip, rateLimitScope);
         return { ok: true, method: "iam", user: iamResult.email ?? iamResult.userId };
       }
-      limiter?.recordFailure(ip, rateLimitScope);
-      return { ok: false, reason: `iam_${iamResult.reason}` };
+      iamReason = iamResult.reason;
     } catch {
-      limiter?.recordFailure(ip, rateLimitScope);
-      return { ok: false, reason: "iam_discovery_failed" };
+      iamReason = "discovery_failed";
     }
+
+    // Fallback: accept shared gateway token (BOT_GATEWAY_TOKEN) even in IAM mode.
+    // This allows node hosts and CLI clients to connect with a pre-shared secret
+    // when they don't have a valid IAM JWT (e.g. after cert rotation).
+    if (auth.token && connectAuth?.token && safeEqualSecret(connectAuth.token, auth.token)) {
+      limiter?.reset(ip, rateLimitScope);
+      return { ok: true, method: "token" };
+    }
+
+    // Also accept password fallback in IAM mode.
+    const password = connectAuth?.password;
+    if (auth.password && password && safeEqualSecret(password, auth.password)) {
+      limiter?.reset(ip, rateLimitScope);
+      return { ok: true, method: "password" };
+    }
+
+    limiter?.recordFailure(ip, rateLimitScope);
+    return { ok: false, reason: `iam_${iamReason ?? "validation_failed"}` };
   }
 
   limiter?.recordFailure(ip, rateLimitScope);

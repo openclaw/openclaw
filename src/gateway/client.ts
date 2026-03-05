@@ -96,6 +96,7 @@ export class GatewayClient {
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
   private tickTimer: NodeJS.Timeout | null = null;
+  private pingTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: GatewayClientOptions) {
     this.opts = {
@@ -225,6 +226,10 @@ export class GatewayClient {
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
+    }
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
     }
     this.ws?.close();
     this.ws = null;
@@ -434,9 +439,15 @@ export class GatewayClient {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
-    setTimeout(() => this.start(), delay).unref();
+    // Do NOT unref() — the reconnect timer must keep the process alive
+    // to ensure the node host reconnects after transient disconnections.
+    setTimeout(() => this.start(), delay);
   }
 
   private flushPendingErrors(err: Error) {
@@ -449,6 +460,9 @@ export class GatewayClient {
   private startTickWatch() {
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
+    }
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
     }
     const rawMinInterval = this.opts.tickWatchMinIntervalMs;
     const minInterval =
@@ -468,6 +482,20 @@ export class GatewayClient {
         this.ws?.close(4000, "tick timeout");
       }
     }, interval);
+
+    // WebSocket-level ping to keep the connection alive through proxies/NATs.
+    // Cloudflare and other reverse proxies may close idle WebSocket connections
+    // after 60-100 seconds. Pinging every 25 seconds prevents this.
+    this.pingTimer = setInterval(() => {
+      if (this.closed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      try {
+        this.ws.ping();
+      } catch {
+        // Ignore ping errors — tick watch will detect the stall.
+      }
+    }, 25_000);
   }
 
   private validateTlsFingerprint(): Error | null {
