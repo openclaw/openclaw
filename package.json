@@ -332,7 +332,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "0.14.1",
     "@aws-sdk/client-bedrock": "^3.1000.0",
-    "@buape/carbon": "0.0.0-beta-20260216184201",
+    "@buape/carbon": "0.0.0-beta-20260303183026",
     "@clack/prompts": "^1.0.1",
     "@discordjs/voice": "^0.19.0",
     "@grammyjs/runner": "^2.0.3",
@@ -362,6 +362,7 @@
     "file-type": "^21.3.0",
     "gaxios": "7.1.3",
     "grammy": "^1.41.0",
+    "hono": "4.12.4",
     "https-proxy-agent": "^7.0.6",
     "ipaddr.js": "^2.3.0",
     "jiti": "^2.6.1",
@@ -380,7 +381,7 @@
     "sharp": "^0.34.5",
     "sqlite-vec": "0.1.7-alpha.2",
     "strip-ansi": "^7.2.0",
-    "tar": "7.5.9",
+    "tar": "7.5.10",
     "tslog": "^4.10.2",
     "undici": "^7.22.0",
     "ws": "^8.19.0",
@@ -419,7 +420,12 @@
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
-      "hono": "4.11.10",
+      "hono": "4.12.4",
+      "@hono/node-server": "1.19.10",
+      "@buape/carbon>hono": "4.12.4",
+      "@buape/carbon>@hono/node-server": "1.19.10",
+      "openclaw>hono": "4.12.4",
+      "openclaw@2026.3.2>hono": "4.12.4",
       "fast-xml-parser": "5.3.8",
       "request": "npm:@cypress/request@3.0.10",
       "request-promise": "npm:@cypress/request-promise@5.0.0",
@@ -428,7 +434,7 @@
       "qs": "6.14.2",
       "node-domexception": "npm:@nolyfill/domexception@^1.0.28",
       "@sinclair/typebox": "0.34.48",
-      "tar": "7.5.9",
+      "tar": "7.5.10",
       "tough-cookie": "4.1.3"
     },
     "onlyBuiltDependencies": [
