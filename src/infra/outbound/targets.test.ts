@@ -346,6 +346,22 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBeUndefined();
   });
 
+  it("keeps explicit heartbeat Slack DM targets when directPolicy is block", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      heartbeat: {
+        target: "slack",
+        to: "user:U123",
+        directPolicy: "block",
+      },
+    });
+
+    expect(resolved.channel).toBe("slack");
+    expect(resolved.to).toBe("user:U123");
+    expect(resolved.reason).toBeUndefined();
+  });
+
   it("allows heartbeat delivery to Discord DMs by default", () => {
     const cfg: OpenClawConfig = {};
     const resolved = resolveHeartbeatDeliveryTarget({
@@ -390,6 +406,22 @@ describe("resolveSessionDeliveryTarget", () => {
 
     expect(resolved.channel).toBe("none");
     expect(resolved.reason).toBe("dm-blocked");
+  });
+
+  it("keeps explicit heartbeat Telegram direct targets when directPolicy is block", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      heartbeat: {
+        target: "telegram",
+        to: "5232990709",
+        directPolicy: "block",
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("5232990709");
+    expect(resolved.reason).toBeUndefined();
   });
 
   it("keeps heartbeat delivery to Telegram groups", () => {

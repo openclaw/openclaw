@@ -325,12 +325,18 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   const sessionChatTypeHint =
     target === "last" && !heartbeat?.to ? normalizeChatType(entry?.chatType) : undefined;
+  const hasExplicitHeartbeatTo =
+    typeof heartbeat?.to === "string" && heartbeat.to.trim().length > 0;
   const deliveryChatType = resolveHeartbeatDeliveryChatType({
     channel: resolvedTarget.channel,
     to: resolved.to,
     sessionChatType: sessionChatTypeHint,
   });
-  if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
+  if (
+    deliveryChatType === "direct" &&
+    heartbeat?.directPolicy === "block" &&
+    !hasExplicitHeartbeatTo
+  ) {
     return buildNoHeartbeatDeliveryTarget({
       reason: "dm-blocked",
       accountId: effectiveAccountId,
