@@ -75,14 +75,35 @@ const setValue = command === "set" ? String(args[commandIndex + 2] || "") : "";
 
 if (command === "sessions" && args[commandIndex + 1] === "ensure") {
   writeLog({ kind: "ensure", agent, args, sessionName: ensureName });
-  emitJson({
-    action: "session_ensured",
-    acpxRecordId: "rec-" + ensureName,
-    acpxSessionId: "sid-" + ensureName,
-    agentSessionId: "inner-" + ensureName,
-    name: ensureName,
-    created: true,
-  });
+  if (process.env.MOCK_ACPX_ENSURE_EMPTY === "1") {
+    emitJson({ action: "session_ensured", name: ensureName });
+  } else {
+    emitJson({
+      action: "session_ensured",
+      acpxRecordId: "rec-" + ensureName,
+      acpxSessionId: "sid-" + ensureName,
+      agentSessionId: "inner-" + ensureName,
+      name: ensureName,
+      created: true,
+    });
+  }
+  process.exit(0);
+}
+
+if (command === "sessions" && args[commandIndex + 1] === "new") {
+  writeLog({ kind: "new", agent, args, sessionName: ensureName });
+  if (process.env.MOCK_ACPX_NEW_EMPTY === "1") {
+    emitJson({ action: "session_created", name: ensureName });
+  } else {
+    emitJson({
+      action: "session_created",
+      acpxRecordId: "rec-" + ensureName,
+      acpxSessionId: "sid-" + ensureName,
+      agentSessionId: "inner-" + ensureName,
+      name: ensureName,
+      created: true,
+    });
+  }
   process.exit(0);
 }
 

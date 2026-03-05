@@ -9,6 +9,7 @@ import { sendMessageTelegram } from "../../../telegram/send.js";
 import type { ChannelOutboundAdapter } from "../types.js";
 
 function resolveTelegramSendContext(params: {
+  cfg: NonNullable<Parameters<typeof sendMessageTelegram>[2]>["cfg"];
   deps?: OutboundSendDeps;
   accountId?: string | null;
   replyToId?: string | null;
@@ -16,6 +17,7 @@ function resolveTelegramSendContext(params: {
 }): {
   send: typeof sendMessageTelegram;
   baseOpts: {
+    cfg: NonNullable<Parameters<typeof sendMessageTelegram>[2]>["cfg"];
     verbose: false;
     textMode: "html";
     messageThreadId?: number;
@@ -29,6 +31,7 @@ function resolveTelegramSendContext(params: {
     baseOpts: {
       verbose: false,
       textMode: "html",
+      cfg: params.cfg,
       messageThreadId: parseTelegramThreadId(params.threadId),
       replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
       accountId: params.accountId ?? undefined,
@@ -41,8 +44,9 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   chunker: markdownToTelegramHtmlChunks,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  sendText: async ({ to, text, accountId, deps, replyToId, threadId }) => {
+  sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId }) => {
     const { send, baseOpts } = resolveTelegramSendContext({
+      cfg,
       deps,
       accountId,
       replyToId,
@@ -54,6 +58,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     return { channel: "telegram", ...result };
   },
   sendMedia: async ({
+    cfg,
     to,
     text,
     mediaUrl,
@@ -64,6 +69,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     threadId,
   }) => {
     const { send, baseOpts } = resolveTelegramSendContext({
+      cfg,
       deps,
       accountId,
       replyToId,
@@ -76,8 +82,18 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "telegram", ...result };
   },
-  sendPayload: async ({ to, payload, mediaLocalRoots, accountId, deps, replyToId, threadId }) => {
+  sendPayload: async ({
+    cfg,
+    to,
+    payload,
+    mediaLocalRoots,
+    accountId,
+    deps,
+    replyToId,
+    threadId,
+  }) => {
     const { send, baseOpts: contextOpts } = resolveTelegramSendContext({
+      cfg,
       deps,
       accountId,
       replyToId,

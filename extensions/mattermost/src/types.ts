@@ -3,7 +3,7 @@ import type {
   DmPolicy,
   GroupPolicy,
   SecretInput,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/mattermost";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 
@@ -69,6 +69,10 @@ export type MattermostAccountConfig = {
     callbackPath?: string;
     /** Explicit callback URL (e.g. behind reverse proxy). */
     callbackUrl?: string;
+  };
+  interactions?: {
+    /** External base URL used for Mattermost interaction callbacks. */
+    callbackBaseUrl?: string;
   };
 };
 
