@@ -129,14 +129,32 @@ describe("telegram stickers", () => {
   );
 
   it(
-    "skips animated and video sticker formats that cannot be downloaded",
+    "downloads thumbnail for animated (TGS) sticker and includes metadata",
     async () => {
       const { handler, replySpy, runtimeError } = await createBotHandler();
+      // Mock getFile API for thumbnail, then the actual file download
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            result: { file_path: "thumbnails/animated_thumb.webp" },
+          }),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: { get: () => "image/webp" },
+          arrayBuffer: async () => new Uint8Array([0x52, 0x49, 0x46, 0x46]).buffer,
+        } as unknown as Response);
 
-      for (const scenario of [
-        {
-          messageId: 101,
-          filePath: "stickers/animated.tgs",
+      await handler({
+        message: {
+          message_id: 101,
+          chat: { id: 1234, type: "private" },
           sticker: {
             file_id: "animated_sticker_id",
             file_unique_id: "animated_unique",
@@ -147,11 +165,59 @@ describe("telegram stickers", () => {
             is_video: false,
             emoji: "😎",
             set_name: "AnimatedPack",
+            thumbnail: {
+              file_id: "animated_thumb_id",
+              file_unique_id: "animated_thumb_unique",
+              width: 128,
+              height: 128,
+            },
           },
+          date: 1736380800,
         },
-        {
-          messageId: 102,
-          filePath: "stickers/video.webm",
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "stickers/animated.tgs" }),
+      });
+
+      expect(runtimeError).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.Body).toContain("<media:sticker>");
+      expect(payload.Sticker?.emoji).toBe("😎");
+      expect(payload.Sticker?.setName).toBe("AnimatedPack");
+      expect(payload.Sticker?.fileId).toBe("animated_sticker_id");
+
+      fetchSpy.mockRestore();
+    },
+    STICKER_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "downloads thumbnail for video (WEBM) sticker and includes metadata",
+    async () => {
+      const { handler, replySpy, runtimeError } = await createBotHandler();
+      // Mock getFile API for thumbnail, then the actual file download
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            result: { file_path: "thumbnails/video_thumb.webp" },
+          }),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: { get: () => "image/webp" },
+          arrayBuffer: async () => new Uint8Array([0x52, 0x49, 0x46, 0x46]).buffer,
+        } as unknown as Response);
+
+      await handler({
+        message: {
+          message_id: 102,
+          chat: { id: 1234, type: "private" },
           sticker: {
             file_id: "video_sticker_id",
             file_unique_id: "video_unique",
@@ -162,29 +228,64 @@ describe("telegram stickers", () => {
             is_video: true,
             emoji: "🎬",
             set_name: "VideoPack",
+            thumbnail: {
+              file_id: "video_thumb_id",
+              file_unique_id: "video_thumb_unique",
+              width: 128,
+              height: 128,
+            },
           },
+          date: 1736380800,
         },
-      ]) {
-        replySpy.mockClear();
-        runtimeError.mockClear();
-        const fetchSpy = vi.spyOn(globalThis, "fetch");
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "stickers/video.webm" }),
+      });
 
-        await handler({
-          message: {
-            message_id: scenario.messageId,
-            chat: { id: 1234, type: "private" },
-            sticker: scenario.sticker,
-            date: 1736380800,
+      expect(runtimeError).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.Body).toContain("<media:sticker>");
+      expect(payload.Sticker?.emoji).toBe("🎬");
+      expect(payload.Sticker?.setName).toBe("VideoPack");
+      expect(payload.Sticker?.fileId).toBe("video_sticker_id");
+
+      fetchSpy.mockRestore();
+    },
+    STICKER_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "falls back to metadata-only for animated/video sticker without thumbnail",
+    async () => {
+      const { handler, replySpy, runtimeError } = await createBotHandler();
+
+      await handler({
+        message: {
+          message_id: 103,
+          chat: { id: 1234, type: "private" },
+          sticker: {
+            file_id: "animated_sticker_no_thumb",
+            file_unique_id: "animated_no_thumb_unique",
+            type: "regular",
+            width: 512,
+            height: 512,
+            is_animated: true,
+            is_video: false,
+            emoji: "🤔",
+            set_name: "NoThumbPack",
           },
-          me: { username: "openclaw_bot" },
-          getFile: async () => ({ file_path: scenario.filePath }),
-        });
+          date: 1736380800,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
 
-        expect(fetchSpy).not.toHaveBeenCalled();
-        expect(replySpy).not.toHaveBeenCalled();
-        expect(runtimeError).not.toHaveBeenCalled();
-        fetchSpy.mockRestore();
-      }
+      expect(runtimeError).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.Body).toContain("<media:sticker>");
+      expect(payload.Sticker?.emoji).toBe("🤔");
+      expect(payload.Sticker?.fileId).toBe("animated_sticker_no_thumb");
     },
     STICKER_TEST_TIMEOUT_MS,
   );
