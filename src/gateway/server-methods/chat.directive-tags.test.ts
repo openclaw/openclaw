@@ -4,7 +4,11 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../protocol/client-info.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
@@ -596,6 +600,46 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           client: {
             mode: GATEWAY_CLIENT_MODES.UI,
             id: "openclaw-tui",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:main",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+      }),
+    );
+  });
+
+  it("chat.send does not inherit external delivery context for control-ui clients on main sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-main-control-ui-routes-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "signal",
+        to: "+15551234567",
+        accountId: "default",
+      },
+      lastChannel: "signal",
+      lastTo: "+15551234567",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-main-control-ui-routes",
+      client: {
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_IDS.CONTROL_UI,
           },
         },
       } as unknown,

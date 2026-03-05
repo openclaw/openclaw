@@ -5,6 +5,7 @@ import {
   normalizeChatChannelId,
 } from "../channels/registry.js";
 import {
+  GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
@@ -49,7 +50,8 @@ export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean 
   if (mode === GATEWAY_CLIENT_MODES.WEBCHAT) {
     return true;
   }
-  return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.WEBCHAT_UI;
+  const clientId = normalizeGatewayClientName(client?.id);
+  return clientId === GATEWAY_CLIENT_NAMES.WEBCHAT_UI || clientId === GATEWAY_CLIENT_IDS.CONTROL_UI;
 }
 
 export function normalizeMessageChannel(raw?: string | null): string | undefined {
