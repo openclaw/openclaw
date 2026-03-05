@@ -260,6 +260,7 @@ type MessageSentEvent = {
   content: string;
   error?: string;
   messageId?: string;
+  result?: OutboundDeliveryResult;
 };
 
 function hasMediaPayload(payload: ReplyPayload): boolean {

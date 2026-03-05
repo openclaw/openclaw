@@ -1056,7 +1056,7 @@ export async function handleFeishuMessage(params: {
       );
       // Broadcast groups deliver the same event to every account; skip recording here
       // to avoid duplicate history entries inflating the context.
-      if (chatHistories && !broadcastAgents) {
+      if (chatHistories && !broadcastAgents && groupHistoryKey) {
         recordPendingHistoryEntryIfEnabled({
           historyMap: chatHistories,
           historyKey: groupHistoryKey,

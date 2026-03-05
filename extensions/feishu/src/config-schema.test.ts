@@ -192,6 +192,9 @@ describe("FeishuConfigSchema defaultAccount", () => {
         true,
       );
     }
+  });
+});
+
 describe("FeishuConfigSchema dispatchMode", () => {
   it("accepts dispatchMode at account level", () => {
     const parsed = FeishuConfigSchema.parse({

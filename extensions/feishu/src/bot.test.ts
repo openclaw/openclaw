@@ -175,14 +175,14 @@ describe("handleFeishuMessage command authorization", () => {
               mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
           },
           reply: {
-            resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
+            resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })) as any,
             formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
             finalizeInboundContext:
               mockFinalizeInboundContext as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
             dispatchReplyFromConfig: mockDispatchReplyFromConfig,
             withReplyDispatcher:
               mockWithReplyDispatcher as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
-            createReplyDispatcherWithTyping: mockCreateReplyDispatcherWithTyping,
+            createReplyDispatcherWithTyping: mockCreateReplyDispatcherWithTyping as any,
           },
           commands: {
             shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
@@ -192,7 +192,6 @@ describe("handleFeishuMessage command authorization", () => {
           media: {
             saveMediaBuffer:
               mockSaveMediaBuffer as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
-            detectMime: vi.fn(async () => "application/octet-stream"),
           },
           pairing: {
             readAllowFromStore: mockReadAllowFromStore,

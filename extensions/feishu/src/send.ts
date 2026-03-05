@@ -8,6 +8,7 @@ import {
   normalizeMentionTagsForCard,
   normalizeMentionTagsForText,
 } from "./mention.js";
+import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
   assertFeishuMessageApiSuccess,

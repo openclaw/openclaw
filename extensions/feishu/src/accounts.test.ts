@@ -344,6 +344,8 @@ describe("resolveFeishuAccount", () => {
         accountId: "main",
       }),
     ).not.toThrow();
+  });
+});
 
 describe("resolveFeishuAccount renderMode fallback", () => {
   it("falls back to top-level renderMode when account override is missing", () => {
