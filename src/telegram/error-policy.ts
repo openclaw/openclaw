@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { OpenClawConfig } from "../config/config.js";
 
 export type TelegramErrorPolicy = "always" | "once" | "silent";
 

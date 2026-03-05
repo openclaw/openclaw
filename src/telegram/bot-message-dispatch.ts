@@ -26,6 +26,11 @@ import { deliverReplies } from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import {
+  isSilentErrorPolicy,
+  resolveTelegramErrorPolicy,
+  shouldSuppressTelegramError,
+} from "./error-policy.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
   type ArchivedPreview,
@@ -40,7 +45,6 @@ import {
 } from "./reasoning-lane-coordinator.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
-import { isSilentErrorPolicy, resolveTelegramErrorPolicy, shouldSuppressTelegramError } from "./error-policy.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
@@ -627,11 +631,13 @@ export const dispatchTelegramMessage = async ({
           if (isSilentErrorPolicy(errorPolicy.policy)) {
             return;
           }
-          if (shouldSuppressTelegramError({
-            chatId,
-            cooldownMs: errorPolicy.cooldownMs,
-            errorMessage: String(err),
-          })) {
+          if (
+            shouldSuppressTelegramError({
+              chatId,
+              cooldownMs: errorPolicy.cooldownMs,
+              errorMessage: String(err),
+            })
+          ) {
             return;
           }
           deliveryState.markNonSilentFailure();
