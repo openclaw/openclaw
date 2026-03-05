@@ -904,7 +904,7 @@ async function agentCommandInternal(
               ? singlePayload.text
               : "";
           if (errorText && isFailoverErrorMessage(errorText)) {
-            const reason = classifyFailoverReason(errorText) ?? "rate_limit";
+            const reason = classifyFailoverReason(errorText)!;
             throw new FailoverError(errorText, {
               reason,
               status: resolveFailoverStatus(reason),
