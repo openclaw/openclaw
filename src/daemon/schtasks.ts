@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { VERSION } from "../version.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
@@ -194,9 +195,11 @@ function buildTaskScript({
   if (workingDirectory) {
     lines.push(`cd /d ${quoteCmdScriptArg(workingDirectory)}`);
   }
+  lines.push(renderCmdSetAssignment("OPENCLAW_SERVICE_VERSION", VERSION));
   if (environment) {
+    const serviceVersionKey = "OPENCLAW_SERVICE_VERSION";
     for (const [key, value] of Object.entries(environment)) {
-      if (!value) {
+      if (!value || key.toUpperCase() === serviceVersionKey) {
         continue;
       }
       lines.push(renderCmdSetAssignment(key, value));
