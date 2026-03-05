@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
+  calculateRateLimitCooldownMs,
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
@@ -50,6 +51,22 @@ describe("resolveProfileUnusableUntil", () => {
   it("returns the latest active timestamp", () => {
     expect(resolveProfileUnusableUntil({ cooldownUntil: 100, disabledUntil: 200 })).toBe(200);
     expect(resolveProfileUnusableUntil({ cooldownUntil: 300 })).toBe(300);
+  });
+});
+
+describe("calculateRateLimitCooldownMs", () => {
+  it("uses default rate-limit cooldown sequence and caps at the last value", () => {
+    expect(calculateRateLimitCooldownMs(1)).toBe(60_000);
+    expect(calculateRateLimitCooldownMs(2)).toBe(300_000);
+    expect(calculateRateLimitCooldownMs(3)).toBe(1_500_000);
+    expect(calculateRateLimitCooldownMs(4)).toBe(3_600_000);
+    expect(calculateRateLimitCooldownMs(9)).toBe(3_600_000);
+  });
+
+  it("uses custom sequence when provided", () => {
+    expect(calculateRateLimitCooldownMs(1, [15_000, 45_000, 90_000])).toBe(15_000);
+    expect(calculateRateLimitCooldownMs(2, [15_000, 45_000, 90_000])).toBe(45_000);
+    expect(calculateRateLimitCooldownMs(5, [15_000, 45_000, 90_000])).toBe(90_000);
   });
 });
 
@@ -509,6 +526,13 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
     store: ReturnType<typeof makeStore>;
     now: number;
     reason: "rate_limit" | "billing" | "auth_permanent";
+    cfg?: {
+      auth?: {
+        cooldowns?: {
+          rateLimitBackoffMs?: number[];
+        };
+      };
+    };
   }): Promise<void> {
     vi.useFakeTimers();
     vi.setSystemTime(params.now);
@@ -517,6 +541,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         store: params.store,
         profileId: "anthropic:default",
         reason: params.reason,
+        cfg: params.cfg,
       });
     } finally {
       vi.useRealTimers();
@@ -635,4 +660,31 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
       expect(testCase.readUntil(stats)).toBe(testCase.expectedUntil(now));
     });
   }
+
+  it("uses configured rate-limit cooldown sequence for recomputed cooldown windows", async () => {
+    const now = 1_000_000;
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now - 60_000,
+        errorCount: 3,
+        lastFailureAt: now - 60_000,
+      },
+    });
+
+    await markFailureAt({
+      store,
+      now,
+      reason: "rate_limit",
+      cfg: {
+        auth: {
+          cooldowns: {
+            rateLimitBackoffMs: [45_000, 90_000],
+          },
+        },
+      },
+    });
+
+    const stats = store.usageStats?.["anthropic:default"];
+    expect(stats?.cooldownUntil).toBe(now + 90_000);
+  });
 });
