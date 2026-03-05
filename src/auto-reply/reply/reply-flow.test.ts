@@ -1015,6 +1015,83 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("Queued #2\ntwo");
   });
 
+  it("strips inbound metadata blocks from collected queued prompts", async () => {
+    const key = `test-collect-strip-meta-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "sender_id": "ou_123",
+  "message_id": "msg_456"
+}
+\`\`\`
+
+hello there`,
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.prompt).toContain("Queued #1\nhello there");
+    expect(calls[0]?.prompt).not.toContain("Conversation info (untrusted metadata):");
+    expect(calls[0]?.prompt).not.toContain('"sender_id"');
+    expect(calls[0]?.prompt).not.toContain('"message_id"');
+  });
+
+  it("uses a placeholder when a collected queued prompt only contains metadata", async () => {
+    const key = `test-collect-meta-only-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "sender_id": "ou_123",
+  "message_id": "msg_456"
+}
+\`\`\``,
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.prompt).toContain("Queued #1\n[message content unavailable]");
+    expect(calls[0]?.prompt).not.toContain('"sender_id"');
+    expect(calls[0]?.prompt).not.toContain('"message_id"');
+  });
+
   it("retries overflow summary delivery without losing dropped previews", async () => {
     const key = `test-overflow-summary-retry-${Date.now()}`;
     const calls: FollowupRun[] = [];

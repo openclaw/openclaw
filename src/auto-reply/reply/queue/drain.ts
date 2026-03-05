@@ -10,12 +10,19 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { stripLeadingInboundMetadata } from "../strip-inbound-meta.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
 const FOLLOWUP_RUN_CALLBACKS = new Map<string, (run: FollowupRun) => Promise<void>>();
+const QUEUED_MESSAGE_UNAVAILABLE_PLACEHOLDER = "[message content unavailable]";
+
+function renderCollectQueueItemPrompt(prompt: string): string {
+  const sanitized = stripLeadingInboundMetadata(prompt).trim();
+  return sanitized || QUEUED_MESSAGE_UNAVAILABLE_PLACEHOLDER;
+}
 
 export function clearFollowupDrainCallback(key: string): void {
   FOLLOWUP_RUN_CALLBACKS.delete(key);
@@ -114,7 +121,8 @@ export function scheduleFollowupDrain(
             title: "[Queued messages while agent was busy]",
             items,
             summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
+            renderItem: (item, idx) =>
+              `---\nQueued #${idx + 1}\n${renderCollectQueueItemPrompt(item.prompt)}`.trim(),
           });
           await runFollowup({
             prompt,
