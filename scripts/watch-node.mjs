@@ -12,7 +12,14 @@ const buildRunnerArgs = (args) => [WATCH_NODE_RUNNER, ...args];
 
 const normalizePath = (filePath) => String(filePath ?? "").replaceAll("\\", "/");
 
-const isIgnoredWatchPath = (filePath) => normalizePath(filePath).endsWith(".test.ts");
+const isIgnoredWatchPath = (filePath) => {
+  const normalizedPath = normalizePath(filePath);
+  return (
+    normalizedPath.endsWith(".test.ts") ||
+    normalizedPath.endsWith(".test.tsx") ||
+    normalizedPath.endsWith("test-helpers.ts")
+  );
+};
 
 export async function runWatchMain(params = {}) {
   const deps = {

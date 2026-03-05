@@ -46,6 +46,8 @@ describe("watch-node script", () => {
     expect(watchPaths).toEqual(runNodeWatchedPaths);
     expect(watchOptions.ignoreInitial).toBe(true);
     expect(watchOptions.ignored("src/infra/watch-node.test.ts")).toBe(true);
+    expect(watchOptions.ignored("src/infra/watch-node.test.tsx")).toBe(true);
+    expect(watchOptions.ignored("src/infra/watch-node-test-helpers.ts")).toBe(true);
     expect(watchOptions.ignored("src/infra/watch-node.ts")).toBe(false);
     expect(watchOptions.ignored("tsconfig.json")).toBe(false);
 
@@ -111,7 +113,7 @@ describe("watch-node script", () => {
     expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
   });
 
-  it("ignores .test.ts changes and restarts on non-test source changes", async () => {
+  it("ignores test-only changes and restarts on non-test source changes", async () => {
     const childA = Object.assign(new EventEmitter(), {
       kill: vi.fn(function () {
         queueMicrotask(() => childA.emit("exit", 0, null));
@@ -135,6 +137,16 @@ describe("watch-node script", () => {
     });
 
     watcher.emit("change", "src/infra/watch-node.test.ts");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(childA.kill).not.toHaveBeenCalled();
+
+    watcher.emit("change", "src/infra/watch-node.test.tsx");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(childA.kill).not.toHaveBeenCalled();
+
+    watcher.emit("change", "src/infra/watch-node-test-helpers.ts");
     await new Promise((resolve) => setImmediate(resolve));
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(childA.kill).not.toHaveBeenCalled();
