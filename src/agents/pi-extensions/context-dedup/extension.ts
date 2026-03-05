@@ -680,20 +680,49 @@ function parseDedupPointerTargetMessageIndex(text: string): number | undefined {
   return value;
 }
 
+function parseLineageSourceMessageIndex(text: string): number | undefined {
+  const match = text.match(/Earlier chunk: context message #(\d+)(?: \(toolCallId [^)]+\))?/);
+  if (!match) {
+    return undefined;
+  }
+  const value = Number.parseInt(match[1] ?? "", 10);
+  if (!Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return value;
+}
+
 function resolveRootSourceMessageIndex(messages: any[], startIndex: number): number {
   let current = startIndex;
   const visited = new Set<number>();
 
   while (!visited.has(current) && current >= 0 && current < messages.length) {
     visited.add(current);
-    const target = parseDedupPointerTargetMessageIndex(extractText(messages[current]?.content));
-    if (typeof target !== "number") {
+
+    const text = extractText(messages[current]?.content);
+    if (typeof text !== "string" || text.length === 0) {
       return current;
     }
-    if (target < 0 || target >= messages.length) {
-      return current;
+
+    const dedupTarget = parseDedupPointerTargetMessageIndex(text);
+    if (typeof dedupTarget === "number") {
+      if (dedupTarget < 0 || dedupTarget >= messages.length) {
+        return current;
+      }
+      current = dedupTarget;
+      continue;
     }
-    current = target;
+
+    const lineageTarget = parseLineageSourceMessageIndex(text);
+    if (typeof lineageTarget === "number") {
+      if (lineageTarget < 0 || lineageTarget >= messages.length) {
+        return current;
+      }
+      current = lineageTarget;
+      continue;
+    }
+
+    return current;
   }
 
   return startIndex;
@@ -720,6 +749,30 @@ function rewriteLineageSourceHint(text: string, messages: any[]): string {
   );
 }
 
+function rewriteDedupPointerSourceHint(text: string, messages: any[]): string {
+  if (!text.includes("Same as context message #")) {
+    return text;
+  }
+
+  return text.replace(
+    /Same as context message #(\d+), block #(\d+)((?: \(toolCallId [^)]+\))?)\./g,
+    (full, sourceIndexRaw: string, blockIndexRaw: string, toolHintRaw: string) => {
+      const sourceIndex = Number.parseInt(sourceIndexRaw, 10);
+      if (!Number.isFinite(sourceIndex) || sourceIndex < 0 || sourceIndex >= messages.length) {
+        return full;
+      }
+
+      const resolved = resolveRootSourceMessageIndex(messages, sourceIndex);
+      if (resolved === sourceIndex) {
+        return full;
+      }
+
+      const toolHint = typeof toolHintRaw === "string" ? toolHintRaw : "";
+      return `Same as context message #${resolved}, block #${blockIndexRaw}${toolHint}.`;
+    },
+  );
+}
+
 export function rewriteReadLineageSourcePointers(messages: any[]): any[] {
   let nextMessages: any[] | null = null;
 
@@ -728,7 +781,7 @@ export function rewriteReadLineageSourcePointers(messages: any[]): any[] {
     const content = msg?.content;
 
     if (typeof content === "string") {
-      const rewritten = rewriteLineageSourceHint(content, messages);
+      const rewritten = rewriteDedupPointerSourceHint(rewriteLineageSourceHint(content, messages), messages);
       if (rewritten !== content) {
         if (!nextMessages) {
           nextMessages = messages.slice();
@@ -749,7 +802,7 @@ export function rewriteReadLineageSourcePointers(messages: any[]): any[] {
         return block;
       }
 
-      const rewritten = rewriteLineageSourceHint(text, messages);
+      const rewritten = rewriteDedupPointerSourceHint(rewriteLineageSourceHint(text, messages), messages);
       if (rewritten === text) {
         return block;
       }

@@ -290,6 +290,32 @@ describe("context-dedup", () => {
     expect(hunkCount).toBeLessThanOrEqual(3);
   });
 
+  it("rewrites dedup pointers that target lineage notes back to root source", () => {
+    const fullChunk = "Heartbeat content line ".repeat(20);
+    const lineageNote =
+      "[Same file chunk already shown earlier]\n" +
+      "Path: HEARTBEAT.md\n" +
+      "Earlier chunk: context message #0 (toolCallId call_a)\n" +
+      "Lines: 1-14";
+
+    const deduped = deduplicateMessages(
+      [
+        { role: "toolResult", toolCallId: "call_a", content: fullChunk },
+        { role: "toolResult", toolCallId: "call_b", content: lineageNote },
+        { role: "toolResult", toolCallId: "call_c", content: lineageNote },
+      ],
+      DEDUP_ON,
+    );
+
+    const preRewrite = String(deduped.messages[2].content);
+    expect(preRewrite).toContain("Same as context message #1");
+
+    const rewritten = rewriteReadLineageSourcePointers(deduped.messages as any[]);
+    const postRewrite = String(rewritten[2].content);
+    expect(postRewrite).toContain("Same as context message #0");
+    expect(postRewrite).not.toContain("Same as context message #1");
+  });
+
   it("rewrites nested lineage source pointers to original dedup source", () => {
     const original = Array.from(
       { length: 40 },
