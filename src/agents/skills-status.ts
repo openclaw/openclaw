@@ -55,7 +55,9 @@ export type SkillStatusReport = {
 };
 
 function resolveSkillKey(entry: SkillEntry): string {
-  return entry.metadata?.skillKey ?? entry.skill.name;
+  // Defensive: skill.name may be a number if YAML parses name: 12306 without quotes
+  const name = entry.metadata?.skillKey ?? entry.skill.name;
+  return typeof name === "string" ? name : String(name);
 }
 
 function selectPreferredInstallSpec(
