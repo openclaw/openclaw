@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId, DEFAULT_AGENT_ID } from "../routing/session-key.js";
@@ -19,10 +20,60 @@ const log = createSubsystemLogger("workflow/store");
 
 const DEFAULT_WORKFLOW_DIRNAME = "workflows";
 
+// Whitelist of fields that can be modified via workflow.update
+// Immutable fields (id, createdAt, tasks, agentId) are excluded for security
+const ALLOWED_PATCH_KEYS = new Set([
+  "title",
+  "description",
+  "status",
+  "priority",
+  "source",
+  "metadata",
+  "startedAt",
+  "completedAt",
+  "updatedAt",
+]);
+
+/**
+ * Filter patch object to only include allowed keys.
+ * Prevents callers from mutating immutable fields like id, tasks, agentId.
+ */
+export function sanitizePlanPatch(patch: Record<string, unknown>): WorkflowPlanPatch {
+  const sanitized: Record<string, unknown> = {};
+  for (const key of Object.keys(patch)) {
+    if (ALLOWED_PATCH_KEYS.has(key)) {
+      sanitized[key] = patch[key];
+    } else {
+      log.warn("rejected disallowed patch key", { key });
+    }
+  }
+  return sanitized as WorkflowPlanPatch;
+}
+
+/**
+ * Resolve configured workflow store directory name.
+ * Falls back to "workflows" if not configured.
+ */
+function resolveWorkflowDirname(): string {
+  try {
+    const cfg = loadConfig();
+    const workflowConfig = (cfg as Record<string, unknown>).workflow as
+      | Record<string, unknown>
+      | undefined;
+    if (workflowConfig?.storeDir && typeof workflowConfig.storeDir === "string") {
+      return workflowConfig.storeDir;
+    }
+  } catch {
+    // Config not available, use default
+  }
+  return DEFAULT_WORKFLOW_DIRNAME;
+}
+
 export function resolveWorkflowDir(agentId?: string): string {
   const root = resolveStateDir();
   const id = normalizeAgentId(agentId ?? DEFAULT_AGENT_ID);
-  return path.join(root, "agents", id, DEFAULT_WORKFLOW_DIRNAME);
+  const dirname = resolveWorkflowDirname();
+  return path.join(root, "agents", id, dirname);
 }
 
 export function resolveWorkflowStorePath(agentId?: string): string {
@@ -216,9 +267,11 @@ export function createWorkflowStoreManager(agentId: string): WorkflowStoreManage
     if (!plan) {
       return null;
     }
+    // Runtime filter to prevent mutation of immutable fields (id, tasks, agentId, createdAt)
+    const safePatch = sanitizePlanPatch(patch as Record<string, unknown>);
     const updatedPlan: WorkflowPlan = {
       ...plan,
-      ...patch,
+      ...safePatch,
       updatedAt: new Date().toISOString(),
     };
     store.activePlans[planId] = updatedPlan;
