@@ -85,6 +85,10 @@ function installHooks() {
   });
 }
 
+function renderEscapedPre(value: string): string {
+  return `<pre class="code-block">${escapeHtml(value)}</pre>`;
+}
+
 export function toSanitizedMarkdownHtml(markdown: string): string {
   const input = markdown.trim();
   if (!input) {
@@ -101,20 +105,27 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   const suffix = truncated.truncated
     ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
     : "";
+  const renderInput = `${truncated.text}${suffix}`;
   if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
-    const escaped = escapeHtml(`${truncated.text}${suffix}`);
-    const html = `<pre class="code-block">${escaped}</pre>`;
+    const html = renderEscapedPre(renderInput);
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(input, sanitized);
     }
     return sanitized;
   }
-  const rendered = marked.parse(`${truncated.text}${suffix}`, {
-    renderer: htmlEscapeRenderer,
-    gfm: true,
-    breaks: true,
-  }) as string;
+  let rendered: string;
+  try {
+    rendered = marked.parse(renderInput, {
+      renderer: htmlEscapeRenderer,
+      gfm: true,
+      breaks: true,
+    }) as string;
+  } catch {
+    // Marked can throw on malformed recursive markdown edge-cases.
+    // Fallback to escaped preformatted text so the UI remains usable.
+    rendered = renderEscapedPre(renderInput);
+  }
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     setCachedMarkdown(input, sanitized);

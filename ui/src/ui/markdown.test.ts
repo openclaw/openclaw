@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { marked } from "marked";
+import { describe, expect, it, vi } from "vitest";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 describe("toSanitizedMarkdownHtml", () => {
@@ -81,5 +82,17 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("Col2");
     // Pipes from table delimiters must not appear as raw text
     expect(html).not.toContain("|------|");
+  });
+
+  it("falls back to escaped text when marked.parse throws", () => {
+    const parseSpy = vi.spyOn(marked, "parse").mockImplementationOnce(() => {
+      throw new Error("too much recursion");
+    });
+    const html = toSanitizedMarkdownHtml("plain <script>alert(1)</script> **text**");
+    expect(html).toContain("<pre");
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).toContain("**text**");
+    expect(html).not.toContain("<script>");
+    expect(parseSpy).toHaveBeenCalledOnce();
   });
 });
