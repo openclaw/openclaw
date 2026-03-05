@@ -49,6 +49,21 @@ describe("RuntimeCache", () => {
     }
   });
 
+  it("evicts least-recently-touched entries when size exceeds maxEntries", () => {
+    const cache = new RuntimeCache({ maxEntries: 2 });
+    cache.set("a", mockState("a"), { now: 10 });
+    cache.set("b", mockState("b"), { now: 20 });
+
+    // Touch "a" so "b" becomes the eviction candidate.
+    cache.get("a", { now: 30 });
+    cache.set("c", mockState("c"), { now: 40 });
+
+    expect(cache.size()).toBe(2);
+    expect(cache.has("a")).toBe(true);
+    expect(cache.has("c")).toBe(true);
+    expect(cache.has("b")).toBe(false);
+  });
+
   it("returns snapshot entries with idle durations", () => {
     const cache = new RuntimeCache();
     cache.set("a", mockState("a"), { now: 10 });

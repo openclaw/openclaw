@@ -22,8 +22,18 @@ export type CachedRuntimeSnapshot = {
   idleMs: number;
 };
 
+const DEFAULT_RUNTIME_CACHE_MAX_ENTRIES = 500;
+
 export class RuntimeCache {
   private readonly cache = new Map<string, RuntimeCacheEntry>();
+  private readonly maxEntries: number;
+
+  constructor(params: { maxEntries?: number } = {}) {
+    this.maxEntries =
+      Number.isFinite(params.maxEntries) && (params.maxEntries ?? 0) > 0
+        ? Math.floor(params.maxEntries ?? 0)
+        : DEFAULT_RUNTIME_CACHE_MAX_ENTRIES;
+  }
 
   size(): number {
     return this.cache.size;
@@ -58,6 +68,23 @@ export class RuntimeCache {
     return this.cache.get(actorKey)?.lastTouchedAt ?? null;
   }
 
+  private pruneOverflow(): void {
+    while (this.cache.size > this.maxEntries) {
+      let oldestKey: string | null = null;
+      let oldestTouchedAt = Number.POSITIVE_INFINITY;
+      for (const [key, entry] of this.cache.entries()) {
+        if (entry.lastTouchedAt < oldestTouchedAt) {
+          oldestTouchedAt = entry.lastTouchedAt;
+          oldestKey = key;
+        }
+      }
+      if (!oldestKey) {
+        return;
+      }
+      this.cache.delete(oldestKey);
+    }
+  }
+
   set(
     actorKey: string,
     state: CachedRuntimeState,
@@ -69,6 +96,7 @@ export class RuntimeCache {
       state,
       lastTouchedAt: params.now ?? Date.now(),
     });
+    this.pruneOverflow();
   }
 
   clear(actorKey: string): void {
