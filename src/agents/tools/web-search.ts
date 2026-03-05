@@ -1633,6 +1633,14 @@ export function createWebSearchTool(options?: {
       }
       const resolvedSearchLang = normalizedBraveLanguageParams.search_lang;
       const resolvedUiLang = normalizedBraveLanguageParams.ui_lang;
+      if (resolvedUiLang && provider === "brave" && braveMode === "llm-context") {
+        return jsonResult({
+          error: "unsupported_ui_lang",
+          message:
+            "ui_lang is not supported by Brave llm-context mode. Remove ui_lang or use Brave web mode for locale-based UI hints.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       const rawFreshness = readStringParam(params, "freshness");
       if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
         return jsonResult({

@@ -648,6 +648,38 @@ describe("web_search external content wrapping", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it("rejects ui_lang in Brave llm-context mode", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch({
+      title: "unused",
+      url: "https://example.com",
+      snippets: ["unused"],
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              brave: {
+                mode: "llm-context",
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", {
+      query: "test",
+      ui_lang: "de-DE",
+    });
+
+    expect(result?.details).toMatchObject({ error: "unsupported_ui_lang" });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("does not wrap Brave result urls (raw for tool chaining)", async () => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
     const url = "https://example.com/some-page";
