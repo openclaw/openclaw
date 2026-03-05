@@ -34,6 +34,17 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 }
 ```
 
+### API-key compatibility note for `gpt-5.3-codex`
+
+`openai/gpt-5.3-codex` is **not currently usable on the API-key path**.
+
+- Built-in normalization routes `openai/gpt-5.3-codex` to `openai-codex/gpt-5.3-codex`, which is the Codex OAuth/subscription provider.
+- Forcing API-key routing via a custom Responses provider still fails on tool calls due to a `function_call`/`reasoning` payload constraint.
+
+If you are using `OPENAI_API_KEY`, use `gpt-5.2-codex` or `gpt-5.1-codex` for now.
+
+(Tracking: #30923, #30844, #18282.)
+
 ## Option B: OpenAI Code (Codex) subscription
 
 **Best for:** using ChatGPT/Codex subscription access instead of an API key.
