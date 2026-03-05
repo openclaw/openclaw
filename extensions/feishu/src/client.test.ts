@@ -6,9 +6,19 @@ const wsClientCtorMock = vi.hoisted(() =>
     return { connected: true };
   }),
 );
+const clientCtorMock = vi.hoisted(() =>
+  vi.fn(function clientCtor() {
+    return { im: {} };
+  }),
+);
 const httpsProxyAgentCtorMock = vi.hoisted(() =>
   vi.fn(function httpsProxyAgentCtor(proxyUrl: string) {
     return { proxyUrl };
+  }),
+);
+const axiosCreateMock = vi.hoisted(() =>
+  vi.fn(function axiosCreate(config: { timeout?: number }) {
+    return { defaults: { timeout: config?.timeout } };
   }),
 );
 
@@ -16,7 +26,7 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
   AppType: { SelfBuild: "self" },
   Domain: { Feishu: "https://open.feishu.cn", Lark: "https://open.larksuite.com" },
   LoggerLevel: { info: "info" },
-  Client: vi.fn(),
+  Client: clientCtorMock,
   WSClient: wsClientCtorMock,
   EventDispatcher: vi.fn(),
 }));
@@ -25,7 +35,18 @@ vi.mock("https-proxy-agent", () => ({
   HttpsProxyAgent: httpsProxyAgentCtorMock,
 }));
 
-import { createFeishuWSClient } from "./client.js";
+vi.mock("axios", () => ({
+  default: {
+    create: axiosCreateMock,
+  },
+}));
+
+import {
+  createFeishuClient,
+  createFeishuWSClient,
+  clearClientCache,
+  FEISHU_HTTP_TIMEOUT_MS,
+} from "./client.js";
 
 const proxyEnvKeys = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] as const;
 type ProxyEnvKey = (typeof proxyEnvKeys)[number];
@@ -48,6 +69,13 @@ function firstWsClientOptions(): { agent?: unknown } {
   return calls[0]?.[0] ?? {};
 }
 
+function firstClientOptions(): { httpInstance?: unknown } {
+  const calls = clientCtorMock.mock.calls as unknown as Array<
+    [options: { httpInstance?: unknown }]
+  >;
+  return calls[0]?.[0] ?? {};
+}
+
 beforeEach(() => {
   priorProxyEnv = {};
   for (const key of proxyEnvKeys) {
@@ -55,6 +83,7 @@ beforeEach(() => {
     delete process.env[key];
   }
   vi.clearAllMocks();
+  clearClientCache();
 });
 
 afterEach(() => {
@@ -66,6 +95,37 @@ afterEach(() => {
       process.env[key] = value;
     }
   }
+});
+
+describe("createFeishuClient HTTP timeout", () => {
+  it("creates an axios instance with 30s timeout to prevent queue deadlocks", () => {
+    createFeishuClient({
+      accountId: "test",
+      appId: "app_123",
+      appSecret: "secret_123",
+    });
+
+    expect(axiosCreateMock).toHaveBeenCalledTimes(1);
+    expect(axiosCreateMock).toHaveBeenCalledWith({
+      timeout: 30_000,
+    });
+  });
+
+  it("exports the timeout constant for documentation", () => {
+    expect(FEISHU_HTTP_TIMEOUT_MS).toBe(30_000);
+  });
+
+  it("passes the axios instance to Lark Client as httpInstance", () => {
+    createFeishuClient({
+      accountId: "test",
+      appId: "app_123",
+      appSecret: "secret_123",
+    });
+
+    const options = firstClientOptions();
+    expect(options.httpInstance).toBeDefined();
+    expect(options.httpInstance).toEqual({ defaults: { timeout: 30_000 } });
+  });
 });
 
 describe("createFeishuWSClient proxy handling", () => {

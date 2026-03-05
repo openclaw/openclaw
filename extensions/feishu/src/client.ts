@@ -1,6 +1,14 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
+import axios from "axios";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import type { FeishuDomain, ResolvedFeishuAccount } from "./types.js";
+
+/**
+ * Default HTTP timeout for Feishu API requests in milliseconds.
+ * Prevents queue deadlocks when the Feishu API hangs or responds slowly.
+ * @see https://github.com/openclaw/openclaw/issues/36412
+ */
+export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 
 function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
   const proxyUrl =
@@ -10,6 +18,16 @@ function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
     process.env.HTTP_PROXY;
   if (!proxyUrl) return undefined;
   return new HttpsProxyAgent(proxyUrl);
+}
+
+/**
+ * Create an axios instance with timeout configured.
+ * This prevents queue deadlocks when Feishu API requests hang.
+ */
+function createHttpInstance(): ReturnType<typeof axios.create> {
+  return axios.create({
+    timeout: FEISHU_HTTP_TIMEOUT_MS,
+  });
 }
 
 // Multi-account client cache
@@ -64,12 +82,13 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     return cached.client;
   }
 
-  // Create new client
+  // Create new client with timeout-configured HTTP instance
   const client = new Lark.Client({
     appId,
     appSecret,
     appType: Lark.AppType.SelfBuild,
     domain: resolveDomain(domain),
+    httpInstance: createHttpInstance(),
   });
 
   // Cache it
