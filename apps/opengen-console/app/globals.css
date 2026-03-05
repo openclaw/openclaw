@@ -207,3 +207,40 @@ body.opengen-app {
   color: #b91c1c;
   font-weight: 600;
 }
+
+.task-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.task-list-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--surface-alt);
+}
+
+.task-list-item a {
+  color: var(--brand);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.task-meta {
+  margin-top: 8px;
+  display: flex;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.task-detail pre {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  overflow-x: auto;
+  background: #f8fafc;
+}

@@ -4,6 +4,7 @@ import {
   type GenerationInput,
   type GenerationType,
 } from "../../../lib/codegen-service";
+import { taskStore } from "../../../lib/task-store";
 
 const VALID_TYPES: GenerationType[] = ["web", "api", "mobile", "desktop", "cli"];
 
@@ -54,6 +55,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     }
 
     const result = await createGenerationTask(parsed);
+    await taskStore.save(result);
     return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json(
