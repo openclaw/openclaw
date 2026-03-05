@@ -12,6 +12,20 @@ import type { HookRunner, PluginHookAgentContext } from "../../../plugins/hooks.
 
 const log = createSubsystemLogger("hooks/stream");
 
+/**
+ * Sentinel error thrown when before_llm_call blocks the LLM call.
+ * Distinct from generic errors so the agent loop can handle it gracefully
+ * (suppress the run without surfacing an error) rather than treating it
+ * as a run failure.
+ */
+export class BeforeLlmCallBlockError extends Error {
+  readonly isBeforeLlmCallBlock = true;
+  constructor(reason: string) {
+    super(`LLM call blocked by plugin: ${reason}`);
+    this.name = "BeforeLlmCallBlockError";
+  }
+}
+
 export interface HookStreamWrapperParams {
   hookRunner: HookRunner;
   agentCtx: PluginHookAgentContext;
@@ -49,7 +63,7 @@ export function wrapStreamFnWithHooks(
         if (result?.block) {
           const reason = result.blockReason ?? "blocked by before_llm_call hook";
           log.warn(`before_llm_call: blocked LLM call: ${reason}`);
-          throw new Error(`LLM call blocked by plugin: ${reason}`);
+          throw new BeforeLlmCallBlockError(reason);
         }
 
         // Apply modifications — only create new context if something changed
@@ -76,8 +90,8 @@ export function wrapStreamFnWithHooks(
           };
         }
       } catch (err) {
-        // Re-throw explicit block errors
-        if ((err as Error)?.message?.startsWith("LLM call blocked by plugin:")) {
+        // Re-throw explicit block errors (sentinel class, not string matching)
+        if (err instanceof BeforeLlmCallBlockError) {
           throw err;
         }
         log.warn(`before_llm_call hook failed: ${String(err)}`);

@@ -1921,8 +1921,17 @@ export async function runEmbeddedAttempt(
             await abortable(activeSession.prompt(effectivePrompt));
           }
         } catch (err) {
-          promptError = err;
-          promptErrorSource = "prompt";
+          // BeforeLlmCallBlockError is a graceful security intervention —
+          // the run completes normally without an error, matching
+          // before_response_emit block behavior.
+          const { BeforeLlmCallBlockError } = await import("./hook-stream-wrapper.js");
+          if (err instanceof BeforeLlmCallBlockError) {
+            log.info(`LLM call blocked by before_llm_call hook: ${err.message}`);
+            // Don't set promptError — let the run complete gracefully
+          } else {
+            promptError = err;
+            promptErrorSource = "prompt";
+          }
         } finally {
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
