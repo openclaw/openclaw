@@ -200,6 +200,9 @@ export class PtyController {
     if (evt.event === "pty.exit") {
       const payload = evt.payload as { exitCode?: number; signal?: number } | undefined;
       this._spawned = false;
+      // Treat a natural exit the same as a user kill so the view does not
+      // auto-respawn on the next render (respawn loop / unwanted restart).
+      this._userKilled = true;
       if (this.term) {
         this.term.writeln("");
         this.term.writeln(

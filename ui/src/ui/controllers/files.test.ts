@@ -10,6 +10,14 @@ import {
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
+function createDeferred<T>() {
+  let resolvePromise: (value: T) => void = () => {};
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
+}
+
 function createState(request: RequestFn, overrides: Partial<FilesState> = {}): FilesState {
   return {
     client: { request } as unknown as FilesState["client"],
@@ -91,6 +99,84 @@ describe("loadFsDirectory", () => {
     expect(state.fsFilePath).toBeNull();
   });
 
+  it("ignores stale responses when a newer directory request finishes first", async () => {
+    const oldDeferred = createDeferred<FsListResult>();
+    const newDeferred = createDeferred<FsListResult>();
+
+    const request = vi.fn((_: string, params?: unknown) => {
+      const path = (params as { path: string }).path;
+      if (path === "/old") {
+        return oldDeferred.promise;
+      }
+      return newDeferred.promise;
+    });
+
+    const state = createState(request, { fsPath: "/home/user" });
+
+    const oldLoad = loadFsDirectory(state, "/old");
+    const newLoad = loadFsDirectory(state, "/new");
+
+    expect(state.fsLoading).toBe(true);
+
+    newDeferred.resolve({
+      path: "/new",
+      entries: [{ name: "fresh", type: "directory", path: "/new/fresh" }],
+    });
+    await newLoad;
+
+    expect(state.fsPath).toBe("/new");
+    expect(state.fsEntries).toEqual([{ name: "fresh", type: "directory", path: "/new/fresh" }]);
+    expect(state.fsLoading).toBe(false);
+
+    oldDeferred.resolve({
+      path: "/old",
+      entries: [{ name: "stale", type: "directory", path: "/old/stale" }],
+    });
+    await oldLoad;
+
+    expect(state.fsPath).toBe("/new");
+    expect(state.fsEntries).toEqual([{ name: "fresh", type: "directory", path: "/new/fresh" }]);
+    expect(state.fsLoading).toBe(false);
+  });
+
+  it("ignores stale error when a newer directory request already succeeded", async () => {
+    let rejectOld!: (err: unknown) => void;
+    const oldPromise = new Promise<FsListResult>((_, reject) => {
+      rejectOld = reject;
+    });
+    const newDeferred = createDeferred<FsListResult>();
+
+    const request = vi.fn((_: string, params?: unknown) => {
+      const path = (params as { path: string }).path;
+      if (path === "/old") {
+        return oldPromise;
+      }
+      return newDeferred.promise;
+    });
+
+    const state = createState(request, { fsPath: "/home/user" });
+
+    const oldLoad = loadFsDirectory(state, "/old");
+    const newLoad = loadFsDirectory(state, "/new");
+
+    newDeferred.resolve({
+      path: "/new",
+      entries: [{ name: "fresh", type: "directory", path: "/new/fresh" }],
+    });
+    await newLoad;
+
+    expect(state.fsPath).toBe("/new");
+    expect(state.fsError).toBeNull();
+
+    // Stale request rejects after newer one settled — should not overwrite good state
+    rejectOld(new Error("stale error"));
+    await oldLoad;
+
+    expect(state.fsPath).toBe("/new");
+    expect(state.fsError).toBeNull();
+    expect(state.fsLoading).toBe(false);
+  });
+
   it("does nothing when client is null", async () => {
     const request = vi.fn();
     const state = createState(request, { client: null });
@@ -145,6 +231,85 @@ describe("readFsFile", () => {
     expect(state.fsFilePath).toBe("/etc/shadow");
     expect(state.fsFileContent).toContain("Error:");
     expect(state.fsFileContent).toContain("permission denied");
+    expect(state.fsFileLoading).toBe(false);
+  });
+
+  it("ignores stale read responses when a newer file request finishes first", async () => {
+    const oldDeferred = createDeferred<FsReadResult>();
+    const newDeferred = createDeferred<FsReadResult>();
+
+    const request = vi.fn((_: string, params?: unknown) => {
+      const path = (params as { path: string }).path;
+      if (path === "/old.txt") {
+        return oldDeferred.promise;
+      }
+      return newDeferred.promise;
+    });
+
+    const state = createState(request);
+
+    const oldRead = readFsFile(state, "/old.txt");
+    const newRead = readFsFile(state, "/new.txt");
+
+    expect(state.fsFileLoading).toBe(true);
+
+    newDeferred.resolve({
+      path: "/new.txt",
+      size: 3,
+      truncated: false,
+      content: "new",
+    });
+    await newRead;
+
+    expect(state.fsFilePath).toBe("/new.txt");
+    expect(state.fsFileContent).toBe("new");
+    expect(state.fsFileLoading).toBe(false);
+
+    oldDeferred.resolve({
+      path: "/old.txt",
+      size: 3,
+      truncated: false,
+      content: "old",
+    });
+    await oldRead;
+
+    expect(state.fsFilePath).toBe("/new.txt");
+    expect(state.fsFileContent).toBe("new");
+    expect(state.fsFileLoading).toBe(false);
+  });
+
+  it("ignores stale error when a newer file request already succeeded", async () => {
+    let rejectOld!: (err: unknown) => void;
+    const oldPromise = new Promise<FsReadResult>((_, reject) => {
+      rejectOld = reject;
+    });
+    const newDeferred = createDeferred<FsReadResult>();
+
+    const request = vi.fn((_: string, params?: unknown) => {
+      const path = (params as { path: string }).path;
+      if (path === "/old.txt") {
+        return oldPromise;
+      }
+      return newDeferred.promise;
+    });
+
+    const state = createState(request);
+
+    const oldRead = readFsFile(state, "/old.txt");
+    const newRead = readFsFile(state, "/new.txt");
+
+    newDeferred.resolve({ path: "/new.txt", size: 3, truncated: false, content: "new" });
+    await newRead;
+
+    expect(state.fsFilePath).toBe("/new.txt");
+    expect(state.fsFileContent).toBe("new");
+
+    // Stale request rejects after newer one settled — should not overwrite
+    rejectOld(new Error("stale read error"));
+    await oldRead;
+
+    expect(state.fsFilePath).toBe("/new.txt");
+    expect(state.fsFileContent).toBe("new");
     expect(state.fsFileLoading).toBe(false);
   });
 
@@ -228,6 +393,42 @@ describe("navigateFsUp", () => {
 
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith("fs.list", { path: "C:\\" });
+    });
+  });
+
+  it("navigates up within a UNC path", async () => {
+    const result: FsListResult = { path: "\\\\server\\share\\docs", entries: [] };
+    const request = vi.fn(async () => result);
+    const state = createState(request, { fsPath: "\\\\server\\share\\docs\\2026" });
+
+    navigateFsUp(state);
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("fs.list", { path: "\\\\server\\share\\docs" });
+    });
+  });
+
+  it("navigates to UNC share root from one level below", async () => {
+    const result: FsListResult = { path: "\\\\server\\share", entries: [] };
+    const request = vi.fn(async () => result);
+    const state = createState(request, { fsPath: "\\\\server\\share\\dir" });
+
+    navigateFsUp(state);
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("fs.list", { path: "\\\\server\\share" });
+    });
+  });
+
+  it("stays at UNC share root when already there", async () => {
+    const result: FsListResult = { path: "\\\\server\\share", entries: [] };
+    const request = vi.fn(async () => result);
+    const state = createState(request, { fsPath: "\\\\server\\share" });
+
+    navigateFsUp(state);
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("fs.list", { path: "\\\\server\\share" });
     });
   });
 });

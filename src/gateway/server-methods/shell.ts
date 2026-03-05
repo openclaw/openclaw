@@ -16,7 +16,7 @@ function resolveAbsPath(input: string | undefined): string {
   }
   const trimmed = input.trim();
   if (trimmed.startsWith("~")) {
-    return path.resolve(os.homedir(), trimmed.slice(1).replace(/^\//, ""));
+    return path.resolve(os.homedir(), trimmed.slice(1).replace(/^[/\\]+/, ""));
   }
   return path.resolve(trimmed);
 }

@@ -79,6 +79,7 @@ type GatewayHost = {
   updateAvailable: UpdateAvailable | null;
   ptyController: PtyController;
   ptySpawned: boolean;
+  ptyError: string | null;
 };
 
 type SessionDefaultsSnapshot = {
@@ -219,6 +220,7 @@ export function connectGateway(host: GatewayHost) {
       // state so auto-spawn works correctly after reconnect.
       host.ptyController.resetSpawnState();
       host.ptySpawned = false;
+      host.ptyError = null;
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =
         resolveGatewayErrorDetailCode(error) ??
