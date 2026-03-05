@@ -104,10 +104,17 @@ export function resolveIMessageInboundDecision(params: {
 }): IMessageInboundDecision {
   const senderRaw = params.message.sender ?? "";
   const sender = senderRaw.trim();
-  if (!sender) {
+  const participantFallbackSender =
+    !sender && params.message.is_group
+      ? ((params.message.participants ?? [])
+          .map((value) => value?.trim() ?? "")
+          .find((value) => value.length > 0) ?? "")
+      : "";
+  const effectiveSender = sender || participantFallbackSender;
+  if (!effectiveSender) {
     return { kind: "drop", reason: "missing sender" };
   }
-  const senderNormalized = normalizeIMessageHandle(sender);
+  const senderNormalized = normalizeIMessageHandle(effectiveSender);
   if (params.message.is_from_me) {
     return { kind: "drop", reason: "from me" };
   }
@@ -153,7 +160,7 @@ export function resolveIMessageInboundDecision(params: {
     isSenderAllowed: (allowFrom) =>
       isAllowedIMessageSender({
         allowFrom,
-        sender,
+        sender: effectiveSender,
         chatId,
         chatGuid,
         chatIdentifier,
@@ -175,7 +182,7 @@ export function resolveIMessageInboundDecision(params: {
         return { kind: "drop", reason: "groupPolicy allowlist (empty groupAllowFrom)" };
       }
       if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED) {
-        params.logVerbose?.(`Blocked iMessage sender ${sender} (not in groupAllowFrom)`);
+        params.logVerbose?.(`Blocked iMessage sender ${effectiveSender} (not in groupAllowFrom)`);
         return { kind: "drop", reason: "not in groupAllowFrom" };
       }
       params.logVerbose?.(`Blocked iMessage group message (${accessDecision.reason})`);
@@ -187,7 +194,7 @@ export function resolveIMessageInboundDecision(params: {
     if (accessDecision.decision === "pairing") {
       return { kind: "pairing", senderId: senderNormalized };
     }
-    params.logVerbose?.(`Blocked iMessage sender ${sender} (dmPolicy=${params.dmPolicy})`);
+    params.logVerbose?.(`Blocked iMessage sender ${effectiveSender} (dmPolicy=${params.dmPolicy})`);
     return { kind: "drop", reason: "dmPolicy blocked" };
   }
 
@@ -222,7 +229,7 @@ export function resolveIMessageInboundDecision(params: {
       accountId: params.accountId,
       isGroup,
       chatId,
-      sender,
+      sender: effectiveSender,
     });
     if (
       params.echoCache.has(echoScope, {
@@ -260,7 +267,7 @@ export function resolveIMessageInboundDecision(params: {
     commandDmAllowFrom.length > 0
       ? isAllowedIMessageSender({
           allowFrom: commandDmAllowFrom,
-          sender,
+          sender: effectiveSender,
           chatId,
           chatGuid,
           chatIdentifier,
@@ -270,7 +277,7 @@ export function resolveIMessageInboundDecision(params: {
     effectiveGroupAllowFrom.length > 0
       ? isAllowedIMessageSender({
           allowFrom: effectiveGroupAllowFrom,
-          sender,
+          sender: effectiveSender,
           chatId,
           chatGuid,
           chatIdentifier,
@@ -293,7 +300,7 @@ export function resolveIMessageInboundDecision(params: {
         log: params.logVerbose,
         channel: "imessage",
         reason: "control command (unauthorized)",
-        target: sender,
+        target: effectiveSender,
       });
     }
     return { kind: "drop", reason: "control command (unauthorized)" };
@@ -328,7 +335,7 @@ export function resolveIMessageInboundDecision(params: {
     chatIdentifier,
     groupId,
     historyKey,
-    sender,
+    sender: effectiveSender,
     senderNormalized,
     route,
     bodyText,

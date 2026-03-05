@@ -118,6 +118,23 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(decision.reason).toBe("no mention");
   });
 
+  it("falls back to first group participant when sender is missing", () => {
+    const cfg = baseCfg();
+    const message: IMessagePayload = {
+      id: 2,
+      chat_id: 41,
+      sender: "",
+      is_from_me: false,
+      text: "@openclaw hello",
+      is_group: true,
+      participants: ["+15550003333", "+15550004444"],
+    };
+
+    const ctxPayload = buildDispatchContextPayload({ cfg, message });
+    expect(ctxPayload.SenderId).toBe("+15550003333");
+    expect(String(ctxPayload.Body ?? "")).toContain("+15550003333:");
+  });
+
   it("dispatches group messages with mention and builds a group envelope", () => {
     const cfg = baseCfg();
     const message: IMessagePayload = {
