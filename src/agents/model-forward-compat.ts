@@ -20,8 +20,11 @@ const ZAI_GLM5_TEMPLATE_MODEL_IDS = ["glm-4.7"] as const;
 // gemini-3.1-pro-preview / gemini-3.1-flash-preview are not yet in pi-ai's built-in
 // google-gemini-cli catalog. Clone the gemini-3-pro/flash-preview template so users
 // don't get "Unknown model" errors when Google releases a new minor version.
+const GEMINI_2_5_FLASH_LITE_ID = "gemini-2.5-flash-lite";
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
+const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
+const GEMINI_2_5_FLASH_TEMPLATE_IDS = ["gemini-2.5-flash", "gemini-3-flash-preview"] as const;
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
 
@@ -168,9 +171,9 @@ function resolveAnthropicSonnet46ForwardCompatModel(
   });
 }
 
-// gemini-3.1-pro-preview / gemini-3.1-flash-preview are not present in pi-ai's built-in
-// google-gemini-cli catalog yet. Clone the nearest gemini-3 template so users don't get
-// "Unknown model" errors when Google Gemini CLI gains new minor-version models.
+// gemini-2.5-flash-lite / gemini-3.1-{pro,flash,flash-lite}-preview may be absent in
+// pi-ai's built-in google-gemini-cli catalog. Clone the nearest Gemini template so users
+// don't get "Unknown model" errors while provider catalogs catch up.
 function resolveGoogleGeminiCli31ForwardCompatModel(
   provider: string,
   modelId: string,
@@ -183,9 +186,14 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   const lower = trimmed.toLowerCase();
 
   let templateIds: readonly string[];
-  if (lower.startsWith(GEMINI_3_1_PRO_PREFIX)) {
+  if (lower === GEMINI_2_5_FLASH_LITE_ID) {
+    templateIds = GEMINI_2_5_FLASH_TEMPLATE_IDS;
+  } else if (lower.startsWith(GEMINI_3_1_PRO_PREFIX)) {
     templateIds = GEMINI_3_1_PRO_TEMPLATE_IDS;
-  } else if (lower.startsWith(GEMINI_3_1_FLASH_PREFIX)) {
+  } else if (
+    lower.startsWith(GEMINI_3_1_FLASH_PREFIX) ||
+    lower.startsWith(GEMINI_3_1_FLASH_LITE_PREFIX)
+  ) {
     templateIds = GEMINI_3_1_FLASH_TEMPLATE_IDS;
   } else {
     return undefined;

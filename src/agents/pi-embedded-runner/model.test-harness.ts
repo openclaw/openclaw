@@ -73,6 +73,19 @@ export const GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL = {
   maxTokens: 64000,
 };
 
+export const GOOGLE_GEMINI_CLI_2_5_FLASH_TEMPLATE_MODEL = {
+  id: "gemini-2.5-flash",
+  name: "Gemini 2.5 Flash (Cloud Code Assist)",
+  provider: "google-gemini-cli",
+  api: "google-gemini-cli",
+  baseUrl: "https://cloudcode-pa.googleapis.com",
+  reasoning: false,
+  input: ["text", "image"] as const,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200000,
+  maxTokens: 64000,
+};
+
 export function mockGoogleGeminiCliProTemplateModel(): void {
   mockDiscoveredModel({
     provider: "google-gemini-cli",
@@ -86,6 +99,14 @@ export function mockGoogleGeminiCliFlashTemplateModel(): void {
     provider: "google-gemini-cli",
     modelId: "gemini-3-flash-preview",
     templateModel: GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
+  });
+}
+
+export function mockGoogleGeminiCli25FlashTemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "google-gemini-cli",
+    modelId: "gemini-2.5-flash",
+    templateModel: GOOGLE_GEMINI_CLI_2_5_FLASH_TEMPLATE_MODEL,
   });
 }
 
