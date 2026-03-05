@@ -399,6 +399,27 @@ describe("AcpxRuntime", () => {
     }
   });
 
+  it("falls back to 'sessions new' when 'sessions ensure' returns NO_SESSION", async () => {
+    process.env.MOCK_ACPX_ENSURE_NO_SESSION = "1";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:claude:acp:fallback-no-session",
+        agent: "claude",
+        mode: "persistent",
+      });
+      expect(handle.backend).toBe("acpx");
+      expect(handle.acpxRecordId).toBe("rec-agent:claude:acp:fallback-no-session");
+      expect(handle.agentSessionId).toBe("inner-agent:claude:acp:fallback-no-session");
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
+      expect(logs.some((entry) => entry.kind === "new")).toBe(true);
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_NO_SESSION;
+    }
+  });
+
   it("fails with ACP_SESSION_INIT_FAILED when both ensure and new omit session IDs", async () => {
     process.env.MOCK_ACPX_ENSURE_EMPTY = "1";
     process.env.MOCK_ACPX_NEW_EMPTY = "1";

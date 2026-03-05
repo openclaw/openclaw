@@ -186,6 +186,7 @@ export class AcpxRuntime implements AcpRuntime {
       }),
       cwd,
       fallbackCode: "ACP_SESSION_INIT_FAILED",
+      ignoreNoSession: true,
     });
     let ensuredEvent = events.find(
       (event) =>

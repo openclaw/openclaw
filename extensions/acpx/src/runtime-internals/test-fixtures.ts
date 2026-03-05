@@ -75,6 +75,14 @@ const setValue = command === "set" ? String(args[commandIndex + 2] || "") : "";
 
 if (command === "sessions" && args[commandIndex + 1] === "ensure") {
   writeLog({ kind: "ensure", agent, args, sessionName: ensureName });
+  if (process.env.MOCK_ACPX_ENSURE_NO_SESSION === "1") {
+    emitJson({
+      type: "error",
+      code: "NO_SESSION",
+      message: "Resource not found",
+    });
+    process.exit(0);
+  }
   if (process.env.MOCK_ACPX_ENSURE_EMPTY === "1") {
     emitJson({ action: "session_ensured", name: ensureName });
   } else {
