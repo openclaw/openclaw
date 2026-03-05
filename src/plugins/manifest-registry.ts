@@ -234,6 +234,7 @@ export function loadPluginManifestRegistry(params: {
         source: candidate.source,
         message: `duplicate plugin id detected; keeping ${existing.candidate.source} and skipping ${candidate.source}`,
       });
+      continue;
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
