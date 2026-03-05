@@ -7,11 +7,6 @@ description: Create, update, or refactor AgentSkills. Use when creating new skil
 
 This skill provides guidance for creating effective skills.
 
-## Early Trigger Rule
-
-If you are about to edit any `SKILL.md` file or create/move files inside a skill directory,
-you are doing skill authoring. Use this guide before making changes.
-
 ## About Skills
 
 Skills are modular, self-contained packages that extend Codex's capabilities by providing
