@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { CHANNEL_IDS } from "../channels/registry.js";
 import { VERSION } from "../version.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
@@ -304,16 +306,14 @@ function buildMergedSchemaCacheKey(params: {
   plugins: PluginUiMetadata[];
   channels: ChannelUiMetadata[];
 }): string {
-  // Cache keys should be bounded in size. Serializing full JSON Schemas can
-  // produce multi-megabyte strings (and even throw RangeError: Invalid string
-  // length) when many plugins/channels are present.
+  // Cache keys must stay small. Serializing full JSON schemas/UI hints can
+  // explode in size with many plugins/channels and crash with
+  // `RangeError: Invalid string length`.
   const plugins = params.plugins
     .map((plugin) => ({
       id: plugin.id,
       name: plugin.name,
       description: plugin.description,
-      configSchema: plugin.configSchema ?? null,
-      configUiHints: plugin.configUiHints ?? null,
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
   const channels = params.channels
@@ -321,21 +321,12 @@ function buildMergedSchemaCacheKey(params: {
       id: channel.id,
       label: channel.label,
       description: channel.description,
-      configSchema: channel.configSchema ?? null,
-      configUiHints: channel.configUiHints ?? null,
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
 
   const json = JSON.stringify({ plugins, channels });
-  let hash = 0xcbf29ce484222325n; // FNV-1a 64-bit offset basis
-  const prime = 0x100000001b3n; // FNV-1a 64-bit prime
-  for (let i = 0; i < json.length; i++) {
-    hash ^= BigInt(json.charCodeAt(i));
-    hash = (hash * prime) & 0xffffffffffffffffn;
-  }
-  // Include lengths to reduce accidental collisions between different payload
-  // shapes that might share a hash in pathological cases.
-  return `${json.length}:${plugins.length}:${channels.length}:${hash.toString(16)}`;
+  // Use a digest to avoid holding extremely long strings in-memory as map keys.
+  return createHash("sha256").update(json).digest("hex");
 }
 
 function setMergedSchemaCache(key: string, value: ConfigSchemaResponse): void {
