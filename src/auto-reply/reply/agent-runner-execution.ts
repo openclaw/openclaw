@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { hasExplicitCliBackend, resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -12,6 +13,7 @@ import {
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
+import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   resolveGroupSessionKey,
@@ -129,6 +131,35 @@ export async function runAgentTurnWithFallback(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
+  // Only resolve codex CLI backend for auto-fallback when the user has
+  // explicitly configured it.  resolveCliBackendConfig() always returns
+  // non-null for "codex-cli" because it merges with a built-in default,
+  // so without this guard we'd attempt to spawn the `codex` binary on
+  // every system — even when it isn't installed.
+  const codexCliBackend = hasExplicitCliBackend("codex-cli", params.followupRun.run.config)
+    ? resolveCliBackendConfig("codex-cli", params.followupRun.run.config)
+    : null;
+  const modelApiByRef = new Map<string, string | undefined>();
+  const resolveModelApi = (provider: string, model: string): string | undefined => {
+    const key = `${provider}\0${model}`;
+    if (modelApiByRef.has(key)) {
+      return modelApiByRef.get(key);
+    }
+    let resolvedApi: string | undefined;
+    try {
+      const resolved = resolveModel(
+        provider,
+        model,
+        params.followupRun.run.agentDir,
+        params.followupRun.run.config,
+      );
+      resolvedApi = resolved.model?.api;
+    } catch {
+      resolvedApi = undefined;
+    }
+    modelApiByRef.set(key, resolvedApi);
+    return resolvedApi;
+  };
 
   while (true) {
     try {
@@ -186,7 +217,7 @@ export async function runAgentTurnWithFallback(params: {
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
-        run: (provider, model) => {
+        run: async (provider, model) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
           params.opts?.onModelSelected?.({
@@ -195,20 +226,34 @@ export async function runAgentTurnWithFallback(params: {
             thinkLevel: params.followupRun.run.thinkLevel,
           });
 
-          if (isCliProvider(provider, params.followupRun.run.config)) {
+          // Detect codex-responses models and auto-fallback to CLI backend
+          // when available. Codex embedded runner silently ignores tool calls.
+          // See: https://github.com/openclaw/openclaw/issues/33587
+          let cliProvider = isCliProvider(provider, params.followupRun.run.config)
+            ? provider
+            : undefined;
+          let isCodexAutoFallback = false;
+          if (!cliProvider && codexCliBackend) {
+            const modelApi = resolveModelApi(provider, model);
+            if (modelApi === "openai-codex-responses") {
+              defaultRuntime.log(
+                "Codex model detected, routing through CLI backend for tool support",
+              );
+              cliProvider = codexCliBackend.id;
+              isCodexAutoFallback = true;
+            }
+          }
+
+          if (cliProvider) {
             const startedAt = Date.now();
-            notifyAgentRunStart();
-            emitAgentEvent({
-              runId,
-              stream: "lifecycle",
-              data: {
-                phase: "start",
-                startedAt,
-              },
-            });
-            const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
-            return (async () => {
-              let lifecycleTerminalEmitted = false;
+            const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), cliProvider);
+
+            if (isCodexAutoFallback) {
+              // Auto-fallback: speculatively try the CLI backend without
+              // emitting lifecycle events. If the CLI succeeds we emit a
+              // single start/end pair after the fact. If it fails we log
+              // the degradation and fall through to the embedded runner,
+              // which manages its own lifecycle — no orphaned events.
               try {
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
@@ -218,7 +263,7 @@ export async function runAgentTurnWithFallback(params: {
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: params.followupRun.run.config,
                   prompt: params.commandBody,
-                  provider,
+                  provider: cliProvider,
                   model,
                   thinkLevel: params.followupRun.run.thinkLevel,
                   timeoutMs: params.followupRun.run.timeoutMs,
@@ -237,9 +282,20 @@ export async function runAgentTurnWithFallback(params: {
                   result.meta?.systemPromptReport,
                 );
 
-                // CLI backends don't emit streaming assistant events, so we need to
-                // emit one with the final text so server-chat can populate its buffer
-                // and send the response to TUI/WebSocket clients.
+                // CLI succeeded — emit lifecycle events retroactively.
+                // NOTE: notifyAgentRunStart and lifecycle:start are emitted after the
+                // CLI has already completed. This is an intentional trade-off of the
+                // speculative approach: we avoid orphaned lifecycle events on failure
+                // at the cost of downstream consumers (timers, UI spinners) having no
+                // window where the run is observable as "in progress". The startedAt
+                // timestamp is accurate; only the event delivery is retroactive.
+                notifyAgentRunStart();
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: { phase: "start", startedAt },
+                });
+
                 const cliText = result.payloads?.[0]?.text?.trim();
                 if (cliText) {
                   emitAgentEvent({
@@ -252,14 +308,69 @@ export async function runAgentTurnWithFallback(params: {
                 emitAgentEvent({
                   runId,
                   stream: "lifecycle",
-                  data: {
-                    phase: "end",
-                    startedAt,
-                    endedAt: Date.now(),
-                  },
+                  data: { phase: "end", startedAt, endedAt: Date.now() },
                 });
-                lifecycleTerminalEmitted = true;
+                return result;
+              } catch (err) {
+                // CLI failed — log degradation and fall through to embedded
+                // runner. No lifecycle events emitted for the CLI attempt,
+                // so the event stream stays clean for the embedded runner.
+                defaultRuntime.error(
+                  `Codex CLI failed, falling back to embedded runner WITHOUT tool support. ` +
+                    `User will receive text-only output. Error: ${String(err)}`,
+                );
+              }
+            } else {
+              // Explicit CLI backend: lifecycle events are committed upfront
+              // because failure is terminal (no fallback).
+              notifyAgentRunStart();
+              emitAgentEvent({
+                runId,
+                stream: "lifecycle",
+                data: { phase: "start", startedAt },
+              });
+              try {
+                const result = await runCliAgent({
+                  sessionId: params.followupRun.run.sessionId,
+                  sessionKey: params.sessionKey,
+                  agentId: params.followupRun.run.agentId,
+                  sessionFile: params.followupRun.run.sessionFile,
+                  workspaceDir: params.followupRun.run.workspaceDir,
+                  config: params.followupRun.run.config,
+                  prompt: params.commandBody,
+                  provider: cliProvider,
+                  model,
+                  thinkLevel: params.followupRun.run.thinkLevel,
+                  timeoutMs: params.followupRun.run.timeoutMs,
+                  runId,
+                  extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                  ownerNumbers: params.followupRun.run.ownerNumbers,
+                  cliSessionId,
+                  bootstrapPromptWarningSignaturesSeen,
+                  bootstrapPromptWarningSignature:
+                    bootstrapPromptWarningSignaturesSeen[
+                      bootstrapPromptWarningSignaturesSeen.length - 1
+                    ],
+                  images: params.opts?.images,
+                });
+                bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                  result.meta?.systemPromptReport,
+                );
 
+                const cliText = result.payloads?.[0]?.text?.trim();
+                if (cliText) {
+                  emitAgentEvent({
+                    runId,
+                    stream: "assistant",
+                    data: { text: cliText },
+                  });
+                }
+
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: { phase: "end", startedAt, endedAt: Date.now() },
+                });
                 return result;
               } catch (err) {
                 emitAgentEvent({
@@ -272,25 +383,9 @@ export async function runAgentTurnWithFallback(params: {
                     error: String(err),
                   },
                 });
-                lifecycleTerminalEmitted = true;
                 throw err;
-              } finally {
-                // Defensive backstop: never let a CLI run complete without a terminal
-                // lifecycle event, otherwise downstream consumers can hang.
-                if (!lifecycleTerminalEmitted) {
-                  emitAgentEvent({
-                    runId,
-                    stream: "lifecycle",
-                    data: {
-                      phase: "error",
-                      startedAt,
-                      endedAt: Date.now(),
-                      error: "CLI run completed without lifecycle terminal event",
-                    },
-                  });
-                }
               }
-            })();
+            }
           }
           const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
             run: params.followupRun.run,
@@ -305,151 +400,147 @@ export async function runAgentTurnWithFallback(params: {
             runId,
             authProfile,
           });
-          return (async () => {
-            const result = await runEmbeddedPiAgent({
-              ...embeddedContext,
-              trigger: params.isHeartbeat ? "heartbeat" : "user",
-              groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
-              groupChannel:
-                params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
-              groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
-              ...senderContext,
-              ...runBaseParams,
-              prompt: params.commandBody,
-              extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-              toolResultFormat: (() => {
-                const channel = resolveMessageChannel(
-                  params.sessionCtx.Surface,
-                  params.sessionCtx.Provider,
-                );
-                if (!channel) {
-                  return "markdown";
-                }
-                return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
-              })(),
-              suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
-              bootstrapContextMode: params.opts?.bootstrapContextMode,
-              bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
-              images: params.opts?.images,
-              abortSignal: params.opts?.abortSignal,
-              blockReplyBreak: params.resolvedBlockStreamingBreak,
-              blockReplyChunking: params.blockReplyChunking,
-              onPartialReply: async (payload) => {
-                const textForTyping = await handlePartialForTyping(payload);
-                if (!params.opts?.onPartialReply || textForTyping === undefined) {
-                  return;
-                }
-                await params.opts.onPartialReply({
-                  text: textForTyping,
-                  mediaUrls: payload.mediaUrls,
-                });
-              },
-              onAssistantMessageStart: async () => {
-                await params.typingSignals.signalMessageStart();
-                await params.opts?.onAssistantMessageStart?.();
-              },
-              onReasoningStream:
-                params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
-                  ? async (payload) => {
-                      await params.typingSignals.signalReasoningDelta();
-                      await params.opts?.onReasoningStream?.({
-                        text: payload.text,
-                        mediaUrls: payload.mediaUrls,
-                      });
-                    }
-                  : undefined,
-              onReasoningEnd: params.opts?.onReasoningEnd,
-              onAgentEvent: async (evt) => {
-                // Signal run start only after the embedded agent emits real activity.
-                const hasLifecyclePhase =
-                  evt.stream === "lifecycle" && typeof evt.data.phase === "string";
-                if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
-                  notifyAgentRunStart();
-                }
-                // Trigger typing when tools start executing.
-                // Must await to ensure typing indicator starts before tool summaries are emitted.
-                if (evt.stream === "tool") {
-                  const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                  const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
-                  if (phase === "start" || phase === "update") {
-                    await params.typingSignals.signalToolStart();
-                    await params.opts?.onToolStart?.({ name, phase });
+          const result = await runEmbeddedPiAgent({
+            ...embeddedContext,
+            trigger: params.isHeartbeat ? "heartbeat" : "user",
+            groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
+            groupChannel:
+              params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
+            groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
+            ...senderContext,
+            ...runBaseParams,
+            prompt: params.commandBody,
+            extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+            toolResultFormat: (() => {
+              const channel = resolveMessageChannel(
+                params.sessionCtx.Surface,
+                params.sessionCtx.Provider,
+              );
+              if (!channel) {
+                return "markdown";
+              }
+              return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
+            })(),
+            suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
+            bootstrapContextMode: params.opts?.bootstrapContextMode,
+            bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
+            images: params.opts?.images,
+            abortSignal: params.opts?.abortSignal,
+            blockReplyBreak: params.resolvedBlockStreamingBreak,
+            blockReplyChunking: params.blockReplyChunking,
+            onPartialReply: async (payload) => {
+              const textForTyping = await handlePartialForTyping(payload);
+              if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                return;
+              }
+              await params.opts.onPartialReply({
+                text: textForTyping,
+                mediaUrls: payload.mediaUrls,
+              });
+            },
+            onAssistantMessageStart: async () => {
+              await params.typingSignals.signalMessageStart();
+              await params.opts?.onAssistantMessageStart?.();
+            },
+            onReasoningStream:
+              params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
+                ? async (payload) => {
+                    await params.typingSignals.signalReasoningDelta();
+                    await params.opts?.onReasoningStream?.({
+                      text: payload.text,
+                      mediaUrls: payload.mediaUrls,
+                    });
                   }
-                }
-                // Track auto-compaction completion
-                if (evt.stream === "compaction") {
-                  const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                  if (phase === "end") {
-                    autoCompactionCompleted = true;
-                  }
-                }
-              },
-              // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
-              // even when regular block streaming is disabled. The handler sends directly
-              // via opts.onBlockReply when the pipeline isn't available.
-              onBlockReply: params.opts?.onBlockReply
-                ? createBlockReplyDeliveryHandler({
-                    onBlockReply: params.opts.onBlockReply,
-                    currentMessageId:
-                      params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
-                    normalizeStreamingText,
-                    applyReplyToMode: params.applyReplyToMode,
-                    typingSignals: params.typingSignals,
-                    blockStreamingEnabled: params.blockStreamingEnabled,
-                    blockReplyPipeline,
-                    directlySentBlockKeys,
-                  })
                 : undefined,
-              onBlockReplyFlush:
-                params.blockStreamingEnabled && blockReplyPipeline
-                  ? async () => {
-                      await blockReplyPipeline.flush({ force: true });
-                    }
-                  : undefined,
-              shouldEmitToolResult: params.shouldEmitToolResult,
-              shouldEmitToolOutput: params.shouldEmitToolOutput,
-              bootstrapPromptWarningSignaturesSeen,
-              bootstrapPromptWarningSignature:
-                bootstrapPromptWarningSignaturesSeen[
-                  bootstrapPromptWarningSignaturesSeen.length - 1
-                ],
-              onToolResult: onToolResult
-                ? (() => {
-                    // Serialize tool result delivery to preserve message ordering.
-                    // Without this, concurrent tool callbacks race through typing signals
-                    // and message sends, causing out-of-order delivery to the user.
-                    // See: https://github.com/openclaw/openclaw/issues/11044
-                    let toolResultChain: Promise<void> = Promise.resolve();
-                    return (payload: ReplyPayload) => {
-                      toolResultChain = toolResultChain
-                        .then(async () => {
-                          const { text, skip } = normalizeStreamingText(payload);
-                          if (skip) {
-                            return;
-                          }
-                          await params.typingSignals.signalTextDelta(text);
-                          await onToolResult({
-                            text,
-                            mediaUrls: payload.mediaUrls,
-                          });
-                        })
-                        .catch((err) => {
-                          // Keep chain healthy after an error so later tool results still deliver.
-                          logVerbose(`tool result delivery failed: ${String(err)}`);
+            onReasoningEnd: params.opts?.onReasoningEnd,
+            onAgentEvent: async (evt) => {
+              // Signal run start only after the embedded agent emits real activity.
+              const hasLifecyclePhase =
+                evt.stream === "lifecycle" && typeof evt.data.phase === "string";
+              if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
+                notifyAgentRunStart();
+              }
+              // Trigger typing when tools start executing.
+              // Must await to ensure typing indicator starts before tool summaries are emitted.
+              if (evt.stream === "tool") {
+                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
+                if (phase === "start" || phase === "update") {
+                  await params.typingSignals.signalToolStart();
+                  await params.opts?.onToolStart?.({ name, phase });
+                }
+              }
+              // Track auto-compaction completion
+              if (evt.stream === "compaction") {
+                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                if (phase === "end") {
+                  autoCompactionCompleted = true;
+                }
+              }
+            },
+            // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
+            // even when regular block streaming is disabled. The handler sends directly
+            // via opts.onBlockReply when the pipeline isn't available.
+            onBlockReply: params.opts?.onBlockReply
+              ? createBlockReplyDeliveryHandler({
+                  onBlockReply: params.opts.onBlockReply,
+                  currentMessageId:
+                    params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+                  normalizeStreamingText,
+                  applyReplyToMode: params.applyReplyToMode,
+                  typingSignals: params.typingSignals,
+                  blockStreamingEnabled: params.blockStreamingEnabled,
+                  blockReplyPipeline,
+                  directlySentBlockKeys,
+                })
+              : undefined,
+            onBlockReplyFlush:
+              params.blockStreamingEnabled && blockReplyPipeline
+                ? async () => {
+                    await blockReplyPipeline.flush({ force: true });
+                  }
+                : undefined,
+            shouldEmitToolResult: params.shouldEmitToolResult,
+            shouldEmitToolOutput: params.shouldEmitToolOutput,
+            bootstrapPromptWarningSignaturesSeen,
+            bootstrapPromptWarningSignature:
+              bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+            onToolResult: onToolResult
+              ? (() => {
+                  // Serialize tool result delivery to preserve message ordering.
+                  // Without this, concurrent tool callbacks race through typing signals
+                  // and message sends, causing out-of-order delivery to the user.
+                  // See: https://github.com/openclaw/openclaw/issues/11044
+                  let toolResultChain: Promise<void> = Promise.resolve();
+                  return (payload: ReplyPayload) => {
+                    toolResultChain = toolResultChain
+                      .then(async () => {
+                        const { text, skip } = normalizeStreamingText(payload);
+                        if (skip) {
+                          return;
+                        }
+                        await params.typingSignals.signalTextDelta(text);
+                        await onToolResult({
+                          text,
+                          mediaUrls: payload.mediaUrls,
                         });
-                      const task = toolResultChain.finally(() => {
-                        params.pendingToolTasks.delete(task);
+                      })
+                      .catch((err) => {
+                        // Keep chain healthy after an error so later tool results still deliver.
+                        logVerbose(`tool result delivery failed: ${String(err)}`);
                       });
-                      params.pendingToolTasks.add(task);
-                    };
-                  })()
-                : undefined,
-            });
-            bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-              result.meta?.systemPromptReport,
-            );
-            return result;
-          })();
+                    const task = toolResultChain.finally(() => {
+                      params.pendingToolTasks.delete(task);
+                    });
+                    params.pendingToolTasks.add(task);
+                  };
+                })()
+              : undefined,
+          });
+          bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+            result.meta?.systemPromptReport,
+          );
+          return result;
         },
       });
       runResult = fallbackResult.result;

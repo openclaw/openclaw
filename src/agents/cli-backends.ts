@@ -206,6 +206,19 @@ export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
   return ids;
 }
 
+/**
+ * Returns true when the user has explicitly configured a CLI backend entry
+ * for the given provider (e.g. "codex-cli") in their config file, as opposed
+ * to relying on the built-in defaults.  This is used to guard auto-fallback
+ * logic: we should not silently spawn a CLI binary that the user never asked
+ * for.
+ */
+export function hasExplicitCliBackend(provider: string, cfg?: OpenClawConfig): boolean {
+  const normalized = normalizeBackendKey(provider);
+  const configured = cfg?.agents?.defaults?.cliBackends ?? {};
+  return Object.keys(configured).some((key) => normalizeBackendKey(key) === normalized);
+}
+
 export function resolveCliBackendConfig(
   provider: string,
   cfg?: OpenClawConfig,
