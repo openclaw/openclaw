@@ -78,6 +78,7 @@ describe("imap-watcher", () => {
       account: "override-account",
       includeBody: false,
       markSeen: false,
+      allowedSenders: ["sender@example.com"],
     });
     expect(result).toEqual({ started: true });
 
@@ -143,6 +144,7 @@ describe("imap-watcher", () => {
       includeBody: false,
       markSeen: false,
       pollIntervalSeconds: 3600,
+      allowedSenders: ["sender@example.com"],
     });
     expect(result).toEqual({ started: true });
 
@@ -158,5 +160,69 @@ describe("imap-watcher", () => {
 
     const fetchMock = vi.mocked(fetch);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects display name spoofing against allowed sender", async () => {
+    vi.mocked(listEnvelopes).mockResolvedValue([
+      {
+        id: "id-1",
+        from: "owner@example.com <attacker@evil.com>",
+        subject: "suspicious",
+        date: "2026-03-03T00:00:00.000Z",
+        flags: [],
+      },
+    ]);
+
+    const cfg: OpenClawConfig = {
+      hooks: {
+        enabled: true,
+        token: "hook-token",
+        imap: {},
+      },
+    };
+
+    const result = await startImapWatcher(cfg, {
+      account: "override-account",
+      includeBody: false,
+      markSeen: false,
+      allowedSenders: ["owner@example.com"],
+    });
+    expect(result).toEqual({ started: true });
+
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it("accepts allowed sender when angle address matches", async () => {
+    vi.mocked(listEnvelopes).mockResolvedValue([
+      {
+        id: "id-1",
+        from: "Owner <owner@example.com>",
+        subject: "trusted",
+        date: "2026-03-03T00:00:00.000Z",
+        flags: [],
+      },
+    ]);
+
+    const cfg: OpenClawConfig = {
+      hooks: {
+        enabled: true,
+        token: "hook-token",
+        imap: {},
+      },
+    };
+
+    const result = await startImapWatcher(cfg, {
+      account: "override-account",
+      includeBody: false,
+      markSeen: false,
+      allowedSenders: ["owner@example.com"],
+    });
+    expect(result).toEqual({ started: true });
+
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
 });

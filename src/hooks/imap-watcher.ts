@@ -447,37 +447,26 @@ function isAllowedSender(from: string, allowedSenders: string[]): boolean {
   if (!normalizedFrom) {
     return false;
   }
-  const candidates = extractSenderEmails(normalizedFrom);
-  const allowed =
-    candidates.length > 0
-      ? candidates.some((candidate) => normalizedAllowed.includes(candidate))
-      : normalizedAllowed.some((candidate) => matchesAllowedSender(normalizedFrom, candidate));
+  const senderAddress = extractSenderAddress(normalizedFrom);
+  const allowed = senderAddress ? normalizedAllowed.includes(senderAddress) : false;
   log.debug(
-    `allowlist check: from="${from}" normalized="${normalizedFrom}" candidates=${candidates.join(
-      ",",
-    )} allowed=${normalizedAllowed.join(",")} result=${allowed}`,
+    `allowlist check: from="${from}" normalized="${normalizedFrom}" sender=${senderAddress ?? ""} allowed=${normalizedAllowed.join(",")} result=${allowed}`,
   );
   return allowed;
 }
 
-function extractSenderEmails(from: string): string[] {
-  const matches = from.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi) ?? [];
+function extractSenderAddress(from: string): string | null {
+  const emailPattern = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i;
+  const bracketMatch = from.match(/<([^<>]+)>/);
+  if (bracketMatch?.[1]) {
+    const bracketEmail = bracketMatch[1].match(emailPattern)?.[0];
+    return bracketEmail ? bracketEmail.toLowerCase().trim() : null;
+  }
+  const matches = from.match(new RegExp(emailPattern.source, "gi")) ?? [];
   const normalized = matches.map((value) => value.toLowerCase().trim()).filter(Boolean);
-  return Array.from(new Set(normalized));
-}
-
-function matchesAllowedSender(from: string, allowed: string): boolean {
-  if (!allowed) {
-    return false;
+  const unique = Array.from(new Set(normalized));
+  if (unique.length === 1 && from === unique[0]) {
+    return unique[0];
   }
-  if (from === allowed) {
-    return true;
-  }
-  if (from.includes(`<${allowed}>`)) {
-    return true;
-  }
-  if (from.startsWith(`${allowed} `)) {
-    return true;
-  }
-  return false;
+  return null;
 }
