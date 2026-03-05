@@ -46,6 +46,54 @@ function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   );
 }
 
+function hasAllowAlsoAllowConflict(policy: unknown): boolean {
+  if (!isRecord(policy)) {
+    return false;
+  }
+  const allow = Array.isArray(policy.allow) ? policy.allow : [];
+  const alsoAllow = Array.isArray(policy.alsoAllow) ? policy.alsoAllow : [];
+  return allow.length > 0 && alsoAllow.length > 0;
+}
+
+function hasAnyToolsAllowAlsoAllowConflict(toolsValue: unknown): boolean {
+  if (!isRecord(toolsValue)) {
+    return false;
+  }
+  if (hasAllowAlsoAllowConflict(toolsValue)) {
+    return true;
+  }
+  const byProvider = toolsValue.byProvider;
+  if (isRecord(byProvider)) {
+    for (const policy of Object.values(byProvider)) {
+      if (hasAllowAlsoAllowConflict(policy)) {
+        return true;
+      }
+    }
+  }
+  const sandboxTools = isRecord(toolsValue.sandbox) ? toolsValue.sandbox.tools : undefined;
+  if (hasAllowAlsoAllowConflict(sandboxTools)) {
+    return true;
+  }
+  const subagentsTools = isRecord(toolsValue.subagents) ? toolsValue.subagents.tools : undefined;
+  return hasAllowAlsoAllowConflict(subagentsTools);
+}
+
+function hasAnyAgentToolsAllowAlsoAllowConflict(agentsValue: unknown): boolean {
+  if (!isRecord(agentsValue)) {
+    return false;
+  }
+  const list = agentsValue.list;
+  if (!Array.isArray(list)) {
+    return false;
+  }
+  return list.some((entry) => {
+    if (!isRecord(entry)) {
+      return false;
+    }
+    return hasAnyToolsAllowAlsoAllowConflict(entry.tools);
+  });
+}
+
 export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["whatsapp"],
@@ -157,6 +205,18 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["tools", "bash"],
     message: "tools.bash was removed; use tools.exec instead (auto-migrated on load).",
+  },
+  {
+    path: ["tools"],
+    message:
+      "tools.allow + tools.alsoAllow in the same scope is legacy-invalid; they are auto-merged into tools.allow on load.",
+    match: (value) => hasAnyToolsAllowAlsoAllowConflict(value),
+  },
+  {
+    path: ["agents"],
+    message:
+      "agents.list[].tools.allow + alsoAllow in the same scope is legacy-invalid; they are auto-merged into allow on load.",
+    match: (value) => hasAnyAgentToolsAllowAlsoAllowConflict(value),
   },
   {
     path: ["agent", "model"],

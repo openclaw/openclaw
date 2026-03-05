@@ -36,6 +36,31 @@ describe("legacy config detection", () => {
     }
   });
 
+  it("flags tools allow+alsoAllow conflicts as legacy for auto-migration", async () => {
+    const topLevel = validateConfigObject({
+      tools: { allow: ["sessions_list"], alsoAllow: ["browser"] },
+    });
+    expect(topLevel.ok).toBe(false);
+    if (!topLevel.ok) {
+      expect(topLevel.issues.some((issue) => issue.path === "tools")).toBe(true);
+    }
+
+    const perAgent = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: { allow: ["sessions_list"], alsoAllow: ["browser"] },
+          },
+        ],
+      },
+    });
+    expect(perAgent.ok).toBe(false);
+    if (!perAgent.ok) {
+      expect(perAgent.issues.some((issue) => issue.path === "agents")).toBe(true);
+    }
+  });
+
   it("migrates or drops routing.allowFrom based on whatsapp configuration", async () => {
     const cases = [
       {
@@ -293,6 +318,48 @@ describe("legacy config detection", () => {
     expect(res.changes).toContain("Moved tools.bash → tools.exec.");
     expect(res.config?.tools?.exec).toEqual({ timeoutSec: 12 });
     expect((res.config?.tools as { bash?: unknown } | undefined)?.bash).toBeUndefined();
+  });
+  it("migrates legacy tools allow+alsoAllow conflicts into allow only", async () => {
+    const res = migrateLegacyConfig({
+      tools: {
+        allow: ["sessions_spawn"],
+        alsoAllow: ["agents_list", "sessions_spawn"],
+        byProvider: {
+          openai: {
+            allow: ["session_status"],
+            alsoAllow: ["browser"],
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              allow: ["sessions_list"],
+              alsoAllow: ["browser", "sessions_list"],
+            },
+          },
+        ],
+      },
+    });
+    expect(res.changes).toContain(
+      "Merged tools.alsoAllow into tools.allow (legacy conflict repair).",
+    );
+    expect(res.changes).toContain(
+      "Merged tools.byProvider.openai.alsoAllow into tools.byProvider.openai.allow (legacy conflict repair).",
+    );
+    expect(res.changes).toContain(
+      "Merged agents.list[main].tools.alsoAllow into agents.list[main].tools.allow (legacy conflict repair).",
+    );
+    expect(res.config?.tools?.allow).toEqual(["sessions_spawn", "agents_list"]);
+    expect(res.config?.tools?.alsoAllow).toBeUndefined();
+    expect(res.config?.tools?.byProvider?.openai?.allow).toEqual(["session_status", "browser"]);
+    expect(res.config?.tools?.byProvider?.openai?.alsoAllow).toBeUndefined();
+    expect(res.config?.agents?.list?.[0]?.tools?.allow).toEqual(["sessions_list", "browser"]);
+    expect(res.config?.agents?.list?.[0]?.tools?.alsoAllow).toBeUndefined();
+    const validated = validateConfigObject(res.config);
+    expect(validated.ok).toBe(true);
   });
   it("accepts per-agent tools.elevated overrides", async () => {
     const res = validateConfigObject({

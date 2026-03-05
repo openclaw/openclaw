@@ -42,8 +42,8 @@ export function renderAgentTools(params: {
       : "default";
   const hasAgentAllow = Array.isArray(agentTools.allow) && agentTools.allow.length > 0;
   const hasGlobalAllow = Array.isArray(globalTools.allow) && globalTools.allow.length > 0;
-  const editable =
-    Boolean(params.configForm) && !params.configLoading && !params.configSaving && !hasAgentAllow;
+  const baseEditable = Boolean(params.configForm) && !params.configLoading && !params.configSaving;
+  const editable = baseEditable && !hasAgentAllow;
   const alsoAllow = hasAgentAllow
     ? []
     : Array.isArray(agentTools.alsoAllow)
@@ -174,7 +174,8 @@ export function renderAgentTools(params: {
         hasAgentAllow
           ? html`
               <div class="callout info" style="margin-top: 12px">
-                This agent is using an explicit allowlist in config. Tool overrides are managed in the Config tab.
+                This agent is using an explicit allowlist in config. Pick a preset to migrate to profile mode,
+                then customize per-tool toggles.
               </div>
             `
           : nothing
@@ -217,7 +218,7 @@ export function renderAgentTools(params: {
             (option) => html`
               <button
                 class="btn btn--sm ${profile === option.id ? "active" : ""}"
-                ?disabled=${!editable}
+                ?disabled=${!baseEditable}
                 @click=${() => params.onProfileChange(params.agentId, option.id, true)}
               >
                 ${option.label}
@@ -226,8 +227,8 @@ export function renderAgentTools(params: {
           )}
           <button
             class="btn btn--sm"
-            ?disabled=${!editable}
-            @click=${() => params.onProfileChange(params.agentId, null, false)}
+            ?disabled=${!baseEditable}
+            @click=${() => params.onProfileChange(params.agentId, null, hasAgentAllow)}
           >
             Inherit
           </button>

@@ -35,7 +35,9 @@ describe("config: tools.alsoAllow", () => {
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((i) => i.path.includes("agents.list"))).toBe(true);
+      expect(res.issues.some((i) => i.path === "agents" || i.path.includes("agents.list"))).toBe(
+        true,
+      );
     }
   });
 

@@ -35,6 +35,64 @@ const AGENT_HEARTBEAT_KEYS = new Set([
 
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
 
+function mergeAllowAndAlsoAllowPolicy(
+  policy: Record<string, unknown> | null,
+  scope: string,
+  changes: string[],
+): void {
+  if (!policy) {
+    return;
+  }
+  const allow = Array.isArray(policy.allow) ? policy.allow : [];
+  const alsoAllow = Array.isArray(policy.alsoAllow) ? policy.alsoAllow : [];
+  if (allow.length === 0 || alsoAllow.length === 0) {
+    return;
+  }
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of [...allow, ...alsoAllow]) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    if (seen.has(entry)) {
+      continue;
+    }
+    seen.add(entry);
+    merged.push(entry);
+  }
+  policy.allow = merged;
+  delete policy.alsoAllow;
+  changes.push(`Merged ${scope}.alsoAllow into ${scope}.allow (legacy conflict repair).`);
+}
+
+function normalizeToolPolicyAllowAlsoAllowConflicts(
+  tools: Record<string, unknown> | null,
+  scope: string,
+  changes: string[],
+): void {
+  if (!tools) {
+    return;
+  }
+  mergeAllowAndAlsoAllowPolicy(tools, scope, changes);
+  const byProvider = getRecord(tools.byProvider);
+  if (byProvider) {
+    for (const [providerKey, policyRaw] of Object.entries(byProvider)) {
+      if (isBlockedObjectKey(providerKey)) {
+        continue;
+      }
+      mergeAllowAndAlsoAllowPolicy(
+        getRecord(policyRaw),
+        `${scope}.byProvider.${providerKey}`,
+        changes,
+      );
+    }
+  }
+  const sandboxTools = getRecord(getRecord(tools.sandbox)?.tools);
+  mergeAllowAndAlsoAllowPolicy(sandboxTools, `${scope}.sandbox.tools`, changes);
+  const subagentsTools = getRecord(getRecord(tools.subagents)?.tools);
+  mergeAllowAndAlsoAllowPolicy(subagentsTools, `${scope}.subagents.tools`, changes);
+}
+
 function splitLegacyHeartbeat(legacyHeartbeat: Record<string, unknown>): {
   agentHeartbeat: Record<string, unknown> | null;
   channelHeartbeat: Record<string, unknown> | null;
@@ -97,6 +155,27 @@ function mergeLegacyIntoDefaults(params: {
 // tools.alsoAllow legacy migration intentionally omitted (field not shipped in prod).
 
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
+  {
+    id: "tools.allow+alsoAllow-conflict-repair",
+    describe: "Merge tools.alsoAllow into tools.allow when both are set",
+    apply: (raw, changes) => {
+      normalizeToolPolicyAllowAlsoAllowConflicts(getRecord(raw.tools), "tools", changes);
+      const list = getAgentsList(getRecord(raw.agents));
+      for (const entry of list) {
+        const agent = getRecord(entry);
+        if (!agent) {
+          continue;
+        }
+        const agentId =
+          typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : "unknown";
+        normalizeToolPolicyAllowAlsoAllowConflicts(
+          getRecord(agent.tools),
+          `agents.list[${agentId}].tools`,
+          changes,
+        );
+      }
+    },
+  },
   {
     // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
     // host-header fallback flag) for any non-loopback bind. The onboarding wizard was updated

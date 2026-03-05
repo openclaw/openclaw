@@ -1,5 +1,5 @@
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderAgentTools } from "./agents-panels-tools-skills.ts";
 
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
@@ -98,5 +98,32 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     expect(container.textContent ?? "").toContain("Could not load runtime tool catalog");
+  });
+
+  it("keeps profile presets enabled for allowlist-to-profile migration", async () => {
+    const onProfileChange = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderAgentTools(
+        createBaseParams({
+          configForm: {
+            agents: {
+              list: [{ id: "main", tools: { allow: ["exec"] } }],
+            },
+          } as Record<string, unknown>,
+          onProfileChange,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const fullButton = buttons.find((button) => button.textContent?.trim() === "Full");
+    expect(fullButton).toBeDefined();
+    expect(fullButton?.disabled).toBe(false);
+    fullButton?.click();
+
+    expect(onProfileChange).toHaveBeenCalledWith("main", "full", true);
   });
 });
