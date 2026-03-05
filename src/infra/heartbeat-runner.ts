@@ -715,7 +715,12 @@ export async function runHeartbeatOnce(opts: {
     visibility.showOk && delivery.channel !== "none" && delivery.to,
   );
   const maybeSendHeartbeatOk = async () => {
-    if (!canAttemptHeartbeatOk || delivery.channel === "none" || !delivery.to) {
+    if (
+      !canAttemptHeartbeatOk ||
+      delivery.channel === "none" ||
+      !delivery.to ||
+      isPlaceholderTarget
+    ) {
       return false;
     }
     const heartbeatPlugin = getChannelPlugin(delivery.channel);
