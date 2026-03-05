@@ -143,17 +143,27 @@ function collectText(value: unknown): string {
   if (!isRecord(value)) {
     return "";
   }
-  if (typeof value.text === "string") {
-    return value.text;
+
+  // Prefer structured content/message blocks over a flat `text` field.
+  // Claude CLI can surface multi-block assistant output in `content[]` while also
+  // including the final block in `text`; picking `text` first drops earlier blocks.
+  if (Array.isArray(value.content)) {
+    const contentText = value.content.map((entry) => collectText(entry)).join("");
+    if (contentText.trim()) {
+      return contentText;
+    }
   }
-  if (typeof value.content === "string") {
+  if (typeof value.content === "string" && value.content.trim()) {
     return value.content;
   }
-  if (Array.isArray(value.content)) {
-    return value.content.map((entry) => collectText(entry)).join("");
-  }
   if (isRecord(value.message)) {
-    return collectText(value.message);
+    const messageText = collectText(value.message);
+    if (messageText.trim()) {
+      return messageText;
+    }
+  }
+  if (typeof value.text === "string") {
+    return value.text;
   }
   return "";
 }
