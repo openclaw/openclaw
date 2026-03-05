@@ -53,17 +53,17 @@ export function applyInputProvenanceToUserMessage(
     return message;
   }
 
-  // Inter-session messages should be attributed to the assistant role.
+  if ((message as { role?: unknown }).role !== "user") {
+    return message;
+  }
+
+  // Inter-session user messages should be attributed to the assistant role.
   if (isInterSessionInputProvenance(inputProvenance)) {
     return {
       ...(message as unknown as Record<string, unknown>),
       role: "assistant",
       provenance: inputProvenance,
     } as unknown as AgentMessage;
-  }
-
-  if ((message as { role?: unknown }).role !== "user") {
-    return message;
   }
   const existing = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
   if (existing) {
