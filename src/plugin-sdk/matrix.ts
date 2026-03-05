@@ -108,3 +108,5 @@ export {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
 } from "./status-helpers.js";
+export { KeyedAsyncQueue } from "./keyed-async-queue.js";
+export type { KeyedAsyncQueueHooks } from "./keyed-async-queue.js";
