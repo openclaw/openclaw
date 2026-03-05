@@ -134,6 +134,13 @@ export type AgentDefaultsConfig = {
   workspace?: string;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
+  /**
+   * Path to a file whose contents are injected into the system prompt for every session.
+   * Absolute or relative to the config file. The agent cannot modify this file (it lives
+   * outside the agent workspace). Fails open: if the file is missing or unreadable, a
+   * warning is logged and injection is skipped.
+   */
+  systemPromptFile?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
