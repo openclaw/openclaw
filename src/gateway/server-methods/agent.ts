@@ -5,10 +5,12 @@ import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-rese
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
+  loadSessionStore,
   mergeSessionEntry,
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
   resolveAgentMainSessionKey,
+  resolveStorePath,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -18,7 +20,11 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
+import {
+  classifySessionKeyShape,
+  normalizeAgentId,
+  toAgentRequestSessionKey,
+} from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -477,7 +483,18 @@ export const agentHandlers: GatewayRequestHandlers = {
           bestEffortDeliver = true;
         }
       }
-      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+    }
+
+    if (!resolvedSessionKey && resolvedSessionId) {
+      const effectiveCfg = cfgForAgent ?? cfg;
+      const storePath = resolveStorePath(effectiveCfg.session?.store);
+      const store = loadSessionStore(storePath);
+      const foundStoreKey = Object.entries(store).find(
+        ([, entry]) => entry?.sessionId === resolvedSessionId,
+      )?.[0];
+      if (foundStoreKey) {
+        resolvedSessionKey = toAgentRequestSessionKey(foundStoreKey) ?? foundStoreKey;
+      }
     }
 
     const runId = idem;
@@ -602,6 +619,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         ),
       );
       return;
+    }
+
+    if (resolvedSessionKey) {
+      registerAgentRunContext(idem, { sessionKey: resolvedSessionKey });
     }
 
     const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);

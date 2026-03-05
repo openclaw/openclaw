@@ -55,6 +55,7 @@ vi.mock("../../config/config.js", async () => {
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
+  resolveAgentEffectiveModelPrimary: () => undefined,
 }));
 
 vi.mock("../../infra/agent-events.js", () => ({
