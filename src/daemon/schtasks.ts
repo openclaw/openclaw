@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { VERSION } from "../version.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
@@ -7,7 +8,6 @@ import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
-import { VERSION } from "../version.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -325,8 +325,8 @@ async function patchTaskScriptVersion(env: GatewayServiceEnv): Promise<void> {
     return;
   }
   const updated = content.replace(
-    /^(set OPENCLAW_SERVICE_VERSION=)[^\r\n]+$/im,
-    `$1${VERSION}`,
+    /^set "OPENCLAW_SERVICE_VERSION=[^\r\n"]*"$/im,
+    `set "OPENCLAW_SERVICE_VERSION=${VERSION}"`,
   );
   if (updated !== content) {
     await fs.writeFile(scriptPath, updated, "utf8");
