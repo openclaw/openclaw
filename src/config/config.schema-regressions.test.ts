@@ -116,6 +116,24 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.list params overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            params: {
+              cacheRetention: "short",
+              temperature: 0.2,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts pdf default model and limits", () => {
     const res = validateConfigObject({
       agents: {
