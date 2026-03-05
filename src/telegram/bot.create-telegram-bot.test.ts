@@ -813,6 +813,83 @@ describe("createTelegramBot", () => {
     expect(payload.SessionKey).toBe("agent:opie:main");
   });
 
+  it("routes to the bound agent by bot account in multi-account setups", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          accounts: {
+            "bot-a": {
+              botToken: "tok-a",
+              dmPolicy: "open",
+            },
+            "bot-b": {
+              botToken: "tok-b",
+              dmPolicy: "open",
+            },
+          },
+        },
+      },
+      bindings: [
+        {
+          agentId: "claw-a",
+          match: { channel: "telegram", accountId: "bot-a" },
+        },
+        {
+          agentId: "main",
+          match: { channel: "telegram", accountId: "bot-b" },
+        },
+      ],
+    });
+
+    createTelegramBot({ token: "tok-a", accountId: "bot-a" });
+    const handlerA = onSpy.mock.calls.findLast((call) => call[0] === "message")?.[1] as
+      | ((ctx: Record<string, unknown>) => Promise<void>)
+      | undefined;
+    if (!handlerA) {
+      throw new Error("missing handler for bot-a");
+    }
+
+    createTelegramBot({ token: "tok-b", accountId: "bot-b" });
+    const handlerB = onSpy.mock.calls.findLast((call) => call[0] === "message")?.[1] as
+      | ((ctx: Record<string, unknown>) => Promise<void>)
+      | undefined;
+    if (!handlerB) {
+      throw new Error("missing handler for bot-b");
+    }
+
+    await handlerA({
+      message: {
+        chat: { id: 123, type: "private" },
+        from: { id: 999, username: "same_sender" },
+        text: "to bot a",
+        date: 1736380800,
+        message_id: 51,
+      },
+      me: { username: "bot_a" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    await handlerB({
+      message: {
+        chat: { id: 123, type: "private" },
+        from: { id: 999, username: "same_sender" },
+        text: "to bot b",
+        date: 1736380801,
+        message_id: 52,
+      },
+      me: { username: "bot_b" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(2);
+    const firstPayload = replySpy.mock.calls[0]?.[0];
+    const secondPayload = replySpy.mock.calls[1]?.[0];
+    expect(firstPayload.AccountId).toBe("bot-a");
+    expect(firstPayload.SessionKey).toBe("agent:claw-a:main");
+    expect(secondPayload.AccountId).toBe("bot-b");
+    expect(secondPayload.SessionKey).toBe("agent:main:main");
+  });
+
   it("drops non-default account DMs without explicit bindings", async () => {
     loadConfig.mockReturnValue({
       channels: {
