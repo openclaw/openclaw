@@ -264,6 +264,10 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_SYSTEMD_UNIT: systemdUnit,
     OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
+    // Set OPENCLAW_VERSION to ensure runtime version takes precedence over
+    // OPENCLAW_SERVICE_VERSION from any existing service scripts.
+    // This fixes version display issues after npm global updates.
+    OPENCLAW_VERSION: VERSION,
     OPENCLAW_SERVICE_VERSION: VERSION,
   };
 }
@@ -287,6 +291,10 @@ export function buildNodeServiceEnvironment(params: {
     OPENCLAW_LOG_PREFIX: "node",
     OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: NODE_SERVICE_KIND,
+    // Set OPENCLAW_VERSION to ensure runtime version takes precedence over
+    // OPENCLAW_SERVICE_VERSION from any existing service scripts.
+    // This fixes version display issues after npm global updates.
+    OPENCLAW_VERSION: VERSION,
     OPENCLAW_SERVICE_VERSION: VERSION,
   };
 }
