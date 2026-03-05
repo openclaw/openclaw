@@ -9,6 +9,7 @@ import {
   TELEGRAM_COMMAND_NAME_PATTERN,
 } from "../config/telegram-custom-commands.js";
 import { logVerbose } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 
@@ -163,18 +164,17 @@ export function syncTelegramMenuCommands(params: {
 }): void {
   const { bot, runtime, commandsToRegister, accountId, botIdentity } = params;
   const sync = async () => {
-    // Skip sync if the command list hasn't changed since the last successful
-    // sync. This prevents hitting Telegram's 429 rate limit when the gateway
-    // is restarted several times in quick succession.
-    // See: openclaw/openclaw#32017
     const currentHash = hashCommandList(commandsToRegister);
     const cachedHash = await readCachedCommandHash(accountId, botIdentity);
-    if (cachedHash === currentHash) {
-      logVerbose("telegram: command menu unchanged; skipping sync");
-      return;
-    }
 
-    // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
+    // Always delete existing commands on gateway restart to prevent Telegram
+    // from accumulating duplicate commands with _2, _3 suffixes.
+    // Telegram's server-side state can drift from our local cache due to:
+    // - Multiple gateway processes/instances
+    // - Manual bot command changes via BotFather
+    // - Cache file corruption or deletion
+    // - Multiple agents sharing the same bot token
+    // See: openclaw/openclaw#35285
     let deleteSucceeded = true;
     if (typeof bot.api.deleteMyCommands === "function") {
       deleteSucceeded = await withTelegramApiErrorLogging({
@@ -182,8 +182,21 @@ export function syncTelegramMenuCommands(params: {
         runtime,
         fn: () => bot.api.deleteMyCommands(),
       })
-        .then(() => true)
-        .catch(() => false);
+        .then(() => {
+          logVerbose("telegram: deleted existing commands successfully");
+          return true;
+        })
+        .catch((deleteErr) => {
+          runtime.error?.(`Telegram deleteMyCommands failed: ${formatErrorMessage(deleteErr)}`);
+          return false;
+        });
+    }
+
+    // Skip registration if commands haven't changed AND delete succeeded.
+    // This avoids unnecessary API calls while ensuring we clean up stale commands.
+    if (deleteSucceeded && cachedHash === currentHash) {
+      logVerbose("telegram: command menu unchanged; skipping registration");
+      return;
     }
 
     if (commandsToRegister.length === 0) {

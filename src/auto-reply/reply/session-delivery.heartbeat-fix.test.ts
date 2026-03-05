@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { resolveLastChannelRaw, resolveLastToRaw } from "./session-delivery.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { resolveLastChannelRaw, resolveLastToRaw } from "./session-delivery.js";
 
 describe("session-delivery heartbeat fix (#35300)", () => {
   describe("resolveLastChannelRaw", () => {
