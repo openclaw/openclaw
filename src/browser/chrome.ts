@@ -267,7 +267,8 @@ export async function launchOpenClawChrome(
     }
 
     // Stealth: hide navigator.webdriver from automation detection (#80)
-    args.push("--disable-blink-features=AutomationControlled");
+    // NOTE: --disable-blink-features=AutomationControlled is removed as it's no longer
+    // supported in newer Chrome versions and causes a warning (#35721)
 
     // Append user-configured extra arguments (e.g., stealth flags, window size)
     if (resolved.extraArgs.length > 0) {
