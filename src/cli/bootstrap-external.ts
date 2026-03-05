@@ -411,6 +411,17 @@ async function installBundledPlugins(params: {
       errorMessage: "Failed to set plugins.allow for posthog-analytics.",
     });
 
+    await runOpenClawOrThrow({
+      openclawCommand: params.openclawCommand,
+      args: [
+        "--profile", params.profile,
+        "config", "set",
+        "plugins.load.paths", JSON.stringify([pluginDest]),
+      ],
+      timeoutMs: 30_000,
+      errorMessage: "Failed to set plugins.load.paths for posthog-analytics.",
+    });
+
     if (params.posthogKey) {
       await runOpenClawOrThrow({
         openclawCommand: params.openclawCommand,
