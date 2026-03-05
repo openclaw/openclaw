@@ -7,10 +7,15 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(),
   randomIdempotencyKey: () => "idem-1",
 }));
+vi.mock("../browser/control-service.js", () => ({
+  getBrowserControlState: vi.fn(() => null),
+  stopBrowserControlService: vi.fn(async () => undefined),
+}));
 vi.mock("./agent.js", () => ({
   agentCommand: vi.fn(),
 }));
 
+import { getBrowserControlState, stopBrowserControlService } from "../browser/control-service.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
@@ -136,6 +141,26 @@ describe("agentCliCommand", () => {
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("stops browser control after local runs when the run started it", async () => {
+    await withTempStore(async () => {
+      mockLocalAgentReply();
+      vi.mocked(getBrowserControlState)
+        .mockReturnValueOnce(null)
+        .mockReturnValueOnce({} as never);
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          to: "+1555",
+          local: true,
+        },
+        runtime,
+      );
+
+      expect(stopBrowserControlService).toHaveBeenCalledTimes(1);
     });
   });
 });
