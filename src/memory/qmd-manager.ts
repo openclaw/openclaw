@@ -595,7 +595,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     const message = err instanceof Error ? err.message : String(err);
     const lower = message.toLowerCase();
     return (
-      (lower.includes("enotdir") || lower.includes("not a directory")) &&
+      (lower.includes("enotdir") ||
+        lower.includes("not a directory") ||
+        lower.includes("enoent") ||
+        lower.includes("no such file")) &&
       NUL_MARKER_RE.test(message)
     );
   }
