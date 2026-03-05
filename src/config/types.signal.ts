@@ -1,5 +1,13 @@
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
 
+export type SignalGroupConfig = {
+  requireMention?: boolean;
+  skills?: string[];
+  enabled?: boolean;
+  allowFrom?: Array<string | number>;
+  systemPrompt?: string;
+};
+
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
 
@@ -43,6 +51,8 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
    * - "extensive": Agent can react liberally
    */
   reactionLevel?: SignalReactionLevel;
+  /** Per-group overrides keyed by group id (or "*" defaults). */
+  groups?: Record<string, SignalGroupConfig>;
 };
 
 export type SignalConfig = {
