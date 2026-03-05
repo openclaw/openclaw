@@ -107,6 +107,54 @@ describe("runCliAgent with process supervisor", () => {
     expect(input.scopeKey).toContain("thread-123");
   });
 
+  it("injects config.env vars into CLI runtime env", async () => {
+    const envKey = "OPENCLAW_TEST_TOOL_ENV_PROPAGATION";
+    const previous = process.env[envKey];
+    delete process.env[envKey];
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 30,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      await runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        prompt: "hi",
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-env-1",
+        config: {
+          env: {
+            vars: {
+              [envKey]: "from-config",
+            },
+          },
+        } satisfies OpenClawConfig,
+      });
+
+      const input = supervisorSpawnMock.mock.calls[0]?.[0] as { env?: Record<string, string> };
+      expect(input.env?.[envKey]).toBe("from-config");
+    } finally {
+      if (previous === undefined) {
+        delete process.env[envKey];
+      } else {
+        process.env[envKey] = previous;
+      }
+    }
+  });
+
   it("fails with timeout when no-output watchdog trips", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({

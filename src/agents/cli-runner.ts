@@ -2,6 +2,7 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { applyConfigEnvVars } from "../config/env-vars.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -87,6 +88,10 @@ export async function runCliAgent(params: {
     );
   }
   const workspaceDir = resolvedWorkspace;
+
+  if (params.config) {
+    applyConfigEnvVars(params.config);
+  }
 
   const backendResolved = resolveCliBackendConfig(params.provider, params.config);
   if (!backendResolved) {
