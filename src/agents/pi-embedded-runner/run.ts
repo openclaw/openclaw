@@ -206,6 +206,43 @@ function resolveActiveErrorContext(params: {
   };
 }
 
+/**
+ * Build agentMeta for error return paths, preserving accumulated usage so that
+ * session totalTokens reflects the actual context size rather than going stale.
+ * Without this, error returns omit usage and the session keeps whatever
+ * totalTokens was set by the previous successful run.
+ */
+function buildErrorAgentMeta(params: {
+  sessionId: string;
+  provider: string;
+  model: string;
+  usageAccumulator: UsageAccumulator;
+  lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
+  lastAssistant?: { usage?: unknown } | null;
+  /** API-reported total from the most recent call, mirroring the success path correction. */
+  lastTurnTotal?: number;
+}): EmbeddedPiAgentMeta {
+  const usage = toNormalizedUsage(params.usageAccumulator);
+  // Apply the same lastTurnTotal correction the success path uses so
+  // usage.total reflects the API-reported context size, not accumulated totals.
+  if (usage && params.lastTurnTotal && params.lastTurnTotal > 0) {
+    usage.total = params.lastTurnTotal;
+  }
+  const lastCallUsage = params.lastAssistant
+    ? normalizeUsage(params.lastAssistant.usage as UsageLike)
+    : undefined;
+  const promptTokens = derivePromptTokens(params.lastRunPromptUsage);
+  return {
+    sessionId: params.sessionId,
+    provider: params.provider,
+    model: params.model,
+    // Only include usage fields when we have actual data from prior API calls.
+    ...(usage ? { usage } : {}),
+    ...(lastCallUsage ? { lastCallUsage } : {}),
+    ...(promptTokens ? { promptTokens } : {}),
+  };
+}
+
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
@@ -684,6 +721,8 @@ export async function runEmbeddedPiAgent(
       };
       try {
         let authRetryPending = false;
+        // Hoisted so the retry-limit error path can use the most recent API total.
+        let lastTurnTotal: number | undefined;
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
             const message =
@@ -705,11 +744,14 @@ export async function runEmbeddedPiAgent(
               ],
               meta: {
                 durationMs: Date.now() - started,
-                agentMeta: {
+                agentMeta: buildErrorAgentMeta({
                   sessionId: params.sessionId,
                   provider,
                   model: model.id,
-                },
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastTurnTotal,
+                }),
                 error: { kind: "retry_limit", message },
               },
             };
@@ -812,7 +854,7 @@ export async function runEmbeddedPiAgent(
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
-          const lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
+          lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
           const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
           autoCompactionCount += attemptCompactionCount;
           const activeErrorContext = resolveActiveErrorContext({
@@ -1004,11 +1046,15 @@ export async function runEmbeddedPiAgent(
               ],
               meta: {
                 durationMs: Date.now() - started,
-                agentMeta: {
+                agentMeta: buildErrorAgentMeta({
                   sessionId: sessionIdUsed,
                   provider,
                   model: model.id,
-                },
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastAssistant,
+                  lastTurnTotal,
+                }),
                 systemPromptReport: attempt.systemPromptReport,
                 error: { kind, message: errorText },
               },
@@ -1076,11 +1122,15 @@ export async function runEmbeddedPiAgent(
                 ],
                 meta: {
                   durationMs: Date.now() - started,
-                  agentMeta: {
+                  agentMeta: buildErrorAgentMeta({
                     sessionId: sessionIdUsed,
                     provider,
                     model: model.id,
-                  },
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastAssistant,
+                    lastTurnTotal,
+                  }),
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "role_ordering", message: errorText },
                 },
@@ -1104,11 +1154,15 @@ export async function runEmbeddedPiAgent(
                 ],
                 meta: {
                   durationMs: Date.now() - started,
-                  agentMeta: {
+                  agentMeta: buildErrorAgentMeta({
                     sessionId: sessionIdUsed,
                     provider,
                     model: model.id,
-                  },
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastAssistant,
+                    lastTurnTotal,
+                  }),
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "image_size", message: errorText },
                 },
