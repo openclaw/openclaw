@@ -88,6 +88,8 @@ export type SessionEntry = {
   subagentRole?: "orchestrator" | "leaf";
   /** Explicit control scope assigned at spawn time for subagent control decisions. */
   subagentControlScope?: "children" | "none";
+  /** Previous sessions for this session key, newest-first. Capped at 20. */
+  history?: SessionHistoryEntry[];
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /**
@@ -376,6 +378,16 @@ export type SessionSystemPromptReport = {
     }>;
   };
 };
+
+export type SessionHistoryEntry = {
+  sessionId: string;
+  sessionFile?: string;
+  updatedAt: number;
+  label?: string;
+  systemSent?: boolean;
+};
+
+export const MAX_SESSION_HISTORY = 20;
 
 export const DEFAULT_RESET_TRIGGER = "/new";
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
