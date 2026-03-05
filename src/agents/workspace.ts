@@ -203,6 +203,23 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+/** True if workspace has user-written memory content (MEMORY.md, memory.md, or .md files in memory/). */
+async function hasMemoryUserContent(dir: string): Promise<boolean> {
+  if (await fileExists(path.join(dir, DEFAULT_MEMORY_FILENAME))) {
+    return true;
+  }
+  if (await fileExists(path.join(dir, DEFAULT_MEMORY_ALT_FILENAME))) {
+    return true;
+  }
+  const memoryDir = path.join(dir, "memory");
+  try {
+    const entries = await fs.readdir(memoryDir, { withFileTypes: true });
+    return entries.some((e) => e.isFile() && e.name.endsWith(".md"));
+  } catch {
+    return false;
+  }
+}
+
 function resolveWorkspaceStatePath(dir: string): string {
   return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
 }
@@ -350,23 +367,26 @@ export async function ensureAgentWorkspace(params?: {
 
   const isBrandNewWorkspace = await (async () => {
     const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
-    const userContentPaths = [
-      path.join(dir, "memory"),
-      path.join(dir, DEFAULT_MEMORY_FILENAME),
-      path.join(dir, ".git"),
-    ];
-    const paths = [...templatePaths, ...userContentPaths];
-    const existing = await Promise.all(
-      paths.map(async (p) => {
+    const templateMissing = await Promise.all(
+      templatePaths.map(async (p) => {
         try {
           await fs.access(p);
-          return true;
-        } catch {
           return false;
+        } catch {
+          return true;
         }
       }),
     );
-    return existing.every((v) => !v);
+    if (!templateMissing.every(Boolean)) {
+      return false;
+    }
+    if (await hasMemoryUserContent(dir)) {
+      return false;
+    }
+    if (await fileExists(path.join(dir, ".git"))) {
+      return false;
+    }
+    return true;
   })();
 
   const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
@@ -407,22 +427,8 @@ export async function ensureAgentWorkspace(params?: {
       fs.readFile(identityPath, "utf-8"),
       fs.readFile(userPath, "utf-8"),
     ]);
-    const hasUserContent = await (async () => {
-      const indicators = [
-        path.join(dir, "memory"),
-        path.join(dir, DEFAULT_MEMORY_FILENAME),
-        path.join(dir, ".git"),
-      ];
-      for (const indicator of indicators) {
-        try {
-          await fs.access(indicator);
-          return true;
-        } catch {
-          // continue
-        }
-      }
-      return false;
-    })();
+    const hasUserContent =
+      (await hasMemoryUserContent(dir)) || (await fileExists(path.join(dir, ".git")));
     const legacyOnboardingCompleted =
       identityContent !== identityTemplate || userContent !== userTemplate || hasUserContent;
     if (legacyOnboardingCompleted) {
