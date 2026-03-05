@@ -288,6 +288,12 @@ export type AgentDefaultsConfig = {
 
 export type AgentCompactionMode = "default" | "safeguard";
 export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
+export type AgentCompactionQualityGuardConfig = {
+  /** Enable compaction summary quality audits and regeneration retries. Default: false. */
+  enabled?: boolean;
+  /** Maximum regeneration retries after a failed quality audit. Default: 1 when enabled. */
+  maxRetries?: number;
+};
 
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
@@ -304,6 +310,8 @@ export type AgentCompactionConfig = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
   identifierInstructions?: string;
+  /** Optional quality-audit retries for safeguard compaction summaries. */
+  qualityGuard?: AgentCompactionQualityGuardConfig;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
 };

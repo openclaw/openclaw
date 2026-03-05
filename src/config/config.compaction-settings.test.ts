@@ -13,6 +13,10 @@ describe("config compaction settings", () => {
               reserveTokensFloor: 12_345,
               identifierPolicy: "custom",
               identifierInstructions: "Keep ticket IDs unchanged.",
+              qualityGuard: {
+                enabled: true,
+                maxRetries: 2,
+              },
               memoryFlush: {
                 enabled: false,
                 softThresholdTokens: 1234,
@@ -34,6 +38,8 @@ describe("config compaction settings", () => {
         expect(cfg.agents?.defaults?.compaction?.identifierInstructions).toBe(
           "Keep ticket IDs unchanged.",
         );
+        expect(cfg.agents?.defaults?.compaction?.qualityGuard?.enabled).toBe(true);
+        expect(cfg.agents?.defaults?.compaction?.qualityGuard?.maxRetries).toBe(2);
         expect(cfg.agents?.defaults?.compaction?.memoryFlush?.enabled).toBe(false);
         expect(cfg.agents?.defaults?.compaction?.memoryFlush?.softThresholdTokens).toBe(1234);
         expect(cfg.agents?.defaults?.compaction?.memoryFlush?.prompt).toBe("Write notes.");
