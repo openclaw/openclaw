@@ -489,7 +489,7 @@ Important hooks for prompt construction:
 Core-enforced hook policy:
 
 - Operators can disable prompt mutation hooks per plugin via `plugins.entries.<id>.hooks.allowPromptInjection: false`.
-- When disabled, OpenClaw blocks registration of `before_prompt_build` and `before_agent_start` for that plugin while leaving other plugin capabilities enabled.
+- When disabled, OpenClaw blocks `before_prompt_build` and ignores prompt-mutating fields returned from legacy `before_agent_start` while preserving legacy `modelOverride` and `providerOverride`.
 
 `before_prompt_build` result fields:
 

@@ -1,7 +1,7 @@
 export type PluginEntryConfig = {
   enabled?: boolean;
   hooks?: {
-    /** Controls typed prompt mutation hooks (before_prompt_build, before_agent_start). */
+    /** Controls prompt mutation via before_prompt_build and prompt fields from legacy before_agent_start. */
     allowPromptInjection?: boolean;
   };
   config?: Record<string, unknown>;

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
+import { createHookRunner } from "./hooks.js";
 import { __testing, loadOpenClawPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
@@ -685,14 +686,18 @@ describe("loadOpenClawPlugins", () => {
     expect(disabled?.status).toBe("disabled");
   });
 
-  it("blocks prompt-injection typed hooks when disabled by plugin hook policy", () => {
+  it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "hook-policy",
       filename: "hook-policy.cjs",
       body: `module.exports = { id: "hook-policy", register(api) {
   api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
-  api.on("before_agent_start", () => ({ prependContext: "legacy" }));
+  api.on("before_agent_start", () => ({
+    prependContext: "legacy",
+    modelOverride: "gpt-4o",
+    providerOverride: "anthropic",
+  }));
   api.on("before_model_resolve", () => ({ providerOverride: "openai" }));
 } };`,
     });
@@ -712,13 +717,28 @@ describe("loadOpenClawPlugins", () => {
     });
 
     expect(registry.plugins.find((entry) => entry.id === "hook-policy")?.status).toBe("loaded");
-    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["before_model_resolve"]);
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
+      "before_agent_start",
+      "before_model_resolve",
+    ]);
+    const runner = createHookRunner(registry);
+    const legacyResult = await runner.runBeforeAgentStart({ prompt: "hello", messages: [] }, {});
+    expect(legacyResult).toEqual({
+      modelOverride: "gpt-4o",
+      providerOverride: "anthropic",
+    });
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>
       String(diag.message).includes(
         "blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
       ),
     );
-    expect(blockedDiagnostics).toHaveLength(2);
+    expect(blockedDiagnostics).toHaveLength(1);
+    const constrainedDiagnostics = registry.diagnostics.filter((diag) =>
+      String(diag.message).includes(
+        "prompt fields constrained by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
+      ),
+    );
+    expect(constrainedDiagnostics).toHaveLength(1);
   });
 
   it("keeps prompt-injection typed hooks enabled by default", () => {

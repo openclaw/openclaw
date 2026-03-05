@@ -767,6 +767,7 @@ describe("config help copy quality", () => {
     const pluginPromptPolicy = FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"];
     expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
     expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
+    expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
   });
 
   it("documents auth/model root semantics and provider secret handling", () => {

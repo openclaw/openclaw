@@ -32,6 +32,7 @@ import type {
   PluginLogger,
   PluginOrigin,
   PluginKind,
+  PluginHookBeforeAgentStartResult,
   PluginHookName,
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
@@ -143,6 +144,38 @@ export type PluginRegistryParams = {
 
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
+};
+
+const stripPromptMutationFieldsFromLegacyHookResult = (
+  result: PluginHookBeforeAgentStartResult | void,
+): PluginHookBeforeAgentStartResult | void => {
+  if (!result || typeof result !== "object") {
+    return result;
+  }
+  const {
+    systemPrompt: _systemPrompt,
+    prependContext: _prependContext,
+    prependSystemContext: _prependSystemContext,
+    appendSystemContext: _appendSystemContext,
+    ...remaining
+  } = result;
+  return Object.keys(remaining).length > 0
+    ? (remaining as PluginHookBeforeAgentStartResult)
+    : undefined;
+};
+
+const constrainLegacyPromptInjectionHook = (
+  handler: PluginHookHandlerMap["before_agent_start"],
+): PluginHookHandlerMap["before_agent_start"] => {
+  return (event, ctx) => {
+    const result = handler(event, ctx);
+    if (result && typeof result === "object" && "then" in result) {
+      return Promise.resolve(result).then((resolved) =>
+        stripPromptMutationFieldsFromLegacyHookResult(resolved),
+      );
+    }
+    return stripPromptMutationFieldsFromLegacyHookResult(result);
+  };
 };
 
 export function createEmptyPluginRegistry(): PluginRegistry {
@@ -496,20 +529,34 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    let effectiveHandler = handler;
     if (policy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
-      });
-      return;
+      if (hookName === "before_prompt_build") {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        });
+        return;
+      }
+      if (hookName === "before_agent_start") {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `typed hook "${hookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        });
+        effectiveHandler = constrainLegacyPromptInjectionHook(
+          handler as PluginHookHandlerMap["before_agent_start"],
+        ) as PluginHookHandlerMap[K];
+      }
     }
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
       hookName,
-      handler,
+      handler: effectiveHandler,
       priority: opts?.priority,
       source: record.source,
     } as TypedPluginHookRegistration);
