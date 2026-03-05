@@ -434,6 +434,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.maxHistoryShare": "Compaction Max History Share",
   "agents.defaults.compaction.identifierPolicy": "Compaction Identifier Policy",
   "agents.defaults.compaction.identifierInstructions": "Compaction Identifier Instructions",
+  "agents.defaults.compaction.qualityGuard": "Compaction Quality Guard",
+  "agents.defaults.compaction.qualityGuard.enabled": "Compaction Quality Guard Enabled",
+  "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Max Retries",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
