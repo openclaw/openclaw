@@ -1,7 +1,6 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/googlechat";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/googlechat";
 import { googlechatDock, googlechatPlugin } from "./src/channel.js";
-import { handleGoogleChatWebhookRequest } from "./src/monitor.js";
 import { setGoogleChatRuntime } from "./src/runtime.js";
 
 const plugin = {
@@ -12,7 +11,6 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setGoogleChatRuntime(api.runtime);
     api.registerChannel({ plugin: googlechatPlugin, dock: googlechatDock });
-    api.registerHttpHandler(handleGoogleChatWebhookRequest);
   },
 };
 

@@ -5,6 +5,7 @@ import {
   describeReplyTarget,
   expandTextLinks,
   normalizeForwardedContext,
+  resolveTelegramDirectPeerId,
   resolveTelegramForumThreadId,
 } from "./helpers.js";
 
@@ -50,6 +51,20 @@ describe("buildTypingThreadParams", () => {
     { input: 1, expected: { message_thread_id: 1 } },
   ])("builds typing params", ({ input, expected }) => {
     expect(buildTypingThreadParams(input)).toEqual(expected);
+  });
+});
+
+describe("resolveTelegramDirectPeerId", () => {
+  it("prefers sender id when available", () => {
+    expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: 123456789 })).toBe(
+      "123456789",
+    );
+  });
+
+  it("falls back to chat id when sender id is missing", () => {
+    expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: undefined })).toBe(
+      "777777777",
+    );
   });
 });
 

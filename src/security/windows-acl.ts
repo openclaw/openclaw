@@ -33,9 +33,14 @@ const TRUSTED_BASE = new Set([
   "system",
   "builtin\\administrators",
   "creator owner",
+  // Localized SYSTEM account names (French, German, Spanish, Portuguese)
+  "autorite nt\\système",
+  "nt-autorität\\system",
+  "autoridad nt\\system",
+  "autoridade nt\\system",
 ]);
 const WORLD_SUFFIXES = ["\\users", "\\authenticated users"];
-const TRUSTED_SUFFIXES = ["\\administrators", "\\system"];
+const TRUSTED_SUFFIXES = ["\\administrators", "\\system", "\\système"];
 
 const SID_RE = /^s-\d+-\d+(-\d+)+$/i;
 const TRUSTED_SIDS = new Set([
@@ -101,10 +106,27 @@ function classifyPrincipal(
   ) {
     return "world";
   }
+
+  // Fallback: strip diacritics and re-check for localized SYSTEM variants
+  const stripped = normalized.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (
+    stripped !== normalized &&
+    (TRUSTED_BASE.has(stripped) ||
+      TRUSTED_SUFFIXES.some((suffix) => {
+        const strippedSuffix = suffix.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        return stripped.endsWith(strippedSuffix);
+      }))
+  ) {
+    return "trusted";
+  }
+
   return "group";
 }
 
-function rightsFromTokens(tokens: string[]): { canRead: boolean; canWrite: boolean } {
+function rightsFromTokens(tokens: string[]): {
+  canRead: boolean;
+  canWrite: boolean;
+} {
   const upper = tokens.join("").toUpperCase();
   const canWrite =
     upper.includes("F") || upper.includes("M") || upper.includes("W") || upper.includes("D");
@@ -261,7 +283,7 @@ export function formatIcaclsResetCommand(
 ): string {
   const user = resolveWindowsUserPrincipal(opts.env) ?? "%USERNAME%";
   const grant = opts.isDir ? "(OI)(CI)F" : "F";
-  return `icacls "${targetPath}" /inheritance:r /grant:r "${user}:${grant}" /grant:r "SYSTEM:${grant}"`;
+  return `icacls "${targetPath}" /inheritance:r /grant:r "${user}:${grant}" /grant:r "*S-1-5-18:${grant}"`;
 }
 
 export function createIcaclsResetCommand(
@@ -279,7 +301,11 @@ export function createIcaclsResetCommand(
     "/grant:r",
     `${user}:${grant}`,
     "/grant:r",
-    `SYSTEM:${grant}`,
+    `*S-1-5-18:${grant}`,
   ];
-  return { command: "icacls", args, display: formatIcaclsResetCommand(targetPath, opts) };
+  return {
+    command: "icacls",
+    args,
+    display: formatIcaclsResetCommand(targetPath, opts),
+  };
 }

@@ -26,7 +26,7 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
     return true;
   }
 
-  // Handle Minimax (M2.1 is chatty/reasoning-like)
+  // Handle Minimax (M2.5 is chatty/reasoning-like)
   if (normalized.includes("minimax")) {
     return true;
   }

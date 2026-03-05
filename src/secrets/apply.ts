@@ -2,25 +2,36 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles.js";
+import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { SecretProviderConfig } from "../config/types.secrets.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
+import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
+import { deletePathStrict, getPath, setPathCreateStrict } from "./path-utils.js";
 import {
   type SecretsApplyPlan,
   type SecretsPlanTarget,
   normalizeSecretsPlanOptions,
-  resolveValidatedTargetPathSegments,
+  resolveValidatedPlanTarget,
 } from "./plan.js";
 import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { prepareSecretsRuntimeSnapshot } from "./runtime.js";
+import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isNonEmptyString, isRecord, writeTextFileAtomic } from "./shared.js";
+import {
+  listAuthProfileStorePaths,
+  listLegacyAuthJsonPaths,
+  parseEnvAssignmentValue,
+  readJsonObjectIfExists,
+} from "./storage-scan.js";
 
 type FileSnapshot = {
   existed: boolean;
@@ -45,6 +56,23 @@ type ProjectedState = {
   warnings: string[];
 };
 
+type ResolvedPlanTargetEntry = {
+  target: SecretsPlanTarget;
+  resolved: NonNullable<ReturnType<typeof resolveValidatedPlanTarget>>;
+};
+
+type ConfigTargetMutationResult = {
+  resolvedTargets: ResolvedPlanTargetEntry[];
+  scrubbedValues: Set<string>;
+  providerTargets: Set<string>;
+  configChanged: boolean;
+  authStoreByPath: Map<string, Record<string, unknown>>;
+};
+
+type MutableAuthProfileStore = Record<string, unknown> & {
+  profiles: Record<string, unknown>;
+};
+
 export type SecretsApplyResult = {
   mode: "dry-run" | "write";
   changed: boolean;
@@ -53,80 +81,14 @@ export type SecretsApplyResult = {
   warnings: string[];
 };
 
-function getByPathSegments(root: unknown, segments: string[]): unknown {
-  if (segments.length === 0) {
-    return undefined;
-  }
-  let cursor: unknown = root;
-  for (const segment of segments) {
-    if (!isRecord(cursor)) {
-      return undefined;
-    }
-    cursor = cursor[segment];
-  }
-  return cursor;
-}
-
-function setByPathSegments(root: OpenClawConfig, segments: string[], value: unknown): boolean {
-  if (segments.length === 0) {
-    throw new Error("Target path is empty.");
-  }
-  let cursor: Record<string, unknown> = root as unknown as Record<string, unknown>;
-  let changed = false;
-  for (const segment of segments.slice(0, -1)) {
-    const existing = cursor[segment];
-    if (!isRecord(existing)) {
-      cursor[segment] = {};
-      changed = true;
-    }
-    cursor = cursor[segment] as Record<string, unknown>;
-  }
-  const leaf = segments[segments.length - 1] ?? "";
-  const previous = cursor[leaf];
-  if (!isDeepStrictEqual(previous, value)) {
-    cursor[leaf] = value;
-    changed = true;
-  }
-  return changed;
-}
-
-function deleteByPathSegments(root: OpenClawConfig, segments: string[]): boolean {
-  if (segments.length === 0) {
-    return false;
-  }
-  let cursor: Record<string, unknown> = root as unknown as Record<string, unknown>;
-  for (const segment of segments.slice(0, -1)) {
-    const existing = cursor[segment];
-    if (!isRecord(existing)) {
-      return false;
-    }
-    cursor = existing;
-  }
-  const leaf = segments[segments.length - 1] ?? "";
-  if (!Object.prototype.hasOwnProperty.call(cursor, leaf)) {
-    return false;
-  }
-  delete cursor[leaf];
-  return true;
-}
-
-function resolveTargetPathSegments(target: SecretsPlanTarget): string[] {
-  const resolved = resolveValidatedTargetPathSegments(target);
+function resolveTarget(
+  target: SecretsPlanTarget,
+): NonNullable<ReturnType<typeof resolveValidatedPlanTarget>> {
+  const resolved = resolveValidatedPlanTarget(target);
   if (!resolved) {
     throw new Error(`Invalid plan target path for ${target.type}: ${target.path}`);
   }
   return resolved;
-}
-
-function parseEnvValue(raw: string): string {
-  const trimmed = raw.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
 }
 
 function scrubEnvRaw(
@@ -154,7 +116,7 @@ function scrubEnvRaw(
       nextLines.push(line);
       continue;
     }
-    const parsedValue = parseEnvValue(match[2] ?? "");
+    const parsedValue = parseEnvAssignmentValue(match[2] ?? "");
     if (migratedValues.has(parsedValue)) {
       removed += 1;
       continue;
@@ -170,63 +132,6 @@ function scrubEnvRaw(
         : joined,
     removed,
   };
-}
-
-function collectAuthStorePaths(config: OpenClawConfig, stateDir: string): string[] {
-  const paths = new Set<string>();
-  // Scope default auth store discovery to the provided stateDir instead of
-  // ambient process env, so apply does not touch unrelated host-global stores.
-  paths.add(path.join(resolveUserPath(stateDir), "agents", "main", "agent", "auth-profiles.json"));
-
-  const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
-  if (fs.existsSync(agentsRoot)) {
-    for (const entry of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      paths.add(path.join(agentsRoot, entry.name, "agent", "auth-profiles.json"));
-    }
-  }
-
-  for (const agentId of listAgentIds(config)) {
-    if (agentId === "main") {
-      paths.add(
-        path.join(resolveUserPath(stateDir), "agents", "main", "agent", "auth-profiles.json"),
-      );
-      continue;
-    }
-    const agentDir = resolveAgentDir(config, agentId);
-    paths.add(resolveUserPath(resolveAuthStorePath(agentDir)));
-  }
-
-  return [...paths];
-}
-
-function collectAuthJsonPaths(stateDir: string): string[] {
-  const out: string[] = [];
-  const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
-  if (!fs.existsSync(agentsRoot)) {
-    return out;
-  }
-  for (const entry of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const candidate = path.join(agentsRoot, entry.name, "agent", "auth.json");
-    if (fs.existsSync(candidate)) {
-      out.push(candidate);
-    }
-  }
-  return out;
-}
-
-function resolveGoogleChatRefPathSegments(pathSegments: string[]): string[] {
-  if (pathSegments.at(-1) === "serviceAccount") {
-    return [...pathSegments.slice(0, -1), "serviceAccountRef"];
-  }
-  throw new Error(
-    `Google Chat target path must end with "serviceAccount": ${pathSegments.join(".")}`,
-  );
 }
 
 function applyProviderPlanMutations(params: {
@@ -280,13 +185,12 @@ async function projectPlanState(params: {
   if (!snapshot.valid) {
     throw new Error("Cannot apply secrets plan: config is invalid.");
   }
+
   const options = normalizeSecretsPlanOptions(params.plan.options);
   const nextConfig = structuredClone(snapshot.config);
   const stateDir = resolveStateDir(params.env, os.homedir);
   const changedFiles = new Set<string>();
   const warnings: string[] = [];
-  const scrubbedValues = new Set<string>();
-  const providerTargets = new Set<string>();
   const configPath = resolveUserPath(snapshot.path);
 
   const providerConfigChanged = applyProviderPlanMutations({
@@ -298,177 +202,46 @@ async function projectPlanState(params: {
     changedFiles.add(configPath);
   }
 
-  for (const target of params.plan.targets) {
-    const targetPathSegments = resolveTargetPathSegments(target);
-    if (target.type === "channels.googlechat.serviceAccount") {
-      const previous = getByPathSegments(nextConfig, targetPathSegments);
-      if (isNonEmptyString(previous)) {
-        scrubbedValues.add(previous.trim());
-      }
-      const refPathSegments = resolveGoogleChatRefPathSegments(targetPathSegments);
-      const wroteRef = setByPathSegments(nextConfig, refPathSegments, target.ref);
-      const deletedLegacy = deleteByPathSegments(nextConfig, targetPathSegments);
-      if (wroteRef || deletedLegacy) {
-        changedFiles.add(configPath);
-      }
-      continue;
-    }
-
-    const previous = getByPathSegments(nextConfig, targetPathSegments);
-    if (isNonEmptyString(previous)) {
-      scrubbedValues.add(previous.trim());
-    }
-    const wroteRef = setByPathSegments(nextConfig, targetPathSegments, target.ref);
-    if (wroteRef) {
-      changedFiles.add(configPath);
-    }
-    if (target.type === "models.providers.apiKey" && target.providerId) {
-      providerTargets.add(normalizeProviderId(target.providerId));
-    }
+  const targetMutations = applyConfigTargetMutations({
+    planTargets: params.plan.targets,
+    nextConfig,
+    stateDir,
+    authStoreByPath: new Map<string, Record<string, unknown>>(),
+    changedFiles,
+  });
+  if (targetMutations.configChanged) {
+    changedFiles.add(configPath);
   }
 
-  const authStoreByPath = new Map<string, Record<string, unknown>>();
-  if (options.scrubAuthProfilesForProviderTargets && providerTargets.size > 0) {
-    for (const authStorePath of collectAuthStorePaths(nextConfig, stateDir)) {
-      if (!fs.existsSync(authStorePath)) {
-        continue;
-      }
-      const raw = fs.readFileSync(authStorePath, "utf8");
-      const parsed = JSON.parse(raw) as unknown;
-      if (!isRecord(parsed) || !isRecord(parsed.profiles)) {
-        continue;
-      }
-      const nextStore = structuredClone(parsed) as Record<string, unknown> & {
-        profiles: Record<string, unknown>;
-      };
-      let mutated = false;
-      for (const profileValue of Object.values(nextStore.profiles)) {
-        if (!isRecord(profileValue) || !isNonEmptyString(profileValue.provider)) {
-          continue;
-        }
-        const provider = normalizeProviderId(String(profileValue.provider));
-        if (!providerTargets.has(provider)) {
-          continue;
-        }
-        if (profileValue.type === "api_key") {
-          if (isNonEmptyString(profileValue.key)) {
-            scrubbedValues.add(profileValue.key.trim());
-          }
-          if ("key" in profileValue) {
-            delete profileValue.key;
-            mutated = true;
-          }
-          if ("keyRef" in profileValue) {
-            delete profileValue.keyRef;
-            mutated = true;
-          }
-          continue;
-        }
-        if (profileValue.type === "token") {
-          if (isNonEmptyString(profileValue.token)) {
-            scrubbedValues.add(profileValue.token.trim());
-          }
-          if ("token" in profileValue) {
-            delete profileValue.token;
-            mutated = true;
-          }
-          if ("tokenRef" in profileValue) {
-            delete profileValue.tokenRef;
-            mutated = true;
-          }
-          continue;
-        }
-        if (profileValue.type === "oauth") {
-          warnings.push(
-            `Provider "${provider}" has OAuth credentials in ${authStorePath}; those still take precedence and are out of scope for static SecretRef migration.`,
-          );
-        }
-      }
-      if (mutated) {
-        authStoreByPath.set(authStorePath, nextStore);
-        changedFiles.add(authStorePath);
-      }
-    }
-  }
+  const authStoreByPath = scrubAuthStoresForProviderTargets({
+    nextConfig,
+    stateDir,
+    providerTargets: targetMutations.providerTargets,
+    scrubbedValues: targetMutations.scrubbedValues,
+    authStoreByPath: targetMutations.authStoreByPath,
+    changedFiles,
+    warnings,
+    enabled: options.scrubAuthProfilesForProviderTargets,
+  });
 
-  const authJsonByPath = new Map<string, Record<string, unknown>>();
-  if (options.scrubLegacyAuthJson) {
-    for (const authJsonPath of collectAuthJsonPaths(stateDir)) {
-      const raw = fs.readFileSync(authJsonPath, "utf8");
-      const parsed = JSON.parse(raw) as unknown;
-      if (!isRecord(parsed)) {
-        continue;
-      }
-      let mutated = false;
-      const nextParsed = structuredClone(parsed);
-      for (const [providerId, value] of Object.entries(nextParsed)) {
-        if (!isRecord(value)) {
-          continue;
-        }
-        if (value.type === "api_key" && isNonEmptyString(value.key)) {
-          delete nextParsed[providerId];
-          mutated = true;
-        }
-      }
-      if (mutated) {
-        authJsonByPath.set(authJsonPath, nextParsed);
-        changedFiles.add(authJsonPath);
-      }
-    }
-  }
+  const authJsonByPath = scrubLegacyAuthJsonStores({
+    stateDir,
+    changedFiles,
+    enabled: options.scrubLegacyAuthJson,
+  });
 
-  const envRawByPath = new Map<string, string>();
-  if (options.scrubEnv && scrubbedValues.size > 0) {
-    const envPath = path.join(resolveConfigDir(params.env, os.homedir), ".env");
-    if (fs.existsSync(envPath)) {
-      const current = fs.readFileSync(envPath, "utf8");
-      const scrubbed = scrubEnvRaw(current, scrubbedValues, new Set(listKnownSecretEnvVarNames()));
-      if (scrubbed.removed > 0 && scrubbed.nextRaw !== current) {
-        envRawByPath.set(envPath, scrubbed.nextRaw);
-        changedFiles.add(envPath);
-      }
-    }
-  }
-
-  const cache = {};
-  for (const target of params.plan.targets) {
-    const resolved = await resolveSecretRefValue(target.ref, {
-      config: nextConfig,
-      env: params.env,
-      cache,
-    });
-    if (target.type === "channels.googlechat.serviceAccount") {
-      if (!(isNonEmptyString(resolved) || isRecord(resolved))) {
-        throw new Error(
-          `Ref ${target.ref.source}:${target.ref.provider}:${target.ref.id} is not string/object.`,
-        );
-      }
-      continue;
-    }
-    if (!isNonEmptyString(resolved)) {
-      throw new Error(
-        `Ref ${target.ref.source}:${target.ref.provider}:${target.ref.id} is not a non-empty string.`,
-      );
-    }
-  }
-
-  const authStoreLookup = new Map<string, Record<string, unknown>>();
-  for (const [authStorePath, store] of authStoreByPath.entries()) {
-    authStoreLookup.set(resolveUserPath(authStorePath), store);
-  }
-  await prepareSecretsRuntimeSnapshot({
-    config: nextConfig,
+  const envRawByPath = scrubEnvFiles({
     env: params.env,
-    loadAuthStore: (agentDir?: string) => {
-      const storePath = resolveUserPath(resolveAuthStorePath(agentDir));
-      const override = authStoreLookup.get(storePath);
-      if (override) {
-        return structuredClone(override) as unknown as ReturnType<
-          typeof loadAuthProfileStoreForSecretsRuntime
-        >;
-      }
-      return loadAuthProfileStoreForSecretsRuntime(agentDir);
-    },
+    scrubbedValues: targetMutations.scrubbedValues,
+    changedFiles,
+    enabled: options.scrubEnv,
+  });
+
+  await validateProjectedSecretsState({
+    env: params.env,
+    nextConfig,
+    resolvedTargets: targetMutations.resolvedTargets,
+    authStoreByPath,
   });
 
   return {
@@ -481,6 +254,415 @@ async function projectPlanState(params: {
     changedFiles,
     warnings,
   };
+}
+
+function applyConfigTargetMutations(params: {
+  planTargets: SecretsPlanTarget[];
+  nextConfig: OpenClawConfig;
+  stateDir: string;
+  authStoreByPath: Map<string, Record<string, unknown>>;
+  changedFiles: Set<string>;
+}): ConfigTargetMutationResult {
+  const resolvedTargets = params.planTargets.map((target) => ({
+    target,
+    resolved: resolveTarget(target),
+  }));
+  const scrubbedValues = new Set<string>();
+  const providerTargets = new Set<string>();
+  let configChanged = false;
+
+  for (const { target, resolved } of resolvedTargets) {
+    if (resolved.entry.configFile === "auth-profiles.json") {
+      const authStoreChanged = applyAuthProfileTargetMutation({
+        target,
+        resolved,
+        nextConfig: params.nextConfig,
+        stateDir: params.stateDir,
+        authStoreByPath: params.authStoreByPath,
+        scrubbedValues,
+      });
+      if (authStoreChanged) {
+        const agentId = String(target.agentId ?? "").trim();
+        if (!agentId) {
+          throw new Error(`Missing required agentId for auth-profiles target ${target.path}.`);
+        }
+        params.changedFiles.add(
+          resolveAuthStorePathForAgent({
+            nextConfig: params.nextConfig,
+            stateDir: params.stateDir,
+            agentId,
+          }),
+        );
+      }
+      continue;
+    }
+
+    const targetPathSegments = resolved.pathSegments;
+    if (resolved.entry.secretShape === "sibling_ref") {
+      const previous = getPath(params.nextConfig, targetPathSegments);
+      if (isNonEmptyString(previous)) {
+        scrubbedValues.add(previous.trim());
+      }
+      const refPathSegments = resolved.refPathSegments;
+      if (!refPathSegments) {
+        throw new Error(`Missing sibling ref path for target ${target.type}.`);
+      }
+      const wroteRef = setPathCreateStrict(params.nextConfig, refPathSegments, target.ref);
+      const deletedLegacy = deletePathStrict(params.nextConfig, targetPathSegments);
+      if (wroteRef || deletedLegacy) {
+        configChanged = true;
+      }
+      continue;
+    }
+
+    const previous = getPath(params.nextConfig, targetPathSegments);
+    if (isNonEmptyString(previous)) {
+      scrubbedValues.add(previous.trim());
+    }
+    const wroteRef = setPathCreateStrict(params.nextConfig, targetPathSegments, target.ref);
+    if (wroteRef) {
+      configChanged = true;
+    }
+    if (resolved.entry.trackProviderShadowing && resolved.providerId) {
+      providerTargets.add(normalizeProviderId(resolved.providerId));
+    }
+  }
+
+  return {
+    resolvedTargets,
+    scrubbedValues,
+    providerTargets,
+    configChanged,
+    authStoreByPath: params.authStoreByPath,
+  };
+}
+
+function scrubAuthStoresForProviderTargets(params: {
+  nextConfig: OpenClawConfig;
+  stateDir: string;
+  providerTargets: Set<string>;
+  scrubbedValues: Set<string>;
+  authStoreByPath: Map<string, Record<string, unknown>>;
+  changedFiles: Set<string>;
+  warnings: string[];
+  enabled: boolean;
+}): Map<string, Record<string, unknown>> {
+  if (!params.enabled || params.providerTargets.size === 0) {
+    return params.authStoreByPath;
+  }
+
+  for (const authStorePath of listAuthProfileStorePaths(params.nextConfig, params.stateDir)) {
+    const existing = params.authStoreByPath.get(authStorePath);
+    const parsed = existing ?? readJsonObjectIfExists(authStorePath).value;
+    if (!parsed || !isRecord(parsed.profiles)) {
+      continue;
+    }
+    const nextStore = structuredClone(parsed) as Record<string, unknown> & {
+      profiles: Record<string, unknown>;
+    };
+    let mutated = false;
+    for (const profile of iterateAuthProfileCredentials(nextStore.profiles)) {
+      const provider = normalizeProviderId(profile.provider);
+      if (!params.providerTargets.has(provider)) {
+        continue;
+      }
+      if (profile.kind === "api_key" || profile.kind === "token") {
+        if (isNonEmptyString(profile.value)) {
+          params.scrubbedValues.add(profile.value.trim());
+        }
+        if (profile.valueField in profile.profile) {
+          delete profile.profile[profile.valueField];
+          mutated = true;
+        }
+        if (profile.refField in profile.profile) {
+          delete profile.profile[profile.refField];
+          mutated = true;
+        }
+        continue;
+      }
+      if (profile.kind === "oauth" && (profile.hasAccess || profile.hasRefresh)) {
+        params.warnings.push(
+          `Provider "${provider}" has OAuth credentials in ${authStorePath}; those still take precedence and are out of scope for static SecretRef migration.`,
+        );
+      }
+    }
+    if (mutated) {
+      params.authStoreByPath.set(authStorePath, nextStore);
+      params.changedFiles.add(authStorePath);
+    }
+  }
+
+  return params.authStoreByPath;
+}
+
+function ensureMutableAuthStore(
+  store: Record<string, unknown> | undefined,
+): MutableAuthProfileStore {
+  const next: Record<string, unknown> = store ? structuredClone(store) : {};
+  if (!isRecord(next.profiles)) {
+    next.profiles = {};
+  }
+  if (typeof next.version !== "number" || !Number.isFinite(next.version)) {
+    next.version = AUTH_STORE_VERSION;
+  }
+  return next as MutableAuthProfileStore;
+}
+
+function resolveAuthStoreForTarget(params: {
+  target: SecretsPlanTarget;
+  nextConfig: OpenClawConfig;
+  stateDir: string;
+  authStoreByPath: Map<string, Record<string, unknown>>;
+}): { path: string; store: MutableAuthProfileStore } {
+  const agentId = String(params.target.agentId ?? "").trim();
+  if (!agentId) {
+    throw new Error(`Missing required agentId for auth-profiles target ${params.target.path}.`);
+  }
+  const authStorePath = resolveAuthStorePathForAgent({
+    nextConfig: params.nextConfig,
+    stateDir: params.stateDir,
+    agentId,
+  });
+  const existing = params.authStoreByPath.get(authStorePath);
+  const loaded = existing ?? readJsonObjectIfExists(authStorePath).value;
+  const store = ensureMutableAuthStore(isRecord(loaded) ? loaded : undefined);
+  params.authStoreByPath.set(authStorePath, store);
+  return { path: authStorePath, store };
+}
+
+function asConfigPathRoot(store: MutableAuthProfileStore): OpenClawConfig {
+  return store as unknown as OpenClawConfig;
+}
+
+function resolveAuthStorePathForAgent(params: {
+  nextConfig: OpenClawConfig;
+  stateDir: string;
+  agentId: string;
+}): string {
+  const normalizedAgentId = normalizeAgentId(params.agentId);
+  const configuredAgentDir = resolveAgentConfig(
+    params.nextConfig,
+    normalizedAgentId,
+  )?.agentDir?.trim();
+  if (configuredAgentDir) {
+    return resolveUserPath(resolveAuthStorePath(configuredAgentDir));
+  }
+  return path.join(
+    resolveUserPath(params.stateDir),
+    "agents",
+    normalizedAgentId,
+    "agent",
+    "auth-profiles.json",
+  );
+}
+
+function ensureAuthProfileContainer(params: {
+  target: SecretsPlanTarget;
+  resolved: ResolvedPlanTargetEntry["resolved"];
+  store: MutableAuthProfileStore;
+}): boolean {
+  let changed = false;
+  const profilePathSegments = params.resolved.pathSegments.slice(0, 2);
+  const profileId = profilePathSegments[1];
+  if (!profileId) {
+    throw new Error(`Invalid auth profile target path: ${params.target.path}`);
+  }
+  const current = getPath(params.store, profilePathSegments);
+  const expectedType = params.resolved.entry.authProfileType;
+  if (isRecord(current)) {
+    if (expectedType && typeof current.type === "string" && current.type !== expectedType) {
+      throw new Error(
+        `Auth profile "${profileId}" type mismatch for ${params.target.path}: expected "${expectedType}", got "${current.type}".`,
+      );
+    }
+    if (
+      !isNonEmptyString(current.provider) &&
+      isNonEmptyString(params.target.authProfileProvider)
+    ) {
+      const wroteProvider = setPathCreateStrict(
+        asConfigPathRoot(params.store),
+        [...profilePathSegments, "provider"],
+        params.target.authProfileProvider,
+      );
+      changed = changed || wroteProvider;
+    }
+    return changed;
+  }
+  if (!expectedType) {
+    throw new Error(
+      `Auth profile target ${params.target.path} is missing auth profile type metadata.`,
+    );
+  }
+  const provider = String(params.target.authProfileProvider ?? "").trim();
+  if (!provider) {
+    throw new Error(
+      `Cannot create auth profile "${profileId}" for ${params.target.path} without authProfileProvider.`,
+    );
+  }
+  const wroteProfile = setPathCreateStrict(asConfigPathRoot(params.store), profilePathSegments, {
+    type: expectedType,
+    provider,
+  });
+  changed = changed || wroteProfile;
+  return changed;
+}
+
+function applyAuthProfileTargetMutation(params: {
+  target: SecretsPlanTarget;
+  resolved: ResolvedPlanTargetEntry["resolved"];
+  nextConfig: OpenClawConfig;
+  stateDir: string;
+  authStoreByPath: Map<string, Record<string, unknown>>;
+  scrubbedValues: Set<string>;
+}): boolean {
+  if (params.resolved.entry.configFile !== "auth-profiles.json") {
+    return false;
+  }
+  const { store } = resolveAuthStoreForTarget({
+    target: params.target,
+    nextConfig: params.nextConfig,
+    stateDir: params.stateDir,
+    authStoreByPath: params.authStoreByPath,
+  });
+  let changed = ensureAuthProfileContainer({
+    target: params.target,
+    resolved: params.resolved,
+    store,
+  });
+  const targetPathSegments = params.resolved.pathSegments;
+  if (params.resolved.entry.secretShape === "sibling_ref") {
+    const previous = getPath(store, targetPathSegments);
+    if (isNonEmptyString(previous)) {
+      params.scrubbedValues.add(previous.trim());
+    }
+    const refPathSegments = params.resolved.refPathSegments;
+    if (!refPathSegments) {
+      throw new Error(`Missing sibling ref path for auth-profiles target ${params.target.path}.`);
+    }
+    const wroteRef = setPathCreateStrict(
+      asConfigPathRoot(store),
+      refPathSegments,
+      params.target.ref,
+    );
+    const deletedPlaintext = deletePathStrict(asConfigPathRoot(store), targetPathSegments);
+    changed = changed || wroteRef || deletedPlaintext;
+    return changed;
+  }
+  const previous = getPath(store, targetPathSegments);
+  if (isNonEmptyString(previous)) {
+    params.scrubbedValues.add(previous.trim());
+  }
+  const wroteRef = setPathCreateStrict(
+    asConfigPathRoot(store),
+    targetPathSegments,
+    params.target.ref,
+  );
+  changed = changed || wroteRef;
+  return changed;
+}
+
+function scrubLegacyAuthJsonStores(params: {
+  stateDir: string;
+  changedFiles: Set<string>;
+  enabled: boolean;
+}): Map<string, Record<string, unknown>> {
+  const authJsonByPath = new Map<string, Record<string, unknown>>();
+  if (!params.enabled) {
+    return authJsonByPath;
+  }
+  for (const authJsonPath of listLegacyAuthJsonPaths(params.stateDir)) {
+    const parsedResult = readJsonObjectIfExists(authJsonPath);
+    const parsed = parsedResult.value;
+    if (!parsed) {
+      continue;
+    }
+    let mutated = false;
+    const nextParsed = structuredClone(parsed);
+    for (const [providerId, value] of Object.entries(nextParsed)) {
+      if (!isRecord(value)) {
+        continue;
+      }
+      if (value.type === "api_key" && isNonEmptyString(value.key)) {
+        delete nextParsed[providerId];
+        mutated = true;
+      }
+    }
+    if (mutated) {
+      authJsonByPath.set(authJsonPath, nextParsed);
+      params.changedFiles.add(authJsonPath);
+    }
+  }
+  return authJsonByPath;
+}
+
+function scrubEnvFiles(params: {
+  env: NodeJS.ProcessEnv;
+  scrubbedValues: Set<string>;
+  changedFiles: Set<string>;
+  enabled: boolean;
+}): Map<string, string> {
+  const envRawByPath = new Map<string, string>();
+  if (!params.enabled || params.scrubbedValues.size === 0) {
+    return envRawByPath;
+  }
+  const envPath = path.join(resolveConfigDir(params.env, os.homedir), ".env");
+  if (!fs.existsSync(envPath)) {
+    return envRawByPath;
+  }
+  const current = fs.readFileSync(envPath, "utf8");
+  const scrubbed = scrubEnvRaw(
+    current,
+    params.scrubbedValues,
+    new Set(listKnownSecretEnvVarNames()),
+  );
+  if (scrubbed.removed > 0 && scrubbed.nextRaw !== current) {
+    envRawByPath.set(envPath, scrubbed.nextRaw);
+    params.changedFiles.add(envPath);
+  }
+  return envRawByPath;
+}
+
+async function validateProjectedSecretsState(params: {
+  env: NodeJS.ProcessEnv;
+  nextConfig: OpenClawConfig;
+  resolvedTargets: ResolvedPlanTargetEntry[];
+  authStoreByPath: Map<string, Record<string, unknown>>;
+}): Promise<void> {
+  const cache = {};
+  for (const { target, resolved: resolvedTarget } of params.resolvedTargets) {
+    const resolved = await resolveSecretRefValue(target.ref, {
+      config: params.nextConfig,
+      env: params.env,
+      cache,
+    });
+    assertExpectedResolvedSecretValue({
+      value: resolved,
+      expected: resolvedTarget.entry.expectedResolvedValue,
+      errorMessage:
+        resolvedTarget.entry.expectedResolvedValue === "string"
+          ? `Ref ${target.ref.source}:${target.ref.provider}:${target.ref.id} is not a non-empty string.`
+          : `Ref ${target.ref.source}:${target.ref.provider}:${target.ref.id} is not string/object.`,
+    });
+  }
+
+  const authStoreLookup = new Map<string, Record<string, unknown>>();
+  for (const [authStorePath, store] of params.authStoreByPath.entries()) {
+    authStoreLookup.set(resolveUserPath(authStorePath), store);
+  }
+  await prepareSecretsRuntimeSnapshot({
+    config: params.nextConfig,
+    env: params.env,
+    loadAuthStore: (agentDir?: string) => {
+      const storePath = resolveUserPath(resolveAuthStorePath(agentDir));
+      const override = authStoreLookup.get(storePath);
+      if (override) {
+        return structuredClone(override) as unknown as ReturnType<
+          typeof loadAuthProfileStoreForSecretsRuntime
+        >;
+      }
+      return loadAuthProfileStoreForSecretsRuntime(agentDir);
+    },
+  });
 }
 
 function captureFileSnapshot(pathname: string): FileSnapshot {

@@ -139,6 +139,8 @@ Configure your tunnel's ingress rules to only route the webhook path:
 ## How it works
 
 1. Google Chat sends webhook POSTs to the gateway. Each request includes an `Authorization: Bearer <token>` header.
+   - OpenClaw verifies bearer auth before reading/parsing full webhook bodies when the header is present.
+   - Google Workspace Add-on requests that carry `authorizationEventObject.systemIdToken` in the body are supported via a stricter pre-auth body budget.
 2. OpenClaw verifies the token against the configured `audienceType` + `audience`:
    - `audienceType: "app-url"` → audience is your HTTPS webhook URL.
    - `audienceType: "project-number"` → audience is the Cloud project number.

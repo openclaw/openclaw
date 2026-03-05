@@ -8,7 +8,9 @@ import {
 } from "./control-ui-assets.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
+import { normalizePackageTagInput } from "./package-tag.js";
 import { trimLogTail } from "./restart-sentinel.js";
+import { resolveStableNodePath } from "./stable-node-path.js";
 import {
   channelToNpmTag,
   DEFAULT_PACKAGE_CHANNEL,
@@ -312,17 +314,7 @@ function managerInstallArgs(manager: "pnpm" | "bun" | "npm") {
 }
 
 function normalizeTag(tag?: string) {
-  const trimmed = tag?.trim();
-  if (!trimmed) {
-    return "latest";
-  }
-  if (trimmed.startsWith("openclaw@")) {
-    return trimmed.slice("openclaw@".length);
-  }
-  if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
-    return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
-  }
-  return trimmed;
+  return normalizePackageTagInput(tag, ["openclaw", DEFAULT_PACKAGE_NAME]) ?? "latest";
 }
 
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
@@ -775,7 +767,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     // Use --fix so that doctor auto-strips unknown config keys introduced by
     // schema changes between versions, preventing a startup validation crash.
-    const doctorArgv = [process.execPath, doctorEntry, "doctor", "--non-interactive", "--fix"];
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
     const doctorStep = await runStep(
       step("openclaw doctor", doctorArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
     );

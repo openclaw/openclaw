@@ -90,6 +90,28 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Queue: collect");
   });
 
+  it("falls back to sessionEntry levels when resolved levels are not passed", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/pi:opus",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        thinkingLevel: "high",
+        verboseLevel: "full",
+        reasoningLevel: "on",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Think: high");
+    expect(normalized).toContain("verbose:full");
+    expect(normalized).toContain("Reasoning: on");
+  });
+
   it("notes channel model overrides in status output", () => {
     const text = buildStatusMessage({
       config: {
