@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtml } from "./format.js";
+import { markdownToTelegramHtml, markdownToTelegramHtmlChunks } from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
   it("handles core markdown-to-telegram conversions", () => {
@@ -111,5 +111,32 @@ describe("markdownToTelegramHtml", () => {
     const res = markdownToTelegramHtml("||secret|| trailing ||");
     expect(res).toContain("<tg-spoiler>secret</tg-spoiler>");
     expect(res).toContain("trailing ||");
+  });
+});
+
+describe("markdownToTelegramHtmlChunks", () => {
+  it("does not split words at character boundaries", () => {
+    // "Regulatory overhang lifts beta for UK banks" is 44 chars.
+    // With limit=30, naive slice would cut mid-"beta" ("...lifts bet" / "a for UK banks").
+    // Word-boundary split must keep "beta" intact in a single chunk.
+    const chunks = markdownToTelegramHtmlChunks(
+      "Regulatory overhang lifts beta for UK banks",
+      30,
+    );
+    expect(chunks.length).toBeGreaterThan(1);
+    const joined = chunks.join("");
+    // Every word from the original must appear complete in exactly one chunk
+    for (const word of ["Regulatory", "overhang", "lifts", "beta", "for", "UK", "banks"]) {
+      expect(chunks.some((c) => c.includes(word))).toBe(true);
+      // The word must not be split across a chunk boundary
+      expect(joined).toContain(word);
+    }
+  });
+
+  it("falls back gracefully when the limit is smaller than any word", () => {
+    // If no whitespace exists before the limit, split at the limit (unchanged behaviour)
+    const chunks = markdownToTelegramHtmlChunks("superlongwordwithnobreaks", 10);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe("superlongwordwithnobreaks");
   });
 });
