@@ -11,6 +11,7 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { deriveInboundMessageHookContext } from "../../hooks/message-hook-mappers.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import {
   buildAutomaticSessionMemoryPrompt,
@@ -32,6 +33,8 @@ import { applyResetModelOverride } from "./session-reset-model.js";
 import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
+
+const log = createSubsystemLogger("auto-reply/get-reply");
 
 const SESSION_SANITIZATION_WRITE_LANE = "background:session-sanitization-write";
 
@@ -372,12 +375,21 @@ export async function getReplyFromConfig(
     workspaceDir,
   });
 
-  const transcriptMemorySystemPrompt = await buildAutomaticSessionMemoryPrompt({
-    cfg,
-    agentId,
-    sessionId,
-    query: cleanedBody,
-  });
+  let transcriptMemorySystemPrompt = "";
+  try {
+    transcriptMemorySystemPrompt =
+      (await buildAutomaticSessionMemoryPrompt({
+        cfg,
+        agentId,
+        sessionId,
+        query: cleanedBody,
+      })) ?? "";
+  } catch (err) {
+    // transcript recall is optional — degrade gracefully
+    log.warn("session memory prompt failed, continuing without it", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   return runPreparedReply({
     ctx,
