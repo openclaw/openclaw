@@ -56,6 +56,8 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  /** Called when a Telegram update has been fully processed (for webhook queue dequeue). */
+  onUpdateProcessed?: (updateId: number) => void;
 };
 
 export { getTelegramSequentialKey };
@@ -160,6 +162,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           highestCompletedUpdateId = updateId;
         }
         maybePersistSafeWatermark();
+        opts.onUpdateProcessed?.(updateId);
       }
     }
   });
