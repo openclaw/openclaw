@@ -832,4 +832,61 @@ describe("handleLineWebhookEvents", () => {
     expect(retained).toHaveLength(1);
     expect(retained[0]?.body).toBe("previous message");
   });
+
+  it("does not create empty pending-history keys for mentioned turns without pending entries", async () => {
+    const processMessage = vi.fn();
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    buildLineMessageContextMock.mockResolvedValueOnce({
+      ctxPayload: {
+        From: "line:group:group-2",
+        Body: "@openclaw hello",
+        BodyForAgent: "@openclaw hello",
+        RawBody: "@openclaw hello",
+      },
+      replyToken: "reply-token",
+      route: { agentId: "default", sessionKey: "line:group:group-2" },
+      isGroup: true,
+      userId: "user-2",
+      groupId: "group-2",
+      accountId: "default",
+    });
+    const event = {
+      type: "message",
+      message: { id: "m-mention-4", type: "text", text: "@openclaw hello" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-2", userId: "user-2" },
+      mode: "active",
+      webhookEventId: "evt-mention-4",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: {
+          line: {
+            groupPolicy: "open",
+            groups: { "group-2": { requireMention: true } },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open", groups: { "group-2": { requireMention: true } } },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+      groupHistories,
+      groupHistoryLimit: 5,
+    });
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(groupHistories.has("line:group:group-2")).toBe(false);
+  });
 });

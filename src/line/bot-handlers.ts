@@ -525,7 +525,8 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         logVerbose(`line: stored group message for context (no mention) session=${historyKey}`);
         return;
       }
-      if (historyMap && historyLimit > 0) {
+      const pendingEntries = historyMap?.get(historyKey);
+      if (historyMap && historyLimit > 0 && (pendingEntries?.length ?? 0) > 0) {
         const bodyWithPendingHistory = buildPendingHistoryContextFromMap({
           historyMap,
           historyKey,
