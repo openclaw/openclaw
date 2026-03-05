@@ -763,4 +763,91 @@ describe("doctor config flow", () => {
     );
     expect(accountWarning).toBeDefined();
   });
+
+  it("does not inject orphan top-level allowFrom when repairing dmPolicy=open with accounts (#35560)", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          telegram: {
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "fake:token",
+                dmPolicy: "open",
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        telegram: {
+          allowFrom?: unknown;
+          accounts: { default: { allowFrom: string[] } };
+        };
+      };
+    };
+    // Repair should add "*" to the account, not the top level
+    expect(cfg.channels.telegram.accounts.default.allowFrom).toContain("*");
+    // Top-level should NOT have an orphan allowFrom injected by repair
+    const topAllowFrom = cfg.channels.telegram.allowFrom as string[] | undefined;
+    expect(
+      topAllowFrom === undefined || !Array.isArray(topAllowFrom) || topAllowFrom.length === 0,
+    ).toBe(true);
+  });
+
+  it("does not inject orphan top-level allowFrom when repairing allowlist with accounts (#35560)", async () => {
+    const result = await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      // Create a pairing store with entries so the repair has something to restore
+      const pairingDir = path.join(configDir, "pairing");
+      await fs.mkdir(pairingDir, { recursive: true });
+      await fs.writeFile(
+        path.join(pairingDir, "telegram.json"),
+        JSON.stringify({ default: { "99999": { paired: true } } }),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({
+          channels: {
+            telegram: {
+              accounts: {
+                default: {
+                  enabled: true,
+                  botToken: "fake:token",
+                  dmPolicy: "allowlist",
+                  // allowFrom intentionally omitted — should be restored from pairing store
+                },
+              },
+            },
+          },
+        }),
+        "utf-8",
+      );
+      return loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: true },
+        confirm: async () => false,
+      });
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        telegram: {
+          allowFrom?: unknown;
+          accounts: { default: { allowFrom?: string[] } };
+        };
+      };
+    };
+    // Top-level should NOT have an orphan allowFrom
+    const topAllowFrom = cfg.channels.telegram.allowFrom as string[] | undefined;
+    expect(
+      topAllowFrom === undefined || !Array.isArray(topAllowFrom) || topAllowFrom.length === 0,
+    ).toBe(true);
+  });
 });
