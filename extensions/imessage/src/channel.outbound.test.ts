@@ -63,4 +63,33 @@ describe("imessagePlugin outbound", () => {
     );
     expect(result).toEqual({ channel: "imessage", messageId: "m-media" });
   });
+
+  it("forwards mediaLocalRoots on direct sendMedia adapter path", async () => {
+    const sendIMessage = vi.fn().mockResolvedValue({ messageId: "m-media-local" });
+    const sendMedia = imessagePlugin.outbound?.sendMedia;
+    expect(sendMedia).toBeDefined();
+    const mediaLocalRoots = ["/tmp/workspace"];
+
+    const result = await sendMedia!({
+      cfg,
+      to: "chat_id:88",
+      text: "caption",
+      mediaUrl: "/tmp/workspace/pic.png",
+      mediaLocalRoots,
+      accountId: "acct-1",
+      deps: { sendIMessage },
+    });
+
+    expect(sendIMessage).toHaveBeenCalledWith(
+      "chat_id:88",
+      "caption",
+      expect.objectContaining({
+        mediaUrl: "/tmp/workspace/pic.png",
+        mediaLocalRoots,
+        accountId: "acct-1",
+        maxBytes: 3 * 1024 * 1024,
+      }),
+    );
+    expect(result).toEqual({ channel: "imessage", messageId: "m-media-local" });
+  });
 });
