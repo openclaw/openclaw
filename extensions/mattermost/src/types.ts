@@ -70,6 +70,10 @@ export type MattermostAccountConfig = {
     /** Explicit callback URL (e.g. behind reverse proxy). */
     callbackUrl?: string;
   };
+  interactions?: {
+    /** External base URL used for Mattermost interaction callbacks. */
+    callbackBaseUrl?: string;
+  };
 };
 
 export type MattermostConfig = {
