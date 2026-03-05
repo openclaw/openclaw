@@ -34,6 +34,8 @@ type MessageSendParams = {
   content: string;
   /** Active agent id for per-agent outbound media root scoping. */
   agentId?: string;
+  /** Session key for internal outbound hook dispatch when no mirror is configured. */
+  sessionKey?: string;
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
@@ -211,7 +213,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: params.agentId,
-      sessionKey: params.mirror?.sessionKey,
+      sessionKey: params.sessionKey ?? params.mirror?.sessionKey,
     });
     const results = await deliverOutboundPayloads({
       cfg,
