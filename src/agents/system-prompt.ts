@@ -125,7 +125,16 @@ function buildMessagingSection(params: {
   messageToolHints?: string[];
 }) {
   if (params.isMinimal) {
-    return [];
+    // Sub-agents still need to know about channel-specific formatting requirements
+    // (e.g. "output HTML, not Markdown" for Campfire/Synology Chat) even though the
+    // full messaging section is suppressed in minimal mode.  Without these hints the
+    // sub-agent completes in raw Markdown regardless of what the channel expects.
+    // Refs #35795.
+    const hints = params.messageToolHints?.filter(Boolean) ?? [];
+    if (hints.length === 0) {
+      return [];
+    }
+    return ["## Platform Formatting", ...hints, ""];
   }
   return [
     "## Messaging",

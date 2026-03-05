@@ -155,6 +155,35 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
+  it("injects messageToolHints under Platform Formatting in minimal mode (refs #35795)", () => {
+    // Sub-agents (promptMode="minimal") must still receive channel-specific formatting
+    // hints so their completion messages respect the channel's requirements.
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      messageToolHints: ["Output HTML, not Markdown.", "Wrap links with <a href=...>."],
+      toolNames: ["message"],
+    });
+
+    expect(prompt).toContain("## Platform Formatting");
+    expect(prompt).toContain("Output HTML, not Markdown.");
+    expect(prompt).toContain("Wrap links with <a href=...>.");
+    // The full Messaging section should still be suppressed.
+    expect(prompt).not.toContain("## Messaging");
+  });
+
+  it("omits Platform Formatting section when messageToolHints is empty in minimal mode", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      messageToolHints: [],
+      toolNames: ["message"],
+    });
+
+    expect(prompt).not.toContain("## Platform Formatting");
+    expect(prompt).not.toContain("## Messaging");
+  });
+
   it("includes safety guardrails in full prompts", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
