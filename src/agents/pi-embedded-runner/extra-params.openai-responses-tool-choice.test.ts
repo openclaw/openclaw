@@ -100,7 +100,7 @@ describe("extra-params: OpenAI Responses tool_choice default", () => {
         api: "openai-completions",
         provider: "openai",
         id: "gpt-5",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
       initialPayload: {
         tools: [{ type: "function", function: { name: "exec" } }],
       },
