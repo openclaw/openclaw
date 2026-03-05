@@ -416,7 +416,10 @@ function appendAssistantTranscriptMessage(params: {
 
   if (!fs.existsSync(transcriptPath)) {
     if (!params.createIfMissing) {
-      return { ok: false, error: "transcript file not found" };
+      return {
+        ok: false,
+        error: "transcript file not found, use createIfMissing: true to auto-create",
+      };
     }
     const ensured = ensureTranscriptFile({
       transcriptPath,
