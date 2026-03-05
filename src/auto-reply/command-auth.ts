@@ -339,9 +339,12 @@ export function resolveCommandAuthorization(params: {
     ? senderCandidates.find((candidate) => ownerCandidatesForCommands.includes(candidate))
     : undefined;
   const senderId = matchedSender ?? senderCandidates[0];
+  const hasOperatorAdminScope = Array.isArray(ctx.GatewayClientScopes)
+    ? ctx.GatewayClientScopes.includes("operator.admin")
+    : false;
 
   const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
-  const senderIsOwner = Boolean(matchedSender);
+  const senderIsOwner = Boolean(matchedSender) || hasOperatorAdminScope;
   const ownerAllowlistConfigured = ownerAllowAll || explicitOwners.length > 0;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner

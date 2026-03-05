@@ -173,6 +173,26 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.ownerList).toEqual(["123"]);
   });
 
+  it("treats operator.admin gateway scope as owner", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["whatsapp:+15551234567"] },
+      channels: { whatsapp: { allowFrom: ["whatsapp:+19995551234"] } },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        SenderE164: "+19995551234",
+        GatewayClientScopes: ["operator.admin"],
+      } as MsgContext,
+      cfg,
+      commandAuthorized: false,
+    });
+
+    expect(auth.senderIsOwner).toBe(true);
+  });
+
   it("does not infer a provider from channel allowlists for webchat command contexts", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+15551234567"] } },
