@@ -17,6 +17,8 @@ type MarkdownConfigSection = MarkdownConfigEntry & {
 const DEFAULT_TABLE_MODES = new Map<string, MarkdownTableMode>([
   ["signal", "bullets"],
   ["whatsapp", "bullets"],
+  // Telegram renders markdown tables as raw pipes/dashes; prefer code blocks.
+  ["telegram", "code"],
 ]);
 
 const isMarkdownTableMode = (value: unknown): value is MarkdownTableMode =>
