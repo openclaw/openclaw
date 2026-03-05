@@ -37,11 +37,7 @@ export type SessionMemorySummaryEntry = {
   discard: boolean;
 };
 
-export type SessionMemoryAuditEvent =
-  | "write"
-  | "discard"
-  | "write_failed"
-  | "raw_expired";
+export type SessionMemoryAuditEvent = "write" | "discard" | "write_failed" | "raw_expired";
 
 export type SessionMemoryAuditEntry = {
   event: SessionMemoryAuditEvent;

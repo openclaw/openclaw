@@ -288,11 +288,15 @@ describe("buildAgentSystemPrompt", () => {
       ],
     });
 
-    expect(prompt).toContain("For transcript-derived current-session recall, prefer session_memory_recall.");
+    expect(prompt).toContain(
+      "For transcript-derived current-session recall, prefer session_memory_recall.",
+    );
     expect(prompt).toContain(
       "session_memory_recall is current-session only. It returns source + confidence; when confidence is medium or low, explicitly qualify the answer.",
     );
-    expect(prompt).toContain("Use session_memory_signal when the current session transcript is noisy");
+    expect(prompt).toContain(
+      "Use session_memory_signal when the current session transcript is noisy",
+    );
     expect(prompt).toContain(
       "sessions_history is for raw transcript inspection/debugging, not normal transcript-memory recall.",
     );

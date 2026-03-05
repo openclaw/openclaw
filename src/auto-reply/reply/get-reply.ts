@@ -383,6 +383,7 @@ export async function getReplyFromConfig(
         agentId,
         sessionId,
         query: cleanedBody,
+        helperDeps: { lane: "background:session-memory-auto-recall" },
       })) ?? "";
   } catch (err) {
     // transcript recall is optional — degrade gracefully

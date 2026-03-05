@@ -84,18 +84,16 @@ describe("session sanitization service", () => {
   });
 
   it("writes raw entries, sanitized summaries, and audit events", async () => {
-    const runner = vi
-      .fn()
-      .mockResolvedValue(
-        createRunnerResult({
-          mode: "write",
-          decisions: ["Call mom tomorrow morning."],
-          actionItems: ["Call mom tomorrow at 9."],
-          entities: ["mom"],
-          contextNote: "User asked to remember a follow-up call.",
-          discard: false,
-        }),
-      );
+    const runner = vi.fn().mockResolvedValue(
+      createRunnerResult({
+        mode: "write",
+        decisions: ["Call mom tomorrow morning."],
+        actionItems: ["Call mom tomorrow at 9."],
+        entities: ["mom"],
+        contextNote: "User asked to remember a follow-up call.",
+        discard: false,
+      }),
+    );
 
     await writeTranscriptTurnToSessionMemory({
       cfg: createConfig(),
@@ -128,17 +126,15 @@ describe("session sanitization service", () => {
   });
 
   it("records discard decisions without appending a summary entry", async () => {
-    const runner = vi
-      .fn()
-      .mockResolvedValue(
-        createRunnerResult({
-          mode: "write",
-          decisions: [],
-          actionItems: [],
-          entities: [],
-          discard: true,
-        }),
-      );
+    const runner = vi.fn().mockResolvedValue(
+      createRunnerResult({
+        mode: "write",
+        decisions: [],
+        actionItems: [],
+        entities: [],
+        discard: true,
+      }),
+    );
 
     await writeTranscriptTurnToSessionMemory({
       cfg: createConfig(),
@@ -350,12 +346,8 @@ describe("session sanitization service", () => {
       sessionId: SESSION_ID,
     });
 
-    await expect(
-      fs.stat(resolveSessionMemorySummaryFile(AGENT_ID, SESSION_ID)),
-    ).rejects.toThrow();
-    await expect(
-      fs.stat(resolveSessionMemoryAuditFile(AGENT_ID, SESSION_ID)),
-    ).rejects.toThrow();
+    await expect(fs.stat(resolveSessionMemorySummaryFile(AGENT_ID, SESSION_ID))).rejects.toThrow();
+    await expect(fs.stat(resolveSessionMemoryAuditFile(AGENT_ID, SESSION_ID))).rejects.toThrow();
     expect(
       await readSessionMemoryRawEntries({
         agentId: AGENT_ID,

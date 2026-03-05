@@ -22,7 +22,12 @@ function encodeMessageId(messageId: string): string {
 }
 
 export function resolveSessionMemoryBaseDir(agentId: string): string {
-  return path.join(resolveStateDir(process.env), "agents", normalizeAgentId(agentId), "session-memory");
+  return path.join(
+    resolveStateDir(process.env),
+    "agents",
+    normalizeAgentId(agentId),
+    "session-memory",
+  );
 }
 
 export function resolveSessionMemoryRawDir(agentId: string, sessionId: string): string {
@@ -81,7 +86,9 @@ export async function writeSessionMemoryRawEntry(params: {
   return filePath;
 }
 
-export async function readSessionMemoryRawEntry(filePath: string): Promise<SessionMemoryRawEntry | null> {
+export async function readSessionMemoryRawEntry(
+  filePath: string,
+): Promise<SessionMemoryRawEntry | null> {
   const raw = await safeReadUtf8(filePath);
   if (!raw) {
     return null;
@@ -113,7 +120,9 @@ export async function readSessionMemoryRawEntries(params: {
         return entry ? { filePath, entry } : null;
       }),
   );
-  return rows.filter((row): row is { filePath: string; entry: SessionMemoryRawEntry } => Boolean(row));
+  return rows.filter((row): row is { filePath: string; entry: SessionMemoryRawEntry } =>
+    Boolean(row),
+  );
 }
 
 function parseJsonLines<T>(raw: string, parse: (value: unknown) => T): T[] {

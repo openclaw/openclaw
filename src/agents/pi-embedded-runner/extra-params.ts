@@ -828,17 +828,10 @@ function createQwenStopTokenWrapper(baseStreamFn: StreamFn | undefined): StreamF
       onPayload: (payload) => {
         const qwenThinkingFormat =
           model.api === "openai-completions"
-            ? (
-                model.compat as
-                  | { thinkingFormat?: "openai" | "zai" | "qwen" }
-                  | undefined
-              )?.thinkingFormat
+            ? (model.compat as { thinkingFormat?: "openai" | "zai" | "qwen" } | undefined)
+                ?.thinkingFormat
             : undefined;
-        if (
-          qwenThinkingFormat === "qwen" &&
-          payload &&
-          typeof payload === "object"
-        ) {
+        if (qwenThinkingFormat === "qwen" && payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
           if (payloadObj.stop === undefined) {
             // Qwen chat templates expect <|im_end|> as the turn terminator.
