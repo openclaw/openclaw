@@ -345,7 +345,11 @@ export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
   // DNS resolution; the SSRF hostname/IP pre-checks in
   // resolvePinnedHostnameWithPolicy still run before we reach this point.
   if (hasProxyEnv()) {
-    return new EnvHttpProxyAgent();
+    // proxyTunnel: false ensures plain HTTP targets use absolute-URI style
+    // proxying (GET http://host/path) instead of CONNECT tunneling, which
+    // some proxies reject for non-TLS traffic.  HTTPS targets still use
+    // CONNECT regardless of this flag.
+    return new EnvHttpProxyAgent({ proxyTunnel: false });
   }
 
   return new Agent({
