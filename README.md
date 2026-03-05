@@ -52,9 +52,10 @@ Model note: while many providers/models are supported, for the best experience a
 Runtime: **Node ≥22**.
 
 ```bash
-npm install -g openclaw@latest
-# or: pnpm add -g openclaw@latest
+npm install -g openclaw@latest # or: pnpm add -g openclaw@latest
+```
 
+```bash
 openclaw onboard --install-daemon
 ```
 
