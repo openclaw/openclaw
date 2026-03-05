@@ -90,6 +90,7 @@ export {
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
+export { KeyedAsyncQueue } from "./keyed-async-queue.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { runPluginCommandWithTimeout } from "./run-command.js";
 export { createLoggerBackedRuntime } from "./runtime.js";
