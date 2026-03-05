@@ -13,7 +13,34 @@ const {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  resolveTavilyApiKey,
+  resolveTavilyConfig,
 } = __testing;
+
+describe("web_search tavily config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveTavilyApiKey({ apiKey: "tvly-test-key" })).toBe("tvly-test-key");
+  });
+
+  it("returns undefined when no apiKey is available", () => {
+    withEnv({ TAVILY_API_KEY: undefined }, () => {
+      expect(resolveTavilyApiKey({})).toBeUndefined();
+      expect(resolveTavilyApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("uses TAVILY_API_KEY from env", () => {
+    withEnv({ TAVILY_API_KEY: "tvly-env-key" }, () => {
+      expect(resolveTavilyApiKey({})).toBe("tvly-env-key");
+    });
+  });
+
+  it("resolves tavily config section", () => {
+    const search = { tavily: { apiKey: "test" } };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(resolveTavilyConfig(search as any)).toEqual({ apiKey: "test" });
+  });
+});
 
 describe("web_search perplexity baseUrl defaults", () => {
   it("detects a Perplexity key prefix", () => {
