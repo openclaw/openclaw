@@ -81,16 +81,21 @@ function toWatchGlobRoot(raw: string): string {
   return raw.replaceAll("\\", "/").replace(/\/+$/, "");
 }
 
-function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): string[] {
+export function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): string[] {
   // Skills are defined by SKILL.md; watch only those files to avoid traversing
   // or watching unrelated large trees (e.g. datasets) that can exhaust FDs.
   const targets = new Set<string>();
+  const loadConfig = config?.skills?.load;
+  const indexFileName = loadConfig?.indexFileName?.trim() || "skills-index.json";
   for (const root of resolveWatchPaths(workspaceDir, config)) {
     const globRoot = toWatchGlobRoot(root);
     // Some configs point directly at a skill folder.
     targets.add(`${globRoot}/SKILL.md`);
     // Standard layout: <skillsRoot>/<skillName>/SKILL.md
     targets.add(`${globRoot}/*/SKILL.md`);
+    if (loadConfig?.indexFirst) {
+      targets.add(`${globRoot}/${indexFileName}`);
+    }
   }
   return Array.from(targets).toSorted();
 }

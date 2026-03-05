@@ -71,3 +71,34 @@ describe("ensureSkillsWatcher", () => {
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/my-skill/SKILL.md"))).toBe(false);
   });
 });
+
+describe("resolveWatchTargets", () => {
+  it("includes skills-index.json when indexFirst is enabled", async () => {
+    const mod = await import("./refresh.js");
+    const targets = mod.resolveWatchTargets("/tmp/workspace", {
+      skills: {
+        load: {
+          indexFirst: true,
+          extraDirs: ["/tmp/external-skills"],
+        },
+      },
+    });
+
+    const posix = (p: string) => p.replaceAll("\\", "/");
+    expect(targets).toEqual(
+      expect.arrayContaining([
+        posix(path.join("/tmp/workspace", "skills", "skills-index.json")),
+        posix(path.join("/tmp/workspace", ".agents", "skills", "skills-index.json")),
+        posix(path.join("/tmp/external-skills", "skills-index.json")),
+        posix(path.join(os.homedir(), ".agents", "skills", "skills-index.json")),
+      ]),
+    );
+  });
+
+  it("does not include skills-index.json by default", async () => {
+    const mod = await import("./refresh.js");
+    const targets = mod.resolveWatchTargets("/tmp/workspace");
+
+    expect(targets.every((target) => !target.endsWith("/skills-index.json"))).toBe(true);
+  });
+});
