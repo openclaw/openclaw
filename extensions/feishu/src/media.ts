@@ -193,6 +193,7 @@ export async function uploadImageFeishu(params: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
       image: imageData as any,
     },
+    timeout: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
   });
 
   // SDK v1.30+ returns data directly without code wrapper on success
