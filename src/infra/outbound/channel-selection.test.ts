@@ -29,6 +29,19 @@ describe("resolveMessageChannelSelection", () => {
     });
   });
 
+  it("accepts provider-prefixed channel values for explicit cross-channel routing", async () => {
+    const selection = await resolveMessageChannelSelection({
+      cfg: {} as never,
+      channel: "discord:123456789012345678",
+    });
+
+    expect(selection).toEqual({
+      channel: "discord",
+      configured: [],
+      source: "explicit",
+    });
+  });
+
   it("falls back to tool context channel when explicit channel is unknown", async () => {
     const selection = await resolveMessageChannelSelection({
       cfg: {} as never,

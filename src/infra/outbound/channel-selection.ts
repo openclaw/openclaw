@@ -25,13 +25,26 @@ function resolveKnownChannel(value?: string | null): MessageChannelId | undefine
   if (!normalized) {
     return undefined;
   }
-  if (!isDeliverableMessageChannel(normalized)) {
+  if (isDeliverableMessageChannel(normalized) && isKnownChannel(normalized)) {
+    return normalized as MessageChannelId;
+  }
+
+  const trimmed = value?.trim();
+  const separator = trimmed?.indexOf(":") ?? -1;
+  if (separator <= 0) {
     return undefined;
   }
-  if (!isKnownChannel(normalized)) {
+  const prefixed = normalizeMessageChannel(trimmed?.slice(0, separator));
+  if (!prefixed) {
     return undefined;
   }
-  return normalized as MessageChannelId;
+  if (!isDeliverableMessageChannel(prefixed)) {
+    return undefined;
+  }
+  if (!isKnownChannel(prefixed)) {
+    return undefined;
+  }
+  return prefixed as MessageChannelId;
 }
 
 function isAccountEnabled(account: unknown): boolean {
@@ -94,7 +107,8 @@ export async function resolveMessageChannelSelection(params: {
 }> {
   const normalized = normalizeMessageChannel(params.channel);
   if (normalized) {
-    if (!isKnownChannel(normalized)) {
+    const explicit = resolveKnownChannel(params.channel);
+    if (!explicit) {
       const fallback = resolveKnownChannel(params.fallbackChannel);
       if (fallback) {
         return {
@@ -106,7 +120,7 @@ export async function resolveMessageChannelSelection(params: {
       throw new Error(`Unknown channel: ${String(normalized)}`);
     }
     return {
-      channel: normalized as MessageChannelId,
+      channel: explicit,
       configured: await listConfiguredMessageChannels(params.cfg),
       source: "explicit",
     };
