@@ -252,7 +252,10 @@ describe("startup-memory", () => {
 
     it("should fall back to cgroup v1 when v2 not available", () => {
       vi.mocked(os.totalmem).mockReturnValue(8 * 1024 * 1024 * 1024);
-      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(fs.existsSync).mockImplementation((path) => {
+        // cgroup v2 doesn't exist, but v1 does
+        return path === "/sys/fs/cgroup/memory/memory.limit_in_bytes";
+      });
       vi.mocked(fs.readFileSync).mockImplementation((path) => {
         if (path === "/sys/fs/cgroup/memory/memory.limit_in_bytes") {
           return "1073741824"; // 1GB
