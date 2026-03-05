@@ -31,6 +31,9 @@ import type {
   PluginLogger,
 } from "./types.js";
 
+// Global symbol for shared jiti instance (used by plugin-sdk/root-alias.cjs)
+const JITI_LOADER_SYMBOL = Symbol.for("openclaw.pluginJitiLoader");
+
 export type PluginLoadResult = PluginRegistry;
 
 export type PluginLoadOptions = {
@@ -581,6 +584,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           }
         : {}),
     });
+    // Store globally so plugin-sdk/root-alias.cjs can reuse the same instance with aliases
+    (globalThis as Record<symbol, unknown>)[JITI_LOADER_SYMBOL] = jitiLoader;
     return jitiLoader;
   };
 
