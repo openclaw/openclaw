@@ -98,6 +98,43 @@ describe("slack ACP thread-binding integration", () => {
       expect(resolved).toBe(sessionKey);
     });
 
+    it("binds and resolves in a Slack DM thread via OriginatingConversationId", async () => {
+      const threadTs = "1709000000.000300";
+      const dmChannelId = "D_DM_CHAN";
+      const sessionKey = "agent:test-account:acp:codex-dm";
+
+      const service = getSessionBindingService();
+      await service.bind({
+        targetSessionKey: sessionKey,
+        targetKind: "session",
+        conversation: {
+          channel: "slack",
+          accountId: "test-account",
+          conversationId: threadTs,
+          parentConversationId: dmChannelId,
+        },
+        placement: "current",
+        metadata: { boundBy: "U_DM_USER", agentId: "codex" },
+      });
+
+      // DM context: OriginatingTo is user:<id>, but OriginatingConversationId carries the D... channel.
+      const params = buildCommandTestParams("/acp status", baseCfg, {
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        AccountId: "test-account",
+        MessageThreadId: threadTs,
+        OriginatingTo: "user:U_DM_USER",
+        OriginatingConversationId: dmChannelId,
+      });
+
+      const ctx = resolveAcpCommandBindingContext(params);
+      expect(ctx.parentConversationId).toBe(dmChannelId);
+
+      const resolved = resolveBoundAcpThreadSessionKey(params);
+      expect(resolved).toBe(sessionKey);
+    });
+
     it("returns undefined when thread has no binding", () => {
       const params = buildCommandTestParams("/acp status", baseCfg, {
         Provider: "slack",

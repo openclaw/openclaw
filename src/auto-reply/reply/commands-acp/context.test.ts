@@ -90,7 +90,6 @@ describe("commands-acp context", () => {
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
     expect(isAcpCommandDiscordChannel(params)).toBe(false);
   });
-
   it("resolves slack thread parent from ThreadParentId for DM thread contexts", () => {
     const params = buildCommandTestParams("/acp status", baseCfg, {
       Provider: "slack",
@@ -109,6 +108,23 @@ describe("commands-acp context", () => {
       conversationId: "1709000000.444444",
       parentConversationId: "D1234567890",
     });
+  });
+
+  it("resolves parentConversationId from OriginatingConversationId for Slack DMs", () => {
+    const params = buildCommandTestParams("/acp spawn claude --thread here", baseCfg, {
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "user:U12345",
+      OriginatingConversationId: "D98765",
+      AccountId: "test",
+      MessageThreadId: "1709000000.000100",
+    });
+
+    const ctx = resolveAcpCommandBindingContext(params);
+    expect(ctx.channel).toBe("slack");
+    expect(ctx.threadId).toBe("1709000000.000100");
+    expect(ctx.parentConversationId).toBe("D98765");
   });
 
   it("builds canonical telegram topic conversation ids from originating chat + thread", () => {
