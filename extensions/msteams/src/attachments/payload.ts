@@ -1,4 +1,4 @@
-import { buildMediaPayload } from "openclaw/plugin-sdk/compat";
+import { buildMediaPayload } from "openclaw/plugin-sdk/msteams";
 
 export function buildMSTeamsMediaPayload(
   mediaList: Array<{ path: string; contentType?: string }>,

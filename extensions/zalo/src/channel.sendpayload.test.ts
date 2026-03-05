@@ -1,4 +1,4 @@
-import type { ReplyPayload } from "openclaw/plugin-sdk/compat";
+import type { ReplyPayload } from "openclaw/plugin-sdk/zalo";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { zaloPlugin } from "./channel.js";
 

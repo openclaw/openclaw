@@ -2,15 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { discoverOpenClawPlugins } from "../src/plugins/discovery.js";
 
-const ROOT_IMPORT_PATTERNS = [
-  /\b(?:import|export)\b[\s\S]*?\bfrom\s+["']openclaw\/plugin-sdk["']/,
-  /\bimport\s+["']openclaw\/plugin-sdk["']/,
-  /\bimport\s*\(\s*["']openclaw\/plugin-sdk["']\s*\)/,
-  /\brequire\s*\(\s*["']openclaw\/plugin-sdk["']\s*\)/,
-];
+// Match exact monolithic-root specifier in any code path:
+// imports/exports, require/dynamic import, and test mocks (vi.mock/jest.mock).
+const ROOT_IMPORT_PATTERN = /["']openclaw\/plugin-sdk["']/;
 
 function hasMonolithicRootImport(content: string): boolean {
-  return ROOT_IMPORT_PATTERNS.some((pattern) => pattern.test(content));
+  return ROOT_IMPORT_PATTERN.test(content);
 }
 
 function isSourceFile(filePath: string): boolean {

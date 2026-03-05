@@ -1,4 +1,4 @@
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/compat";
+import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/tlon";
 import { UrbitAuthError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 

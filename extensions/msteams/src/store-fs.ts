@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/compat";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/msteams";
 import { withFileLock as withPathLock } from "./file-lock.js";
 
 const STORE_LOCK_OPTIONS = {

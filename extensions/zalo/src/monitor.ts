@@ -3,7 +3,7 @@ import type {
   MarkdownTableMode,
   OpenClawConfig,
   OutboundReplyPayload,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/zalo";
 import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
@@ -15,7 +15,7 @@ import {
   sendMediaWithLeadingCaption,
   resolveWebhookPath,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/zalo";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
   ZaloApiError,

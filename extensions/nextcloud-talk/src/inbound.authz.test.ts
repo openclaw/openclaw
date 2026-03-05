@@ -1,4 +1,4 @@
-import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/compat";
+import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/nextcloud-talk";
 import { describe, expect, it, vi } from "vitest";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";

@@ -148,7 +148,7 @@ describe("message tool schema scoping", () => {
     label: "Discord",
     docsPath: "/channels/discord",
     blurb: "Discord test plugin.",
-    actions: ["send", "poll"],
+    actions: ["send", "poll", "poll-vote"],
   });
 
   afterEach(() => {
@@ -161,14 +161,14 @@ describe("message tool schema scoping", () => {
       expectComponents: false,
       expectButtons: true,
       expectButtonStyle: true,
-      expectedActions: ["send", "react", "poll"],
+      expectedActions: ["send", "react", "poll", "poll-vote"],
     },
     {
       provider: "discord",
       expectComponents: true,
       expectButtons: false,
       expectButtonStyle: false,
-      expectedActions: ["send", "poll", "react"],
+      expectedActions: ["send", "poll", "poll-vote", "react"],
     },
   ])(
     "scopes schema fields for $provider",
@@ -209,6 +209,9 @@ describe("message tool schema scoping", () => {
       for (const action of expectedActions) {
         expect(actionEnum).toContain(action);
       }
+      expect(properties.pollId).toBeDefined();
+      expect(properties.pollOptionIndex).toBeDefined();
+      expect(properties.pollOptionId).toBeDefined();
     },
   );
 });

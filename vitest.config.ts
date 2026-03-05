@@ -8,55 +8,60 @@ const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
 const ciWorkers = isWindows ? 2 : 3;
+const pluginSdkSubpaths = [
+  "account-id",
+  "core",
+  "compat",
+  "telegram",
+  "discord",
+  "slack",
+  "signal",
+  "imessage",
+  "whatsapp",
+  "line",
+  "msteams",
+  "acpx",
+  "bluebubbles",
+  "copilot-proxy",
+  "device-pair",
+  "diagnostics-otel",
+  "diffs",
+  "feishu",
+  "google-gemini-cli-auth",
+  "googlechat",
+  "irc",
+  "llm-task",
+  "lobster",
+  "matrix",
+  "mattermost",
+  "memory-core",
+  "memory-lancedb",
+  "minimax-portal-auth",
+  "nextcloud-talk",
+  "nostr",
+  "open-prose",
+  "phone-control",
+  "qwen-portal-auth",
+  "synology-chat",
+  "talk-voice",
+  "test-utils",
+  "thread-ownership",
+  "tlon",
+  "twitch",
+  "voice-call",
+  "zalo",
+  "zalouser",
+  "keyed-async-queue",
+] as const;
 
 export default defineConfig({
   resolve: {
     // Keep this ordered: the base `openclaw/plugin-sdk` alias is a prefix match.
     alias: [
-      {
-        find: "openclaw/plugin-sdk/account-id",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "account-id.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/core",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "core.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/compat",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "compat.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/telegram",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "telegram.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/discord",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "discord.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/slack",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "slack.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/signal",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "signal.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/imessage",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "imessage.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/whatsapp",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "whatsapp.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/line",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "line.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/keyed-async-queue",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "keyed-async-queue.ts"),
-      },
+      ...pluginSdkSubpaths.map((subpath) => ({
+        find: `openclaw/plugin-sdk/${subpath}`,
+        replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
+      })),
       {
         find: "openclaw/plugin-sdk",
         replacement: path.join(repoRoot, "src", "plugin-sdk", "index.ts"),

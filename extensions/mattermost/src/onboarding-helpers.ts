@@ -1,1 +1,1 @@
-export { promptAccountId } from "openclaw/plugin-sdk/compat";
+export { promptAccountId } from "openclaw/plugin-sdk/mattermost";

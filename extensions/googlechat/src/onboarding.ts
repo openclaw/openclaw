@@ -1,4 +1,4 @@
-import type { OpenClawConfig, DmPolicy } from "openclaw/plugin-sdk/compat";
+import type { OpenClawConfig, DmPolicy } from "openclaw/plugin-sdk/googlechat";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
@@ -10,7 +10,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   migrateBaseNameToDefaultAccount,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/googlechat";
 import {
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
