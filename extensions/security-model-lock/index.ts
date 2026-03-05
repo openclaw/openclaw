@@ -5,6 +5,9 @@ import type {
   PluginHookToolContext,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
+  PluginHookMessageSendingEvent,
+  PluginHookMessageSendingResult,
+  PluginHookMessageContext,
   PluginHookAgentContext,
 } from "openclaw/plugin-sdk/types";
 import fs from "node:fs";
@@ -27,6 +30,17 @@ type SecureModelLockState = {
   lockedAt: number;
   reason: string;
   triggeredBySkill?: string;
+  /**
+   * 触发锁定的 runId。
+   * before_tool_call 阶段 2 只在同一个 run 内 block 工具调用，
+   * 避免后续 run（用户重新发送请求）的合法工具调用被误 block。
+   */
+  lockRunId?: string;
+  /**
+   * 当本次 run 中首次触发锁定时置为 true。
+   * message_sending hook 消费后立即清除，确保替换通知只发送一次。
+   */
+  pendingNotice: boolean;
 };
 
 // 插件配置 Schema
@@ -60,7 +74,7 @@ function parseConfig(api: OpenClawPluginApi): SecurityModelLockConfig {
     enabled: config?.enabled ?? true,
     lockNotice:
       config?.lockNotice ??
-      "检测到敏感 skill 调用，已切换到安全模型。会话已锁定，无法切换回其他模型。",
+      "⚠️ 检测到敏感 skill 调用，会话已切换并固定为安全模型，请重新输入。切换其他模型请使用 /new 或 /reset命令重置会话。",
   };
 }
 
@@ -92,11 +106,16 @@ function lockSession(params: {
   sessionKey: string;
   reason: string;
   triggeredBySkill?: string;
+  runId?: string;
 }): SecureModelLockState {
   const state: SecureModelLockState = {
     lockedAt: Date.now(),
     reason: params.reason,
     triggeredBySkill: params.triggeredBySkill,
+    // 记录触发锁定的 runId，用于限制阶段 2 只在同一 run 内 block
+    lockRunId: params.runId,
+    // 标记需要在本次 run 的出站消息中发送一次锁定通知
+    pendingNotice: true,
   };
   sessionLocks.set(params.sessionKey, state);
   return state;
@@ -255,20 +274,47 @@ export default function register(api: OpenClawPluginApi) {
   );
 
   // ============================================================================
-  // before_tool_call hook - 检测 read 工具是否读取敏感 skill 文件
+  // before_tool_call hook - 两阶段拦截：
+  //   阶段 1：首次检测到 read 敏感 skill → 锁定会话并阻断本次工具调用。
+  //   阶段 2：会话已锁定 → 阻断所有后续工具调用，强制 LLM 立即停止执行，
+  //           避免继续调用 web_search/exec/process 等工具绕过锁定。
+  //           message_sending hook 会在 LLM 生成最终回复时将其替换为通知文本。
   // ============================================================================
   api.on("before_tool_call", (event, ctx): PluginHookBeforeToolCallResult | void => {
     const { toolName, params } = event;
-    const { sessionKey, sessionId, runId } = ctx;
+    const { sessionKey, runId } = ctx;
 
     api.logger.debug(`security-model-lock: before_tool_call: toolName=${toolName}, sessionKey=${sessionKey}`);
 
-    // 只检测 read 工具
+    // ── 阶段 2：会话已锁定，且当前仍在触发锁定的同一 run 内 → 阻断工具调用 ──
+    // 只在同一 runId 内 block，避免用户重新发送请求后的合法工具调用被误 block。
+    if (isSessionLocked(sessionKey)) {
+      const lockState = getLockState(sessionKey);
+      if (lockState?.lockRunId && lockState.lockRunId === runId) {
+        api.logger.info(
+          `security-model-lock: session ${sessionKey} is locked, blocking tool call: ${toolName}`,
+        );
+        // 阻断并给出简短原因，让 LLM 停止工具调用；
+        // 实际的用户通知文本由 message_sending hook 替换。
+        return {
+          block: true,
+          blockReason: "当前会话已触发敏感skill，请停止所有工具调用并回复用户。",
+        };
+      }
+      // 不同 run（用户重新发送请求）：只做模型切换，不 block 工具调用
+    }
+
+    // ── 阶段 1：检测 read 工具是否读取敏感 skill 文件 ──────────────────────
+    // 如果会话已锁定（来自之前的 run），跳过阶段 1，避免安全模型在新 run 中
+    // 读取 SKILL.md 时被误判为再次触发敏感 skill，导致重复锁定。
+    if (isSessionLocked(sessionKey)) {
+      return;
+    }
+
     if (toolName.toLowerCase() !== "read") {
       return;
     }
 
-    // 检查是否有 file_path 或 path 参数（两者都可能被使用）
     const filePath = (params?.file_path as string | undefined) ?? (params?.path as string | undefined);
     api.logger.debug(`security-model-lock: read tool file_path=${filePath}`);
 
@@ -277,7 +323,6 @@ export default function register(api: OpenClawPluginApi) {
       return;
     }
 
-    // 检查是否读取敏感 skill 文件
     const matchedSkill = checkIfSensitiveSkillPath(filePath, sensitiveSkillNames, skillsDirs, api.logger);
     api.logger.debug(`security-model-lock: checkIfSensitiveSkillPath result: ${matchedSkill}`);
 
@@ -285,31 +330,25 @@ export default function register(api: OpenClawPluginApi) {
       return;
     }
 
-    // 检查会话是否已锁定
-    const locked = isSessionLocked(sessionKey);
-    if (locked) {
-      api.logger.info(
-        `security-model-lock: allowing read ${filePath} in locked session ${sessionKey} (using secure model)`,
-      );
-      return;
-    }
-
     api.logger.info(
       `security-model-lock: sensitive skill detected: ${matchedSkill} via read ${filePath} (session: ${sessionKey}, run: ${runId})`,
     );
 
-    // 锁定会话
+    // 锁定会话，pendingNotice=true 让 message_sending hook 替换 LLM 生成的回复
+    // 记录 runId 以便阶段 2 只在同一 run 内 block 工具调用
     lockSession({
       sessionKey: sessionKey!,
       reason: `Sensitive skill "${matchedSkill}" was accessed via read tool`,
       triggeredBySkill: matchedSkill,
+      runId: runId,
     });
 
     api.logger.info(
       `security-model-lock: session ${sessionKey} locked, blocking tool call`,
     );
 
-    // 阻断工具调用，以对话形式发送锁定通知
+    // 阻断工具调用；LLM 会根据 blockReason 生成回复，
+    // 该回复随后被 message_sending hook 替换为统一的 lockNotice。
     return {
       block: true,
       blockReason: `检测到敏感 skill "${matchedSkill}" 初次被读写，已切换到安全模型，需要暂停本次任务并告知用户，引导用户重新提问。`,
@@ -338,6 +377,42 @@ export default function register(api: OpenClawPluginApi) {
       modelOverride: config.secureModel?.model,
     };
   });
+
+  // ============================================================================
+  // message_sending hook - 拦截并替换本次 run 触发锁定后的第一条出站消息
+  //
+  // 时机：LLM 生成回复后、消息实际发送给用户之前（同步等待，可修改内容）。
+  // 目的：无论 LLM 根据 blockReason 生成了什么文本，都统一替换为配置的
+  //       lockNotice，确保用户收到准确、一致的安全提示。
+  // ============================================================================
+  api.on(
+    "message_sending",
+    (
+      event: PluginHookMessageSendingEvent,
+      ctx: PluginHookMessageContext,
+    ): PluginHookMessageSendingResult | void => {
+      // message_sending ctx 不携带 sessionKey；通过遍历锁定表找到有 pendingNotice 的会话。
+      // 由于单次 run 是串行的，同一时刻最多只有一个会话处于 pendingNotice 状态。
+      for (const [, state] of sessionLocks) {
+        if (!state.pendingNotice) {
+          continue;
+        }
+        // 消费标志，保证只替换一次
+        state.pendingNotice = false;
+
+        const skillLabel = state.triggeredBySkill ? `"${state.triggeredBySkill}"` : "敏感";
+        const notice =
+          config.lockNotice ??
+          `⚠️ 检测到敏感 skill 调用，会话已切换并固定为安全模型，请重新输入。切换其他模型请使用 /new 或 /reset命令重置会话。`;
+
+        api.logger.info(
+          `security-model-lock: intercepting outbound message, replacing with lock notice (skill=${state.triggeredBySkill ?? "unknown"})`,
+        );
+
+        return { content: notice };
+      }
+    },
+  );
 
   // ============================================================================
   // session_start / before_reset hook - 清理会话的锁定状态

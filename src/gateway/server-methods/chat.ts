@@ -48,6 +48,7 @@ import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 type TranscriptAppendResult = {
@@ -904,9 +905,29 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (info.kind !== "final") {
             return;
           }
-          const text = payload.text?.trim() ?? "";
+          let text = payload.text?.trim() ?? "";
           if (!text) {
             return;
+          }
+          // Run message_sending plugin hook for webchat path (mirrors the
+          // behaviour of deliver.ts / telegram delivery.replies.ts so plugins
+          // like security-model-lock can intercept replies on all channels).
+          const hookRunner = getGlobalHookRunner();
+          if (hookRunner?.hasHooks("message_sending")) {
+            try {
+              const hookResult = await hookRunner.runMessageSending(
+                { to: sessionKey, content: text, metadata: { channel: INTERNAL_MESSAGE_CHANNEL } },
+                { channelId: INTERNAL_MESSAGE_CHANNEL, conversationId: sessionKey },
+              );
+              if (hookResult?.cancel) {
+                return;
+              }
+              if (typeof hookResult?.content === "string" && hookResult.content !== text) {
+                text = hookResult.content;
+              }
+            } catch {
+              // Never block delivery on hook failure.
+            }
           }
           finalReplyParts.push(text);
         },
