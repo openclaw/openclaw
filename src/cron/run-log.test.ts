@@ -95,6 +95,26 @@ describe("cron run log", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "creates runs dir as 0700 and log files as 0600",
+    async () => {
+      await withRunLogDir("openclaw-cron-log-perms-", async (dir) => {
+        const logPath = path.join(dir, "runs", "job-perms.jsonl");
+        await appendCronRunLog(logPath, {
+          ts: 1,
+          jobId: "job-perms",
+          action: "finished",
+          status: "ok",
+        });
+
+        const runsDirMode = (await fs.stat(path.dirname(logPath))).mode & 0o777;
+        const logFileMode = (await fs.stat(logPath)).mode & 0o777;
+        expect(runsDirMode).toBe(0o700);
+        expect(logFileMode).toBe(0o600);
+      });
+    },
+  );
+
   it("reads newest entries and filters by jobId", async () => {
     await withRunLogDir("openclaw-cron-log-read-", async (dir) => {
       const logPathA = path.join(dir, "runs", "a.jsonl");
