@@ -16,7 +16,7 @@ describe("stripUnknownConfigKeys", () => {
     expect(result.config).toEqual(config);
   });
 
-  it("should handle config with unknown keys", () => {
+  it("should handle config with unknown keys without throwing", () => {
     const config = {
       gateway: {
         mode: "local" as const,
@@ -28,9 +28,10 @@ describe("stripUnknownConfigKeys", () => {
       },
     } as OpenClawConfig;
 
-    const result = stripUnknownConfigKeys(config);
+    // Should not throw
+    expect(() => stripUnknownConfigKeys(config)).not.toThrow();
 
-    // Function should complete without errors
+    const result = stripUnknownConfigKeys(config);
     expect(result).toBeDefined();
     expect(result.config).toBeDefined();
     expect(Array.isArray(result.removed)).toBe(true);
@@ -51,7 +52,6 @@ describe("stripUnknownConfigKeys", () => {
 
     const result = stripUnknownConfigKeys(config);
 
-    // Function should complete without errors
     expect(result).toBeDefined();
     expect(result.config).toBeDefined();
     expect(Array.isArray(result.removed)).toBe(true);
@@ -68,7 +68,6 @@ describe("stripUnknownConfigKeys", () => {
       },
     } as OpenClawConfig;
 
-    // Should not throw
     expect(() => stripUnknownConfigKeys(config)).not.toThrow();
   });
 
@@ -81,7 +80,6 @@ describe("stripUnknownConfigKeys", () => {
 
     const result = stripUnknownConfigKeys(config);
 
-    // Valid config should be preserved
-    expect(result.config.gateway.mode).toBe("local");
+    expect(result.config.gateway?.mode).toBe("local");
   });
 });

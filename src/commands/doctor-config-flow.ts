@@ -2090,7 +2090,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
     // Always log warnings regardless of repair mode
     if (params.runtime) {
-      params.runtime.warn(warningLines);
+      params.runtime.log(warningLines);
     }
   }
 

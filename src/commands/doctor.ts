@@ -102,6 +102,7 @@ export async function doctorCommand(
     options,
     confirm: (p) => prompter.confirm(p),
   });
+  let cfg: OpenClawConfig = configResult.cfg;
   const cfgForPersistence = structuredClone(cfg);
   const sourceConfigValid = configResult.sourceConfigValid ?? true;
 
