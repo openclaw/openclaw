@@ -141,6 +141,46 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(aId.length).toBeLessThanOrEqual(40);
       expect(bId.length).toBeLessThanOrEqual(40);
     });
+
+    it("forces unique IDs when an assistant repeats the same tool call ID across turns", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call1", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call1",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call1", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call1",
+          toolName: "read",
+          content: [{ type: "text", text: "ok 2" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
+      const a1 = out[0] as unknown as { content: { id: string }[] };
+      const tr1 = out[1] as unknown as { toolCallId: string };
+      const a2 = out[2] as unknown as { content: { id: string }[] };
+      const tr2 = out[3] as unknown as { toolCallId: string };
+
+      expect(a1.content[0].id).toBe("call1");
+      expect(tr1.toolCallId).toBe("call1");
+      // The second turn SHOULD NOT reuse "call1" because it's generating a new ID
+      // to avoid cross-turn conflict in LLM history.
+      expect(a2.content[0].id).not.toBe("call1");
+      expect(typeof a2.content[0].id).toBe("string");
+      expect(a2.content[0].id.startsWith("call1")).toBe(true);
+      expect(tr2.toolCallId).toBe(a2.content[0].id);
+    });
   });
 
   describe("strict mode (alphanumeric only)", () => {

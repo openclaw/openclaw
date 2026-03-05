@@ -224,15 +224,15 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
   const map = new Map<string, string>();
   const used = new Set<string>();
 
-  const resolve = (id: string) => {
-    const existing = map.get(id);
-    if (existing) {
-      return existing;
-    }
+  const resolveAssistant = (id: string) => {
     const next = makeUniqueToolId({ id, used, mode });
     map.set(id, next);
     used.add(next);
     return next;
+  };
+
+  const resolveToolResult = (id: string) => {
+    return map.get(id) ?? id;
   };
 
   let changed = false;
@@ -244,7 +244,7 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
     if (role === "assistant") {
       const next = rewriteAssistantToolCallIds({
         message: msg as Extract<AgentMessage, { role: "assistant" }>,
-        resolve,
+        resolve: resolveAssistant,
       });
       if (next !== msg) {
         changed = true;
@@ -254,7 +254,7 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
     if (role === "toolResult") {
       const next = rewriteToolResultIds({
         message: msg as Extract<AgentMessage, { role: "toolResult" }>,
-        resolve,
+        resolve: resolveToolResult,
       });
       if (next !== msg) {
         changed = true;
