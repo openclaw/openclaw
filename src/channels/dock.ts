@@ -3,6 +3,7 @@ import {
   resolveChannelGroupToolsPolicy,
 } from "../config/group-policy.js";
 import { resolveDiscordAccount } from "../discord/accounts.js";
+import { resolveLineAccount } from "../line/accounts.js";
 import {
   formatTrimmedAllowFromEntries,
   formatWhatsAppConfigAllowFromEntries,
@@ -13,7 +14,6 @@ import {
 } from "../plugin-sdk/channel-config-helpers.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { resolveLineAccount } from "../line/accounts.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
 import { resolveSlackAccount, resolveSlackReplyToMode } from "../slack/accounts.js";
 import { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
