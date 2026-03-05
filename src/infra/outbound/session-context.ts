@@ -1,5 +1,6 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 
 export type OutboundSessionContext = {
   /** Canonical session key used for internal hook dispatch. */
@@ -21,12 +22,14 @@ export function buildOutboundSessionContext(params: {
   sessionKey?: string | null;
   agentId?: string | null;
 }): OutboundSessionContext | undefined {
-  const key = normalizeOptionalString(params.sessionKey);
+  const explicitKey = normalizeOptionalString(params.sessionKey);
   const explicitAgentId = normalizeOptionalString(params.agentId);
-  const derivedAgentId = key
-    ? resolveSessionAgentId({ sessionKey: key, config: params.cfg })
+  const derivedAgentId = explicitKey
+    ? resolveSessionAgentId({ sessionKey: explicitKey, config: params.cfg })
     : undefined;
   const agentId = explicitAgentId ?? derivedAgentId;
+  const key =
+    explicitKey ?? (agentId ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId }) : undefined);
   if (!key && !agentId) {
     return undefined;
   }
