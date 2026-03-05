@@ -323,8 +323,8 @@ export function renderApp(state: AppViewState) {
                 class="btn btn--sm update-banner__close"
                 @click=${() => {
                   sessionStorage.setItem("updateBannerDismissed", effectiveUpdate.latestVersion);
-                  // Force re-render by resetting the updateAvailable state
-                  state.updateAvailable = null;
+                  // Force re-render without page reload
+                  requestAnimationFrame(() => renderApp(state));
                 }}
               >✕</button>
             </div>`
