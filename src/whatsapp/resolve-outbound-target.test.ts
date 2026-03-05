@@ -139,6 +139,25 @@ describe("resolveWhatsAppOutboundTarget", () => {
       expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "implicit" });
     });
 
+    it("returns actionable allowFrom error when target is valid but not in allowList (#35580)", () => {
+      vi.mocked(normalize.normalizeWhatsAppTarget)
+        .mockReturnValueOnce(PRIMARY_TARGET)
+        .mockReturnValueOnce(SECONDARY_TARGET);
+      vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
+
+      const result = resolveWhatsAppOutboundTarget({
+        to: PRIMARY_TARGET,
+        allowFrom: [SECONDARY_TARGET],
+        mode: "implicit",
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected error");
+      }
+      expect(result.error.message).toContain(PRIMARY_TARGET);
+      expect(result.error.message).toContain("allowFrom");
+    });
+
     it("handles mixed numeric and string allowList entries", () => {
       vi.mocked(normalize.normalizeWhatsAppTarget)
         .mockReturnValueOnce("+11234567890") // for 'to' param
