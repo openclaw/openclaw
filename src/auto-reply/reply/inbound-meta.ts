@@ -44,7 +44,7 @@ function resolveInboundChannel(ctx: TemplateContext): string | undefined {
 }
 
 function shouldPseudonymizeInbound(ctx: TemplateContext): boolean {
-  const enabled = (process.env.OPENCLAW_PSEUDONYMIZE_INBOUND_META ?? "true").toLowerCase() !== "false";
+  const enabled = (process.env.OPENCLAW_PSEUDONYMIZE_INBOUND_META ?? "false").toLowerCase() !== "false";
   if (!enabled) {
     return false;
   }

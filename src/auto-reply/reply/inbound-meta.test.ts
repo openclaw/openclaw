@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 
@@ -330,5 +330,42 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["sender"]).toBe("user@example.com");
+  });
+
+  it("pseudonymizes whatsapp sender fields when enabled", () => {
+    vi.stubEnv("OPENCLAW_PSEUDONYMIZE_INBOUND_META", "true");
+    vi.stubEnv("OPENCLAW_PSEUDONYMIZE_INBOUND_WHATSAPP_ONLY", "true");
+    vi.stubEnv("OPENCLAW_INBOUND_META_HMAC_SECRET", "test-secret");
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "whatsapp",
+      SenderId: "+15551234567",
+      SenderE164: "+15551234567",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(String(conversationInfo["sender_id"]) ).toMatch(/^sender_[a-f0-9]{20}$/);
+    expect(String(conversationInfo["sender"]) ).toMatch(/^sender_label_[a-f0-9]{20}$/);
+
+    vi.unstubAllEnvs();
+  });
+
+  it("does not pseudonymize non-whatsapp channels by default scope", () => {
+    vi.stubEnv("OPENCLAW_PSEUDONYMIZE_INBOUND_META", "true");
+    vi.stubEnv("OPENCLAW_PSEUDONYMIZE_INBOUND_WHATSAPP_ONLY", "true");
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "telegram",
+      SenderId: "alice",
+      SenderName: "Alice",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["sender_id"]).toBe("alice");
+    expect(conversationInfo["sender"]).toBe("Alice");
+
+    vi.unstubAllEnvs();
   });
 });
