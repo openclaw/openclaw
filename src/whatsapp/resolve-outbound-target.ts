@@ -43,7 +43,8 @@ export function resolveWhatsAppOutboundTarget(params: {
       ok: false,
       error: new Error(
         `Target "${normalizedTo}" is not listed in the configured WhatsApp allowFrom policy.`,
-      ),    };
+      ),
+    };
   }
 
   return {
