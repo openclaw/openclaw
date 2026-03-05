@@ -437,7 +437,7 @@ export function registerFundTools(api: OpenClawPluginApi, deps: FundToolDeps): v
         }> = [];
 
         for (const profile of profiles) {
-          const record = records.find((r) => r.id === profile.strategyId);
+          const record = records.find((r) => r.id === profile.id);
           if (!record) continue;
 
           const check = manager.checkPromotion(profile);
@@ -445,7 +445,7 @@ export function registerFundTools(api: OpenClawPluginApi, deps: FundToolDeps): v
           // Promotion ready
           if (check.eligible && check.targetLevel) {
             actions.push({
-              strategyId: profile.strategyId,
+              strategyId: profile.id,
               strategyName: record.name,
               currentLevel: record.level,
               action: check.needsUserConfirmation ? "approve_promotion" : "promote",
@@ -459,7 +459,7 @@ export function registerFundTools(api: OpenClawPluginApi, deps: FundToolDeps): v
           // Needs backtest
           if (record.level === "L1_BACKTEST" && !record.lastBacktest) {
             actions.push({
-              strategyId: profile.strategyId,
+              strategyId: profile.id,
               strategyName: record.name,
               currentLevel: record.level,
               action: "run_backtest",
@@ -476,7 +476,7 @@ export function registerFundTools(api: OpenClawPluginApi, deps: FundToolDeps): v
             } | null;
             if (metrics?.maxDrawdown && metrics.maxDrawdown < -20) {
               actions.push({
-                strategyId: profile.strategyId,
+                strategyId: profile.id,
                 strategyName: record.name,
                 currentLevel: record.level,
                 action: "review_health",

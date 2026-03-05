@@ -232,7 +232,10 @@
             html += '<div class="strat-card__time">' + daysText + ' in stage</div>';
 
             if (isPending) {
+              html += '<div class="strat-card__actions">';
               html += '<button class="strat-card__approve" onclick="approveStrategy(\'' + s.id + '\')">&#10003; Approve L3</button>';
+              html += '<button class="strat-card__reject" onclick="rejectStrategy(\'' + s.id + '\')">&#10007; Reject</button>';
+              html += '</div>';
             }
 
             html += '</div>';
@@ -310,6 +313,22 @@
       // ── Approve strategy ────────────────────────────────────
       window.approveStrategy = function(strategyId) {
         fetch('/api/v1/finance/flow/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ strategyId: strategyId })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.ok) {
+            pendingApprovals.delete(strategyId);
+            fetchFlowData();
+          }
+        })
+        .catch(function() {});
+      };
+
+      window.rejectStrategy = function(strategyId) {
+        fetch('/api/v1/finance/flow/reject', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ strategyId: strategyId })

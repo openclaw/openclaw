@@ -269,4 +269,132 @@ d("Phase F — A5: Browser Flow", () => {
     const updated = ctx.services.strategyRegistry.get(strategyId);
     expect(updated?.level).toBe("L3_LIVE");
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  //  A5.2.1 — Approve moves card from L2 column to L3 column
+  // ═══════════════════════════════════════════════════════════════
+
+  it("A5.2.1 approve button moves strategy from L2 to L3 column and records event", async () => {
+    // Create a strategy and set to L2 with pending approval
+    const createRes = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        templateId: "sma-crossover",
+        name: "Approve Column Test",
+        symbol: "SOL/USDT",
+        timeframe: "1h",
+        exchangeId: "binance",
+        parameters: { fastPeriod: 5, slowPeriod: 20 },
+      }),
+    });
+    expect(createRes.status).toBe(201);
+    const strategyId = (createRes.body as { strategy: { id: string } }).strategy.id;
+
+    // Set to L2_PAPER and add pending approval event
+    ctx.services.strategyRegistry.updateLevel(strategyId, "L2_PAPER" as never);
+    ctx.services.eventStore.addEvent({
+      type: "trade_pending",
+      title: `L3 Promotion: Approve Column Test`,
+      detail: `Strategy eligible for live trading`,
+      status: "pending",
+      actionParams: { action: "promote_l3", strategyId },
+    });
+
+    // Navigate to flow page
+    const isHtml = await gotoFlow();
+    if (!isHtml) return;
+    await page.waitForTimeout(500);
+
+    // Verify card is in L2 column with pending class
+    const pendingCard = page.locator(".strat-card--pending");
+    expect(await pendingCard.count()).toBeGreaterThanOrEqual(1);
+
+    // Click approve
+    const approveBtn = page.locator("button.strat-card__approve").first();
+    await approveBtn.click();
+    await page.waitForTimeout(500);
+
+    // Verify registry updated
+    const updatedReg = ctx.services.strategyRegistry.get(strategyId);
+    expect(updatedReg?.level).toBe("L3_LIVE");
+
+    // Verify event store has approval event
+    const events = ctx.services.eventStore.listEvents();
+    const promoEvent = events.find(
+      (e) =>
+        (e.actionParams as Record<string, unknown>)?.strategyId === strategyId &&
+        (e.actionParams as Record<string, unknown>)?.action === "promote_l3",
+    );
+    expect(promoEvent).toBeDefined();
+
+    // Reload page and verify card appears in L3 column
+    await gotoFlow();
+    await page.waitForTimeout(500);
+    const l3Col = page.locator('[data-level="L3_LIVE"] .pipeline-col__cards');
+    const l3Text = await l3Col.textContent();
+    expect(l3Text).toContain("Approve Column Test");
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  //  A5.2.2 — Reject button keeps strategy in L2 column
+  // ═══════════════════════════════════════════════════════════════
+
+  it("A5.2.2 reject button keeps strategy in L2 and records rejection", async () => {
+    // Create a strategy and set to L2 with pending approval
+    const createRes = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        templateId: "rsi-mean-reversion",
+        name: "Reject Column Test",
+        symbol: "DOGE/USDT",
+        timeframe: "4h",
+        exchangeId: "binance",
+        parameters: {},
+      }),
+    });
+    expect(createRes.status).toBe(201);
+    const strategyId = (createRes.body as { strategy: { id: string } }).strategy.id;
+
+    // Set to L2_PAPER and add pending approval + register in lifecycle engine
+    ctx.services.strategyRegistry.updateLevel(strategyId, "L2_PAPER" as never);
+    ctx.services.eventStore.addEvent({
+      type: "trade_pending",
+      title: `L3 Promotion: Reject Column Test`,
+      detail: `Strategy eligible for live trading`,
+      status: "pending",
+      actionParams: { action: "promote_l3", strategyId },
+    });
+
+    // Directly inject into lifecycle engine's pendingApprovals set
+    // (simulating what sendApprovalRequest does after detecting L2→L3 eligibility)
+    const engine = ctx.services.lifecycleEngine as unknown as { pendingApprovals: Set<string> };
+    engine.pendingApprovals.add(strategyId);
+
+    // Navigate to flow page
+    const isHtml = await gotoFlow();
+    if (!isHtml) return;
+    await page.waitForTimeout(500);
+
+    // Find the reject button
+    const rejectBtn = page.locator("button.strat-card__reject");
+    const rejectCount = await rejectBtn.count();
+    expect(rejectCount).toBeGreaterThanOrEqual(1);
+
+    // Click reject
+    await rejectBtn.first().click();
+    await page.waitForTimeout(500);
+
+    // Verify strategy stays L2_PAPER
+    const after = ctx.services.strategyRegistry.get(strategyId);
+    expect(after?.level).toBe("L2_PAPER");
+
+    // Verify rejection recorded in activity log
+    const rejectLogs = ctx.services.activityLog.listRecent(50, "approval");
+    const rejectLog = rejectLogs.find(
+      (l) => l.strategyId === strategyId && l.action === "l3_promotion_rejected",
+    );
+    expect(rejectLog).toBeDefined();
+  });
 });

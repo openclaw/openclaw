@@ -167,23 +167,42 @@
   color: var(--text-dim);
 }
 
-.strat-card__approve {
+.strat-card__actions {
+  display: flex;
+  gap: 6px;
   margin-top: 8px;
-  width: 100%;
+}
+
+.strat-card__approve,
+.strat-card__reject {
+  flex: 1;
   padding: 5px 0;
   border-radius: var(--r-sm);
   font-family: var(--mono);
   font-size: 10px;
   font-weight: 600;
-  background: rgba(34, 197, 94, 0.15);
-  color: var(--gain);
-  border: 1px solid rgba(34, 197, 94, 0.3);
   cursor: pointer;
   transition: background 0.15s;
 }
 
+.strat-card__approve {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--gain);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
 .strat-card__approve:hover {
   background: rgba(34, 197, 94, 0.25);
+}
+
+.strat-card__reject {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--loss);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.strat-card__reject:hover {
+  background: rgba(239, 68, 68, 0.25);
 }
 
 /* ── Activity Timeline ───────────────────────────────────────── */

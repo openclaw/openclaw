@@ -691,6 +691,27 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     },
   });
 
+  // ── Flow: Reject L3 promotion ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/flow/reject",
+    handler: async (req: unknown, res: HttpRes) => {
+      const body = await parseJsonBody(req as HttpReq);
+      const strategyId = body?.strategyId as string | undefined;
+      const reason = body?.reason as string | undefined;
+      if (!strategyId) {
+        errorResponse(res, 400, "Missing strategyId");
+        return;
+      }
+      const engine = deps.lifecycleEngine;
+      if (!engine) {
+        errorResponse(res, 503, "Lifecycle engine not available");
+        return;
+      }
+      const ok = engine.handleRejection(strategyId, reason);
+      jsonResponse(res, ok ? 200 : 404, { ok, strategyId });
+    },
+  });
+
   // ── OHLCV K-line Data ──
   api.registerHttpRoute({
     path: "/api/v1/finance/ohlcv",
