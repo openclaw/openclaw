@@ -132,6 +132,26 @@ function replaceBlockText(block: TextLikeBlock, nextText: string): TextLikeBlock
   return block;
 }
 
+function stripLeadingTimestampPrefix(text: string): string {
+  const patterns = [
+    /^\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?\s+[A-Za-z_\/+\-]{2,12}\]\s*/,
+    /^\[\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}(?::\d{2})?(?:\s+[A-Za-z_\/+\-]{2,12})?\]\s*/,
+  ];
+
+  let normalized = text;
+  for (const pattern of patterns) {
+    normalized = normalized.replace(pattern, "");
+  }
+  return normalized;
+}
+
+function normalizeTextForDedup(text: string, role: string): string {
+  if (role === "user" || role === "assistant") {
+    return stripLeadingTimestampPrefix(text);
+  }
+  return text;
+}
+
 /**
  * Get the full reference tag string.
  */
@@ -186,6 +206,7 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
 
   type FirstOccurrence = {
     text: string;
+    canonicalText: string;
     messageIndex: number;
     blockIndex: number;
     toolCallId?: string;
@@ -200,6 +221,7 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
       continue;
     }
 
+    const role = messageRole(msg);
     const contents = Array.isArray(msg.content) ? msg.content : [msg.content];
     for (let blockIdx = 0; blockIdx < contents.length; blockIdx++) {
       const block = contents[blockIdx] as TextLikeBlock;
@@ -208,12 +230,18 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
         continue;
       }
 
-      const hash = contentHash(text);
+      const canonicalText = normalizeTextForDedup(text, role);
+      if (!canonicalText.trim()) {
+        continue;
+      }
+
+      const hash = contentHash(canonicalText);
       counts.set(hash, (counts.get(hash) || 0) + 1);
 
       if (!firstByHash.has(hash)) {
         firstByHash.set(hash, {
           text,
+          canonicalText,
           messageIndex: msgIdx,
           blockIndex: blockIdx,
           toolCallId: typeof msg?.toolCallId === "string" ? msg.toolCallId : undefined,
@@ -232,7 +260,7 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
     if (!first) {
       continue;
     }
-    if (first.text.length < config.minContentSize) {
+    if (first.canonicalText.length < config.minContentSize) {
       continue;
     }
     dedupHashes.add(hash);
@@ -254,6 +282,7 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
       return msg;
     }
 
+    const role = messageRole(msg);
     const isArrayContent = Array.isArray(msg.content);
     const contents = isArrayContent ? msg.content : [msg.content];
 
@@ -263,7 +292,12 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
         return block;
       }
 
-      const hash = contentHash(text);
+      const canonicalText = normalizeTextForDedup(text, role);
+      if (!canonicalText.trim()) {
+        return block;
+      }
+
+      const hash = contentHash(canonicalText);
       if (!dedupHashes.has(hash)) {
         return block;
       }
