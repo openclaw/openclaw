@@ -36,6 +36,10 @@ let watcherProcess: ChildProcess | null = null;
 let renewInterval: ReturnType<typeof setInterval> | null = null;
 let shuttingDown = false;
 let currentConfig: GmailHookRuntimeConfig | null = null;
+// Generation counter to prevent stale restart timers from spawning duplicate watchers
+// after a stop+start cycle (hot-reload). Each start/stop bumps the counter, and
+// pending restart timers check their captured generation before respawning.
+let watcherGeneration = 0;
 
 function isGogAvailable(): boolean {
   return hasBinary("gog");
@@ -116,8 +120,9 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
     }
     log.warn(`gog exited (code=${code}, signal=${signal}); restarting in 5s`);
     watcherProcess = null;
+    const gen = watcherGeneration;
     setTimeout(() => {
-      if (shuttingDown || !currentConfig) {
+      if (shuttingDown || !currentConfig || watcherGeneration !== gen) {
         return;
       }
       watcherProcess = spawnGogServe(currentConfig);
@@ -250,8 +255,9 @@ function startGwsWatcher(runtimeConfig: GmailHookRuntimeConfig): GmailWatcherSta
       }
       log.warn(`gws exited (code=${code}, signal=${signal}); restarting in 5s`);
       watcherProcess = null;
+      const gen = watcherGeneration;
       setTimeout(() => {
-        if (shuttingDown || !currentConfig) {
+        if (shuttingDown || !currentConfig || watcherGeneration !== gen) {
           return;
         }
         spawnAndWatch();
@@ -303,6 +309,9 @@ export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatch
   const runtimeConfig = resolved.value;
   currentConfig = runtimeConfig;
 
+  // Invalidate any pending restart timers from a previous watcher lifecycle
+  watcherGeneration += 1;
+
   if (cliMode === "gws") {
     return startGwsWatcher(runtimeConfig);
   }
@@ -313,6 +322,7 @@ export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatch
  * Stop the Gmail watcher service.
  */
 export async function stopGmailWatcher(): Promise<void> {
+  watcherGeneration += 1;
   shuttingDown = true;
 
   if (renewInterval) {
