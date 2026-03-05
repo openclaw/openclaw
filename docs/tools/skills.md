@@ -66,6 +66,19 @@ By default, `clawhub` installs into `./skills` under your current working
 directory (or falls back to the configured OpenClaw workspace). OpenClaw picks
 that up as `<workspace>/skills` on the next session.
 
+## Troubleshooting skill installs
+
+- A skill folder is primarily **instructions** (`SKILL.md`), not a full tool implementation.
+  It is normal for many skills to only include docs/metadata files.
+- If a skill references MCP tools, those tools come from the configured MCP
+  server or external runtime, not from files bundled inside the skill folder.
+- Prefer `clawhub install <skill-slug>` for public registry skills. If you install
+  from a Git repo URL, ensure the repository is accessible from your machine
+  (authenticated for private repos).
+- If a skill is installed but tools are still unavailable, verify the backing
+  dependency is reachable/authenticated (for example MCP server auth) and then
+  start a new session so the refreshed skill snapshot is picked up.
+
 ## Security notes
 
 - Treat third-party skills as **untrusted code**. Read them before enabling.
