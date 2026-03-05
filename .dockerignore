@@ -30,6 +30,8 @@ coverage
 *.log
 tmp
 **/tmp
+.build-context
+.infra-checkouts
 
 # build artifacts
 dist

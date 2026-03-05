@@ -326,7 +326,7 @@ jobs:
           pre-commit run zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        run: pre-commit run --all-files pnpm-audit-prod
+        run: pnpm audit --prod --audit-level=critical
 
   # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
   # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;

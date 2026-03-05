@@ -67,7 +67,7 @@ jobs:
           repository: morpho-org/morpho-infra
           ref: main
           token: ${{ steps.app-token.outputs.token }}
-          path: .build-context/morpho-infra
+          path: .infra-checkouts/morpho-infra
 
       - name: Checkout morpho-infra-helm
         uses: actions/checkout@v4
@@ -75,22 +75,7 @@ jobs:
           repository: morpho-org/morpho-infra-helm
           ref: main
           token: ${{ steps.app-token.outputs.token }}
-          path: .build-context/morpho-infra-helm
-
-      - name: Build local OpenClaw package
-        run: |
-          set -euo pipefail
-          mkdir -p .build-context
-          cp deploy/eks/Dockerfile.runtime .build-context/Dockerfile
-
-          pack_output="$(npm pack --silent --pack-destination .build-context)"
-          pack_file="$(printf '%s\n' "$pack_output" | tail -n1)"
-          if [[ -z "$pack_file" || ! -f ".build-context/$pack_file" ]]; then
-            echo "::error::Failed to create package tarball"
-            exit 1
-          fi
-
-          mv ".build-context/$pack_file" .build-context/openclaw-local.tgz
+          path: .infra-checkouts/morpho-infra-helm
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -114,9 +99,8 @@ jobs:
           set -euo pipefail
           docker build \
             --platform linux/amd64 \
-            --build-arg OPENCLAW_LOCAL_TARBALL=openclaw-local.tgz \
             -t "${{ steps.image.outputs.uri }}" \
-            .build-context
+            .
           docker push "${{ steps.image.outputs.uri }}"
 
       - name: Resolve infra update environments
