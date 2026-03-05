@@ -881,4 +881,36 @@ describe("doctor config flow", () => {
     // Account should get "*" added even though dmPolicy is inherited from parent
     expect(cfg.channels.telegram.accounts.default.allowFrom).toContain("*");
   });
+
+  it("skips account repair when parent already has allowFrom wildcard (#35560)", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "fake:token",
+                // inherits dmPolicy=open and allowFrom=["*"] from parent
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        telegram: {
+          accounts: { default: { allowFrom?: string[] } };
+        };
+      };
+    };
+    // Account should NOT get its own allowFrom — parent already has "*"
+    expect(cfg.channels.telegram.accounts.default.allowFrom).toBeUndefined();
+  });
 });
