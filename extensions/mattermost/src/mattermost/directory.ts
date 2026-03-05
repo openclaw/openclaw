@@ -1,4 +1,8 @@
-import type { OpenClawConfig, ChannelDirectoryEntry, RuntimeEnv } from "openclaw/plugin-sdk";
+import type {
+  ChannelDirectoryEntry,
+  OpenClawConfig,
+  RuntimeEnv,
+} from "openclaw/plugin-sdk/mattermost";
 import { listMattermostAccountIds, resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,

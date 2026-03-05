@@ -38,6 +38,7 @@ export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "../channels/plugins/types.js";
+export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { createTypingCallbacks } from "../channels/typing.js";
