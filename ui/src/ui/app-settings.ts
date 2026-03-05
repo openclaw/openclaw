@@ -221,6 +221,7 @@ export async function refreshActiveTab(host: SettingsHost) {
       host.sessionKey;
     if (preferredSessionKey && preferredSessionKey !== host.sessionKey) {
       host.sessionKey = preferredSessionKey;
+      syncUrlWithSessionKey(host, preferredSessionKey, true);
     }
     await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
     scheduleChatScroll(
