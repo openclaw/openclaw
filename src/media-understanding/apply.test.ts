@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { injectTimestamp } from "../gateway/server-methods/agent-timestamp.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import { runExec } from "../process/exec.js";
@@ -282,7 +283,9 @@ describe("applyMediaUnderstanding", () => {
       body: "[Audio]\nTranscript:\ntranscribed text",
       commandBody: "transcribed text",
     });
-    expect((ctx as unknown as { BodyForAgent?: string }).BodyForAgent).toBe(ctx.Body);
+    expect((ctx as unknown as { BodyForAgent?: string }).BodyForAgent).toBe(
+      injectTimestamp(ctx.Body!),
+    );
   });
 
   it("skips file blocks for text-like audio when transcription succeeds", async () => {
@@ -720,7 +723,7 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Image]\nUser text:\nshow Dom\nDescription:\nimage description");
     expect(ctx.CommandBody).toBe("show Dom");
     expect(ctx.RawBody).toBe("show Dom");
-    expect(ctx.BodyForAgent).toBe(ctx.Body);
+    expect(ctx.BodyForAgent).toBe(injectTimestamp(ctx.Body!));
     expect(ctx.BodyForCommands).toBe("show Dom");
   });
 
