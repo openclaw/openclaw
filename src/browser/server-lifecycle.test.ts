@@ -121,3 +121,40 @@ describe("stopKnownBrowserProfiles", () => {
     expect(onWarn).toHaveBeenCalledWith("openclaw browser stop failed: Error: oops");
   });
 });
+
+describe("stopKnownBrowserProfiles — shutdown config isolation", () => {
+  beforeEach(() => {
+    createBrowserRouteContextMock.mockClear();
+    listKnownProfileNamesMock.mockClear();
+  });
+
+  it("creates route context with refreshConfigFromDisk: false to prevent orphaned browser processes on shutdown", async () => {
+    // Bug: when refreshConfigFromDisk: true, hot-reload during shutdown mutates
+    // current.resolved.profiles. Profiles deleted from disk config between
+    // listKnownProfileNames() and forProfile() throw "Profile not found",
+    // their stopRunningBrowser() is never called, and Chromium children are orphaned.
+    //
+    // Fix: pass refreshConfigFromDisk: false so shutdown operates on the
+    // in-memory snapshot and cannot lose running profiles to a concurrent
+    // config change on disk.
+    listKnownProfileNamesMock.mockReturnValue(["chrome"]);
+    const stopRunningBrowser = vi.fn(async () => ({ stopped: true }));
+    createBrowserRouteContextMock.mockReturnValue({
+      forProfile: () => ({ stopRunningBrowser }),
+    });
+    const state = { resolved: { profiles: { chrome: {} } }, profiles: new Map() };
+
+    await stopKnownBrowserProfiles({
+      getState: () => state as never,
+      onWarn: vi.fn(),
+    });
+
+    // Must use refreshConfigFromDisk: false so hot-reload cannot evict
+    // in-flight running profiles and orphan their Chromium processes.
+    expect(createBrowserRouteContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ refreshConfigFromDisk: false }),
+    );
+    // stopRunningBrowser must be called — the browser process gets cleaned up.
+    expect(stopRunningBrowser).toHaveBeenCalledTimes(1);
+  });
+});

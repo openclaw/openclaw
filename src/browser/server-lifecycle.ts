@@ -32,7 +32,7 @@ export async function stopKnownBrowserProfiles(params: {
   }
   const ctx = createBrowserRouteContext({
     getState: params.getState,
-    refreshConfigFromDisk: true,
+    refreshConfigFromDisk: false,
   });
   try {
     for (const name of listKnownProfileNames(current)) {
