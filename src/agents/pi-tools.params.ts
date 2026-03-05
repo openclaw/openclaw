@@ -1,3 +1,4 @@
+import { expandHomePrefix } from "../infra/home-dir.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 export type RequiredParamGroup = {
@@ -95,6 +96,10 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   if ("file_path" in normalized && !("path" in normalized)) {
     normalized.path = normalized.file_path;
     delete normalized.file_path;
+  }
+  // Expand ~ in path
+  if (typeof normalized.path === "string" && normalized.path.startsWith("~")) {
+    normalized.path = expandHomePrefix(normalized.path);
   }
   // old_string → oldText (edit)
   if ("old_string" in normalized && !("oldText" in normalized)) {
