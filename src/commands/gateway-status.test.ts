@@ -218,6 +218,92 @@ describe("gateway-status command", () => {
     expect(unresolvedWarning?.targetIds).toContain("localLoopback");
   });
 
+  it("does not resolve local token SecretRef when OPENCLAW_GATEWAY_TOKEN is set", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        MISSING_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        loadConfig.mockReturnValueOnce({
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+            },
+          },
+        } as unknown as ReturnType<typeof loadConfig>);
+
+        await runGatewayStatus(runtime, { timeout: "1000", json: true });
+      },
+    );
+
+    expect(runtimeErrors).toHaveLength(0);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          token: "env-token",
+        }),
+      }),
+    );
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings?: Array<{ code?: string; message?: string }>;
+    };
+    const unresolvedWarning = parsed.warnings?.find(
+      (warning) =>
+        warning.code === "auth_secretref_unresolved" &&
+        warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
+    );
+    expect(unresolvedWarning).toBeUndefined();
+  });
+
+  it("does not resolve local password SecretRef in token mode", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        MISSING_GATEWAY_PASSWORD: undefined,
+      },
+      async () => {
+        loadConfig.mockReturnValueOnce({
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: "config-token",
+              password: { source: "env", provider: "default", id: "MISSING_GATEWAY_PASSWORD" },
+            },
+          },
+        } as unknown as ReturnType<typeof loadConfig>);
+
+        await runGatewayStatus(runtime, { timeout: "1000", json: true });
+      },
+    );
+
+    expect(runtimeErrors).toHaveLength(0);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings?: Array<{ code?: string; message?: string }>;
+    };
+    const unresolvedPasswordWarning = parsed.warnings?.find(
+      (warning) =>
+        warning.code === "auth_secretref_unresolved" &&
+        warning.message?.includes("gateway.auth.password SecretRef is unresolved"),
+    );
+    expect(unresolvedPasswordWarning).toBeUndefined();
+  });
+
   it("resolves env-template gateway.auth.token before probing targets", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     await withEnvAsync(

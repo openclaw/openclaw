@@ -182,6 +182,16 @@ async function resolveConfiguredSecretInputValue(
   return {};
 }
 
+function readGatewayTokenEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const token = env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+  return token || undefined;
+}
+
+function readGatewayPasswordEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const password = env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim();
+  return password || undefined;
+}
+
 export async function resolveAuthForTarget(
   cfg: OpenClawConfig,
   target: GatewayStatusTarget,
@@ -194,52 +204,102 @@ export async function resolveAuthForTarget(
   }
 
   const diagnostics: string[] = [];
-  if (target.kind === "configRemote" || target.kind === "sshTunnel") {
-    const tokenResolution = await resolveConfiguredSecretInputValue(
-      cfg,
-      cfg.gateway?.remote?.token,
-      "gateway.remote.token",
-    );
-    const passwordResolution = await resolveConfiguredSecretInputValue(
-      cfg,
-      (cfg.gateway?.remote as { password?: unknown } | undefined)?.password,
-      "gateway.remote.password",
-    );
+  const authMode = cfg.gateway?.auth?.mode;
+  const tokenOnly = authMode === "token";
+  const passwordOnly = authMode === "password";
+  const authDisabled = authMode === "none" || authMode === "trusted-proxy";
+  if (authDisabled) {
+    return {};
+  }
+
+  const resolveToken = async (value: unknown, path: string): Promise<string | undefined> => {
+    const tokenResolution = await resolveConfiguredSecretInputValue(cfg, value, path);
     if (tokenResolution.unresolvedRefReason) {
       diagnostics.push(tokenResolution.unresolvedRefReason);
     }
+    return tokenResolution.value;
+  };
+  const resolvePassword = async (value: unknown, path: string): Promise<string | undefined> => {
+    const passwordResolution = await resolveConfiguredSecretInputValue(cfg, value, path);
     if (passwordResolution.unresolvedRefReason) {
       diagnostics.push(passwordResolution.unresolvedRefReason);
     }
+    return passwordResolution.value;
+  };
+
+  if (target.kind === "configRemote" || target.kind === "sshTunnel") {
+    const remoteTokenValue = cfg.gateway?.remote?.token;
+    const remotePasswordValue = (cfg.gateway?.remote as { password?: unknown } | undefined)
+      ?.password;
+    if (tokenOnly) {
+      const token = await resolveToken(remoteTokenValue, "gateway.remote.token");
+      return {
+        token,
+        ...(diagnostics.length > 0 ? { diagnostics } : {}),
+      };
+    }
+    if (passwordOnly) {
+      const password = await resolvePassword(remotePasswordValue, "gateway.remote.password");
+      return {
+        password,
+        ...(diagnostics.length > 0 ? { diagnostics } : {}),
+      };
+    }
+    const token = await resolveToken(remoteTokenValue, "gateway.remote.token");
+    const password = token
+      ? undefined
+      : await resolvePassword(remotePasswordValue, "gateway.remote.password");
     return {
-      token: tokenResolution.value,
-      password: passwordResolution.value,
+      token,
+      password,
       ...(diagnostics.length > 0 ? { diagnostics } : {}),
     };
   }
 
-  const envToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || "";
-  const envPassword = process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || "";
-  const cfgTokenResolution = await resolveConfiguredSecretInputValue(
-    cfg,
-    cfg.gateway?.auth?.token,
-    "gateway.auth.token",
-  );
-  const cfgPasswordResolution = await resolveConfiguredSecretInputValue(
-    cfg,
-    cfg.gateway?.auth?.password,
-    "gateway.auth.password",
-  );
-  if (cfgTokenResolution.unresolvedRefReason) {
-    diagnostics.push(cfgTokenResolution.unresolvedRefReason);
+  const envToken = readGatewayTokenEnv();
+  const envPassword = readGatewayPasswordEnv();
+  if (tokenOnly) {
+    if (envToken) {
+      return { token: envToken };
+    }
+    const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
+    return {
+      token,
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    };
   }
-  if (cfgPasswordResolution.unresolvedRefReason) {
-    diagnostics.push(cfgPasswordResolution.unresolvedRefReason);
+  if (passwordOnly) {
+    if (envPassword) {
+      return { password: envPassword };
+    }
+    const password = await resolvePassword(cfg.gateway?.auth?.password, "gateway.auth.password");
+    return {
+      password,
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    };
   }
 
+  if (envToken) {
+    return { token: envToken };
+  }
+  const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
+  if (token) {
+    return {
+      token,
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    };
+  }
+  if (envPassword) {
+    return {
+      password: envPassword,
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    };
+  }
+  const password = await resolvePassword(cfg.gateway?.auth?.password, "gateway.auth.password");
+
   return {
-    token: envToken || cfgTokenResolution.value,
-    password: envPassword || cfgPasswordResolution.value,
+    token,
+    password,
     ...(diagnostics.length > 0 ? { diagnostics } : {}),
   };
 }
