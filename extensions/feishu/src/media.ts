@@ -414,9 +414,24 @@ export function detectFileType(
 }
 
 /**
+ * Check whether a media source is a local file path (not a URL or data URI).
+ */
+function isLocalFilePath(mediaUrl: string): boolean {
+  if (/^(https?:\/\/|data:|file:\/\/)/i.test(mediaUrl)) {
+    return false;
+  }
+  return path.isAbsolute(mediaUrl) || mediaUrl.startsWith("~");
+}
+
+/**
  * Upload and send media (image or file) from URL, local path, or buffer.
  * When mediaUrl is a local path, mediaLocalRoots (from core outbound context)
  * must be passed so loadWebMedia allows the path (post CVE-2026-26321).
+ *
+ * For local files, we pass the file path directly to the SDK upload functions
+ * so they use fs.createReadStream() instead of an in-memory Buffer.  This
+ * avoids binary corruption caused by the axios/form-data multipart
+ * serialization layer when given a raw Buffer (see #32123).
  */
 export async function sendMediaFeishu(params: {
   cfg: ClawdbotConfig;
@@ -447,6 +462,54 @@ export async function sendMediaFeishu(params: {
   }
   const mediaMaxBytes = (account.config?.mediaMaxMb ?? 30) * 1024 * 1024;
 
+  // For local file paths, pass the path directly to the SDK upload functions
+  // so they use fs.createReadStream().  This preserves binary integrity that
+  // can be lost when the Buffer is serialized through axios's multipart
+  // form-data layer (#32123).
+  if (!mediaBuffer && mediaUrl && isLocalFilePath(mediaUrl)) {
+    // Validate the path is allowed before passing it to the SDK.
+    await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
+      maxBytes: mediaMaxBytes,
+      optimizeImages: false,
+      localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
+    });
+    // loadWebMedia succeeded → path is safe and within size limits.
+    // Now use the raw file path for upload to preserve binary fidelity.
+    const resolvedPath = mediaUrl.startsWith("~")
+      ? path.join(process.env.HOME ?? "", mediaUrl.slice(1))
+      : mediaUrl;
+    const name = fileName ?? (path.basename(resolvedPath) || "file");
+    const ext = path.extname(name).toLowerCase();
+    const isImage = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
+      ext,
+    );
+
+    if (isImage) {
+      const { imageKey } = await uploadImageFeishu({ cfg, image: resolvedPath, accountId });
+      return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
+    }
+
+    const fileType = detectFileType(name);
+    const { fileKey } = await uploadFileFeishu({
+      cfg,
+      file: resolvedPath,
+      fileName: name,
+      fileType,
+      accountId,
+    });
+    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
+    return sendFileFeishu({
+      cfg,
+      to,
+      fileKey,
+      msgType,
+      replyToMessageId,
+      replyInThread,
+      accountId,
+    });
+  }
+
+  // Remote URL or in-memory buffer path: read into a Buffer as before.
   let buffer: Buffer;
   let name: string;
 

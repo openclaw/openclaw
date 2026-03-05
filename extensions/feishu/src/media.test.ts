@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -257,29 +258,135 @@ describe("sendMediaFeishu msg_type routing", () => {
   });
 
   it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {
+    // Create a real temp file since local paths now use ReadStream (not buffer).
+    const tmpDir = path.join(resolvePreferredOpenClawTmpDir(), "media-roots-test-" + Date.now());
+    await fs.mkdir(tmpDir, { recursive: true });
+    const tmpFile = path.join(tmpDir, "file.pdf");
+    await fs.writeFile(tmpFile, Buffer.from("fake-pdf"));
+
+    try {
+      loadWebMediaMock.mockResolvedValue({
+        buffer: Buffer.from("local-file"),
+        fileName: "file.pdf",
+        kind: "document",
+        contentType: "application/pdf",
+      });
+
+      const roots = [tmpDir, "/tmp/openclaw"];
+      await sendMediaFeishu({
+        cfg: {} as any,
+        to: "user:ou_target",
+        mediaUrl: tmpFile,
+        mediaLocalRoots: roots,
+      });
+
+      expect(loadWebMediaMock).toHaveBeenCalledWith(
+        tmpFile,
+        expect.objectContaining({
+          maxBytes: expect.any(Number),
+          optimizeImages: false,
+          localRoots: roots,
+        }),
+      );
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses ReadStream for local file uploads to preserve binary integrity (#32123)", async () => {
+    // Create a real temp file so fs.createReadStream can open it.
+    const tmpDir = path.join(resolvePreferredOpenClawTmpDir(), "media-test-" + Date.now());
+    await fs.mkdir(tmpDir, { recursive: true });
+    const tmpFile = path.join(tmpDir, "report.xlsx");
+    await fs.writeFile(tmpFile, Buffer.from("PK\x03\x04fake-xlsx-content"));
+
+    try {
+      // loadWebMedia validates the path but the actual upload should use a
+      // ReadStream (not the in-memory buffer) to avoid binary corruption in
+      // the axios/form-data multipart serialization layer.
+      loadWebMediaMock.mockResolvedValue({
+        buffer: Buffer.from("should-not-be-used"),
+        fileName: "report.xlsx",
+        kind: "document",
+        contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+
+      await sendMediaFeishu({
+        cfg: {} as any,
+        to: "user:ou_target",
+        mediaUrl: tmpFile,
+      });
+
+      // loadWebMedia is called for path validation + size check
+      expect(loadWebMediaMock).toHaveBeenCalledWith(
+        tmpFile,
+        expect.objectContaining({ optimizeImages: false }),
+      );
+
+      // The SDK should receive a ReadStream, not a Buffer.
+      const createCall = fileCreateMock.mock.calls[0][0];
+      expect(createCall.data.file).toBeInstanceOf(fsSync.ReadStream);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses ReadStream for local image uploads to preserve binary integrity (#32123)", async () => {
+    const tmpDir = path.join(resolvePreferredOpenClawTmpDir(), "media-test-" + Date.now());
+    await fs.mkdir(tmpDir, { recursive: true });
+    const tmpFile = path.join(tmpDir, "photo.png");
+    await fs.writeFile(tmpFile, Buffer.from("fake-png"));
+
+    try {
+      loadWebMediaMock.mockResolvedValue({
+        buffer: Buffer.from("image-bytes"),
+        fileName: "photo.png",
+        kind: "image",
+        contentType: "image/png",
+      });
+
+      await sendMediaFeishu({
+        cfg: {} as any,
+        to: "user:ou_target",
+        mediaUrl: tmpFile,
+      });
+
+      const createCall = imageCreateMock.mock.calls[0][0];
+      expect(createCall.data.image).toBeInstanceOf(fsSync.ReadStream);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still uses buffer for remote URLs (not local paths)", async () => {
     loadWebMediaMock.mockResolvedValue({
-      buffer: Buffer.from("local-file"),
+      buffer: Buffer.from("remote-file"),
       fileName: "doc.pdf",
       kind: "document",
       contentType: "application/pdf",
     });
 
-    const roots = ["/allowed/workspace", "/tmp/openclaw"];
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
-      mediaUrl: "/allowed/workspace/file.pdf",
-      mediaLocalRoots: roots,
+      mediaUrl: "https://example.com/doc.pdf",
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith(
-      "/allowed/workspace/file.pdf",
-      expect.objectContaining({
-        maxBytes: expect.any(Number),
-        optimizeImages: false,
-        localRoots: roots,
-      }),
-    );
+    const createCall = fileCreateMock.mock.calls[0][0];
+    expect(Buffer.isBuffer(createCall.data.file)).toBe(true);
+  });
+
+  it("still uses buffer when mediaBuffer is provided directly", async () => {
+    const buf = Buffer.from("direct-buffer");
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: buf,
+      fileName: "file.xlsx",
+    });
+
+    const createCall = fileCreateMock.mock.calls[0][0];
+    expect(Buffer.isBuffer(createCall.data.file)).toBe(true);
   });
 
   it("fails closed when media URL fetch is blocked", async () => {
