@@ -205,14 +205,23 @@ function resolveNestedSkillsRoot(
   return { baseDir: dir };
 }
 
+function normalizeLoadedSkillName(skill: Skill): Skill {
+  const name = String(skill.name ?? "").trim();
+  return { ...skill, name };
+}
+
 function unwrapLoadedSkills(loaded: unknown): Skill[] {
   if (Array.isArray(loaded)) {
-    return loaded as Skill[];
+    return loaded
+      .map((skill) => normalizeLoadedSkillName(skill as Skill))
+      .filter((skill) => Boolean(skill.name));
   }
   if (loaded && typeof loaded === "object" && "skills" in loaded) {
     const skills = (loaded as { skills?: unknown }).skills;
     if (Array.isArray(skills)) {
-      return skills as Skill[];
+      return skills
+        .map((skill) => normalizeLoadedSkillName(skill as Skill))
+        .filter((skill) => Boolean(skill.name));
     }
   }
   return [];
