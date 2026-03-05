@@ -12,6 +12,7 @@ import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { isPluginHookName, isPromptInjectionHookName } from "./types.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
@@ -138,6 +139,10 @@ export type PluginRegistryParams = {
   logger: PluginLogger;
   coreGatewayHandlers?: GatewayRequestHandlers;
   runtime: PluginRuntime;
+};
+
+type PluginTypedHookPolicy = {
+  allowPromptInjection?: boolean;
 };
 
 export function createEmptyPluginRegistry(): PluginRegistry {
@@ -480,7 +485,26 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     hookName: K,
     handler: PluginHookHandlerMap[K],
     opts?: { priority?: number },
+    policy?: PluginTypedHookPolicy,
   ) => {
+    if (!isPluginHookName(hookName)) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `unknown typed hook "${String(hookName)}" ignored`,
+      });
+      return;
+    }
+    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+      });
+      return;
+    }
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
@@ -503,6 +527,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     params: {
       config: OpenClawPluginApi["config"];
       pluginConfig?: Record<string, unknown>;
+      hookPolicy?: PluginTypedHookPolicy;
     },
   ): OpenClawPluginApi => {
     return {
@@ -526,7 +551,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerService: (service) => registerService(record, service),
       registerCommand: (command) => registerCommand(record, command),
       resolvePath: (input: string) => resolveUserPath(input),
-      on: (hookName, handler, opts) => registerTypedHook(record, hookName, handler, opts),
+      on: (hookName, handler, opts) =>
+        registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
     };
   };
 

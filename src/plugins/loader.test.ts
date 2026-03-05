@@ -685,6 +685,103 @@ describe("loadOpenClawPlugins", () => {
     expect(disabled?.status).toBe("disabled");
   });
 
+  it("blocks prompt-injection typed hooks when disabled by plugin hook policy", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-policy",
+      filename: "hook-policy.cjs",
+      body: `module.exports = { id: "hook-policy", register(api) {
+  api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
+  api.on("before_agent_start", () => ({ prependContext: "legacy" }));
+  api.on("before_model_resolve", () => ({ providerOverride: "openai" }));
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-policy"],
+        entries: {
+          "hook-policy": {
+            hooks: {
+              allowPromptInjection: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "hook-policy")?.status).toBe("loaded");
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["before_model_resolve"]);
+    const blockedDiagnostics = registry.diagnostics.filter((diag) =>
+      String(diag.message).includes(
+        "blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
+      ),
+    );
+    expect(blockedDiagnostics).toHaveLength(2);
+  });
+
+  it("keeps prompt-injection typed hooks enabled by default", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-policy-default",
+      filename: "hook-policy-default.cjs",
+      body: `module.exports = { id: "hook-policy-default", register(api) {
+  api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
+  api.on("before_agent_start", () => ({ prependContext: "legacy" }));
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-policy-default"],
+      },
+    });
+
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
+      "before_prompt_build",
+      "before_agent_start",
+    ]);
+  });
+
+  it("ignores unknown typed hooks from plugins and keeps loading", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-unknown",
+      filename: "hook-unknown.cjs",
+      body: `module.exports = { id: "hook-unknown", register(api) {
+  api.on("totally_unknown_hook_name", () => ({ foo: "bar" }));
+  api.on(123, () => ({ foo: "baz" }));
+  api.on("before_model_resolve", () => ({ providerOverride: "openai" }));
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-unknown"],
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "hook-unknown")?.status).toBe("loaded");
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["before_model_resolve"]);
+    const unknownHookDiagnostics = registry.diagnostics.filter((diag) =>
+      String(diag.message).includes('unknown typed hook "'),
+    );
+    expect(unknownHookDiagnostics).toHaveLength(2);
+    expect(
+      unknownHookDiagnostics.some((diag) =>
+        String(diag.message).includes('unknown typed hook "totally_unknown_hook_name" ignored'),
+      ),
+    ).toBe(true);
+    expect(
+      unknownHookDiagnostics.some((diag) =>
+        String(diag.message).includes('unknown typed hook "123" ignored'),
+      ),
+    ).toBe(true);
+  });
+
   it("enforces memory slot selection", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const memoryA = writePlugin({
