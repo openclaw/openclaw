@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -114,6 +115,14 @@ function resolveNodeModulesBinPackageRoot(argv1: string): string | null {
   return path.join(nodeModulesDir, binName);
 }
 
+function resolveRealpathDir(filePath: string): string | null {
+  try {
+    return path.dirname(fsSync.realpathSync(filePath));
+  } catch {
+    return null;
+  }
+}
+
 function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   const dirs: string[] = [];
   const cwd = normalizeDir(opts.cwd);
@@ -123,6 +132,10 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   const argv1 = normalizeDir(opts.argv1);
   if (argv1) {
     dirs.push(path.dirname(argv1));
+    const realpathDir = resolveRealpathDir(argv1);
+    if (realpathDir) {
+      dirs.push(realpathDir);
+    }
     const packageRoot = resolveNodeModulesBinPackageRoot(argv1);
     if (packageRoot) {
       dirs.push(packageRoot);
