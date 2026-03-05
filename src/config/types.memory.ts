@@ -1,6 +1,6 @@
 import type { SessionSendPolicyConfig } from "./types.base.js";
 
-export type MemoryBackend = "builtin" | "qmd";
+export type MemoryBackend = "builtin" | "qmd" | "postgres";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 
@@ -8,6 +8,7 @@ export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  postgres?: MemoryPostgresConfig;
 };
 
 export type MemoryQmdConfig = {
@@ -64,4 +65,21 @@ export type MemoryQmdLimitsConfig = {
   maxSnippetChars?: number;
   maxInjectedChars?: number;
   timeoutMs?: number;
+};
+
+export type MemoryPostgresConfig = {
+  /** PostgreSQL connection string, e.g. postgres://user:pass@host:5432/dbname */
+  connectionString?: string;
+  /** Embedding provider: openai, voyage, gemini, ollama (defaults to memory.embedding or openai) */
+  embeddingProvider?: string;
+  /** Embedding model override */
+  embeddingModel?: string;
+  /** Embedding dimensions (default: 1536 for OpenAI text-embedding-3-small) */
+  embeddingDimensions?: number;
+  /** pgvector index type: ivfflat or hnsw (default: hnsw) */
+  indexType?: "ivfflat" | "hnsw";
+  /** Max pool connections (default: 5) */
+  maxConnections?: number;
+  /** Similarity threshold 0-1 (default: 0.3) */
+  minSimilarity?: number;
 };
