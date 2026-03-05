@@ -109,7 +109,7 @@ export async function dispatchReplyFromConfig(params: {
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
   const channel = String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
   const chatId = ctx.To ?? ctx.From;
-  const messageId = resolveInboundMessageSid(ctx);
+  const messageId = resolveInboundMessageSid(ctx) ?? undefined;
   const sessionKey = ctx.SessionKey;
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
@@ -172,7 +172,7 @@ export async function dispatchReplyFromConfig(params: {
   // Extract message context for hooks (plugin and internal)
   const timestamp =
     typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
-  const messageIdForHook = resolveInboundMessageSid(ctx);
+  const messageIdForHook = resolveInboundMessageSid(ctx) ?? undefined;
   const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
   const { isGroup, groupId } = hookContext;
 
