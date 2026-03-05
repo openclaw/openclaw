@@ -90,7 +90,10 @@ export function createFollowupRunner(params: {
       ) {
         continue;
       }
-      await typingSignals.signalTextDelta(payload.text);
+      await typingSignals.signalTextDelta(
+        payload.text,
+        payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
+      );
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
       if (shouldRouteToOriginating) {
