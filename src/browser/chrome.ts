@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isPrivateNetworkAllowedByPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { rawDataToString } from "../infra/ws.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -257,6 +258,10 @@ export async function launchOpenClawChrome(
       // Best-effort; older Chromes may ignore.
       args.push("--headless=new");
       args.push("--disable-gpu");
+    }
+    if (isPrivateNetworkAllowedByPolicy(resolved.ssrfPolicy)) {
+      args.push("--ignore-certificate-errors");
+      args.push("--allow-insecure-localhost");
     }
     if (resolved.noSandbox) {
       args.push("--no-sandbox");
