@@ -303,6 +303,41 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(chatCall?.[1])).toBe("");
   });
 
+  it("chat.inject creates transcript file when session metadata points to a missing file", async () => {
+    createTranscriptFixture("openclaw-chat-inject-missing-transcript-");
+    fs.rmSync(mockState.transcriptPath, { force: true });
+    expect(fs.existsSync(mockState.transcriptPath)).toBe(false);
+
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await chatHandlers["chat.inject"]({
+      params: { sessionKey: "main", message: "hello from inject" },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(respond).toHaveBeenCalled();
+    const [ok, payload, error] = respond.mock.calls.at(-1) ?? [];
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(payload).toMatchObject({ ok: true, messageId: expect.any(String) });
+    const transcriptDir = path.dirname(mockState.transcriptPath);
+    const createdJsonl = fs
+      .readdirSync(transcriptDir)
+      .filter((entry) => entry.endsWith(".jsonl"))
+      .map((entry) => path.join(transcriptDir, entry));
+    expect(createdJsonl.length).toBeGreaterThan(0);
+
+    const lines = fs.readFileSync(createdJsonl[0], "utf-8").split(/\r?\n/).filter(Boolean);
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+    const last = JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
+    expect(last.type).toBe("message");
+  });
+
   it("chat.send non-streaming final keeps message defined for directive-only assistant text", async () => {
     createTranscriptFixture("openclaw-chat-send-directive-only-");
     mockState.finalText = "[[reply_to_current]]";
