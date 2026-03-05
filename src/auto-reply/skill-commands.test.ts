@@ -147,10 +147,8 @@ describe("listSkillCommandsForAgents", () => {
       },
     });
     const names = commands.map((entry) => entry.name);
-    // demo-skill appears in both workspaces; only the first registration (demo_skill) survives.
     expect(names).toContain("demo_skill");
     expect(names).not.toContain("demo_skill_2");
-    // extra-skill is unique to the research workspace and should be present.
     expect(names).toContain("extra_skill");
   });
 
