@@ -71,6 +71,9 @@ function setCachedSessionTitleFields(cacheKey: string, stat: fs.Stats, value: Se
   }
 }
 
+const CHAT_HISTORY_TRANSCRIPT_TAIL_MAX_BYTES = 1024 * 1024;
+const CHAT_HISTORY_TRANSCRIPT_MAX_PARSED_LINES = 1200;
+
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -83,36 +86,82 @@ export function readSessionMessages(
     return [];
   }
 
-  const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return [];
+  }
+
+  const start = Math.max(0, stat.size - CHAT_HISTORY_TRANSCRIPT_TAIL_MAX_BYTES);
+  let text = "";
+  try {
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const len = stat.size - start;
+      if (len > 0) {
+        const buf = Buffer.allocUnsafe(len);
+        const bytesRead = fs.readSync(fd, buf, 0, len, start);
+        text = buf.toString("utf-8", 0, bytesRead);
+      }
+    } finally {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // best effort
+      }
+    }
+  } catch {
+    return [];
+  }
+
+  if (!text) {
+    return [];
+  }
+
+  let lines = text.split(/\r?\n/);
+  // When reading from a non-zero offset, the first line may be partial/corrupted.
+  if (start > 0 && lines.length > 0) {
+    lines = lines.slice(1);
+  }
+  if (lines.length > CHAT_HISTORY_TRANSCRIPT_MAX_PARSED_LINES) {
+    lines = lines.slice(-CHAT_HISTORY_TRANSCRIPT_MAX_PARSED_LINES);
+  }
+
   const messages: unknown[] = [];
   for (const line of lines) {
     if (!line.trim()) {
       continue;
     }
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed?.message) {
-        messages.push(parsed.message);
-        continue;
-      }
 
-      // Compaction entries are not "message" records, but they're useful context for debugging.
-      // Emit a lightweight synthetic message that the Web UI can render as a divider.
-      if (parsed?.type === "compaction") {
-        const ts = typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
-        const timestamp = Number.isFinite(ts) ? ts : Date.now();
-        messages.push({
-          role: "system",
-          content: [{ type: "text", text: "Compaction" }],
-          timestamp,
-          __openclaw: {
-            kind: "compaction",
-            id: typeof parsed.id === "string" ? parsed.id : undefined,
-          },
-        });
-      }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
     } catch {
-      // ignore bad lines
+      // ignore bad/partial lines
+      continue;
+    }
+
+    const entry = parsed as Record<string, unknown>;
+    if (entry.message) {
+      messages.push(entry.message);
+      continue;
+    }
+
+    // Compaction entries are not "message" records, but they're useful context for debugging.
+    // Emit a lightweight synthetic message that the Web UI can render as a divider.
+    if (entry.type === "compaction") {
+      const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
+      const timestamp = Number.isFinite(ts) ? ts : Date.now();
+      messages.push({
+        role: "system",
+        content: [{ type: "text", text: "Compaction" }],
+        timestamp,
+        __openclaw: {
+          kind: "compaction",
+          id: typeof entry.id === "string" ? entry.id : undefined,
+        },
+      });
     }
   }
   return messages;
