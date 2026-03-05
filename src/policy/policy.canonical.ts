@@ -17,7 +17,10 @@ function compareKeys(a: string, b: string): number {
 }
 
 function canonicalizeJsonValue(value: unknown): CanonicalJson {
-  if (value == null || typeof value === "boolean") {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === "boolean") {
     return value;
   }
   if (typeof value === "number") {
@@ -35,8 +38,10 @@ function canonicalizeJsonValue(value: unknown): CanonicalJson {
   if (typeof value === "object") {
     const seen = new Set<string>();
     const entries = Object.entries(value as Record<string, unknown>)
-      .map(([key, entryValue]) => [key.normalize("NFC"), canonicalizeJsonValue(entryValue)] as const)
-      .sort(([a], [b]) => compareKeys(a, b));
+      .map(
+        ([key, entryValue]) => [key.normalize("NFC"), canonicalizeJsonValue(entryValue)] as const,
+      )
+      .toSorted(([a], [b]) => compareKeys(a, b));
     const out: Record<string, CanonicalJson> = {};
     for (const [key, entryValue] of entries) {
       if (seen.has(key)) {
