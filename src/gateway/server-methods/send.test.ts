@@ -15,7 +15,9 @@ const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   loadConfig: vi.fn(),
-  decideWrite: vi.fn(() => ({ kind: "allow" })),
+  decideWrite: vi.fn((): { kind: string; target?: unknown; reason?: string } => ({
+    kind: "allow",
+  })),
   getProtectedDestinationMap: vi.fn(() => new Map()),
 }));
 

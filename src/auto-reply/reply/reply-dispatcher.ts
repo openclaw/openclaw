@@ -28,7 +28,7 @@ export type ReplyDispatchDestination = {
 
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
-  info: { kind: ReplyDispatchKind; destination: ReplyDispatchDestination },
+  info: { kind: ReplyDispatchKind; destination?: ReplyDispatchDestination },
 ) => Promise<void>;
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
@@ -51,8 +51,10 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
 }
 
 export type ReplyDispatcherOptions = {
-  cfg: OpenClawConfig;
-  destination: ReplyDispatchDestination;
+  /** Config for write-policy enforcement. When absent, policy checks are skipped. */
+  cfg?: OpenClawConfig;
+  /** Outbound destination for write-policy enforcement. When absent, policy checks are skipped. */
+  destination?: ReplyDispatchDestination;
   deliver: ReplyDispatchDeliverer;
   responsePrefix?: string;
   /** Static context for response prefix template interpolation. */
@@ -166,6 +168,16 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           if (delayMs > 0) {
             await sleep(delayMs);
           }
+        }
+        // Skip write-policy enforcement when cfg/destination are absent (extension call sites
+        // that haven't adopted the write-policy surface yet — safe because relay routing config
+        // is required for any destination to be protected).
+        if (!options.cfg || !options.destination) {
+          await options.deliver(normalized, {
+            kind,
+            destination: options.destination,
+          });
+          return;
         }
         const decision = decideWrite(
           "announce",
