@@ -339,7 +339,8 @@ export async function monitorWebInbox(options: {
     // In confirming mode, intercept replies and send to owner for approval
     const { access } = inbound;
     let confirmingReplySent = false;
-    const earlyBody = extractText(msg.message ?? undefined);
+    // Use enriched.body (includes location/media placeholders) instead of raw earlyBody
+    const confirmedOriginalMessage = enriched.body;
     const reply = async (text: string) => {
       if (access.confirmingMode && access.confirmingConfig?.ownerChat && !confirmingReplySent) {
         confirmingReplySent = true;
@@ -351,7 +352,7 @@ export async function monitorWebInbox(options: {
           senderId: senderDisplay,
           senderName: pushNameDisplay,
           replyTo: chatJid,
-          originalMessage: earlyBody ?? "",
+          originalMessage: confirmedOriginalMessage,
           suggestedResponse: text,
           accountId: access.resolvedAccountId,
         });
@@ -362,7 +363,7 @@ export async function monitorWebInbox(options: {
             code,
             senderId: senderDisplay,
             senderName: pushNameDisplay,
-            originalMessage: earlyBody ?? "",
+            originalMessage: confirmedOriginalMessage,
             suggestedResponse: text,
             includeMessage,
           });

@@ -66,7 +66,8 @@ async function sendApprovedMessage(params: {
   const messageToSend = response.editedResponse ?? response.suggestedResponse;
 
   if (channel === "whatsapp") {
-    // Import dynamically to avoid circular dependencies
+    // replyTo is always a DM JID — confirming mode is only activated for DMs
+    // (see access-control.ts: confirmingMode is set inside the `if (!params.group)` block)
     const { requireActiveWebListener } = await import("../web/active-listener.js");
     const { listener } = requireActiveWebListener(response.accountId);
     await listener.sendMessage(response.replyTo, messageToSend);
@@ -164,14 +165,14 @@ export function registerConfirmingCli(program: Command) {
         defaultRuntime.log(`${theme.muted("Resolved:")} ${response.resolvedAt}`);
       }
       defaultRuntime.log("");
-      defaultRuntime.log(`${theme.heading("Original Message:")}`);
+      defaultRuntime.log(theme.heading("Original Message:"));
       defaultRuntime.log(response.originalMessage);
       defaultRuntime.log("");
-      defaultRuntime.log(`${theme.heading("Suggested Response:")}`);
+      defaultRuntime.log(theme.heading("Suggested Response:"));
       defaultRuntime.log(response.suggestedResponse);
       if (response.editedResponse) {
         defaultRuntime.log("");
-        defaultRuntime.log(`${theme.heading("Edited Response:")}`);
+        defaultRuntime.log(theme.heading("Edited Response:"));
         defaultRuntime.log(response.editedResponse);
       }
     });
