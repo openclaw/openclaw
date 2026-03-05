@@ -55,7 +55,10 @@ export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 // Remote providers considered for auto-selection when provider === "auto".
 // Ollama is intentionally excluded here so that "auto" mode does not
 // implicitly assume a local Ollama instance is available.
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "bedrock", "voyage", "mistral"] as const;
+// Bedrock is last because its auth check (AWS default credential chain)
+// cannot prove credentials exist without a real API call, unlike
+// key-based providers that fail fast on missing env vars.
+const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral", "bedrock"] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
