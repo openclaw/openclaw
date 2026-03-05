@@ -1,5 +1,5 @@
-import { createLLMClientFromEnv, createOrchestrator } from "../../../src/codegen/index.js";
-import type { GenerationTask, UserRequest } from "../../../src/codegen/types.js";
+import { createLLMClientFromEnv, createOrchestrator } from "../../../src/codegen/index";
+import type { GenerationTask, UserRequest } from "../../../src/codegen/types";
 
 export type GenerationType = "web" | "api" | "mobile" | "desktop" | "cli";
 
