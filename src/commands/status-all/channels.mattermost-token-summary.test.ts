@@ -93,6 +93,40 @@ function makeTokenPlugin(): ChannelPlugin {
   };
 }
 
+function makeMismatchedDefaultAccountPlugin(): ChannelPlugin {
+  return {
+    id: "bncr",
+    meta: {
+      id: "bncr",
+      label: "Bncr",
+      selectionLabel: "Bncr",
+      docsPath: "/channels/bncr",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["Primary"],
+      defaultAccountId: () => "default",
+      resolveAccount: (_cfg, accountId) => ({
+        name: accountId,
+        enabled: accountId === "Primary",
+        token: accountId === "Primary" ? "token-value" : "",
+      }),
+      isConfigured: (account) => Boolean((account as { token?: string }).token),
+      isEnabled: (account) => (account as { enabled?: boolean }).enabled !== false,
+    },
+    status: {
+      buildChannelSummary: async (params) => ({
+        linked: params.snapshot.accountId === "Primary",
+        configured: true,
+      }),
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
 describe("buildChannelsTable - mattermost token summary", () => {
   it("does not require appToken for mattermost accounts", async () => {
     vi.mocked(listChannelPlugins).mockReturnValue([makeMattermostPlugin()]);
@@ -133,5 +167,18 @@ describe("buildChannelsTable - mattermost token summary", () => {
     expect(tokenRow).toBeDefined();
     expect(tokenRow?.state).toBe("ok");
     expect(tokenRow?.detail).toContain("token");
+  });
+
+  it("uses a configured account for summary when default account is missing", async () => {
+    vi.mocked(listChannelPlugins).mockReturnValue([makeMismatchedDefaultAccountPlugin()]);
+
+    const table = await buildChannelsTable({ channels: {} } as never, {
+      showSecrets: false,
+    });
+
+    const row = table.rows.find((entry) => entry.id === "bncr");
+    expect(row).toBeDefined();
+    expect(row?.state).toBe("ok");
+    expect(row?.detail).toContain("linked");
   });
 });

@@ -127,16 +127,22 @@ export async function buildChannelSummary(
     }
 
     const configuredEntries = entries.filter((entry) => entry.configured);
-    const anyEnabled = entries.some((entry) => entry.enabled);
+    const enabledEntries = entries.filter((entry) => entry.enabled);
+    const anyEnabled = enabledEntries.length > 0;
     const fallbackEntry =
       entries.find((entry) => entry.accountId === defaultAccountId) ?? entries[0];
+    const summaryEntry =
+      (fallbackEntry?.configured ? fallbackEntry : undefined) ??
+      configuredEntries[0] ??
+      enabledEntries[0] ??
+      fallbackEntry;
     const summary = plugin.status?.buildChannelSummary
       ? await plugin.status.buildChannelSummary({
-          account: fallbackEntry?.account ?? {},
+          account: summaryEntry?.account ?? {},
           cfg: effective,
           defaultAccountId,
           snapshot:
-            fallbackEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
+            summaryEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
         })
       : undefined;
 

@@ -343,14 +343,19 @@ export async function buildChannelsTable(
     const enabledAccounts = accounts.filter((a) => a.enabled);
     const configuredAccounts = enabledAccounts.filter((a) => a.configured);
     const defaultEntry = accounts.find((a) => a.accountId === defaultAccountId) ?? accounts[0];
+    const summaryEntry =
+      (defaultEntry?.configured ? defaultEntry : undefined) ??
+      configuredAccounts[0] ??
+      enabledAccounts[0] ??
+      defaultEntry;
 
     const summary = plugin.status?.buildChannelSummary
       ? await plugin.status.buildChannelSummary({
-          account: defaultEntry?.account ?? {},
+          account: summaryEntry?.account ?? {},
           cfg,
           defaultAccountId,
           snapshot:
-            defaultEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
+            summaryEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
         })
       : undefined;
 
