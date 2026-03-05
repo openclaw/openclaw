@@ -1,8 +1,8 @@
 import type { Bot, Context } from "grammy";
 import {
-  ensureConfiguredAcpBindingSession,
-  resolveConfiguredAcpBindingRecord,
-} from "../acp/persistent-bindings.js";
+  ensureConfiguredAcpRouteReady,
+  resolveConfiguredAcpRoute,
+} from "../acp/persistent-bindings.route.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import type { CommandArgs } from "../auto-reply/commands-registry.js";
 import {
@@ -43,7 +43,7 @@ import {
   matchPluginCommand,
 } from "../plugins/commands.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveAgentIdFromSessionKey, resolveThreadSessionKeys } from "../routing/session-key.js";
+import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
@@ -452,17 +452,20 @@ export const registerTelegramNativeCommands = ({
       },
       parentPeer,
     });
-    const configuredBinding = resolveConfiguredAcpBindingRecord({
+    const configuredRoute = resolveConfiguredAcpRoute({
       cfg,
+      route,
       channel: "telegram",
       accountId,
       conversationId: peerId,
       parentConversationId: isGroup ? String(chatId) : undefined,
     });
+    const configuredBinding = configuredRoute.configuredBinding;
+    route = configuredRoute.route;
     if (configuredBinding) {
-      const ensured = await ensureConfiguredAcpBindingSession({
+      const ensured = await ensureConfiguredAcpRouteReady({
         cfg,
-        spec: configuredBinding.spec,
+        configuredBinding,
       });
       if (!ensured.ok) {
         logVerbose(
@@ -479,16 +482,6 @@ export const registerTelegramNativeCommands = ({
             ),
         });
         return null;
-      }
-      const configuredSessionKey = configuredBinding.record.targetSessionKey?.trim() ?? "";
-      if (configuredSessionKey) {
-        const boundAgentId = resolveAgentIdFromSessionKey(configuredSessionKey);
-        route = {
-          ...route,
-          sessionKey: configuredSessionKey,
-          agentId: boundAgentId || route.agentId,
-          matchedBy: "binding.channel",
-        };
       }
     }
     const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);

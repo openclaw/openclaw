@@ -1,8 +1,8 @@
 import { ChannelType, MessageType, type User } from "@buape/carbon";
 import {
-  ensureConfiguredAcpBindingSession,
-  resolveConfiguredAcpBindingRecord,
-} from "../../acp/persistent-bindings.js";
+  ensureConfiguredAcpRouteReady,
+  resolveConfiguredAcpRoute,
+} from "../../acp/persistent-bindings.route.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
 import {
@@ -354,16 +354,18 @@ export async function preflightDiscordMessage(
       conversationId: messageChannelId,
       parentConversationId: earlyThreadParentId,
     }) ?? undefined;
-  const configuredBinding =
+  const configuredRoute =
     threadBinding == null
-      ? resolveConfiguredAcpBindingRecord({
+      ? resolveConfiguredAcpRoute({
           cfg: freshCfg,
+          route,
           channel: "discord",
           accountId: params.accountId,
           conversationId: messageChannelId,
           parentConversationId: earlyThreadParentId,
         })
       : null;
+  const configuredBinding = configuredRoute?.configuredBinding ?? null;
   if (!threadBinding && configuredBinding) {
     threadBinding = configuredBinding.record;
   }
@@ -387,7 +389,7 @@ export async function preflightDiscordMessage(
         agentId: boundAgentId ?? route.agentId,
         matchedBy: "binding.channel" as const,
       }
-    : route;
+    : (configuredRoute?.route ?? route);
   const isBoundThreadSession = Boolean(boundSessionKey && earlyThreadChannel);
   if (
     isBoundThreadBotSystemMessage({
@@ -758,9 +760,9 @@ export async function preflightDiscordMessage(
     return null;
   }
   if (configuredBinding) {
-    const ensured = await ensureConfiguredAcpBindingSession({
+    const ensured = await ensureConfiguredAcpRouteReady({
       cfg: freshCfg,
-      spec: configuredBinding.spec,
+      configuredBinding,
     });
     if (!ensured.ok) {
       logVerbose(

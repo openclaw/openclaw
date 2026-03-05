@@ -1,7 +1,5 @@
-import { resolveConfiguredAcpBindingRecord } from "../../../acp/persistent-bindings.js";
 import { callGateway } from "../../../gateway/call.js";
-import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-import { isAcpSessionKey } from "../../../routing/session-key.js";
+import { resolveEffectiveResetTargetSessionKey } from "../acp-reset-target.js";
 import { resolveRequesterSessionKey } from "../commands-subagents/shared.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
@@ -43,32 +41,16 @@ export function resolveBoundAcpThreadSessionKey(params: HandleCommandsParams): s
       : "";
   const activeSessionKey = commandTargetSessionKey || params.sessionKey.trim();
   const bindingContext = resolveAcpCommandBindingContext(params);
-  if (!bindingContext.channel || !bindingContext.conversationId) {
-    return activeSessionKey && isAcpSessionKey(activeSessionKey) ? activeSessionKey : undefined;
-  }
-  const serviceBinding = getSessionBindingService().resolveByConversation({
-    channel: bindingContext.channel,
-    accountId: bindingContext.accountId,
-    conversationId: bindingContext.conversationId,
-    parentConversationId: bindingContext.parentConversationId,
-  });
-  const serviceSessionKey =
-    serviceBinding?.targetKind === "session" ? serviceBinding.targetSessionKey.trim() : "";
-  if (serviceSessionKey) {
-    return serviceSessionKey;
-  }
-  const configuredBinding = resolveConfiguredAcpBindingRecord({
+  return resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,
     conversationId: bindingContext.conversationId,
     parentConversationId: bindingContext.parentConversationId,
+    activeSessionKey,
+    allowNonAcpBindingSessionKey: true,
+    skipConfiguredFallbackWhenActiveSessionNonAcp: false,
   });
-  const binding = configuredBinding?.record ?? null;
-  if (binding && binding.targetKind === "session") {
-    return binding.targetSessionKey.trim() || undefined;
-  }
-  return activeSessionKey && isAcpSessionKey(activeSessionKey) ? activeSessionKey : undefined;
 }
 
 export async function resolveAcpTargetSessionKey(params: {

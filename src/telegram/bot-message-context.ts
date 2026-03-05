@@ -1,8 +1,8 @@
 import type { Bot } from "grammy";
 import {
-  ensureConfiguredAcpBindingSession,
-  resolveConfiguredAcpBindingRecord,
-} from "../acp/persistent-bindings.js";
+  ensureConfiguredAcpRouteReady,
+  resolveConfiguredAcpRoute,
+} from "../acp/persistent-bindings.route.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
   findModelInCatalog,
@@ -51,7 +51,6 @@ import {
 import {
   DEFAULT_ACCOUNT_ID,
   buildAgentMainSessionKey,
-  resolveAgentIdFromSessionKey,
   resolveThreadSessionKeys,
 } from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
@@ -250,23 +249,17 @@ export const buildTelegramMessageContext = async ({
       `telegram: per-topic agent override: topic=${resolvedThreadId ?? dmThreadId} agent=${topicAgentId} sessionKey=${overrideSessionKey}`,
     );
   }
-  const configuredBinding = resolveConfiguredAcpBindingRecord({
+  const configuredRoute = resolveConfiguredAcpRoute({
     cfg: freshCfg,
+    route,
     channel: "telegram",
     accountId: account.accountId,
     conversationId: peerId,
     parentConversationId: isGroup ? String(chatId) : undefined,
   });
-  const configuredBindingSessionKey = configuredBinding?.record.targetSessionKey?.trim() ?? "";
-  if (configuredBindingSessionKey) {
-    const boundAgentId = resolveAgentIdFromSessionKey(configuredBindingSessionKey);
-    route = {
-      ...route,
-      sessionKey: configuredBindingSessionKey,
-      agentId: boundAgentId || route.agentId,
-      matchedBy: "binding.channel",
-    };
-  }
+  const configuredBinding = configuredRoute.configuredBinding;
+  const configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
+  route = configuredRoute.route;
   const requiresExplicitAccountBinding = (candidate: ResolvedAgentRoute): boolean =>
     candidate.accountId !== DEFAULT_ACCOUNT_ID && candidate.matchedBy === "default";
   // Fail closed for named Telegram accounts when route resolution falls back to
@@ -376,9 +369,9 @@ export const buildTelegramMessageContext = async ({
     if (!configuredBinding) {
       return true;
     }
-    const ensured = await ensureConfiguredAcpBindingSession({
+    const ensured = await ensureConfiguredAcpRouteReady({
       cfg: freshCfg,
-      spec: configuredBinding.spec,
+      configuredBinding,
     });
     if (ensured.ok) {
       logVerbose(

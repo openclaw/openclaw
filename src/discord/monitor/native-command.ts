@@ -15,9 +15,9 @@ import {
 } from "@buape/carbon";
 import { ApplicationCommandOptionType, ButtonStyle } from "discord-api-types/v10";
 import {
-  ensureConfiguredAcpBindingSession,
-  resolveConfiguredAcpBindingRecord,
-} from "../../acp/persistent-bindings.js";
+  ensureConfiguredAcpRouteReady,
+  resolveConfiguredAcpRoute,
+} from "../../acp/persistent-bindings.route.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import type {
@@ -1546,20 +1546,22 @@ async function dispatchDiscordCommandInteraction(params: {
     parentPeer: threadParentId ? { kind: "channel", id: threadParentId } : undefined,
   });
   const threadBinding = isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined;
-  const configuredBinding =
+  const configuredRoute =
     threadBinding == null
-      ? resolveConfiguredAcpBindingRecord({
+      ? resolveConfiguredAcpRoute({
           cfg,
+          route,
           channel: "discord",
           accountId,
           conversationId: channelId,
           parentConversationId: threadParentId,
         })
       : null;
+  const configuredBinding = configuredRoute?.configuredBinding ?? null;
   if (configuredBinding) {
-    const ensured = await ensureConfiguredAcpBindingSession({
+    const ensured = await ensureConfiguredAcpRouteReady({
       cfg,
-      spec: configuredBinding.spec,
+      configuredBinding,
     });
     if (!ensured.ok) {
       logVerbose(
@@ -1569,7 +1571,7 @@ async function dispatchDiscordCommandInteraction(params: {
       return;
     }
   }
-  const configuredBoundSessionKey = configuredBinding?.record.targetSessionKey?.trim() ?? "";
+  const configuredBoundSessionKey = configuredRoute?.boundSessionKey ?? "";
   const boundSessionKey = threadBinding?.targetSessionKey?.trim() || configuredBoundSessionKey;
   const boundAgentId = boundSessionKey ? resolveAgentIdFromSessionKey(boundSessionKey) : undefined;
   const effectiveRoute = boundSessionKey
@@ -1579,7 +1581,7 @@ async function dispatchDiscordCommandInteraction(params: {
         agentId: boundAgentId ?? route.agentId,
         ...(configuredBinding ? { matchedBy: "binding.channel" as const } : {}),
       }
-    : route;
+    : (configuredRoute?.route ?? route);
   const conversationLabel = isDirectMessage ? (user.globalName ?? user.username) : channelId;
   const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
     channelConfig,

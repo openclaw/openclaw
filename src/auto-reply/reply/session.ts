@@ -4,7 +4,6 @@ import {
   buildTelegramTopicConversationId,
   parseTelegramChatIdFromTarget,
 } from "../../acp/conversation-id.js";
-import { resolveConfiguredAcpBindingRecord } from "../../acp/persistent-bindings.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -30,18 +29,14 @@ import {
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
-import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import {
-  isAcpSessionKey,
-  normalizeMainKey,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeMainKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import {
@@ -177,43 +172,18 @@ function resolveBoundAcpSessionForReset(params: {
   ctx: MsgContext;
 }): string | undefined {
   const activeSessionKey = normalizeSessionText(params.ctx.SessionKey);
-  if (activeSessionKey && !isAcpSessionKey(activeSessionKey)) {
-    return undefined;
-  }
-
   const bindingContext = resolveAcpResetBindingContext(params.ctx);
-  if (!bindingContext) {
-    return activeSessionKey && isAcpSessionKey(activeSessionKey) ? activeSessionKey : undefined;
-  }
-
-  const serviceBinding = getSessionBindingService().resolveByConversation({
-    channel: bindingContext.channel,
-    accountId: bindingContext.accountId,
-    conversationId: bindingContext.conversationId,
-    parentConversationId: bindingContext.parentConversationId,
-  });
-  if (serviceBinding?.targetKind === "session") {
-    const serviceSessionKey = serviceBinding.targetSessionKey.trim();
-    if (serviceSessionKey) {
-      return isAcpSessionKey(serviceSessionKey) ? serviceSessionKey : undefined;
-    }
-  }
-
-  const configuredBinding = resolveConfiguredAcpBindingRecord({
+  return resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
-    channel: bindingContext.channel,
-    accountId: bindingContext.accountId,
-    conversationId: bindingContext.conversationId,
-    parentConversationId: bindingContext.parentConversationId,
+    channel: bindingContext?.channel,
+    accountId: bindingContext?.accountId,
+    conversationId: bindingContext?.conversationId,
+    parentConversationId: bindingContext?.parentConversationId,
+    activeSessionKey,
+    allowNonAcpBindingSessionKey: false,
+    skipConfiguredFallbackWhenActiveSessionNonAcp: true,
+    fallbackToActiveAcpWhenUnbound: false,
   });
-  const configuredSessionKey =
-    configuredBinding?.record.targetKind === "session"
-      ? configuredBinding.record.targetSessionKey.trim()
-      : "";
-  if (configuredSessionKey && isAcpSessionKey(configuredSessionKey)) {
-    return configuredSessionKey;
-  }
-  return undefined;
 }
 
 export async function initSessionState(params: {
