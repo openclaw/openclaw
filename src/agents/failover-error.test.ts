@@ -20,11 +20,15 @@ const GEMINI_RESOURCE_EXHAUSTED_MESSAGE =
 const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
 // AWS Bedrock 429 ThrottlingException / 503 ServiceUnavailable:
 // https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
-const BEDROCK_THROTTLING_EXCEPTION_MESSAGE = "ThrottlingException";
-const BEDROCK_SERVICE_UNAVAILABLE_MESSAGE = "ServiceUnavailable";
+const BEDROCK_THROTTLING_EXCEPTION_MESSAGE =
+  "ThrottlingException: Your request was denied due to exceeding the account quotas for Amazon Bedrock.";
+const BEDROCK_SERVICE_UNAVAILABLE_MESSAGE =
+  "ServiceUnavailable: The service is temporarily unable to handle the request.";
 // Groq error codes examples: https://console.groq.com/docs/errors
-const GROQ_TOO_MANY_REQUESTS_MESSAGE = "Too many requests were sent in a given timeframe.";
-const GROQ_SERVICE_UNAVAILABLE_MESSAGE = "Service Unavailable";
+const GROQ_TOO_MANY_REQUESTS_MESSAGE =
+  "429 Too Many Requests: Too many requests were sent in a given timeframe.";
+const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
+  "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.";
 
 describe("failover-error", () => {
   it("infers failover reason from HTTP status", () => {

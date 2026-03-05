@@ -29,11 +29,15 @@ const ANTHROPIC_OVERLOADED_PAYLOAD =
 // OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
 const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
 // Together AI error code examples: https://docs.together.ai/docs/error-codes
-const TOGETHER_PAYMENT_REQUIRED_MESSAGE = "Payment Required";
-const TOGETHER_ENGINE_OVERLOADED_MESSAGE = "Engine Overloaded";
+const TOGETHER_PAYMENT_REQUIRED_MESSAGE =
+  "402 Payment Required: The account associated with this API key has reached its maximum allowed monthly spending limit.";
+const TOGETHER_ENGINE_OVERLOADED_MESSAGE =
+  "503 Engine Overloaded: The server is experiencing a high volume of requests and is temporarily overloaded.";
 // Groq error code examples: https://console.groq.com/docs/errors
-const GROQ_TOO_MANY_REQUESTS_MESSAGE = "Too many requests were sent in a given timeframe.";
-const GROQ_SERVICE_UNAVAILABLE_MESSAGE = "Service Unavailable";
+const GROQ_TOO_MANY_REQUESTS_MESSAGE =
+  "429 Too Many Requests: Too many requests were sent in a given timeframe.";
+const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
+  "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.";
 
 describe("isAuthPermanentErrorMessage", () => {
   it("matches permanent auth failure patterns", () => {
@@ -504,9 +508,9 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason(ANTHROPIC_OVERLOADED_PAYLOAD)).toBe("rate_limit");
     expect(classifyFailoverReason(OPENROUTER_CREDITS_MESSAGE)).toBe("billing");
     expect(classifyFailoverReason(TOGETHER_PAYMENT_REQUIRED_MESSAGE)).toBe("billing");
-    expect(classifyFailoverReason(TOGETHER_ENGINE_OVERLOADED_MESSAGE)).toBe("rate_limit");
+    expect(classifyFailoverReason(TOGETHER_ENGINE_OVERLOADED_MESSAGE)).toBe("timeout");
     expect(classifyFailoverReason(GROQ_TOO_MANY_REQUESTS_MESSAGE)).toBe("rate_limit");
-    expect(classifyFailoverReason(GROQ_SERVICE_UNAVAILABLE_MESSAGE)).toBe("rate_limit");
+    expect(classifyFailoverReason(GROQ_SERVICE_UNAVAILABLE_MESSAGE)).toBe("timeout");
   });
 
   it("classifies internal and compatibility error messages", () => {

@@ -731,7 +731,7 @@ describe("runWithModelFallback", () => {
     });
   });
 
-  it("falls back on documented Anthropic overloaded_error payloads", async () => {
+  it("falls back on documented overloaded_error payloads", async () => {
     await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
