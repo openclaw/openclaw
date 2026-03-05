@@ -175,6 +175,20 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts channels.discord.agentComponents.enabled", () => {
+    const res = validateConfigObject({
+      channels: {
+        discord: {
+          agentComponents: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects browser.extraArgs with non-array value", () => {
     const res = validateConfigObject({
       browser: {
