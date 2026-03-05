@@ -281,10 +281,18 @@ export async function sendMessageMattermost(
     throw new Error("Mattermost message is empty");
   }
 
+  const replyToId = opts.replyToId?.trim();
+  if (replyToId && !isMattermostId(replyToId)) {
+    logger.warn?.(
+      `mattermost send: ignoring invalid replyToId "${replyToId}" (expected 26-char alphanumeric Mattermost ID)`,
+    );
+  }
+  const rootId = replyToId && isMattermostId(replyToId) ? replyToId : undefined;
+
   const post = await createMattermostPost(client, {
     channelId,
     message,
-    rootId: opts.replyToId,
+    rootId,
     fileIds,
     props: opts.props,
   });
