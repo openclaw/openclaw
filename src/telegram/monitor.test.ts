@@ -163,7 +163,6 @@ vi.mock("./bot.js", () => ({
       start: vi.fn(),
     };
   },
-  createTelegramWebhookCallback: vi.fn(),
 }));
 
 // Mock the grammyjs/runner to resolve immediately
