@@ -145,7 +145,14 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
   },
 
   config: {
-    listAccountIds: (cfg: OpenClawConfig): string[] => getXRuntime().channel.x.listXAccountIds(cfg),
+    listAccountIds: (cfg: OpenClawConfig): string[] => {
+      const runtime = getXRuntime();
+      if (!runtime.channel?.x) {
+        console.warn('X channel not available in runtime');
+        return [];
+      }
+      return runtime.channel.x.listXAccountIds(cfg);
+    },
 
     resolveAccount: (cfg: OpenClawConfig, accountId?: string | null): XAccountConfig => {
       const account = getXRuntime().channel.x.resolveXAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
