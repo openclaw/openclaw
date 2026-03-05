@@ -11,11 +11,11 @@ import {
 } from "./policy.js";
 
 describe("acp policy", () => {
-  it("treats ACP as enabled by default", () => {
+  it("treats ACP + ACP dispatch as enabled by default", () => {
     const cfg = {} satisfies OpenClawConfig;
     expect(isAcpEnabledByPolicy(cfg)).toBe(true);
-    expect(isAcpDispatchEnabledByPolicy(cfg)).toBe(false);
-    expect(resolveAcpDispatchPolicyState(cfg)).toBe("dispatch_disabled");
+    expect(isAcpDispatchEnabledByPolicy(cfg)).toBe(true);
+    expect(resolveAcpDispatchPolicyState(cfg)).toBe("enabled");
   });
 
   it("reports ACP disabled state when acp.enabled is false", () => {
@@ -47,11 +47,12 @@ describe("acp policy", () => {
   it("applies allowlist filtering for ACP agents", () => {
     const cfg = {
       acp: {
-        allowedAgents: ["Codex", "claude-code"],
+        allowedAgents: ["Codex", "claude-code", "kimi"],
       },
     } satisfies OpenClawConfig;
     expect(isAcpAgentAllowedByPolicy(cfg, "codex")).toBe(true);
     expect(isAcpAgentAllowedByPolicy(cfg, "claude-code")).toBe(true);
+    expect(isAcpAgentAllowedByPolicy(cfg, "KIMI")).toBe(true);
     expect(isAcpAgentAllowedByPolicy(cfg, "gemini")).toBe(false);
     expect(resolveAcpAgentPolicyError(cfg, "gemini")?.code).toBe("ACP_SESSION_INIT_FAILED");
     expect(resolveAcpAgentPolicyError(cfg, "codex")).toBeNull();

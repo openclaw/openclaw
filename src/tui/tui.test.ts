@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  isIgnorableTuiStopError,
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveTuiSessionKey,
+  stopTuiSafely,
 } from "./tui.js";
 
 describe("resolveFinalAssistantText", () => {
@@ -71,6 +73,27 @@ describe("resolveTuiSessionKey", () => {
         sessionMainKey: "agent:main:main",
       }),
     ).toBe("agent:ops:incident");
+  });
+
+  it("lowercases session keys with uppercase characters", () => {
+    // Uppercase in agent-prefixed form
+    expect(
+      resolveTuiSessionKey({
+        raw: "agent:main:Test1",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:test1");
+    // Uppercase in bare form (prefixed by currentAgentId)
+    expect(
+      resolveTuiSessionKey({
+        raw: "Test1",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:test1");
   });
 });
 
@@ -148,5 +171,38 @@ describe("resolveCtrlCAction", () => {
       action: "warn",
       nextLastCtrlCAt: 3501,
     });
+  });
+});
+
+describe("TUI shutdown safety", () => {
+  it("treats setRawMode EBADF errors as ignorable", () => {
+    expect(isIgnorableTuiStopError(new Error("setRawMode EBADF"))).toBe(true);
+    expect(
+      isIgnorableTuiStopError({
+        code: "EBADF",
+        syscall: "setRawMode",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not ignore unrelated stop errors", () => {
+    expect(isIgnorableTuiStopError(new Error("something else failed"))).toBe(false);
+    expect(isIgnorableTuiStopError({ code: "EIO", syscall: "write" })).toBe(false);
+  });
+
+  it("swallows only ignorable stop errors", () => {
+    expect(() => {
+      stopTuiSafely(() => {
+        throw new Error("setRawMode EBADF");
+      });
+    }).not.toThrow();
+  });
+
+  it("rethrows non-ignorable stop errors", () => {
+    expect(() => {
+      stopTuiSafely(() => {
+        throw new Error("boom");
+      });
+    }).toThrow("boom");
   });
 });

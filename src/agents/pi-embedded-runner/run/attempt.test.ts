@@ -3,13 +3,30 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import {
   isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
+  resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldInjectOllamaCompatNumCtx,
+  decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
+
+function createOllamaProviderConfig(injectNumCtxForOpenAICompat: boolean): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        ollama: {
+          baseUrl: "http://127.0.0.1:11434/v1",
+          api: "openai-completions",
+          injectNumCtxForOpenAICompat,
+          models: [],
+        },
+      },
+    },
+  };
+}
 
 describe("resolvePromptBuildHookResult", () => {
   function createLegacyOnlyHookRunner() {
@@ -128,6 +145,25 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     };
   }
 
+  async function invokeWrappedStream(
+    baseFn: (...args: never[]) => unknown,
+    allowedToolNames?: Set<string>,
+  ) {
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, allowedToolNames);
+    return await wrappedFn({} as never, {} as never, {} as never);
+  }
+
+  function createEventStream(params: {
+    event: unknown;
+    finalToolCall: { type: string; name: string };
+  }) {
+    const finalMessage = { role: "assistant", content: [params.finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({ events: [params.event], resultMessage: finalMessage }),
+    );
+    return { baseFn, finalMessage };
+  }
+
   it("trims whitespace from live streamed tool call names and final result message", async () => {
     const partialToolCall = { type: "toolCall", name: " read " };
     const messageToolCall = { type: "toolCall", name: " exec " };
@@ -137,13 +173,9 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       partial: { role: "assistant", content: [partialToolCall] },
       message: { role: "assistant", content: [messageToolCall] },
     };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() => createFakeStream({ events: [event], resultMessage: finalMessage }));
+    const { baseFn, finalMessage } = createEventStream({ event, finalToolCall });
 
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never);
-    const stream = wrappedFn({} as never, {} as never, {} as never) as Awaited<
-      ReturnType<typeof wrappedFn>
-    >;
+    const stream = await invokeWrappedStream(baseFn);
 
     const seenEvents: unknown[] = [];
     for await (const item of stream) {
@@ -169,13 +201,100 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       }),
     );
 
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never);
-    const stream = await wrappedFn({} as never, {} as never, {} as never);
+    const stream = await invokeWrappedStream(baseFn);
     const result = await stream.result();
 
     expect(finalToolCall.name).toBe("browser");
     expect(result).toBe(finalMessage);
     expect(baseFn).toHaveBeenCalledTimes(1);
+  });
+  it("normalizes common tool aliases when the canonical name is allowed", async () => {
+    const finalToolCall = { type: "toolCall", name: " BASH " };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["exec"]));
+    const result = await stream.result();
+
+    expect(finalToolCall.name).toBe("exec");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("does not collapse whitespace-only tool names to empty strings", async () => {
+    const partialToolCall = { type: "toolCall", name: "   " };
+    const finalToolCall = { type: "toolCall", name: "\t  " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const { baseFn } = createEventStream({ event, finalToolCall });
+
+    const stream = await invokeWrappedStream(baseFn);
+
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("   ");
+    expect(finalToolCall.name).toBe("\t  ");
+    expect(baseFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("assigns fallback ids to missing/blank tool call ids in streamed and final messages", async () => {
+    const partialToolCall = { type: "toolCall", name: " read ", id: "   " };
+    const finalToolCallA = { type: "toolCall", name: " exec ", id: "" };
+    const finalToolCallB: { type: string; name: string; id?: string } = {
+      type: "toolCall",
+      name: " write ",
+    };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCallA, finalToolCallB] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(partialToolCall.id).toBe("call_auto_1");
+    expect(finalToolCallA.name).toBe("exec");
+    expect(finalToolCallA.id).toBe("call_auto_1");
+    expect(finalToolCallB.name).toBe("write");
+    expect(finalToolCallB.id).toBe("call_auto_2");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("trims surrounding whitespace on tool call ids", async () => {
+    const finalToolCall = { type: "toolCall", name: " read ", id: "  call_42  " };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("read");
+    expect(finalToolCall.id).toBe("call_42");
   });
 });
 
@@ -241,6 +360,29 @@ describe("isOllamaCompatProvider", () => {
   });
 });
 
+describe("resolveOllamaBaseUrlForRun", () => {
+  it("prefers provider baseUrl over model baseUrl", () => {
+    expect(
+      resolveOllamaBaseUrlForRun({
+        modelBaseUrl: "http://model-host:11434",
+        providerBaseUrl: "http://provider-host:11434",
+      }),
+    ).toBe("http://provider-host:11434");
+  });
+
+  it("falls back to model baseUrl when provider baseUrl is missing", () => {
+    expect(
+      resolveOllamaBaseUrlForRun({
+        modelBaseUrl: "http://model-host:11434",
+      }),
+    ).toBe("http://model-host:11434");
+  });
+
+  it("falls back to native default when neither baseUrl is configured", () => {
+    expect(resolveOllamaBaseUrlForRun({})).toBe("http://127.0.0.1:11434");
+  });
+});
+
 describe("wrapOllamaCompatNumCtx", () => {
   it("injects num_ctx and preserves downstream onPayload hooks", () => {
     let payloadSeen: Record<string, unknown> | undefined;
@@ -278,18 +420,7 @@ describe("resolveOllamaCompatNumCtxEnabled", () => {
   it("returns false when provider flag is explicitly disabled", () => {
     expect(
       resolveOllamaCompatNumCtxEnabled({
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://127.0.0.1:11434/v1",
-                api: "openai-completions",
-                injectNumCtxForOpenAICompat: false,
-                models: [],
-              },
-            },
-          },
-        },
+        config: createOllamaProviderConfig(false),
         providerId: "ollama",
       }),
     ).toBe(false);
@@ -317,20 +448,48 @@ describe("shouldInjectOllamaCompatNumCtx", () => {
           api: "openai-completions",
           baseUrl: "http://127.0.0.1:11434/v1",
         },
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://127.0.0.1:11434/v1",
-                api: "openai-completions",
-                injectNumCtxForOpenAICompat: false,
-                models: [],
-              },
-            },
-          },
-        },
+        config: createOllamaProviderConfig(false),
         providerId: "ollama",
       }),
     ).toBe(false);
+  });
+});
+
+describe("decodeHtmlEntitiesInObject", () => {
+  it("decodes HTML entities in string values", () => {
+    const result = decodeHtmlEntitiesInObject(
+      "source .env &amp;&amp; psql &quot;$DB&quot; -c &lt;query&gt;",
+    );
+    expect(result).toBe('source .env && psql "$DB" -c <query>');
+  });
+
+  it("recursively decodes nested objects", () => {
+    const input = {
+      command: "cd ~/dev &amp;&amp; npm run build",
+      args: ["--flag=&quot;value&quot;", "&lt;input&gt;"],
+      nested: { deep: "a &amp; b" },
+    };
+    const result = decodeHtmlEntitiesInObject(input) as Record<string, unknown>;
+    expect(result.command).toBe("cd ~/dev && npm run build");
+    expect((result.args as string[])[0]).toBe('--flag="value"');
+    expect((result.args as string[])[1]).toBe("<input>");
+    expect((result.nested as Record<string, string>).deep).toBe("a & b");
+  });
+
+  it("passes through non-string primitives unchanged", () => {
+    expect(decodeHtmlEntitiesInObject(42)).toBe(42);
+    expect(decodeHtmlEntitiesInObject(null)).toBe(null);
+    expect(decodeHtmlEntitiesInObject(true)).toBe(true);
+    expect(decodeHtmlEntitiesInObject(undefined)).toBe(undefined);
+  });
+
+  it("returns strings without entities unchanged", () => {
+    const input = "plain string with no entities";
+    expect(decodeHtmlEntitiesInObject(input)).toBe(input);
+  });
+
+  it("decodes numeric character references", () => {
+    expect(decodeHtmlEntitiesInObject("&#39;hello&#39;")).toBe("'hello'");
+    expect(decodeHtmlEntitiesInObject("&#x27;world&#x27;")).toBe("'world'");
   });
 });

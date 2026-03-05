@@ -1,6 +1,7 @@
 import { isAllowedParsedChatSender } from "../plugin-sdk/allow-from.js";
 import { normalizeE164 } from "../utils.js";
 import {
+  type ParsedChatTarget,
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedAllowTarget,
@@ -15,11 +16,7 @@ export type IMessageTarget =
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; to: string; service: IMessageService };
 
-export type IMessageAllowTarget =
-  | { kind: "chat_id"; chatId: number }
-  | { kind: "chat_guid"; chatGuid: string }
-  | { kind: "chat_identifier"; chatIdentifier: string }
-  | { kind: "handle"; handle: string };
+export type IMessageAllowTarget = ParsedChatTarget | { kind: "handle"; handle: string };
 
 const CHAT_ID_PREFIXES = ["chat_id:", "chatid:", "chat:"];
 const CHAT_GUID_PREFIXES = ["chat_guid:", "chatguid:", "guid:"];

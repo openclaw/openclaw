@@ -1,8 +1,7 @@
-import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../../auto-reply/inbound-debounce.js";
+  createChannelInboundDebouncer,
+  shouldDebounceTextInbound,
+} from "../../channels/inbound-debounce-policy.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackMessageEvent } from "../types.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
@@ -16,48 +15,102 @@ export type SlackMessageHandler = (
   opts: { source: "message" | "app_mention"; wasMentioned?: boolean },
 ) => Promise<void>;
 
+function resolveSlackSenderId(message: SlackMessageEvent): string | null {
+  return message.user ?? message.bot_id ?? null;
+}
+
+function isSlackDirectMessageChannel(channelId: string): boolean {
+  return channelId.startsWith("D");
+}
+
+function isTopLevelSlackMessage(message: SlackMessageEvent): boolean {
+  return !message.thread_ts && !message.parent_user_id;
+}
+
+function buildTopLevelSlackConversationKey(
+  message: SlackMessageEvent,
+  accountId: string,
+): string | null {
+  if (!isTopLevelSlackMessage(message)) {
+    return null;
+  }
+  const senderId = resolveSlackSenderId(message);
+  if (!senderId) {
+    return null;
+  }
+  return `slack:${accountId}:${message.channel}:${senderId}`;
+}
+
+function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonitorContext["cfg"]) {
+  const text = message.text ?? "";
+  const textForCommandDetection = stripSlackMentionsForCommandDetection(text);
+  return shouldDebounceTextInbound({
+    text: textForCommandDetection,
+    cfg,
+    hasMedia: Boolean(message.files && message.files.length > 0),
+  });
+}
+
+/**
+ * Build a debounce key that isolates messages by thread (or by message timestamp
+ * for top-level non-DM channel messages). Without per-message scoping, concurrent
+ * top-level messages from the same sender can share a key and get merged
+ * into a single reply on the wrong thread.
+ *
+ * DMs intentionally stay channel-scoped to preserve short-message batching.
+ */
+export function buildSlackDebounceKey(
+  message: SlackMessageEvent,
+  accountId: string,
+): string | null {
+  const senderId = resolveSlackSenderId(message);
+  if (!senderId) {
+    return null;
+  }
+  const messageTs = message.ts ?? message.event_ts;
+  const threadKey = message.thread_ts
+    ? `${message.channel}:${message.thread_ts}`
+    : message.parent_user_id && messageTs
+      ? `${message.channel}:maybe-thread:${messageTs}`
+      : messageTs && !isSlackDirectMessageChannel(message.channel)
+        ? `${message.channel}:${messageTs}`
+        : message.channel;
+  return `slack:${accountId}:${threadKey}:${senderId}`;
+}
+
 export function createSlackMessageHandler(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
+  /** Called on each inbound event to update liveness tracking. */
+  trackEvent?: () => void;
 }): SlackMessageHandler {
-  const { ctx, account } = params;
-  const debounceMs = resolveInboundDebounceMs({ cfg: ctx.cfg, channel: "slack" });
-  const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
-
-  const debouncer = createInboundDebouncer<{
+  const { ctx, account, trackEvent } = params;
+  const { debounceMs, debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
     opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
   }>({
-    debounceMs,
-    buildKey: (entry) => {
-      const senderId = entry.message.user ?? entry.message.bot_id;
-      if (!senderId) {
-        return null;
-      }
-      const messageTs = entry.message.ts ?? entry.message.event_ts;
-      // If Slack flags a thread reply but omits thread_ts, isolate it from root debouncing.
-      const threadKey = entry.message.thread_ts
-        ? `${entry.message.channel}:${entry.message.thread_ts}`
-        : entry.message.parent_user_id && messageTs
-          ? `${entry.message.channel}:maybe-thread:${messageTs}`
-          : entry.message.channel;
-      return `slack:${ctx.accountId}:${threadKey}:${senderId}`;
-    },
-    shouldDebounce: (entry) => {
-      const text = entry.message.text ?? "";
-      if (!text.trim()) {
-        return false;
-      }
-      if (entry.message.files && entry.message.files.length > 0) {
-        return false;
-      }
-      const textForCommandDetection = stripSlackMentionsForCommandDetection(text);
-      return !hasControlCommand(textForCommandDetection, ctx.cfg);
-    },
+    cfg: ctx.cfg,
+    channel: "slack",
+    buildKey: (entry) => buildSlackDebounceKey(entry.message, ctx.accountId),
+    shouldDebounce: (entry) => shouldDebounceSlackMessage(entry.message, ctx.cfg),
     onFlush: async (entries) => {
       const last = entries.at(-1);
       if (!last) {
         return;
+      }
+      const flushedKey = buildSlackDebounceKey(last.message, ctx.accountId);
+      const topLevelConversationKey = buildTopLevelSlackConversationKey(
+        last.message,
+        ctx.accountId,
+      );
+      if (flushedKey && topLevelConversationKey) {
+        const pendingKeys = pendingTopLevelDebounceKeys.get(topLevelConversationKey);
+        if (pendingKeys) {
+          pendingKeys.delete(flushedKey);
+          if (pendingKeys.size === 0) {
+            pendingTopLevelDebounceKeys.delete(topLevelConversationKey);
+          }
+        }
       }
       const combinedText =
         entries.length === 1
@@ -97,6 +150,8 @@ export function createSlackMessageHandler(params: {
       ctx.runtime.error?.(`slack inbound debounce flush failed: ${String(err)}`);
     },
   });
+  const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
+  const pendingTopLevelDebounceKeys = new Map<string, Set<string>>();
 
   return async (message, opts) => {
     if (opts.source === "message" && message.type !== "message") {
@@ -113,7 +168,25 @@ export function createSlackMessageHandler(params: {
     if (ctx.markMessageSeen(message.channel, message.ts)) {
       return;
     }
+    trackEvent?.();
     const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });
+    const debounceKey = buildSlackDebounceKey(resolvedMessage, ctx.accountId);
+    const conversationKey = buildTopLevelSlackConversationKey(resolvedMessage, ctx.accountId);
+    const canDebounce = debounceMs > 0 && shouldDebounceSlackMessage(resolvedMessage, ctx.cfg);
+    if (!canDebounce && conversationKey) {
+      const pendingKeys = pendingTopLevelDebounceKeys.get(conversationKey);
+      if (pendingKeys && pendingKeys.size > 0) {
+        const keysToFlush = Array.from(pendingKeys);
+        for (const pendingKey of keysToFlush) {
+          await debouncer.flushKey(pendingKey);
+        }
+      }
+    }
+    if (canDebounce && debounceKey && conversationKey) {
+      const pendingKeys = pendingTopLevelDebounceKeys.get(conversationKey) ?? new Set<string>();
+      pendingKeys.add(debounceKey);
+      pendingTopLevelDebounceKeys.set(conversationKey, pendingKeys);
+    }
     await debouncer.enqueue({ message: resolvedMessage, opts });
   };
 }

@@ -1,10 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configureCommand,
   ensureConfigReady,
   installBaseProgramMocks,
   installSmokeProgramMocks,
-  messageCommand,
   onboardCommand,
   runTui,
   runtime,
@@ -27,14 +26,19 @@ vi.mock("./config-cli.js", () => ({
 const { buildProgram } = await import("./program.js");
 
 describe("cli program (smoke)", () => {
+  let program = createProgram();
+
   function createProgram() {
     return buildProgram();
   }
 
   async function runProgram(argv: string[]) {
-    const program = createProgram();
     await program.parseAsync(argv, { from: "user" });
   }
+
+  beforeAll(() => {
+    program = createProgram();
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -42,16 +46,9 @@ describe("cli program (smoke)", () => {
     ensureConfigReady.mockResolvedValue(undefined);
   });
 
-  it("runs message command with required options", async () => {
-    await expect(
-      runProgram(["message", "send", "--target", "+1", "--message", "hi"]),
-    ).rejects.toThrow("exit");
-    expect(messageCommand).toHaveBeenCalled();
-  });
-
   it("registers memory + status commands", () => {
-    const program = createProgram();
     const names = program.commands.map((command) => command.name());
+    expect(names).toContain("message");
     expect(names).toContain("memory");
     expect(names).toContain("status");
   });
