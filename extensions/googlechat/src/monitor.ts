@@ -282,6 +282,7 @@ async function processMessageWithPipeline(params: {
     typingIndicator = "message";
   }
   let typingMessageName: string | undefined;
+  let cleanupDeletePromise: Promise<void> | undefined;
 
   // Start typing indicator (message mode only, reaction mode not supported with app auth)
   if (typingIndicator === "message") {
@@ -339,8 +340,12 @@ async function processMessageWithPipeline(params: {
           const nameToDelete = typingMessageName;
           typingMessageName = undefined;
           if (nameToDelete) {
-            void deleteGoogleChatMessage({ account, messageName: nameToDelete }).catch((err) => {
+            cleanupDeletePromise = deleteGoogleChatMessage({
+              account,
+              messageName: nameToDelete,
+            }).catch((err) => {
               runtime.error?.(`Failed deleting typing message on cleanup: ${String(err)}`);
+              typingMessageName = nameToDelete;
             });
           }
         },
@@ -350,6 +355,9 @@ async function processMessageWithPipeline(params: {
       },
     });
   } finally {
+    if (cleanupDeletePromise) {
+      await cleanupDeletePromise;
+    }
     if (typingMessageName) {
       try {
         await deleteGoogleChatMessage({ account, messageName: typingMessageName });
