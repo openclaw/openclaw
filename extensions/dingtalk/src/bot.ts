@@ -176,11 +176,6 @@ function resolveDingtalkGroupConfig(params: {
   const direct = groups[groupId];
   if (direct) return direct;
 
-  const ciMatch = Object.entries(groups).find(
-    ([k, v]) => k !== "*" && v && k.toLowerCase() === groupId.toLowerCase(),
-  );
-  if (ciMatch) return ciMatch[1];
-
   return wildcard;
 }
 
