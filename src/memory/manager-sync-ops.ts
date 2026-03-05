@@ -51,6 +51,7 @@ type MemoryIndexMeta = {
   provider: string;
   providerKey?: string;
   sources?: MemorySource[];
+  sessionIncludeResetArchives?: boolean;
   chunkTokens: number;
   chunkOverlap: number;
   vectorDims?: number;
@@ -887,6 +888,7 @@ export abstract class MemoryManagerSyncOps {
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
     const configuredSources = this.resolveConfiguredSourcesForMeta();
+    const sessionsSourceEnabled = configuredSources.includes("sessions");
     const needsFullReindex =
       params?.force ||
       !meta ||
@@ -894,6 +896,11 @@ export abstract class MemoryManagerSyncOps {
       (this.provider && meta.provider !== this.provider.id) ||
       meta.providerKey !== this.providerKey ||
       this.metaSourcesDiffer(meta, configuredSources) ||
+      (sessionsSourceEnabled &&
+        this.metaSessionIncludeResetArchivesDiffers(
+          meta,
+          this.settings.sync.sessions.includeResetArchives,
+        )) ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
       (vectorReady && !meta?.vectorDims);
@@ -1106,6 +1113,7 @@ export abstract class MemoryManagerSyncOps {
         provider: this.provider?.id ?? "none",
         providerKey: this.providerKey!,
         sources: this.resolveConfiguredSourcesForMeta(),
+        sessionIncludeResetArchives: this.settings.sync.sessions.includeResetArchives,
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
       };
@@ -1177,6 +1185,7 @@ export abstract class MemoryManagerSyncOps {
       provider: this.provider?.id ?? "none",
       providerKey: this.providerKey!,
       sources: this.resolveConfiguredSourcesForMeta(),
+      sessionIncludeResetArchives: this.settings.sync.sessions.includeResetArchives,
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
     };
@@ -1260,5 +1269,13 @@ export abstract class MemoryManagerSyncOps {
       return true;
     }
     return metaSources.some((source, index) => source !== configuredSources[index]);
+  }
+
+  private metaSessionIncludeResetArchivesDiffers(
+    meta: MemoryIndexMeta,
+    configuredIncludeResetArchives: boolean,
+  ): boolean {
+    const metaValue = meta.sessionIncludeResetArchives === true;
+    return metaValue !== configuredIncludeResetArchives;
   }
 }

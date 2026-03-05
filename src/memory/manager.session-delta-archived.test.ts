@@ -34,7 +34,12 @@ vi.mock("./embeddings.js", () => ({
   }),
 }));
 
-function createMemoryConfig(workspaceDir: string): OpenClawConfig {
+function createMemoryConfig(
+  workspaceDir: string,
+  opts?: {
+    includeResetArchives?: boolean;
+  },
+): OpenClawConfig {
   return {
     agents: {
       defaults: {
@@ -52,7 +57,7 @@ function createMemoryConfig(workspaceDir: string): OpenClawConfig {
             sessions: {
               deltaBytes: 999_999,
               deltaMessages: 999_999,
-              includeResetArchives: true,
+              includeResetArchives: opts?.includeResetArchives ?? true,
             },
           },
           query: { minScore: 0, hybrid: { enabled: false } },
@@ -188,5 +193,65 @@ describe("memory session delta archived paths", () => {
 
     await inner.syncSessionFiles({ needsFullReindex: false });
     expect(indexSpy.mock.calls.length).toBe(firstRunIndexedPaths.length);
+  });
+
+  it("triggers a full session reindex when includeResetArchives toggles", async () => {
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-archived-toggle-"));
+    const stateDir = path.join(workspaceDir, "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const activePath = path.join(sessionsDir, "active.jsonl");
+    const archivedPath = path.join(sessionsDir, "active.jsonl.reset.2026-02-18T10-00-00.000Z");
+    await fs.writeFile(
+      activePath,
+      '{"type":"message","message":{"role":"user","content":"active message"}}\n',
+      "utf-8",
+    );
+    await fs.writeFile(
+      archivedPath,
+      '{"type":"message","message":{"role":"assistant","content":"archived snapshot"}}\n',
+      "utf-8",
+    );
+
+    const cfgWithArchives = createMemoryConfig(workspaceDir, { includeResetArchives: true });
+    const withArchives = await getMemorySearchManager({ cfg: cfgWithArchives, agentId: "main" });
+    expect(withArchives.manager).not.toBeNull();
+    if (!withArchives.manager) {
+      throw new Error("manager missing");
+    }
+    manager = withArchives.manager as unknown as MemoryIndexManager;
+
+    await manager.sync({ force: true });
+    const withArchivesFiles =
+      manager.status().sourceCounts.find((entry) => entry.source === "sessions")?.files ?? 0;
+    expect(withArchivesFiles).toBe(2);
+    await manager.close();
+    manager = null;
+
+    const cfgWithoutArchives = createMemoryConfig(workspaceDir, { includeResetArchives: false });
+    const withoutArchives = await getMemorySearchManager({
+      cfg: cfgWithoutArchives,
+      agentId: "main",
+    });
+    expect(withoutArchives.manager).not.toBeNull();
+    if (!withoutArchives.manager) {
+      throw new Error("manager missing");
+    }
+    manager = withoutArchives.manager as unknown as MemoryIndexManager;
+
+    const inner = manager as unknown as {
+      syncSessionFiles: (params: { needsFullReindex: boolean }) => Promise<void>;
+    };
+    const syncSessionsSpy = vi.spyOn(inner, "syncSessionFiles");
+
+    await manager.sync({ reason: "search" });
+
+    expect(syncSessionsSpy).toHaveBeenCalled();
+    expect(syncSessionsSpy.mock.calls.at(-1)?.[0]).toMatchObject({ needsFullReindex: true });
+    const withoutArchivesFiles =
+      manager.status().sourceCounts.find((entry) => entry.source === "sessions")?.files ?? 0;
+    expect(withoutArchivesFiles).toBe(1);
   });
 });
