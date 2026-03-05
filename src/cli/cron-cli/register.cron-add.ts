@@ -130,6 +130,9 @@ export function registerCronAddCommand(cron: Command) {
               } catch {
                 throw new Error("Invalid --every; use e.g. 10m, 1h, 1d");
               }
+              if (!everyMs) {
+                throw new Error("--every must be positive; use e.g. 10m, 1h, 1d");
+              }
               return { kind: "every" as const, everyMs };
             }
             const staggerMs = parseCronStaggerMs({ staggerRaw, useExact });

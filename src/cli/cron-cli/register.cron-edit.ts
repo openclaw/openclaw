@@ -174,6 +174,9 @@ export function registerCronEditCommand(cron: Command) {
             } catch {
               throw new Error("Invalid --every");
             }
+            if (!everyMs) {
+              throw new Error("--every must be positive; use e.g. 10m, 1h, 1d");
+            }
             patch.schedule = { kind: "every", everyMs };
           } else if (opts.cron) {
             patch.schedule = {

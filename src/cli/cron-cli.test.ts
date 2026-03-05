@@ -603,6 +603,21 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("rejects --every 0s (zero duration) on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "z",
+      "--every",
+      "0s",
+      "--session",
+      "main",
+      "--system-event",
+      "tick",
+    ]);
+  });
+
   it("sets explicit stagger for cron edit", async () => {
     await runCronCommand(["cron", "edit", "job-1", "--cron", "0 * * * *", "--stagger", "30s"]);
 
@@ -628,6 +643,10 @@ describe("cron cli", () => {
 
   it("rejects --exact on edit when existing job is not cron", async () => {
     await expectCronEditWithScheduleLookupExit({ kind: "every", everyMs: 60_000 }, ["--exact"]);
+  });
+
+  it("rejects --every 0s (zero duration) on cron edit", async () => {
+    await expectCronCommandExit(["cron", "edit", "job-1", "--every", "0s"]);
   });
 
   it("patches failure alert settings on cron edit", async () => {
