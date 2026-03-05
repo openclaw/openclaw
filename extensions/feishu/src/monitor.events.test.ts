@@ -22,6 +22,23 @@ vi.mock("./client.js", () => ({
   createEventDispatcher: createEventDispatcherMock,
 }));
 
+vi.mock("./runtime.js", () => ({
+  getFeishuRuntime: () => ({
+    channel: {
+      debounce: {
+        resolveInboundDebounceMs: () => 0,
+        createInboundDebouncer: () => ({
+          enqueue: async () => {},
+          flushKey: async () => {},
+        }),
+      },
+      text: {
+        hasControlCommand: () => false,
+      },
+    },
+  }),
+}));
+
 vi.mock("openclaw/plugin-sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk")>();
   return {

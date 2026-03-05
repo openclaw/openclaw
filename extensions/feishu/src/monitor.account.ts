@@ -1,5 +1,6 @@
 import * as crypto from "crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
@@ -36,6 +37,11 @@ export type FeishuReactionCreatedEvent = {
   operator_type?: string;
   user_id?: { open_id?: string };
   action_time?: string;
+};
+
+type FeishuChatMemberUserEvent = {
+  chat_id?: string;
+  users?: Array<{ name?: string; user_id?: { open_id?: string; union_id?: string } }>;
 };
 
 type ResolveReactionSyntheticEventParams = {
@@ -400,6 +406,13 @@ function registerEventHandlers(
       try {
         const event = data as unknown as FeishuBotAddedEvent;
         log(`feishu[${accountId}]: bot added to chat ${event.chat_id}`);
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("chat_member_bot_added") && event.chat_id) {
+          void hookRunner.runChatMemberBotAdded(
+            { chatId: event.chat_id },
+            { channelId: "feishu", accountId },
+          );
+        }
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot added event: ${String(err)}`);
       }
@@ -408,8 +421,81 @@ function registerEventHandlers(
       try {
         const event = data as unknown as { chat_id: string };
         log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("chat_member_bot_deleted") && event.chat_id) {
+          void hookRunner.runChatMemberBotDeleted(
+            { chatId: event.chat_id },
+            { channelId: "feishu", accountId },
+          );
+        }
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
+      }
+    },
+    "im.chat.member.user.added_v1": async (data) => {
+      try {
+        const event = data as unknown as FeishuChatMemberUserEvent;
+        const hookRunner = getGlobalHookRunner();
+        if (!hookRunner?.hasHooks("chat_member_user_added") || !event.chat_id) {
+          return;
+        }
+        const users = (event.users ?? [])
+          .filter((u) => u.user_id?.open_id)
+          .map((u) => ({
+            openId: u.user_id!.open_id!,
+            unionId: u.user_id?.union_id,
+            name: u.name,
+          }));
+        void hookRunner.runChatMemberUserAdded(
+          { chatId: event.chat_id, users },
+          { channelId: "feishu", accountId },
+        );
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling user added event: ${String(err)}`);
+      }
+    },
+    "im.chat.member.user.deleted_v1": async (data) => {
+      try {
+        const event = data as unknown as FeishuChatMemberUserEvent;
+        const hookRunner = getGlobalHookRunner();
+        if (!hookRunner?.hasHooks("chat_member_user_deleted") || !event.chat_id) {
+          return;
+        }
+        const users = (event.users ?? [])
+          .filter((u) => u.user_id?.open_id)
+          .map((u) => ({
+            openId: u.user_id!.open_id!,
+            unionId: u.user_id?.union_id,
+            name: u.name,
+          }));
+        void hookRunner.runChatMemberUserDeleted(
+          { chatId: event.chat_id, users },
+          { channelId: "feishu", accountId },
+        );
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling user deleted event: ${String(err)}`);
+      }
+    },
+    "im.chat.member.user.withdrawn_v1": async (data) => {
+      try {
+        const event = data as unknown as FeishuChatMemberUserEvent;
+        const hookRunner = getGlobalHookRunner();
+        if (!hookRunner?.hasHooks("chat_member_user_withdrawn") || !event.chat_id) {
+          return;
+        }
+        const users = (event.users ?? [])
+          .filter((u) => u.user_id?.open_id)
+          .map((u) => ({
+            openId: u.user_id!.open_id!,
+            unionId: u.user_id?.union_id,
+            name: u.name,
+          }));
+        void hookRunner.runChatMemberUserWithdrawn(
+          { chatId: event.chat_id, users },
+          { channelId: "feishu", accountId },
+        );
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling user withdrawn event: ${String(err)}`);
       }
     },
     "im.message.reaction.created_v1": async (data) => {
