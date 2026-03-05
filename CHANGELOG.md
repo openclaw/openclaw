@@ -17,10 +17,18 @@ Docs: https://docs.openclaw.ai
 - Slack/DM typing feedback: add `channels.slack.typingReaction` so Socket Mode DMs can show reaction-based processing status even when Slack native assistant typing is unavailable. (#19816) Thanks @dalefrieswthat.
 - Cron/job snapshot persistence: skip backup during normalization persistence in `ensureLoaded` so `jobs.json.bak` keeps the pre-edit snapshot for recovery, while preserving backup creation on explicit user-driven writes. (#35234) Thanks @0xsline.
 - TTS/OpenAI-compatible endpoints: add `messages.tts.openai.baseUrl` config support with config-over-env precedence, endpoint-aware directive validation, and OpenAI TTS request routing to the resolved base URL. (#34321) thanks @RealKai42.
+- Plugins/before_prompt_build system-context fields: add `prependSystemContext` and `appendSystemContext` so static plugin guidance can be placed in system prompt space for provider caching and lower repeated prompt token cost. (#35177) thanks @maweibin.
+- Gateway: add SecretRef support for gateway.auth.token with auth-mode guardrails. (#35094) Thanks @joshavant.
+
+### Breaking
+
+- **BREAKING:** Gateway auth now requires explicit `gateway.auth.mode` when both `gateway.auth.token` and `gateway.auth.password` are configured (including SecretRefs). Set `gateway.auth.mode` to `token` or `password` before upgrade to avoid startup/pairing/TUI failures. (#35094) Thanks @joshavant.
 
 ### Fixes
 
+- Agents/compaction safeguard pre-check: skip embedded compaction before entering the Pi SDK when a session has no real conversation messages, avoiding unnecessary LLM API calls on idle sessions. (#36451) thanks @Sid-Qin.
 - iMessage/cron completion announces: strip leaked inline reply tags (for example `[[reply_to:6100]]`) from user-visible completion text so announcement deliveries do not expose threading metadata. (#24600) Thanks @vincentkoc.
+- Feishu/group slash command detection: normalize group mention wrappers before command-authorization probing so mention-prefixed commands (for example `@Bot/model` and `@Bot /reset`) are recognized as gateway commands instead of being forwarded to the agent. (#35994) Thanks @liuxiaopai-ai.
 - Agents/context pruning: guard assistant thinking/text char estimation against malformed blocks (missing `thinking`/`text` strings or null entries) so pruning no longer crashes with malformed provider content. (openclaw#35146) thanks @Sid-Qin.
 - Agents/schema cleaning: detect Venice + Grok model IDs as xAI-proxied targets so unsupported JSON Schema keywords are stripped before requests, preventing Venice/Grok `Invalid arguments` failures. (openclaw#35355) thanks @Sid-Qin.
 - Skills/native command deduplication: centralize skill command dedupe by canonical `skillName` in `listSkillCommandsForAgents` so duplicate suffixed variants (for example `_2`) are no longer surfaced across interfaces outside Discord. (#27521) thanks @shivama205.
@@ -29,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/Control UI version reporting: align runtime and browser client version metadata to avoid `dev` placeholders, wait for bootstrap version before first UI websocket connect, and only forward bootstrap `serverVersion` to same-origin gateway targets to prevent cross-target version leakage. (from #35230, #30928, #33928) Thanks @Sid-Qin, @joelnishanth, and @MoerAI.
 - Web UI/config form: treat `additionalProperties: true` object schemas as editable map entries instead of unsupported fields so Accounts-style maps stay editable in form mode. (#35380, supersedes #32072) Thanks @stakeswky and @liuxiaopai-ai.
 - Feishu/streaming card delivery synthesis: unify snapshot and delta streaming merge semantics, apply overlap-aware final merge, suppress duplicate final text delivery (including text+media final packets), prefer topic-thread `message.reply` routing when a reply target exists, and tune card print cadence to avoid duplicate incremental rendering. (from #33245, #32896, #33840) Thanks @rexl2018, @kcinzgg, and @aerelune.
+- Feishu/group mention detection: carry startup-probed bot display names through monitor dispatch so `requireMention` checks compare against current bot identity instead of stale config names, fixing missed `@bot` handling in groups while preserving multi-bot false-positive guards. (#36317, #34271) Thanks @liuxiaopai-ai.
 - Security/dependency audit: patch transitive Hono vulnerabilities by pinning `hono` to `4.12.5` and `@hono/node-server` to `1.19.10` in production resolution paths. Thanks @shakkernerd.
 - Security/dependency audit: bump `tar` to `7.5.10` (from `7.5.9`) to address the high-severity hardlink path traversal advisory (`GHSA-qffp-2rhf-9h96`). Thanks @shakkernerd.
 - Cron/announce delivery robustness: bypass pending-descendant announce guards for cron completion sends, ensure named-agent announce routes have outbound session entries, and fall back to direct delivery only when an announce send was actually attempted and failed. (from #35185, #32443, #34987) Thanks @Sid-Qin, @scoootscooob, and @bmendonca3.
@@ -121,6 +130,9 @@ Docs: https://docs.openclaw.ai
 - LINE/status/config/webhook synthesis: fix status false positives from snapshot/config state and accept LINE webhook HEAD probes for compatibility. (from #10487, #25726, #27537, #27908, #31387) Thanks @BlueBirdBack, @stakeswky, @loiie45e, @puritysb, and @mcaxtr.
 - LINE cleanup/test follow-ups: fold cleanup/test learnings into the synthesis review path while keeping runtime changes focused on regression fixes. (from #17630, #17289) Thanks @Clawborn and @davidahmann.
 - Mattermost/interactive buttons: add interactive button send/callback support with directory-based channel/user target resolution, and harden callbacks via account-scoped HMAC verification plus sender-scoped DM routing. (#19957) thanks @tonydehnke.
+- Feishu/groupPolicy legacy alias compatibility: treat legacy `groupPolicy: "allowall"` as `open` in both schema parsing and runtime policy checks so intended open-group configs no longer silently drop group messages when `groupAllowFrom` is empty. (from #36358) Thanks @Sid-Qin.
+
+- Mattermost/plugin SDK import policy: replace remaining monolithic `openclaw/plugin-sdk` imports in Mattermost mention-gating paths/tests with scoped subpaths (`openclaw/plugin-sdk/compat` and `openclaw/plugin-sdk/mattermost`) so `pnpm check` passes `lint:plugins:no-monolithic-plugin-sdk-entry-imports` on baseline. (#36480) Thanks @Takhoffman.
 
 ## 2026.3.2
 
@@ -472,6 +484,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Models/provider config precedence: prefer exact `models.providers.<name>` matches before normalized provider aliases in embedded model resolution, preventing alias/canonical key collisions from applying the wrong provider `api`, `baseUrl`, or headers. (#35934) thanks @RealKai42.
 - Logging/Subsystem console timestamps: route subsystem console timestamp rendering through `formatConsoleTimestamp(...)` so `pretty` and timestamp-prefix output use local timezone formatting consistently instead of inline UTC `toISOString()` paths. (#25970) Thanks @openperf.
 - Feishu/Multi-account + reply reliability: add `channels.feishu.defaultAccount` outbound routing support with schema validation, prevent inbound preview text from leaking into prompt system events, keep quoted-message extraction text-first (post/interactive/file placeholders instead of raw JSON), route Feishu video sends as `msg_type: "file"`, and avoid websocket event blocking by using non-blocking event handling in monitor dispatch. Landed from contributor PRs #31209, #29610, #30432, #30331, and #29501. Thanks @stakeswky, @hclsys, @bmendonca3, @patrick-yingxi-pan, and @zwffff.
 - Feishu/Target routing + replies + dedupe: normalize provider-prefixed targets (`feishu:`/`lark:`), prefer configured `channels.feishu.defaultAccount` for tool execution, honor Feishu outbound `renderMode` in adapter text/caption sends, fall back to normal send when reply targets are withdrawn/deleted, and add synchronous in-memory dedupe guard for concurrent duplicate inbound events. Landed from contributor PRs #30428, #30438, #29958, #30444, and #29463. Thanks @bmendonca3 and @Yaxuan42.
