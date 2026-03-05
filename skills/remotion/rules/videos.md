@@ -9,7 +9,7 @@ metadata:
 
 ## Prerequisites
 
-First, the @remotion/media package needs to be installed.  
+First, the @remotion/media package needs to be installed.
 If it is not, use the following command:
 
 ```bash
