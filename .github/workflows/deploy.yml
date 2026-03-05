@@ -58,6 +58,10 @@ jobs:
                   scope: resourcegroup
                   resourceGroupName: ${{ env.RESOURCE_GROUP }}
                   template: ./main.bicep
+                  # To restrict Slack bot access, create a SLACK_ALLOWED_MEMBERS secret
+                  # with a JSON array of member IDs (e.g., '["U12345","U67890"]') and add:
+                  #   slackAllowedMembers=${{ secrets.SLACK_ALLOWED_MEMBERS }}
+                  # to the parameters below.
                   parameters: >
                       containerImage=${{ steps.get-image.outputs.image }}
                       registryServer=${{ env.REGISTRY_NAME }}.azurecr.io
@@ -69,6 +73,3 @@ jobs:
                       geminiApiKey=${{ secrets.GEMINI_API_KEY }}
                       slackAppToken=${{ secrets.SLACK_APP_TOKEN }}
                       slackBotToken=${{ secrets.SLACK_BOT_TOKEN }}
-                      # Uncomment below and create a SLACK_ALLOWED_MEMBERS secret with a JSON array
-                      # of Slack member IDs (e.g., '["U12345","U67890"]') to restrict bot access.
-                      # slackAllowedMembers=${{ secrets.SLACK_ALLOWED_MEMBERS }}
