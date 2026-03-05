@@ -54,9 +54,12 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   const isDmKind = kind === "direct" || kind === "dm";
   const kindTarget = (() => {
     if (isDmKind) {
-      // DM session keys (per-channel-peer / per-account-channel-peer scopes).
-      // The `id` is the raw peer ID (e.g., Telegram chatId). Return it as-is so
-      // the channel's send function can resolve it without further wrapping.
+      // DM session keys: kind is direct/dm and `id` should be channel-native.
+      // Note: normalizeTarget may still rewrite the final target.
+      if (normalizedChannel === "discord" && !id.includes(":")) {
+        // Discord DMs are addressed to users, not channels.
+        return `user:${id}`;
+      }
       return id;
     }
     if (!normalizedChannel) {

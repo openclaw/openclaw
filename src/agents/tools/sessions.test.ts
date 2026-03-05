@@ -261,6 +261,14 @@ describe("resolveAnnounceTargetFromKey — DM session keys", () => {
     expect(result?.threadId).toBeUndefined();
   });
 
+  it("resolves per-channel-peer DM key (dm kind)", () => {
+    const result = resolveAnnounceTargetFromKey("agent:main:telegram:dm:102272550");
+    expect(result).not.toBeNull();
+    expect(result?.channel).toBe("telegram");
+    expect(result?.to).toBe("102272550");
+    expect(result?.threadId).toBeUndefined();
+  });
+
   it("DM key and group key for same channel do not collide", () => {
     const dm = resolveAnnounceTargetFromKey("agent:main:telegram:direct:102272550");
     const group = resolveAnnounceTargetFromKey("agent:main:telegram:group:-1001234567890");
@@ -274,6 +282,16 @@ describe("resolveAnnounceTargetFromKey — DM session keys", () => {
     );
     expect(result).not.toBeNull();
     expect(result?.threadId).toBe("99");
+  });
+
+  it("resolves Discord DM key (direct kind) as user target", () => {
+    const result = resolveAnnounceTargetFromKey("agent:main:discord:direct:214905613497532417");
+    expect(result).not.toBeNull();
+    expect(result).toEqual({
+      channel: "discord",
+      to: "user:214905613497532417",
+      threadId: undefined,
+    });
   });
 
   it("resolves group key without topic", () => {
