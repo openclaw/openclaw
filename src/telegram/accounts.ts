@@ -72,20 +72,27 @@ export function resetMissingDefaultWarnFlag(): void {
 }
 
 export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
+  return resolveDefaultTelegramRoutingAccount(cfg).accountId;
+}
+
+export function resolveDefaultTelegramRoutingAccount(cfg: OpenClawConfig): {
+  accountId: string;
+  explicit: boolean;
+} {
   const boundDefault = resolveDefaultAgentBoundAccountId(cfg, "telegram");
   if (boundDefault) {
-    return boundDefault;
+    return { accountId: boundDefault, explicit: true };
   }
   const preferred = normalizeOptionalAccountId(cfg.channels?.telegram?.defaultAccount);
   if (
     preferred &&
     listTelegramAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
   ) {
-    return preferred;
+    return { accountId: preferred, explicit: true };
   }
   const ids = listTelegramAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
+    return { accountId: DEFAULT_ACCOUNT_ID, explicit: true };
   }
   if (ids.length > 1 && !emittedMissingDefaultWarn) {
     emittedMissingDefaultWarn = true;
@@ -94,7 +101,7 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
         `${formatSetExplicitDefaultInstruction("telegram")} to avoid routing surprises in multi-account setups.`,
     );
   }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
+  return { accountId: ids[0] ?? DEFAULT_ACCOUNT_ID, explicit: false };
 }
 
 function resolveAccountConfig(
