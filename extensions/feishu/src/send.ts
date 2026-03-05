@@ -16,7 +16,7 @@ const DEFAULT_FEISHU_SEND_TIMEOUT_MS = 20_000;
 function resolveFeishuSendTimeoutMs(): number {
   const raw = process.env.OPENCLAW_FEISHU_SEND_TIMEOUT_MS;
   if (!raw) return DEFAULT_FEISHU_SEND_TIMEOUT_MS;
-  const parsed = Number.parseInt(raw, 10);
+  const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_FEISHU_SEND_TIMEOUT_MS;
   return parsed;
 }
