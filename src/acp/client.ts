@@ -348,8 +348,15 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
 
 export function resolveAcpClientSpawnEnv(
   baseEnv: NodeJS.ProcessEnv = process.env,
+  options?: { stripKeys?: ReadonlySet<string> },
 ): NodeJS.ProcessEnv {
-  return { ...baseEnv, OPENCLAW_SHELL: "acp-client" };
+  const env = { ...baseEnv, OPENCLAW_SHELL: "acp-client" };
+  if (options?.stripKeys) {
+    for (const key of options.stripKeys) {
+      delete env[key];
+    }
+  }
+  return env;
 }
 
 type AcpSpawnRuntime = {
@@ -450,7 +457,10 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const entryPath = resolveSelfEntryPath();
   const serverCommand = opts.serverCommand ?? (entryPath ? process.execPath : "openclaw");
   const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : [entryPath, ...serverArgs];
-  const spawnEnv = resolveAcpClientSpawnEnv();
+  const { getActiveSkillEnvKeys } = await import("../agents/skills/env-overrides.js");
+  const spawnEnv = resolveAcpClientSpawnEnv(process.env, {
+    stripKeys: getActiveSkillEnvKeys(),
+  });
   const spawnInvocation = resolveAcpClientSpawnInvocation(
     { serverCommand, serverArgs: effectiveArgs },
     {
