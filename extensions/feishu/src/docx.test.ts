@@ -326,6 +326,53 @@ describe("feishu_doc image fetch hardening", () => {
     );
   });
 
+  it("create allows explicit requester_open_id outside Feishu channel context", async () => {
+    const feishuDocTool = resolveFeishuDocTool({
+      messageChannel: "webchat",
+    });
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "create",
+      title: "Demo",
+      requester_open_id: "ou_manual_456",
+    });
+
+    expect(result.details.requester_permission_added).toBe(true);
+    expect(result.details.requester_open_id).toBe("ou_manual_456");
+    expect(permissionMemberCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          member_id: "ou_manual_456",
+          perm: "edit",
+        }),
+      }),
+    );
+  });
+
+  it("create ignores explicit requester_open_id when trusted Feishu requester is present", async () => {
+    const feishuDocTool = resolveFeishuDocTool({
+      messageChannel: "feishu",
+      requesterSenderId: "ou_123",
+    });
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "create",
+      title: "Demo",
+      requester_open_id: "ou_manual_456",
+    });
+
+    expect(result.details.requester_permission_added).toBe(true);
+    expect(result.details.requester_open_id).toBe("ou_123");
+    expect(permissionMemberCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          member_id: "ou_123",
+          perm: "edit",
+        }),
+      }),
+    );
+  });
+
   it("create skips requester grant when trusted requester identity is unavailable", async () => {
     const feishuDocTool = resolveFeishuDocTool({
       messageChannel: "feishu",

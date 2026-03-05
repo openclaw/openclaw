@@ -1308,13 +1308,17 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       api.logger,
                     ),
                   );
-                case "create":
+                case "create": {
+                  // Keep trusted sender identity authoritative on Feishu, but allow
+                  // explicit requester_open_id as a fallback for non-Feishu contexts.
+                  const requestedRequesterOpenId = p.requester_open_id?.trim() || undefined;
                   return json(
                     await createDoc(client, p.title, p.folder_token, {
                       grantToRequester: p.grant_to_requester,
-                      requesterOpenId: trustedRequesterOpenId,
+                      requesterOpenId: trustedRequesterOpenId ?? requestedRequesterOpenId,
                     }),
                   );
+                }
                 case "list_blocks":
                   return json(await listBlocks(client, p.doc_token));
                 case "get_block":

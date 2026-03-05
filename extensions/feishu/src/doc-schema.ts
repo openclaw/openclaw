@@ -43,6 +43,12 @@ export const FeishuDocSchema = Type.Union([
     action: Type.Literal("create"),
     title: Type.String({ description: "Document title" }),
     folder_token: Type.Optional(Type.String({ description: "Target folder token (optional)" })),
+    requester_open_id: Type.Optional(
+      Type.String({
+        description:
+          "Requester open_id for edit-grant fallback outside trusted Feishu message context. Ignored when trusted sender context exists.",
+      }),
+    ),
     grant_to_requester: Type.Optional(
       Type.Boolean({
         description:
