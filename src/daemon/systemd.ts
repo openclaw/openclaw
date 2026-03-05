@@ -213,7 +213,8 @@ function shouldFallbackToMachineUserScope(detail: string): boolean {
     normalized.includes("failed to connect to bus") ||
     normalized.includes("failed to connect to user scope bus") ||
     normalized.includes("dbus_session_bus_address") ||
-    normalized.includes("xdg_runtime_dir")
+    normalized.includes("xdg_runtime_dir") ||
+    normalized.startsWith("command failed: systemctl --user")
   );
 }
 
@@ -238,7 +239,11 @@ async function execSystemctlUser(
   }
 
   const detail = `${directResult.stderr} ${directResult.stdout}`.trim();
-  if (!machineUser || !shouldFallbackToMachineUserScope(detail)) {
+  if (
+    !machineUser ||
+    !shouldFallbackToMachineUserScope(detail) ||
+    isSystemdUnitNotEnabled(detail)
+  ) {
     return directResult;
   }
 
