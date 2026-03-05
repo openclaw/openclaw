@@ -67,6 +67,54 @@ metadata: |
 
         self.assertTrue(valid, message)
 
+    def _make_skill(self, name: str, description: str) -> Path:
+        safe_name = name.strip().replace("/", "") or "unnamed-skill"
+        skill_dir = self.temp_dir / safe_name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = f"---\nname: {name}\ndescription: {description}\n---\n# Skill\n"
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+        return skill_dir
+
+    def test_rejects_empty_name(self):
+        skill_dir = self._make_skill("", "valid description")
+        valid, message = quick_validate.validate_skill(skill_dir)
+        self.assertFalse(valid)
+        self.assertEqual(message, "Name cannot be empty")
+
+    def test_rejects_empty_description(self):
+        skill_dir = self._make_skill("valid-name", "")
+        valid, message = quick_validate.validate_skill(skill_dir)
+        self.assertFalse(valid)
+        self.assertEqual(message, "Description cannot be empty")
+
+    def test_rejects_leading_hyphen_name(self):
+        skill_dir = self._make_skill("-bad-name", "valid description")
+        valid, message = quick_validate.validate_skill(skill_dir)
+        self.assertFalse(valid)
+        self.assertIn("kebab-case", message)
+
+    def test_rejects_trailing_hyphen_name(self):
+        skill_dir = self._make_skill("bad-name-", "valid description")
+        valid, message = quick_validate.validate_skill(skill_dir)
+        self.assertFalse(valid)
+        self.assertIn("kebab-case", message)
+
+    def test_rejects_consecutive_hyphens(self):
+        skill_dir = self._make_skill("bad--name", "valid description")
+        valid, message = quick_validate.validate_skill(skill_dir)
+        self.assertFalse(valid)
+        self.assertIn("kebab-case", message)
+
+    def test_accepts_valid_kebab_name(self):
+        skill_dir = self._make_skill("my-skill", "valid description")
+        valid, message = quick_validate.validate_skill(skill_dir)
+        self.assertTrue(valid, message)
+
+    def test_accepts_name_with_digits(self):
+        skill_dir = self._make_skill("skill-v2", "valid description")
+        valid, message = quick_validate.validate_skill(skill_dir)
+        self.assertTrue(valid, message)
+
 
 if __name__ == "__main__":
     main()
