@@ -64,19 +64,23 @@ async function waitForRegisterCall(registerMock: ReturnType<typeof vi.fn>): Prom
 
 async function startMonitorAndGetHandlers(): Promise<{
   handlers: RegisteredHandlers;
+  logMock: ReturnType<typeof vi.fn>;
+  errorMock: ReturnType<typeof vi.fn>;
   stop: () => Promise<void>;
 }> {
   const registerMock = vi.fn();
   createEventDispatcherMock.mockReturnValue({ register: registerMock });
   createFeishuWSClientMock.mockReturnValue({ start: vi.fn() });
   probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "ou_bot_default" });
+  const logMock = vi.fn();
+  const errorMock = vi.fn();
 
   const abortController = new AbortController();
   const monitorPromise = monitorFeishuProvider({
     config: buildWebSocketConfig(),
     runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
+      log: logMock,
+      error: errorMock,
       exit: vi.fn(),
     },
     abortSignal: abortController.signal,
@@ -90,6 +94,8 @@ async function startMonitorAndGetHandlers(): Promise<{
 
   return {
     handlers,
+    logMock,
+    errorMock,
     stop: async () => {
       abortController.abort();
       await monitorPromise;
@@ -202,6 +208,37 @@ describe("monitorFeishuProvider chat member relay", () => {
       expect(hookRunnerMocks.runChatMemberBotDeleted).not.toHaveBeenCalled();
       expect(hookRunnerMocks.runChatMemberUserDeleted).not.toHaveBeenCalled();
       expect(hookRunnerMocks.runChatMemberUserWithdrawn).not.toHaveBeenCalled();
+    } finally {
+      await stop();
+    }
+  });
+
+  it("logs recalled events with account attribution and recall metadata", async () => {
+    const { handlers, logMock, errorMock, stop } = await startMonitorAndGetHandlers();
+    try {
+      await handlers["im.message.recalled_v1"]({
+        message_id: "om_recalled_1",
+        chat_id: "oc_group_1",
+        recall_time: "1741175699887",
+        operator_id: { open_id: "ou_operator" },
+        message: {
+          sender_id: { open_id: "ou_sender" },
+          root_id: "om_root_1",
+          thread_id: "omt_thread_1",
+        },
+      });
+
+      const recalledLogLine = logMock.mock.calls
+        .map((call) => call[0])
+        .find((value) => typeof value === "string" && value.includes("message recalled"));
+      expect(recalledLogLine).toBe(
+        "feishu[default]: message recalled chat=oc_group_1 message=om_recalled_1 " +
+          "operator=ou_operator sender=ou_sender root=om_root_1 " +
+          "thread=omt_thread_1 recall_time=1741175699887",
+      );
+      expect(errorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("error handling message recalled event"),
+      );
     } finally {
       await stop();
     }
