@@ -72,6 +72,7 @@ type GatewayHost = {
   serverVersion: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  chatRunHasMedia: boolean;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -284,8 +285,20 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     );
   }
   const state = handleChatEvent(host as unknown as OpenClawApp, payload);
+  // Capture the media flag before handleTerminalChatEvent, which calls
+  // resetToolStream and clears it.  The reload decision needs the pre-reset
+  // value to know whether this run produced renderable media.
+  const hadMedia = host.chatRunHasMedia;
   handleTerminalChatEvent(host, payload, state);
-  if (state === "final" && shouldReloadHistoryForFinalEvent(payload)) {
+  // Preserve media flag when a cross-run terminal event (e.g. sub-agent
+  // announce) resets it while the active run is still in progress.
+  // handleChatEvent sets chatRunId=null for the active run's own final event,
+  // so chatRunId still being set here means this was a cross-run event and the
+  // active run's media tracking should not be cleared.
+  if (host.chatRunId != null) {
+    host.chatRunHasMedia = hadMedia;
+  }
+  if (state === "final" && shouldReloadHistoryForFinalEvent(payload, hadMedia)) {
     void loadChatHistory(host as unknown as OpenClawApp);
   }
 }

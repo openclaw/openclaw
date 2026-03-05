@@ -4,7 +4,16 @@ import { parseFenceSpans } from "../markdown/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
 
 // Allow optional wrapping backticks and punctuation after the token; capture the core token.
-export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
+// Note: the trailing backtick is excluded from the capture group so callers don't need to strip it.
+export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n`]+)`?/gi;
+
+/**
+ * Line-anchored regex that matches a MEDIA: line pointing to an **image** file.
+ * Used by the TUI verbose-bypass and gateway payload filter to detect tool results
+ * that should preserve image data for inline rendering. Only matches image extensions
+ * (png/jpg/jpeg/gif/webp) — not audio or other MEDIA: references.
+ */
+export const MEDIA_IMAGE_LINE_RE = /^MEDIA:\s*`?(.+\.(?:png|jpe?g|gif|webp))`?\s*$/im;
 
 export function normalizeMediaSource(src: string) {
   return src.startsWith("file://") ? src.replace("file://", "") : src;
