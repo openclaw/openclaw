@@ -640,9 +640,14 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onLoadFiles: async (agentId) => {
-                  const activeFile = state.agentFileActive;
                   await loadAgentFiles(state, agentId);
-                  if (activeFile && resolvedAgentId === agentId) {
+                  const currentAgentId =
+                    state.agentsSelectedId ??
+                    state.agentsList?.defaultId ??
+                    state.agentsList?.agents?.[0]?.id ??
+                    null;
+                  const activeFile = state.agentFileActive;
+                  if (activeFile && currentAgentId === agentId) {
                     await loadAgentFileContent(state, agentId, activeFile, {
                       force: true,
                       preserveDraft: false,
