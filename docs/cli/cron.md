@@ -42,8 +42,28 @@ Disable delivery for an isolated job:
 openclaw cron edit <job-id> --no-deliver
 ```
 
+Enable lightweight bootstrap context for an isolated job:
+
+```bash
+openclaw cron edit <job-id> --light-context
+```
+
 Announce to a specific channel:
 
 ```bash
 openclaw cron edit <job-id> --announce --channel slack --to "channel:C1234567890"
 ```
+
+Create an isolated job with lightweight bootstrap context:
+
+```bash
+openclaw cron add \
+  --name "Lightweight morning brief" \
+  --cron "0 7 * * *" \
+  --session isolated \
+  --message "Summarize overnight updates." \
+  --light-context \
+  --no-deliver
+```
+
+`--light-context` applies to isolated agent-turn jobs only. For cron runs, lightweight mode keeps bootstrap context empty instead of injecting the full workspace bootstrap set.
