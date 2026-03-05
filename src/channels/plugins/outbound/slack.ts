@@ -2,6 +2,7 @@ import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../../../slack/send.js";
 import type { ChannelOutboundAdapter } from "../types.js";
+import { sendTextMediaPayload } from "./direct-text-media.js";
 
 function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentity | undefined {
   if (!identity) {
@@ -47,6 +48,7 @@ async function applySlackMessageSendingHooks(params: {
 }
 
 async function sendSlackOutboundMessage(params: {
+  cfg: NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"];
   to: string;
   text: string;
   mediaUrl?: string;
@@ -79,6 +81,7 @@ async function sendSlackOutboundMessage(params: {
 
   const slackIdentity = resolveSlackSendIdentity(params.identity);
   const result = await send(params.to, hookResult.text, {
+    cfg: params.cfg,
     threadTs,
     accountId: params.accountId ?? undefined,
     ...(params.mediaUrl
@@ -93,41 +96,11 @@ export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: 4000,
-  sendPayload: async (ctx) => {
-    const text = ctx.payload.text ?? "";
-    const urls = ctx.payload.mediaUrls?.length
-      ? ctx.payload.mediaUrls
-      : ctx.payload.mediaUrl
-        ? [ctx.payload.mediaUrl]
-        : [];
-    if (!text && urls.length === 0) {
-      return { channel: "slack", messageId: "" };
-    }
-    if (urls.length > 0) {
-      let lastResult = await slackOutbound.sendMedia!({
-        ...ctx,
-        text,
-        mediaUrl: urls[0],
-      });
-      for (let i = 1; i < urls.length; i++) {
-        lastResult = await slackOutbound.sendMedia!({
-          ...ctx,
-          text: "",
-          mediaUrl: urls[i],
-        });
-      }
-      return lastResult;
-    }
-    const limit = slackOutbound.textChunkLimit;
-    const chunks = limit && slackOutbound.chunker ? slackOutbound.chunker(text, limit) : [text];
-    let lastResult: Awaited<ReturnType<NonNullable<typeof slackOutbound.sendText>>>;
-    for (const chunk of chunks) {
-      lastResult = await slackOutbound.sendText!({ ...ctx, text: chunk });
-    }
-    return lastResult!;
-  },
-  sendText: async ({ to, text, accountId, deps, replyToId, threadId, identity }) => {
+  sendPayload: async (ctx) =>
+    await sendTextMediaPayload({ channel: "slack", ctx, adapter: slackOutbound }),
+  sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity }) => {
     return await sendSlackOutboundMessage({
+      cfg,
       to,
       text,
       accountId,
@@ -138,6 +111,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
     });
   },
   sendMedia: async ({
+    cfg,
     to,
     text,
     mediaUrl,
@@ -149,6 +123,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
     identity,
   }) => {
     return await sendSlackOutboundMessage({
+      cfg,
       to,
       text,
       mediaUrl,

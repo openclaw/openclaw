@@ -44,6 +44,14 @@ async function expectInitialForumSend(
   );
 }
 
+function expectDmMessagePreviewViaSendMessage(
+  api: ReturnType<typeof createMockDraftApi>,
+  text = "Hello",
+): void {
+  expect(api.sendMessage).toHaveBeenCalledWith(123, text, { message_thread_id: 42 });
+  expect(api.editMessageText).not.toHaveBeenCalled();
+}
+
 function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
   const api = createMockDraftApi();
   api.sendMessage
@@ -135,9 +143,8 @@ describe("createTelegramDraftStream", () => {
     stream.update("Hello");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
+    expectDmMessagePreviewViaSendMessage(api);
     expect(api.sendMessageDraft).not.toHaveBeenCalled();
-    expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
   it("falls back to message transport when sendMessageDraft is unavailable", async () => {
@@ -153,11 +160,40 @@ describe("createTelegramDraftStream", () => {
     stream.update("Hello");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
-    expect(api.editMessageText).not.toHaveBeenCalled();
+    expectDmMessagePreviewViaSendMessage(api);
     expect(warn).toHaveBeenCalledWith(
       "telegram stream preview: sendMessageDraft unavailable; falling back to sendMessage/editMessageText",
     );
+  });
+
+  it("falls back to message transport when sendMessageDraft is rejected at runtime", async () => {
+    const api = createMockDraftApi();
+    api.sendMessageDraft.mockRejectedValueOnce(
+      new Error(
+        "Call to 'sendMessageDraft' failed! (400: Bad Request: method sendMessageDraft can be used only in private chats)",
+      ),
+    );
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
+    expect(stream.previewMode?.()).toBe("message");
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview: sendMessageDraft rejected by API; falling back to sendMessage/editMessageText",
+    );
+
+    stream.update("Hello again");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
   });
 
   it("retries DM message preview send without thread when thread is not found", async () => {
@@ -180,6 +216,66 @@ describe("createTelegramDraftStream", () => {
     expect(warn).toHaveBeenCalledWith(
       "telegram stream preview send failed with message_thread_id, retrying without thread",
     );
+  });
+
+  it("materializes draft previews using rendered HTML text", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      renderText: (text) => ({
+        text: text.replace("**bold**", "<b>bold</b>"),
+        parseMode: "HTML",
+      }),
+    });
+
+    stream.update("**bold**");
+    await stream.flush();
+    await stream.materialize?.();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>bold</b>", {
+      message_thread_id: 42,
+      parse_mode: "HTML",
+    });
+  });
+
+  it("retries materialize send without thread when dm thread lookup fails", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockRejectedValueOnce(new Error("400: Bad Request: message thread not found"))
+      .mockResolvedValueOnce({ message_id: 55 });
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    const materializedId = await stream.materialize?.();
+
+    expect(materializedId).toBe(55);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Hello", { message_thread_id: 42 });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Hello", undefined);
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview materialize send failed with message_thread_id, retrying without thread",
+    );
+  });
+
+  it("returns existing preview id when materializing message transport", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "message",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    const materializedId = await stream.materialize?.();
+
+    expect(materializedId).toBe(17);
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("does not edit or delete messages after DM draft stream finalization", async () => {
@@ -362,6 +458,14 @@ describe("draft stream initial message debounce", () => {
     deleteMessage: vi.fn().mockResolvedValue(true),
   });
 
+  function createDebouncedStream(api: ReturnType<typeof createMockApi>, minInitialChars = 30) {
+    return createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      minInitialChars,
+    });
+  }
+
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -373,11 +477,7 @@ describe("draft stream initial message debounce", () => {
   describe("isFinal has highest priority", () => {
     it("sends immediately on stop() even with 1 character", async () => {
       const api = createMockApi();
-      const stream = createTelegramDraftStream({
-        api: api as unknown as Bot["api"],
-        chatId: 123,
-        minInitialChars: 30,
-      });
+      const stream = createDebouncedStream(api);
 
       stream.update("Y");
       await stream.stop();
@@ -388,11 +488,7 @@ describe("draft stream initial message debounce", () => {
 
     it("sends immediately on stop() with short sentence", async () => {
       const api = createMockApi();
-      const stream = createTelegramDraftStream({
-        api: api as unknown as Bot["api"],
-        chatId: 123,
-        minInitialChars: 30,
-      });
+      const stream = createDebouncedStream(api);
 
       stream.update("Ok.");
       await stream.stop();
@@ -405,11 +501,7 @@ describe("draft stream initial message debounce", () => {
   describe("minInitialChars threshold", () => {
     it("does not send first message below threshold", async () => {
       const api = createMockApi();
-      const stream = createTelegramDraftStream({
-        api: api as unknown as Bot["api"],
-        chatId: 123,
-        minInitialChars: 30,
-      });
+      const stream = createDebouncedStream(api);
 
       stream.update("Processing"); // 10 chars, below 30
       await stream.flush();
@@ -419,11 +511,7 @@ describe("draft stream initial message debounce", () => {
 
     it("sends first message when reaching threshold", async () => {
       const api = createMockApi();
-      const stream = createTelegramDraftStream({
-        api: api as unknown as Bot["api"],
-        chatId: 123,
-        minInitialChars: 30,
-      });
+      const stream = createDebouncedStream(api);
 
       // Exactly 30 chars
       stream.update("I am processing your request..");
@@ -434,11 +522,7 @@ describe("draft stream initial message debounce", () => {
 
     it("works with longer text above threshold", async () => {
       const api = createMockApi();
-      const stream = createTelegramDraftStream({
-        api: api as unknown as Bot["api"],
-        chatId: 123,
-        minInitialChars: 30,
-      });
+      const stream = createDebouncedStream(api);
 
       stream.update("I am processing your request, please wait a moment"); // 50 chars
       await stream.flush();
@@ -450,11 +534,7 @@ describe("draft stream initial message debounce", () => {
   describe("subsequent updates after first message", () => {
     it("edits normally after first message is sent", async () => {
       const api = createMockApi();
-      const stream = createTelegramDraftStream({
-        api: api as unknown as Bot["api"],
-        chatId: 123,
-        minInitialChars: 30,
-      });
+      const stream = createDebouncedStream(api);
 
       // First message at threshold (30 chars)
       stream.update("I am processing your request..");

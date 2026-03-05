@@ -8,8 +8,24 @@ import {
   normalizeStringEntriesLower,
 } from "../../shared/string-normalization.js";
 
+const SLACK_SLUG_CACHE_MAX = 512;
+const slackSlugCache = new Map<string, string>();
+
 export function normalizeSlackSlug(raw?: string) {
-  return normalizeHyphenSlug(raw);
+  const key = raw ?? "";
+  const cached = slackSlugCache.get(key);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const normalized = normalizeHyphenSlug(raw);
+  slackSlugCache.set(key, normalized);
+  if (slackSlugCache.size > SLACK_SLUG_CACHE_MAX) {
+    const oldest = slackSlugCache.keys().next();
+    if (!oldest.done) {
+      slackSlugCache.delete(oldest.value);
+    }
+  }
+  return normalized;
 }
 
 export function normalizeAllowList(list?: Array<string | number>) {

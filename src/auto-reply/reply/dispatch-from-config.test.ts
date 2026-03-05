@@ -178,7 +178,7 @@ function createAcpRuntime(events: Array<Record<string, unknown>>) {
           runtimeSessionName: `${input.sessionKey}:${input.mode}`,
         }) as { sessionKey: string; backend: string; runtimeSessionName: string },
     ),
-    runTurn: vi.fn(async function* () {
+    runTurn: vi.fn(async function* (_params: { text?: string }) {
       for (const event of events) {
         yield event;
       }
@@ -268,6 +268,7 @@ describe("dispatchReplyFromConfig", () => {
       Provider: "slack",
       AccountId: "acc-1",
       MessageThreadId: 123,
+      GroupChannel: "ops-room",
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
     });
@@ -286,6 +287,8 @@ describe("dispatchReplyFromConfig", () => {
         to: "telegram:999",
         accountId: "acc-1",
         threadId: 123,
+        isGroup: true,
+        groupId: "telegram:999",
       }),
     );
   });
@@ -906,6 +909,73 @@ describe("dispatchReplyFromConfig", () => {
     expect(runtime.runTurn).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "command output",
+    });
+  });
+
+  it("routes ACP reset tails through ACP after command handling", async () => {
+    setNoAbort();
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "tail accepted" },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+      },
+      session: {
+        sendPolicy: {
+          default: "deny",
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandSource: "native",
+      SessionKey: "discord:slash:owner",
+      CommandTargetSessionKey: "agent:codex-acp:session-1",
+      CommandBody: "/new continue with deployment",
+      BodyForCommands: "/new continue with deployment",
+      BodyForAgent: "/new continue with deployment",
+    });
+    const replyResolver = vi.fn(async (resolverCtx: MsgContext) => {
+      resolverCtx.Body = "continue with deployment";
+      resolverCtx.RawBody = "continue with deployment";
+      resolverCtx.CommandBody = "continue with deployment";
+      resolverCtx.BodyForCommands = "continue with deployment";
+      resolverCtx.BodyForAgent = "continue with deployment";
+      resolverCtx.AcpDispatchTailAfterReset = true;
+      return undefined;
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(runtime.runTurn).toHaveBeenCalledTimes(1);
+    expect(runtime.runTurn.mock.calls[0]?.[0]).toMatchObject({
+      text: "continue with deployment",
     });
   });
 

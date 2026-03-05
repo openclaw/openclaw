@@ -365,12 +365,16 @@ async function readAllowFromStateForPathWithExists(
   if (cachedOrMissing) {
     return cachedOrMissing;
   }
+  if (!stat) {
+    return { entries: [], exists: false };
+  }
 
   const { value, exists } = await readJsonFile<AllowFromStore>(filePath, {
     version: 1,
     allowFrom: [],
   });
   const entries = normalizeAllowFromList(channel, value);
+  // stat is guaranteed non-null here: resolveAllowFromReadCacheOrMissing returns early when stat is null.
   setAllowFromReadCache(filePath, {
     exists,
     mtimeMs: stat.mtimeMs,
@@ -402,6 +406,9 @@ function readAllowFromStateForPathSyncWithExists(
   if (cachedOrMissing) {
     return cachedOrMissing;
   }
+  if (!stat) {
+    return { entries: [], exists: false };
+  }
 
   let raw = "";
   try {
@@ -413,6 +420,7 @@ function readAllowFromStateForPathSyncWithExists(
     }
     return { entries: [], exists: false };
   }
+  // stat is guaranteed non-null here: resolveAllowFromReadCacheOrMissing returns early when stat is null.
   try {
     const parsed = JSON.parse(raw) as AllowFromStore;
     const entries = normalizeAllowFromList(channel, parsed);

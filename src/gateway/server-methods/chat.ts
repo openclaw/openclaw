@@ -7,15 +7,21 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "../../utils/directive-tags.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isWebchatClient,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -26,7 +32,11 @@ import {
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
-import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  hasGatewayClientCap,
+} from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -45,6 +55,7 @@ import {
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
+import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -69,6 +80,20 @@ const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
+const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
+  "main",
+  "direct",
+  "dm",
+  "group",
+  "channel",
+  "cron",
+  "run",
+  "subagent",
+  "acp",
+  "thread",
+  "topic",
+]);
+const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
@@ -186,16 +211,61 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   return { message: changed ? entry : message, changed };
 }
 
+/**
+ * Extract the visible text from an assistant history message for silent-token checks.
+ * Returns `undefined` for non-assistant messages or messages with no extractable text.
+ * When `entry.text` is present it takes precedence over `entry.content` to avoid
+ * dropping messages that carry real text alongside a stale `content: "NO_REPLY"`.
+ */
+function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const entry = message as Record<string, unknown>;
+  if (entry.role !== "assistant") {
+    return undefined;
+  }
+  if (typeof entry.text === "string") {
+    return entry.text;
+  }
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  if (!Array.isArray(entry.content) || entry.content.length === 0) {
+    return undefined;
+  }
+
+  const texts: string[] = [];
+  for (const block of entry.content) {
+    if (!block || typeof block !== "object") {
+      return undefined;
+    }
+    const typed = block as { type?: unknown; text?: unknown };
+    if (typed.type !== "text" || typeof typed.text !== "string") {
+      return undefined;
+    }
+    texts.push(typed.text);
+  }
+  return texts.length > 0 ? texts.join("\n") : undefined;
+}
+
 function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
   }
   let changed = false;
-  const next = messages.map((message) => {
+  const next: unknown[] = [];
+  for (const message of messages) {
     const res = sanitizeChatHistoryMessage(message);
     changed ||= res.changed;
-    return res.message;
-  });
+    // Drop assistant messages whose entire visible text is the silent reply token.
+    const text = extractAssistantTextForSilentCheck(res.message);
+    if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+      changed = true;
+      continue;
+    }
+    next.push(res.message);
+  }
   return changed ? next : messages;
 }
 
@@ -794,6 +864,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
+      const shouldDeliverExternally = p.deliver === true;
       const routeChannelCandidate = normalizeMessageChannel(
         entry?.deliveryContext?.channel ?? entry?.lastChannel,
       );
@@ -801,7 +872,43 @@ export const chatHandlers: GatewayRequestHandlers = {
       const routeAccountIdCandidate =
         entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
       const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
+      const parsedSessionKey = parseAgentSessionKey(sessionKey);
+      const sessionScopeParts = (parsedSessionKey?.rest ?? sessionKey).split(":").filter(Boolean);
+      const sessionScopeHead = sessionScopeParts[0];
+      const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
+      const normalizedSessionScopeHead = (sessionScopeHead ?? "").trim().toLowerCase();
+      const sessionPeerShapeCandidates = [sessionScopeParts[1], sessionScopeParts[2]]
+        .map((part) => (part ?? "").trim().toLowerCase())
+        .filter(Boolean);
+      const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
+        normalizedSessionScopeHead,
+      );
+      const isChannelScopedSession = sessionPeerShapeCandidates.some((part) =>
+        CHANNEL_SCOPED_SESSION_SHAPES.has(part),
+      );
+      const hasLegacyChannelPeerShape =
+        !isChannelScopedSession &&
+        typeof sessionScopeParts[1] === "string" &&
+        sessionChannelHint === routeChannelCandidate;
+      const clientMode = client?.connect?.client?.mode;
+      const isFromWebchatClient =
+        isWebchatClient(client?.connect?.client) || clientMode === GATEWAY_CLIENT_MODES.UI;
+      const configuredMainKey = (cfg.session?.mainKey ?? "main").trim().toLowerCase();
+      const isConfiguredMainSessionScope =
+        normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
+      // Channel-agnostic session scopes (main, direct:<peer>, etc.) can leak
+      // stale routes across surfaces. Allow configured main sessions from
+      // non-Webchat/UI clients (e.g., CLI, backend) to keep the last external route.
+      const canInheritDeliverableRoute = Boolean(
+        sessionChannelHint &&
+        sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
+        ((!isChannelAgnosticSessionScope &&
+          (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
+          (isConfiguredMainSessionScope && client?.connect !== undefined && !isFromWebchatClient)),
+      );
       const hasDeliverableRoute =
+        shouldDeliverExternally &&
+        canInheritDeliverableRoute &&
         routeChannelCandidate &&
         routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
         typeof routeToCandidate === "string" &&
@@ -942,23 +1049,31 @@ export const chatHandlers: GatewayRequestHandlers = {
               message,
             });
           }
-          context.dedupe.set(`chat:${clientRunId}`, {
-            ts: Date.now(),
-            ok: true,
-            payload: { runId: clientRunId, status: "ok" as const },
+          setGatewayDedupeEntry({
+            dedupe: context.dedupe,
+            key: `chat:${clientRunId}`,
+            entry: {
+              ts: Date.now(),
+              ok: true,
+              payload: { runId: clientRunId, status: "ok" as const },
+            },
           });
         })
         .catch((err) => {
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
-          context.dedupe.set(`chat:${clientRunId}`, {
-            ts: Date.now(),
-            ok: false,
-            payload: {
-              runId: clientRunId,
-              status: "error" as const,
-              summary: String(err),
+          setGatewayDedupeEntry({
+            dedupe: context.dedupe,
+            key: `chat:${clientRunId}`,
+            entry: {
+              ts: Date.now(),
+              ok: false,
+              payload: {
+                runId: clientRunId,
+                status: "error" as const,
+                summary: String(err),
+              },
+              error,
             },
-            error,
           });
           broadcastChatError({
             context,
@@ -977,11 +1092,15 @@ export const chatHandlers: GatewayRequestHandlers = {
         status: "error" as const,
         summary: String(err),
       };
-      context.dedupe.set(`chat:${clientRunId}`, {
-        ts: Date.now(),
-        ok: false,
-        payload,
-        error,
+      setGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        key: `chat:${clientRunId}`,
+        entry: {
+          ts: Date.now(),
+          ok: false,
+          payload,
+          error,
+        },
       });
       respond(false, payload, error, {
         runId: clientRunId,

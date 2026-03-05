@@ -61,6 +61,8 @@ export type OpenClawPluginToolContext = {
   agentDir?: string;
   agentId?: string;
   sessionKey?: string;
+  /** Ephemeral session UUID — regenerated on /new and /reset. Use for per-conversation isolation. */
+  sessionId?: string;
   messageChannel?: string;
   agentAccountId?: string;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
@@ -338,6 +340,10 @@ export type PluginHookAgentContext = {
   sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
+  /** What initiated this agent run: "user", "heartbeat", "cron", or "memory". */
+  trigger?: string;
+  /** Channel identifier (e.g. "telegram", "discord", "whatsapp"). */
+  channelId?: string;
 };
 
 // before_model_resolve hook
@@ -363,6 +369,16 @@ export type PluginHookBeforePromptBuildEvent = {
 export type PluginHookBeforePromptBuildResult = {
   systemPrompt?: string;
   prependContext?: string;
+  /**
+   * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).
+   * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
+   */
+  prependSystemContext?: string;
+  /**
+   * Appended to the agent system prompt so providers can cache it (e.g. prompt caching).
+   * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
+   */
+  appendSystemContext?: string;
 };
 
 // before_agent_start hook (legacy compatibility: combines both phases)
@@ -482,13 +498,23 @@ export type PluginHookMessageSentEvent = {
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
+  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  sessionId?: string;
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
   toolName: string;
+  /** Provider-specific tool call ID when available. */
+  toolCallId?: string;
 };
 
 // before_tool_call hook
 export type PluginHookBeforeToolCallEvent = {
   toolName: string;
   params: Record<string, unknown>;
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
+  /** Provider-specific tool call ID when available. */
+  toolCallId?: string;
 };
 
 export type PluginHookBeforeToolCallResult = {
@@ -501,6 +527,10 @@ export type PluginHookBeforeToolCallResult = {
 export type PluginHookAfterToolCallEvent = {
   toolName: string;
   params: Record<string, unknown>;
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
+  /** Provider-specific tool call ID when available. */
+  toolCallId?: string;
   result?: unknown;
   error?: string;
   durationMs?: number;
@@ -546,17 +576,20 @@ export type PluginHookBeforeMessageWriteResult = {
 export type PluginHookSessionContext = {
   agentId?: string;
   sessionId: string;
+  sessionKey?: string;
 };
 
 // session_start hook
 export type PluginHookSessionStartEvent = {
   sessionId: string;
+  sessionKey?: string;
   resumedFrom?: string;
 };
 
 // session_end hook
 export type PluginHookSessionEndEvent = {
   sessionId: string;
+  sessionKey?: string;
   messageCount: number;
   durationMs?: number;
 };
