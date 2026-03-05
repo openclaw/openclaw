@@ -38,6 +38,7 @@ import {
   pickAuthMethod,
   resolveProviderMatch,
 } from "../provider-auth-helpers.js";
+import { BUILTIN_AUTH_PROVIDERS } from "./auth.builtin-providers.js";
 import { loadValidConfigOrThrow, updateConfig } from "./shared.js";
 
 function guardCancel<T>(value: T | symbol): T {
@@ -365,12 +366,14 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     return;
   }
 
-  const providers = resolvePluginProviders({ config, workspaceDir });
-  if (providers.length === 0) {
-    throw new Error(
-      `No provider plugins found. Install one via \`${formatCliCommand("openclaw plugins install")}\`.`,
-    );
-  }
+  const pluginProviders = resolvePluginProviders({ config, workspaceDir });
+  // Merge built-in providers (e.g. openai-codex) ahead of plugin-registered ones.
+  // Plugin registrations override built-ins when IDs collide.
+  const pluginIds = new Set(pluginProviders.map((p) => p.id));
+  const providers = [
+    ...BUILTIN_AUTH_PROVIDERS.filter((p) => !pluginIds.has(p.id)),
+    ...pluginProviders,
+  ];
 
   const requestedProvider = resolveRequestedLoginProviderOrThrow(providers, opts.provider);
   const selectedProvider =
