@@ -41,7 +41,9 @@ export function resolveWhatsAppOutboundTarget(params: {
     }
     return {
       ok: false,
-      error: missingTargetError("WhatsApp", "<E.164|group JID>"),
+      error: new Error(
+        `WhatsApp target "${normalizedTo}" is not listed in the configured allowFrom policy. Add it to channels.whatsapp.allowFrom in your config.`,
+      ),
     };
   }
 

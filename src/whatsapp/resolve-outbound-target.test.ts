@@ -134,9 +134,22 @@ describe("resolveWhatsAppOutboundTarget", () => {
       expectAllowedForTarget({ allowFrom: [PRIMARY_TARGET], mode: "implicit" });
     });
 
-    it("denies message when target is not in allowList", () => {
-      mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
-      expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "implicit" });
+    it("denies message when target is not in allowList with actionable error", () => {
+      // normalizeWhatsAppTarget is called for allowFrom entries first, then for `to`.
+      // mockReturnValueOnce order: allowFrom[0] → SECONDARY_TARGET, to → PRIMARY_TARGET.
+      mockNormalizedDirectMessage(SECONDARY_TARGET, PRIMARY_TARGET);
+      const result = resolveWhatsAppOutboundTarget({
+        to: PRIMARY_TARGET,
+        allowFrom: [SECONDARY_TARGET],
+        mode: "implicit",
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected failure");
+      }
+      // Error should mention the target and hint at allowFrom config, not just E.164 format.
+      expect(result.error.message).toContain(PRIMARY_TARGET);
+      expect(result.error.message).toContain("allowFrom");
     });
 
     it("handles mixed numeric and string allowList entries", () => {
