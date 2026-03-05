@@ -220,7 +220,6 @@ describe("applyBeforeResponseEmitHook", () => {
       assistantTexts: ["turn 1 with SSN 123-45-6789", "turn 2 with SSN 123-45-6789"],
       messagesSnapshot: activeSession.messages.slice(),
       activeSession,
-      preRunMessageCount: 2, // 2 messages existed before run (prior history + new question)
     });
 
     // Prior history must be preserved
@@ -362,7 +361,6 @@ describe("applyBeforeResponseEmitHook", () => {
       assistantTexts: ["PII in turn 1", "PII in turn 2"],
       messagesSnapshot: activeSession.messages.slice(),
       activeSession,
-      preRunMessageCount: 2,
     });
 
     expect(result).toEqual({
@@ -471,39 +469,38 @@ describe("getRunScopedMessages", () => {
       makeMsg("assistant", "new answer"),
     ];
     // Tail scan finds 1 assistant message from end, returns from that point
-    const result = getRunScopedMessages(messages, 1, 1);
+    const result = getRunScopedMessages(messages, 1);
     expect(result).toHaveLength(1);
     expect((result[0] as { content: unknown }).content).toBe("new answer");
   });
 
-  it("falls back to tail when compaction invalidates preRunMessageCount", () => {
-    // Simulates compaction: preRunMessageCount was 50 but array is now 3
+  it("handles compacted transcript correctly via tail scan", () => {
     const messages = [
       makeMsg("user", "compacted q"),
       makeMsg("assistant", "run turn 1"),
       makeMsg("assistant", "run turn 2"),
     ];
-    const result = getRunScopedMessages(messages, 50, 2);
+    const result = getRunScopedMessages(messages, 2);
     expect(result).toHaveLength(2);
     expect((result[0] as { content: unknown }).content).toBe("run turn 1");
     expect((result[1] as { content: unknown }).content).toBe("run turn 2");
   });
 
-  it("returns full array when no preRunMessageCount provided and enough assistants", () => {
+  it("returns full array when all messages are from current run", () => {
     const messages = [makeMsg("assistant", "a"), makeMsg("assistant", "b")];
-    const result = getRunScopedMessages(messages, undefined, 2);
+    const result = getRunScopedMessages(messages, 2);
     expect(result).toStrictEqual(messages);
   });
 
   it("returns empty when not enough assistant messages found (defensive)", () => {
     const messages = [makeMsg("user", "q")];
-    const result = getRunScopedMessages(messages, 50, 2);
+    const result = getRunScopedMessages(messages, 2);
     expect(result).toHaveLength(0);
   });
 
   it("returns empty when assistantTextCount is 0", () => {
     const messages = [makeMsg("assistant", "a")];
-    const result = getRunScopedMessages(messages, 50, 0);
+    const result = getRunScopedMessages(messages, 0);
     expect(result).toHaveLength(0);
   });
 });

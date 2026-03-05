@@ -22,13 +22,6 @@ export interface ApplyBeforeResponseEmitParams {
   assistantTexts: string[];
   messagesSnapshot: AgentMessage[];
   activeSession: { messages: AgentMessage[] };
-  /**
-   * Number of messages in activeSession before this run started. Used to scope
-   * block/rewrite operations to only current-run assistant messages so that
-   * previously-delivered history is never corrupted. Falls back to counting
-   * from the tail (using assistantTexts.length) if compaction invalidates this.
-   */
-  preRunMessageCount?: number;
   channel?: string;
 }
 
@@ -88,15 +81,7 @@ export function extractAssistantText(msg: AgentMessage): string {
 export async function applyBeforeResponseEmitHook(
   params: ApplyBeforeResponseEmitParams,
 ): Promise<ApplyBeforeResponseEmitResult | undefined> {
-  const {
-    hookRunner,
-    agentCtx,
-    assistantTexts,
-    messagesSnapshot,
-    activeSession,
-    preRunMessageCount,
-    channel,
-  } = params;
+  const { hookRunner, agentCtx, assistantTexts, messagesSnapshot, activeSession, channel } = params;
 
   // Find last assistant message
   const lastAssistantMsg = [...messagesSnapshot].toReversed().find((m) => m.role === "assistant");
@@ -127,17 +112,20 @@ export async function applyBeforeResponseEmitHook(
   );
 
   // Scope to only current-run messages so we never corrupt prior history.
-  // If compaction shrunk the message array during the run, preRunMessageCount
-  // may exceed the current length — fall back to extracting the last N
-  // assistant messages (where N = assistantTexts.length) as a safe bound.
-  const runMessages = getRunScopedMessages(
-    activeSession.messages,
-    preRunMessageCount,
-    assistantTexts.length,
-  );
+  // Uses tail-based scan (last N assistant messages) which is compaction-safe.
+  const runMessages = getRunScopedMessages(activeSession.messages, assistantTexts.length);
 
   if (emitResult?.block) {
     log.warn(`response blocked: ${emitResult.blockReason ?? "no reason"}`);
+    if (runMessages.length === 0) {
+      // Compaction edge case: couldn't identify run-scoped messages.
+      // Response delivery is still suppressed, but blocked content may
+      // persist in activeSession.messages and leak into future turns.
+      log.warn(
+        "response blocked but run-scoped messages empty — blocked content may persist in session history. " +
+          "This can occur when compaction makes run boundaries unidentifiable.",
+      );
+    }
     // Clear blocked content from current-run session history only so it
     // doesn't leak to subsequent turns or session persistence. Prior turns
     // that were already delivered are left intact.
@@ -171,20 +159,15 @@ export async function applyBeforeResponseEmitHook(
 
 /**
  * Get the subset of session messages belonging to the current run.
- * Uses preRunMessageCount when valid; falls back to tail-based extraction
- * if compaction invalidated the index (array shrunk below the marker).
+ * Uses tail-based scanning: finds the last N assistant messages (where N
+ * is the count produced in this run) and returns everything from the first
+ * match onward. This is compaction-safe — works regardless of whether
+ * compaction shifted message indices during the run.
  */
 export function getRunScopedMessages(
   messages: AgentMessage[],
-  preRunMessageCount: number | undefined,
   assistantTextCount: number,
 ): AgentMessage[] {
-  // Always prefer tail-based scan over index-based slicing. Compaction can
-  // replace/merge earlier transcript entries while keeping messages.length
-  // >= preRunMessageCount, which makes the index stale and causes the slice
-  // to include compacted pre-run messages or miss actual run messages.
-  // The tail scan is compaction-safe because it works backward from the end
-  // and only needs the count of assistant messages produced in this run.
   if (assistantTextCount <= 0) {
     // No assistant texts — return empty slice to avoid touching history.
     return [];

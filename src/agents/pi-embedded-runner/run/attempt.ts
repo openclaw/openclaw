@@ -1844,10 +1844,6 @@ export async function runEmbeddedAttempt(
           );
         }
 
-        // Capture message count before the agent run so before_response_emit
-        // can scope block/rewrite to only current-run assistant messages.
-        const preRunMessageCount = activeSession.messages.length;
-
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
           // Called each run; only mutates already-answered user turns that still carry image blocks.
@@ -2021,7 +2017,6 @@ export async function runEmbeddedAttempt(
               assistantTexts,
               messagesSnapshot,
               activeSession,
-              preRunMessageCount,
               channel: params.messageChannel ?? params.messageProvider,
             });
             if (emitResult !== undefined) {
