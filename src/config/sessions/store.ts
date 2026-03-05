@@ -420,21 +420,21 @@ async function saveSessionStoreUnlocked(
           archivedDirs.add(path.dirname(archivedPath));
         }
       }
-      if (archivedDirs.size > 0 || maintenance.resetArchiveRetentionMs != null) {
-        const targetDirs =
-          archivedDirs.size > 0 ? [...archivedDirs] : [path.dirname(path.resolve(storePath))];
+      // Always include the base sessions directory to ensure old archived files are cleaned up,
+      // not just directories where new archives were created in this maintenance run.
+      const baseSessionsDir = path.dirname(path.resolve(storePath));
+      const targetDirs = [...new Set([baseSessionsDir, ...archivedDirs])];
+      await cleanupArchivedSessionTranscripts({
+        directories: targetDirs,
+        olderThanMs: maintenance.pruneAfterMs,
+        reason: "deleted",
+      });
+      if (maintenance.resetArchiveRetentionMs != null) {
         await cleanupArchivedSessionTranscripts({
           directories: targetDirs,
-          olderThanMs: maintenance.pruneAfterMs,
-          reason: "deleted",
+          olderThanMs: maintenance.resetArchiveRetentionMs,
+          reason: "reset",
         });
-        if (maintenance.resetArchiveRetentionMs != null) {
-          await cleanupArchivedSessionTranscripts({
-            directories: targetDirs,
-            olderThanMs: maintenance.resetArchiveRetentionMs,
-            reason: "reset",
-          });
-        }
       }
 
       // Rotate the on-disk file if it exceeds the size threshold.
