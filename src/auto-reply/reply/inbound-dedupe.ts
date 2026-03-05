@@ -33,6 +33,45 @@ function firstNonEmptyId(
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
+const resolveInboundBody = (ctx: MsgContext): string => {
+  if (typeof ctx.BodyForCommands === "string") {
+    return ctx.BodyForCommands;
+  }
+  if (typeof ctx.CommandBody === "string") {
+    return ctx.CommandBody;
+  }
+  if (typeof ctx.RawBody === "string") {
+    return ctx.RawBody;
+  }
+  if (typeof ctx.Body === "string") {
+    return ctx.Body;
+  }
+  return "";
+};
+
+const resolveWebchatBodyFallbackId = (ctx: MsgContext, provider: string): string | null => {
+  if (provider !== "webchat") {
+    return null;
+  }
+  const body = resolveInboundBody(ctx);
+  if (!body) {
+    return null;
+  }
+
+  const stampMatch = body.match(/\[[^\]\n]*GMT[+-]\d+[^\]\n]*\]/i)?.[0]?.trim();
+  if (!stampMatch) {
+    return null;
+  }
+
+  const lines = body
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const tail = lines.length > 0 ? lines[lines.length - 1] : "";
+  return tail ? `bodyts:${stampMatch}:${tail.slice(0, 180)}` : `bodyts:${stampMatch}`;
+};
+
 export function resolveInboundMessageSid(ctx: MsgContext): string | null {
   // Keep precedence aligned with other inbound mappers (dispatch-acp, hook mapper)
   // to avoid subtle identity drift across code paths.
@@ -46,7 +85,7 @@ export function resolveInboundMessageSid(ctx: MsgContext): string | null {
 
 export function buildInboundDedupeKey(ctx: MsgContext): string | null {
   const provider = normalizeProvider(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface);
-  const messageId = resolveInboundMessageSid(ctx);
+  const messageId = resolveInboundMessageSid(ctx) ?? resolveWebchatBodyFallbackId(ctx, provider);
   if (!provider || !messageId) {
     return null;
   }

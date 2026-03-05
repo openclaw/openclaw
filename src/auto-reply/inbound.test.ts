@@ -268,6 +268,41 @@ describe("inbound dedupe", () => {
     expect(buildInboundDedupeKey(ctx)).toBeNull();
   });
 
+  it("uses webchat body timestamp fallback when SID is missing", () => {
+    const ctx: MsgContext = {
+      Provider: "webchat",
+      OriginatingChannel: "webchat",
+      OriginatingTo: "webchat:gateway-client",
+      BodyForCommands: "[Thu 2026-03-05 15:17 GMT+8] ping from tui",
+    };
+    expect(buildInboundDedupeKey(ctx)).toBe(
+      "webchat|webchat:gateway-client|bodyts:[Thu 2026-03-05 15:17 GMT+8]:[Thu 2026-03-05 15:17 GMT+8] ping from tui",
+    );
+  });
+
+  it("dedupes webchat retries without SID when timestamp+tail match", () => {
+    resetInboundDedupe();
+    const ctx: MsgContext = {
+      Provider: "webchat",
+      OriginatingChannel: "webchat",
+      OriginatingTo: "webchat:gateway-client",
+      BodyForCommands:
+        "Sender (untrusted metadata):\n...\n[Thu 2026-03-05 15:17 GMT+8] Ok test everything and update krill.",
+    };
+    expect(shouldSkipDuplicateInbound(ctx, { now: 100 })).toBe(false);
+    expect(shouldSkipDuplicateInbound(ctx, { now: 200 })).toBe(true);
+  });
+
+  it("does not apply webchat fallback when no embedded timestamp exists", () => {
+    const ctx: MsgContext = {
+      Provider: "webchat",
+      OriginatingChannel: "webchat",
+      OriginatingTo: "webchat:gateway-client",
+      BodyForCommands: "hello without wrapper timestamp",
+    };
+    expect(buildInboundDedupeKey(ctx)).toBeNull();
+  });
+
   it("skips duplicates with the same key", () => {
     resetInboundDedupe();
     const ctx: MsgContext = {
