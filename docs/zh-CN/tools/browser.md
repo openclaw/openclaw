@@ -231,7 +231,8 @@ OpenClaw 还可以通过本地 CDP 中继 + Chrome 扩展驱动**你现有的 Ch
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-  --remote-debugging-port=9222 \
+  --remote-debugging-port=9223 \
+  --remote-debugging-address=127.0.0.1 \
   --user-data-dir="$HOME/.openclaw/browser/existing-chrome"
 ```
 
@@ -244,7 +245,7 @@ OpenClaw 还可以通过本地 CDP 中继 + Chrome 扩展驱动**你现有的 Ch
     defaultProfile: "existing-chrome",
     profiles: {
       "existing-chrome": {
-        cdpUrl: "http://127.0.0.1:9222",
+        cdpUrl: "http://127.0.0.1:9223",
         color: "#4285F4",
       },
     },
@@ -256,7 +257,7 @@ OpenClaw 还可以通过本地 CDP 中继 + Chrome 扩展驱动**你现有的 Ch
 
 注意：
 
-- `attachOnly: true` 表示 OpenClaw 不会再自行启动本地浏览器进程。
+- `attachOnly: true` 是全局开关：OpenClaw 会对**所有**配置文件都停止自行启动本地浏览器进程。如果你仍然需要 OpenClaw 托管配置（例如 `openclaw`），请不要设置 `attachOnly`，只配置 `profiles.existing-chrome.cdpUrl`。
 - 如果你希望继续使用 `chrome` 这个配置名，也可以直接覆盖 `profiles.chrome.cdpUrl`。
 - 除非你有严格的网络隔离控制，否则请将调试端点保持在 loopback（`127.0.0.1`）。
 

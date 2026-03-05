@@ -250,7 +250,8 @@ If you want OpenClaw to control an already-running Chrome instance (for example 
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-  --remote-debugging-port=9222 \
+  --remote-debugging-port=9223 \
+  --remote-debugging-address=127.0.0.1 \
   --user-data-dir="$HOME/.openclaw/browser/existing-chrome"
 ```
 
@@ -263,7 +264,7 @@ If you want OpenClaw to control an already-running Chrome instance (for example 
     defaultProfile: "existing-chrome",
     profiles: {
       "existing-chrome": {
-        cdpUrl: "http://127.0.0.1:9222",
+        cdpUrl: "http://127.0.0.1:9223",
         color: "#4285F4",
       },
     },
@@ -275,7 +276,7 @@ If you want OpenClaw to control an already-running Chrome instance (for example 
 
 Notes:
 
-- `attachOnly: true` tells OpenClaw not to launch its own local browser process.
+- `attachOnly: true` is global: OpenClaw will not launch its own local browser process for **any** profile. If you still want OpenClaw-managed profiles (for example `openclaw`), omit `attachOnly` and only set `profiles.existing-chrome.cdpUrl`.
 - If you prefer to keep the profile name `chrome`, you can override `profiles.chrome.cdpUrl` with your own CDP URL.
 - Keep the debugging endpoint on loopback (`127.0.0.1`) unless you have strong network controls in place.
 
