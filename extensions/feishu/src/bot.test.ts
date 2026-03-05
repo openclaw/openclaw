@@ -569,6 +569,53 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("normalizes CommandBody for group slash commands with a leading bot mention", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-admin",
+        },
+      },
+      message: {
+        message_id: "msg-group-command-mention-normalization",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "@_bot_1 /model foo" }),
+        mentions: [{ key: "@_bot_1", id: { open_id: "ou-bot-123" }, name: "Bot", tenant_key: "" }],
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      botOpenId: "ou-bot-123",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        CommandBody: "/model foo",
+        BodyForCommands: "/model foo",
+      }),
+    );
+  });
+
   it("allows group sender when global groupSenderAllowFrom includes sender", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 

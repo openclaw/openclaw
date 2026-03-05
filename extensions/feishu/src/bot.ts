@@ -504,6 +504,35 @@ function normalizeMentions(
 }
 
 /**
+ * Feishu command parsing should ignore a leading bot mention, even in group chats,
+ * while preserving the full message context used for user-facing prompts.
+ */
+function normalizeFeishuCommandBody(text: string, botStripId?: string): string {
+  if (!botStripId) {
+    return text;
+  }
+
+  const trimmed = text.trimStart();
+  const botTagPrefix = `<at user_id="${botStripId}">`;
+  if (!trimmed.startsWith(botTagPrefix)) {
+    return text;
+  }
+
+  const closingTag = "</at>";
+  const closeIndex = trimmed.indexOf(closingTag);
+  if (closeIndex === -1) {
+    return text;
+  }
+
+  const afterTag = trimmed.slice(closeIndex + closingTag.length).trimStart();
+  if (!afterTag || !/^[!\/]/.test(afterTag)) {
+    return text;
+  }
+
+  return afterTag;
+}
+
+/**
  * Parse media keys from message content based on message type.
  */
 function parseMediaKeys(
@@ -1299,6 +1328,8 @@ export async function handleFeishuMessage(params: {
         : undefined;
 
     // --- Shared context builder for dispatch ---
+    const commandBodyForParsing = normalizeFeishuCommandBody(ctx.content, botOpenId?.trim());
+
     const buildCtxPayloadForAgent = (
       agentSessionKey: string,
       agentAccountId: string,
@@ -1311,7 +1342,8 @@ export async function handleFeishuMessage(params: {
         ReplyToId: ctx.parentId,
         RootMessageId: ctx.rootId,
         RawBody: ctx.content,
-        CommandBody: ctx.content,
+        CommandBody: commandBodyForParsing,
+        BodyForCommands: commandBodyForParsing,
         From: feishuFrom,
         To: feishuTo,
         SessionKey: agentSessionKey,
