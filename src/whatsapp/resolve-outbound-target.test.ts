@@ -194,6 +194,20 @@ describe("resolveWhatsAppOutboundTarget", () => {
       expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "broadcast" });
     });
 
+    it("returns allowFrom policy error (not generic E.164 error) when blocked", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
+      const result = resolveWhatsAppOutboundTarget({
+        to: PRIMARY_TARGET,
+        allowFrom: [SECONDARY_TARGET],
+        mode: "implicit",
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain("allowFrom");
+        expect(result.error.message).not.toContain("<E.164");
+      }
+    });
+
     it("allows message in custom mode string when target is in allowList", () => {
       mockNormalizedDirectMessage(PRIMARY_TARGET, PRIMARY_TARGET);
       expectAllowedForTarget({ allowFrom: [PRIMARY_TARGET], mode: "broadcast" });
