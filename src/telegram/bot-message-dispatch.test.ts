@@ -1816,4 +1816,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftA.clear).toHaveBeenCalledTimes(1);
     expect(draftB.clear).toHaveBeenCalledTimes(1);
   });
+
+  it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
+    const statusReactionController = {
+      setThinking: vi.fn(async () => {}),
+      setCompacting: vi.fn(async () => {}),
+      setTool: vi.fn(async () => {}),
+      setDone: vi.fn(async () => {}),
+      setError: vi.fn(async () => {}),
+      setQueued: vi.fn(async () => {}),
+      clear: vi.fn(async () => {}),
+      restoreInitial: vi.fn(async () => {}),
+    };
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onCompaction?.({ phase: "start" });
+      await replyOptions?.onCompaction?.({ phase: "end", willRetry: false });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        statusReactionController: statusReactionController as never,
+      }),
+      streamMode: "off",
+    });
+
+    expect(statusReactionController.setCompacting).toHaveBeenCalledTimes(1);
+    expect(statusReactionController.setThinking).toHaveBeenCalledTimes(2);
+  });
 });

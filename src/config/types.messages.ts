@@ -51,6 +51,7 @@ export type AudioConfig = {
 
 export type StatusReactionsEmojiConfig = {
   thinking?: string;
+  compacting?: string;
   tool?: string;
   coding?: string;
   web?: string;

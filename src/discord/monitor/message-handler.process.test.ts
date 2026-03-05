@@ -47,6 +47,7 @@ type DispatchInboundParams = {
     onReasoningStream?: () => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: { name?: string }) => Promise<void> | void;
+    onCompaction?: (payload: { phase?: string; willRetry?: boolean }) => Promise<void> | void;
     onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
     onAssistantMessageStart?: () => Promise<void> | void;
   };
@@ -344,6 +345,37 @@ describe("processDiscordMessage ack reactions", () => {
     const emojis = getReactionEmojis();
     expect(emojis).toContain("🟦");
     expect(emojis).toContain("🏁");
+  });
+
+  it("shows compacting reaction during auto-compaction and returns to thinking", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onCompaction?.({ phase: "start" });
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await params?.replyOptions?.onCompaction?.({ phase: "end", willRetry: false });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          statusReactions: {
+            timing: { debounceMs: 0 },
+          },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const runPromise = processDiscordMessage(ctx as any);
+    await vi.advanceTimersByTimeAsync(1_500);
+    await vi.runAllTimersAsync();
+    await runPromise;
+
+    const emojis = getReactionEmojis();
+    expect(emojis).toContain(DEFAULT_EMOJIS.compacting);
   });
 
   it("clears status reactions when dispatch aborts and removeAckAfterReply is enabled", async () => {

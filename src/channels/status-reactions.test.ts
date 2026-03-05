@@ -157,6 +157,15 @@ describe("createStatusReactionController", () => {
     expect(calls).toContainEqual({ method: "set", emoji: DEFAULT_EMOJIS.coding });
   });
 
+  it("should set compacting emoji on compaction state", async () => {
+    const { calls, controller } = createEnabledController();
+
+    void controller.setCompacting();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+
+    expect(calls).toContainEqual({ method: "set", emoji: DEFAULT_EMOJIS.compacting });
+  });
+
   const immediateTerminalCases = [
     {
       name: "setDone",
@@ -446,6 +455,7 @@ describe("constants", () => {
     const emojiKeys = [
       "queued",
       "thinking",
+      "compacting",
       "tool",
       "coding",
       "web",

@@ -17,6 +17,7 @@ export type StatusReactionAdapter = {
 export type StatusReactionEmojis = {
   queued?: string; // Default: uses initialEmoji param
   thinking?: string; // Default: "🧠"
+  compacting?: string; // Default: "✍"
   tool?: string; // Default: "🛠️"
   coding?: string; // Default: "💻"
   web?: string; // Default: "🌐"
@@ -37,6 +38,7 @@ export type StatusReactionTiming = {
 export type StatusReactionController = {
   setQueued: () => Promise<void> | void;
   setThinking: () => Promise<void> | void;
+  setCompacting: () => Promise<void> | void;
   setTool: (toolName?: string) => Promise<void> | void;
   setDone: () => Promise<void>;
   setError: () => Promise<void>;
@@ -51,6 +53,7 @@ export type StatusReactionController = {
 export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
   queued: "👀",
   thinking: "🤔",
+  compacting: "✍",
   tool: "🔥",
   coding: "👨‍💻",
   web: "⚡",
@@ -155,6 +158,7 @@ export function createStatusReactionController(params: {
     initialEmoji,
     emojis.queued,
     emojis.thinking,
+    emojis.compacting,
     emojis.tool,
     emojis.coding,
     emojis.web,
@@ -301,6 +305,10 @@ export function createStatusReactionController(params: {
     scheduleEmoji(emojis.thinking);
   }
 
+  function setCompacting(): void {
+    scheduleEmoji(emojis.compacting);
+  }
+
   function setTool(toolName?: string): void {
     const emoji = resolveToolEmoji(toolName, emojis);
     scheduleEmoji(emoji);
@@ -374,6 +382,7 @@ export function createStatusReactionController(params: {
   return {
     setQueued,
     setThinking,
+    setCompacting,
     setTool,
     setDone,
     setError,

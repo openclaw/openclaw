@@ -673,6 +673,18 @@ export const dispatchTelegramMessage = async ({
               await statusReactionController.setTool(payload.name);
             }
           : undefined,
+        onCompaction: statusReactionController
+          ? async (payload) => {
+              const phase = payload.phase?.toLowerCase();
+              if (phase === "start") {
+                await statusReactionController.setCompacting();
+                return;
+              }
+              if (phase === "end" && payload.willRetry !== true) {
+                await statusReactionController.setThinking();
+              }
+            }
+          : undefined,
         onModelSelected,
       },
     }));

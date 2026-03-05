@@ -162,6 +162,7 @@ export const MessagesSchema = z
         emojis: z
           .object({
             thinking: z.string().optional(),
+            compacting: z.string().optional(),
             tool: z.string().optional(),
             coding: z.string().optional(),
             web: z.string().optional(),
