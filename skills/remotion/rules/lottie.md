@@ -56,4 +56,3 @@ export const MyAnimation = () => {
 
   return <Lottie animationData={animationData} loop animationSpeed={1} />;
 };
-```
