@@ -152,6 +152,18 @@ describe("feishu bitable record payload", () => {
     expect(createRecordMock).not.toHaveBeenCalled();
   });
 
+  test("create_record rejects payload when neither fields nor fields_json is provided", async () => {
+    const tool = setupTool("feishu_bitable_create_record");
+
+    const result = await tool.execute("call-missing", {
+      app_token: "app_x",
+      table_id: "tbl_x",
+    });
+
+    expect(readError(result)).toContain("Provide either fields or fields_json");
+    expect(createRecordMock).not.toHaveBeenCalled();
+  });
+
   test("update_record rejects invalid or empty fields_json", async () => {
     const tool = setupTool("feishu_bitable_update_record");
 

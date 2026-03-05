@@ -206,6 +206,10 @@ function resolveRecordFields(args: RecordFieldsArgs, actionName: string): Record
     throw new Error(`Provide either fields or fields_json for ${actionName}, not both`);
   }
 
+  if (!hasFields && !hasFieldsJson) {
+    throw new Error(`Provide either fields or fields_json for ${actionName}`);
+  }
+
   let resolved: unknown;
   if (hasFieldsJson) {
     const raw = args.fields_json?.trim();
