@@ -3,6 +3,7 @@ import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
+import { isXaiProvider } from "./schema/clean-for-xai.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -12,6 +13,8 @@ export type HookContext = {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
+  modelProvider?: string;
+  modelId?: string;
   loopDetection?: ToolLoopDetectionConfig;
 };
 
@@ -26,6 +29,39 @@ const MAX_LOOP_WARNING_KEYS = 256;
 let beforeToolCallRuntimePromise: Promise<
   typeof import("./pi-tools.before-tool-call.runtime.js")
 > | null = null;
+
+const HTML_ENTITY_RE = /&(amp|quot|lt|gt|apos|#39|#x27);/i;
+
+function decodeHtmlEntities(value: string): string {
+  if (!HTML_ENTITY_RE.test(value)) {
+    return value;
+  }
+  return value
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&apos;/gi, "'")
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x27;/gi, "'");
+}
+
+function decodeHtmlEntitiesInParams(value: unknown): unknown {
+  if (typeof value === "string") {
+    return decodeHtmlEntities(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => decodeHtmlEntitiesInParams(item));
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+  const decoded: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    decoded[key] = decodeHtmlEntitiesInParams(entry);
+  }
+  return decoded;
+}
 
 function loadBeforeToolCallRuntime() {
   beforeToolCallRuntimePromise ??= import("./pi-tools.before-tool-call.runtime.js");
@@ -95,7 +131,9 @@ export async function runBeforeToolCallHook(args: {
   ctx?: HookContext;
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
-  const params = args.params;
+  const params = isXaiProvider(args.ctx?.modelProvider, args.ctx?.modelId)
+    ? decodeHtmlEntitiesInParams(args.params)
+    : args.params;
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
@@ -149,7 +187,7 @@ export async function runBeforeToolCallHook(args: {
 
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_tool_call")) {
-    return { blocked: false, params: args.params };
+    return { blocked: false, params };
   }
 
   try {
@@ -270,6 +308,8 @@ export const __testing = {
   BEFORE_TOOL_CALL_WRAPPED,
   buildAdjustedParamsKey,
   adjustedParamsByToolCallId,
+  decodeHtmlEntities,
+  decodeHtmlEntitiesInParams,
   runBeforeToolCallHook,
   isPlainObject,
 };

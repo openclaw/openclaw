@@ -183,6 +183,86 @@ describe("before_tool_call hook integration", () => {
     });
     expect(consumeAdjustedParamsForToolCall(sharedToolCallId, "run-a")).toBeUndefined();
   });
+
+  it("decodes HTML-entity encoded params for xAI models", async () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
+      modelProvider: "xai",
+      modelId: "grok-4-1-fast",
+    });
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
+
+    await tool.execute(
+      "call-xai-1",
+      {
+        command:
+          "source .env &amp;&amp; psql &quot;$DATABASE_URL&quot; -c &quot;SELECT 1 &lt; 2&quot;",
+      },
+      undefined,
+      extensionContext,
+    );
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-xai-1",
+      {
+        command: 'source .env && psql "$DATABASE_URL" -c "SELECT 1 < 2"',
+      },
+      undefined,
+      extensionContext,
+    );
+  });
+
+  it("decodes HTML-entity encoded params for xAI models routed through OpenRouter", async () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
+      modelProvider: "openrouter",
+      modelId: "x-ai/grok-4-1-fast",
+    });
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
+
+    await tool.execute(
+      "call-xai-or-1",
+      { command: "echo &quot;hi&quot;" },
+      undefined,
+      extensionContext,
+    );
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-xai-or-1",
+      { command: 'echo "hi"' },
+      undefined,
+      extensionContext,
+    );
+  });
+
+  it("does not decode HTML entities for non-xAI providers", async () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
+      modelProvider: "openai",
+      modelId: "gpt-5-mini",
+    });
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
+
+    await tool.execute(
+      "call-openai-1",
+      { command: "echo &amp;&amp;" },
+      undefined,
+      extensionContext,
+    );
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-openai-1",
+      { command: "echo &amp;&amp;" },
+      undefined,
+      extensionContext,
+    );
+  });
 });
 
 describe("before_tool_call hook deduplication (#15502)", () => {
