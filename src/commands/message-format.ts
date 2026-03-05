@@ -33,7 +33,7 @@ export type MessageCliJsonEnvelope = {
   action: ChannelMessageActionName;
   channel: ChannelId;
   dryRun: boolean;
-  handledBy: "plugin" | "core" | "dry-run";
+  handledBy: "plugin" | "core" | "dry-run" | "silent";
   payload: unknown;
 };
 
@@ -262,6 +262,10 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
 
   if (result.handledBy === "dry-run") {
     return [muted(`[dry-run] would run ${result.action} via ${result.channel}`)];
+  }
+
+  if (result.handledBy === "silent") {
+    return [muted(`[silent] suppressed ${result.action} via ${result.channel}`)];
   }
 
   if (result.kind === "broadcast") {

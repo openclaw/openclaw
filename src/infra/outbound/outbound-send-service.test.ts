@@ -182,6 +182,8 @@ describe("executeSendAction", () => {
     expect(result.sendResult?.to).toBe("user:123");
     expect(result.sendResult?.via).toBe("direct");
     expect(result.sendResult?.mediaUrl).toBeNull();
+    expect(result.sendResult?.delivered).toBe(false);
+    expect(result.sendResult?.discarded).toBe(true);
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });

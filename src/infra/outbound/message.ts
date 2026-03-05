@@ -65,6 +65,9 @@ export type MessageSendResult = {
   mediaUrls?: string[];
   result?: OutboundDeliveryResult | { messageId: string };
   dryRun?: boolean;
+  ok?: boolean;
+  delivered?: boolean;
+  discarded?: boolean;
 };
 
 type MessagePollParams = {

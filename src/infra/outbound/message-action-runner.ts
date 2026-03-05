@@ -107,7 +107,7 @@ export type MessageActionRunResult =
       channel: ChannelId;
       action: "send";
       to: string;
-      handledBy: "plugin" | "core";
+      handledBy: "plugin" | "core" | "silent";
       payload: unknown;
       toolResult?: AgentToolResult<unknown>;
       sendResult?: MessageSendResult;

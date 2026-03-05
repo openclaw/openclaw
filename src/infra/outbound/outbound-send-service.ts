@@ -100,15 +100,22 @@ export async function executeSendAction(params: {
 }> {
   throwIfAborted(params.ctx.abortSignal);
 
-  if (isSilentReplyText(params.message)) {
+  if (
+    isSilentReplyText(params.message) &&
+    !params.mediaUrl &&
+    (!params.mediaUrls || params.mediaUrls.length === 0)
+  ) {
     return {
       handledBy: "silent",
       payload: { ok: true, reason: SILENT_REPLY_TOKEN },
       sendResult: {
+        ok: true,
         channel: params.ctx.channel,
         to: params.to,
-        via: "direct",
+        via: "direct" as const,
         mediaUrl: null,
+        delivered: false,
+        discarded: true,
       },
     };
   }
