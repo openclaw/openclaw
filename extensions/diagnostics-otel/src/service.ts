@@ -435,9 +435,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "gen_ai.system": evt.provider ?? "unknown",
           "gen_ai.usage.input_tokens": usage.input ?? 0,
           "gen_ai.usage.output_tokens": usage.output ?? 0,
-          // Langfuse-specific attributes
-          "langfuse.session.id": evt.sessionKey ?? "",
         };
+        if (evt.sessionKey) {
+          spanAttrs["langfuse.session.id"] = evt.sessionKey;
+        }
         if (evt.costUsd) {
           spanAttrs["gen_ai.usage.cost"] = evt.costUsd;
         }
