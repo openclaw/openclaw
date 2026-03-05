@@ -307,6 +307,15 @@ describe("config paths", () => {
 });
 
 describe("config strict validation", () => {
+  it("accepts agents.list[].thinkingDefault", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [{ id: "pi", thinkingDefault: "medium" }],
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects unknown fields", async () => {
     const res = validateConfigObject({
       agents: { list: [{ id: "pi" }] },
