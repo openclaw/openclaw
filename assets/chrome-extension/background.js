@@ -336,9 +336,8 @@ function sendToRelay(payload) {
   ws.send(JSON.stringify(payload))
 }
 
-function ensureGatewayHandshakeStarted(payload) {
+function ensureGatewayHandshakeStarted() {
   if (relayConnectRequestId) return
-  const nonce = typeof payload?.nonce === 'string' ? payload.nonce.trim() : ''
   relayConnectRequestId = `ext-connect-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
   sendToRelay({
     type: 'req',
@@ -357,7 +356,6 @@ function ensureGatewayHandshakeStarted(payload) {
       scopes: ['operator.read', 'operator.write'],
       caps: [],
       commands: [],
-      nonce: nonce || undefined,
       auth: relayGatewayToken ? { token: relayGatewayToken } : undefined,
     },
   })
@@ -406,7 +404,7 @@ async function onRelayMessage(text) {
 
   if (msg && msg.type === 'event' && msg.event === 'connect.challenge') {
     try {
-      ensureGatewayHandshakeStarted(msg.payload)
+      ensureGatewayHandshakeStarted()
     } catch (err) {
       console.warn('gateway connect handshake start failed', err instanceof Error ? err.message : String(err))
       relayConnectRequestId = null
