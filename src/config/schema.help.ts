@@ -237,7 +237,7 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.profiles.*.cdpUrl":
     "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
   "browser.profiles.*.driver":
-    'Per-profile browser driver mode: "clawd" or "extension" depending on connection/runtime strategy. Use the driver that matches your browser control stack to avoid protocol mismatches.',
+    'Per-profile browser driver mode: "openclaw" (default) or "extension" depending on connection/runtime strategy. The legacy value "clawd" is still accepted. Use the driver that matches your browser control stack to avoid protocol mismatches.',
   "browser.profiles.*.attachOnly":
     "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
   "browser.profiles.*.color":
