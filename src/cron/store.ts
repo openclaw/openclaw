@@ -113,6 +113,12 @@ async function renameWithRetry(src: string, dest: string): Promise<void> {
       // Windows doesn't reliably support atomic replace via rename when dest exists.
       if (code === "EPERM" || code === "EEXIST") {
         await fs.promises.copyFile(src, dest);
+        // Ensure correct permissions - copyFile doesn't preserve mode
+        try {
+          await fs.promises.chmod(dest, 0o600);
+        } catch {
+          // Best-effort: chmod may fail in some environments (e.g., Windows, some test mocks)
+        }
         await fs.promises.unlink(src).catch(() => {});
         return;
       }
