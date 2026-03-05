@@ -126,7 +126,8 @@ export function createTelegramDraftStream(params: {
     prefersDraftTransport && !disableDraftForQuotedReply && resolvedDraftApi,
   );
   if (prefersDraftTransport && disableDraftForQuotedReply) {
-    params.log?.(
+    const notify = requestedPreviewTransport === "draft" ? params.warn : params.log;
+    notify?.(
       "telegram stream preview: reply_to_message_id present; forcing sendMessage/editMessageText transport",
     );
   }
