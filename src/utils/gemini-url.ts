@@ -28,7 +28,7 @@ export function buildGeminiUrl(params: {
   const baseUrlWithVersion = hasV1Beta ? rawBaseUrl : `${rawBaseUrl}/v1beta`;
   
   const modelPart = params.modelHasPrefix 
-    ? `models/${encodeURIComponent(params.modelId.replace(/^models\//, ""))}` 
+    ? `models/${encodeURIComponent(params.modelId.replace(/^models\//, ""))}`
     : `models/${encodeURIComponent(params.modelId)}`;
   
   let url = `${baseUrlWithVersion}/${modelPart}${params.endpoint}`;
