@@ -86,7 +86,10 @@ export function normalizeToolParameters(
 
   const isGeminiProvider =
     options?.modelProvider?.toLowerCase().includes("google") ||
-    options?.modelProvider?.toLowerCase().includes("gemini");
+    options?.modelProvider?.toLowerCase().includes("gemini") ||
+    // OpenRouter proxy: provider is "openrouter" but modelId starts with "google/"
+    (options?.modelProvider?.toLowerCase().includes("openrouter") &&
+      options?.modelId?.toLowerCase().startsWith("google/"));
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
   const isXai = isXaiProvider(options?.modelProvider, options?.modelId);
 
