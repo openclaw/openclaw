@@ -49,4 +49,21 @@ describe("sent-message-cache", () => {
     expect(wasSentByBot(100, 1)).toBe(true);
     expect(wasSentByBot(100, 2)).toBe(true);
   });
+
+  it("implements true LRU: recently accessed chats survive eviction", () => {
+    // Fill to capacity
+    for (let i = 0; i < 5000; i++) {
+      recordSentMessage(i, 1);
+    }
+    
+    // Access chat 0 (moves it to end)
+    expect(wasSentByBot(0, 1)).toBe(true);
+    
+    // Add new chat - should evict chat 1 (oldest), not chat 0 (recently accessed)
+    recordSentMessage(5000, 1);
+    
+    expect(wasSentByBot(0, 1)).toBe(true);  // Recently accessed, should survive
+    expect(wasSentByBot(1, 1)).toBe(false); // Oldest unaccessed, should be evicted
+    expect(wasSentByBot(5000, 1)).toBe(true);
+  });
 });

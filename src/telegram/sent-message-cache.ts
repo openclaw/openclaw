@@ -27,7 +27,7 @@ function cleanupExpired(entry: CacheEntry): void {
 
 function evictOldestChat(): void {
   const oldest = sentMessages.keys().next().value;
-  if (oldest) {
+  if (oldest !== undefined) {
     sentMessages.delete(oldest);
   }
 }
@@ -66,7 +66,15 @@ export function wasSentByBot(chatId: number | string, messageId: number): boolea
   }
   // Clean up expired entries on read
   cleanupExpired(entry);
-  return entry.timestamps.has(messageId);
+  const result = entry.timestamps.has(messageId);
+  
+  // LRU: move to end by re-inserting
+  if (result) {
+    sentMessages.delete(key);
+    sentMessages.set(key, entry);
+  }
+  
+  return result;
 }
 
 /**
