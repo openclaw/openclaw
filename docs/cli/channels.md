@@ -12,7 +12,7 @@ Manage chat channel accounts and their runtime status on the Gateway.
 
 Related docs:
 
-- Channel guides: [Channels](/channels/index)
+- Channel guides: [Channels](/channels)
 - Gateway configuration: [Configuration](/gateway/configuration)
 
 ## Common commands

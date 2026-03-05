@@ -107,7 +107,7 @@ If still stuck:
 
 Related:
 
-- [/nodes/index](/nodes/index)
+- [Nodes](/nodes)
 - [/nodes/camera](/nodes/camera)
 - [/nodes/location-command](/nodes/location-command)
 - [/tools/exec-approvals](/tools/exec-approvals)
