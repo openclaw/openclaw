@@ -117,11 +117,21 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     ]);
   });
 
-  it("forces a fresh session for isolated cron runs", async () => {
+  it("forces a fresh session for scheduler-owned isolated cron runs", async () => {
     await runSkillFilterCase();
     expect(resolveCronSessionMock).toHaveBeenCalledOnce();
     expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
       forceNew: true,
+    });
+  });
+
+  it("reuses session history for webhook-triggered isolated runs with stable sessionKey", async () => {
+    await runSkillFilterCase({
+      sessionKey: "hook:webhook:ticket-42",
+    });
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      forceNew: false,
     });
   });
 

@@ -241,8 +241,10 @@ export async function runCronIsolatedAgentTurn(params: {
     sessionKey: agentSessionKey,
     agentId,
     nowMs: now,
-    // Isolated cron runs must not carry prior turn context across executions.
-    forceNew: params.job.sessionTarget === "isolated",
+    // Keep scheduler-owned isolated jobs (cron:<jobId>) stateless across runs,
+    // but allow hook/webhook-triggered isolated jobs with stable session keys
+    // to resume conversation history.
+    forceNew: params.job.sessionTarget === "isolated" && baseSessionKey.startsWith("cron:"),
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   const runSessionKey = baseSessionKey.startsWith("cron:")
