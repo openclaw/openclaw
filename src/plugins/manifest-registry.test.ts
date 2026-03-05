@@ -152,8 +152,10 @@ describe("loadPluginManifestRegistry", () => {
 
     const registry = loadRegistry(candidates);
     expect(countDuplicateWarnings(registry)).toBe(0);
-    expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]?.origin).toBe("global");
+    // Both records are emitted so the loader can mark the loser as "disabled".
+    expect(registry.plugins).toHaveLength(2);
+    expect(registry.plugins[0]?.origin).toBe("bundled");
+    expect(registry.plugins[1]?.origin).toBe("global");
   });
 
   it("emits duplicate warning for same-origin plugins with same id", () => {
@@ -234,7 +236,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
-  it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
+  it("prefers higher-precedence origins for the same physical directory (config > workspace > bundled > global)", () => {
     const dir = makeTempDir();
     fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
     const manifest = { id: "precedence-plugin", configSchema: { type: "object" } };

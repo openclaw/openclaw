@@ -12,12 +12,12 @@ type SeenIdEntry = {
   recordIndex: number;
 };
 
-// Precedence: config > workspace > global > bundled
+// Rank for resolving same-physical-directory conflicts (lower = higher precedence).
 const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
   workspace: 1,
-  global: 2,
-  bundled: 3,
+  bundled: 2,
+  global: 3,
 };
 
 export type PluginManifestRecord = {
@@ -216,10 +216,13 @@ export function loadPluginManifestRegistry(params: {
       })();
       // Cross-origin duplicates (e.g. bundled + global) are expected when a
       // user installs a global extension that shadows a bundled plugin.
-      // Silently prefer the higher-precedence origin in that case.
+      // Silently skip the warning — the loader handles precedence via
+      // discovery order and marks the loser as "disabled".
       // Only warn when two different directories share the same plugin id
       // within the same origin — that indicates a real configuration conflict.
-      if (samePlugin || candidate.origin !== existing.candidate.origin) {
+      if (samePlugin) {
+        // Same physical directory discovered under two origins. Keep the
+        // higher-precedence record (lower rank number) and silently skip.
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = buildRecord({
             manifest,
@@ -232,12 +235,16 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+      if (candidate.origin === existing.candidate.origin) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
+      // For cross-origin duplicates, fall through without warning so both
+      // records are emitted and the loader can mark the loser as "disabled".
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
