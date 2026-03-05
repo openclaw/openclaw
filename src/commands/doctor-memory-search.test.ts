@@ -135,6 +135,25 @@ describe("noteMemorySearchHealth", () => {
     await expectNoWarningWithConfiguredRemoteApiKey("openai");
   });
 
+  it("does not warn when remote apiKey is configured as a SecretRef object", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      local: {},
+      remote: {
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "OPENAI_API_KEY",
+        },
+      },
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
   it("does not warn in auto mode when remote apiKey is configured", async () => {
     await expectNoWarningWithConfiguredRemoteApiKey("auto");
   });

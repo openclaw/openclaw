@@ -4,6 +4,7 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
 import { DEFAULT_LOCAL_MODEL } from "../memory/embeddings.js";
 import { note } from "../terminal/note.js";
@@ -26,7 +27,7 @@ export async function noteMemorySearchHealth(
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
   const resolved = resolveMemorySearchConfig(cfg, agentId);
-  const hasRemoteApiKey = Boolean(resolved?.remote?.apiKey?.trim());
+  const hasRemoteApiKey = hasConfiguredSecretInput(resolved?.remote?.apiKey);
 
   if (!resolved) {
     note("Memory search is explicitly disabled (enabled: false).", "Memory search");
