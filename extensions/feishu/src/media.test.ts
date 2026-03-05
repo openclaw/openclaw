@@ -317,6 +317,12 @@ describe("sendMediaFeishu msg_type routing", () => {
       imageKey,
     });
 
+    expect(imageGetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { image_key: imageKey },
+        timeout: 120_000,
+      }),
+    );
     expect(result.buffer).toEqual(Buffer.from("image-data"));
     expect(capturedPath).toBeDefined();
     expectPathIsolatedToTmpRoot(capturedPath as string, imageKey);

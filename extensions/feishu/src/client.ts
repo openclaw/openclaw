@@ -4,6 +4,8 @@ import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.
 
 /** Default HTTP timeout for Feishu API requests (30 seconds). */
 export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
+export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
+export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
 
 function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
   const proxyUrl =
@@ -72,13 +74,26 @@ export type FeishuClientCredentials = {
 };
 
 function resolveConfiguredHttpTimeoutMs(creds: FeishuClientCredentials): number {
+  const clampTimeout = (value: number): number => {
+    const rounded = Math.floor(value);
+    return Math.min(Math.max(rounded, 1), FEISHU_HTTP_TIMEOUT_MAX_MS);
+  };
+
+  const envRaw = process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
+  if (envRaw) {
+    const envValue = Number(envRaw);
+    if (Number.isFinite(envValue) && envValue > 0) {
+      return clampTimeout(envValue);
+    }
+  }
+
   const fromConfig = creds.config?.httpTimeoutMs;
   const fromDirectField = creds.httpTimeoutMs;
   const timeout = fromDirectField ?? fromConfig;
   if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
     return FEISHU_HTTP_TIMEOUT_MS;
   }
-  return Math.floor(timeout);
+  return clampTimeout(timeout);
 }
 
 /**
