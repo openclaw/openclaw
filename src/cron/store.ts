@@ -83,11 +83,11 @@ export async function saveCronStore(
     return;
   }
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
+  await fs.promises.writeFile(tmp, json, "utf-8");
+  await fs.promises.chmod(tmp, 0o600).catch(() => {});
   if (previous !== null && !opts?.skipBackup) {
     try {
       await fs.promises.copyFile(storePath, `${storePath}.bak`);
-      // Set secure permissions on backup file
       await fs.promises.chmod(`${storePath}.bak`, 0o600).catch(() => {});
     } catch {
       // best-effort
