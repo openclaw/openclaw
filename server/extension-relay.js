@@ -362,6 +362,15 @@ const isMain = process.argv[1]?.endsWith("extension-relay.js");
 if (isMain) {
   const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 18792;
   ensureChromeExtensionRelayServer({ cdpUrl: `http://127.0.0.1:${port}` })
-    .then(s => console.log(`[standalone] Relay running at ${s.baseUrl}\n[standalone] CDP WebSocket: ${s.cdpWsUrl}\n[standalone] Set MCP config to use this cdpUrl.`))
+    .then(s => {
+      const gatewayToken = process.env.MCP_WEB_ADAPTER_TOKEN || "default-token";
+      console.log(`[standalone] Relay running at ${s.baseUrl}`);
+      console.log(`[standalone] CDP WebSocket: ${s.cdpWsUrl}`);
+      console.log(`[standalone] --- Authentication ---`);
+      console.log(`[standalone] Master Token (MCP_WEB_ADAPTER_TOKEN): ${gatewayToken === "default-token" ? "(using default-token)" : gatewayToken}`);
+      console.log(`[standalone] Derived Extension Token: ${resolveRelayAuthTokenForPort(port)}`);
+      console.log(`[standalone] -----------------------`);
+      console.log(`[standalone] Set MCP config to use this cdpUrl.`);
+    })
     .catch(e => { console.error("[standalone] Failed to start relay:", e); process.exit(1); });
 }

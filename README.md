@@ -17,7 +17,14 @@ Run the standalone relay server to listen for extension connections.
 cd server
 node extension-relay.js
 ```
-The server defaults to port `18792`. Ensure you have an authentication token set in your environment (e.g., `MCP_WEB_ADAPTER_TOKEN`).
+The server defaults to port `18792`. 
+
+**Authentication**:
+- By default, it uses `default-token`.
+- You can set your own secret via the `MCP_WEB_ADAPTER_TOKEN` environment variable.
+- When the server starts, it will print the **Master Token** and the **Derived Extension Token**.
+- Use the **Master Token** in your MCP server configuration.
+- Use the **Derived Extension Token** (or the Master Token) in the Chrome Extension options.
 
 ### 2. Install the Extension
 1. Open Chrome and navigate to `chrome://extensions`.
