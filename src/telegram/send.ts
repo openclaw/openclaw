@@ -442,7 +442,11 @@ export function buildInlineKeyboard(
   const rows = buttons
     .map((row) =>
       row
-        .filter((button) => button?.text && ("callback_data" in button || "copy_text" in button))
+        .filter(
+          (button) =>
+            button?.text &&
+            (("callback_data" in button && button.callback_data) || "copy_text" in button),
+        )
         .map((button): InlineKeyboardButton => {
           if ("copy_text" in button) {
             return { text: button.text, copy_text: button.copy_text };
