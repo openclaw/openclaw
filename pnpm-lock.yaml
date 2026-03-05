@@ -18,6 +18,11 @@ overrides:
   tar: 7.5.10
   tough-cookie: 4.1.3
 
+patchedDependencies:
+  '@mariozechner/pi-ai':
+    hash: 2887b1293a79de30a27e05d7509b9ba571847028cb6b4c4f7722bf1cf46d4ae1
+    path: patches/@mariozechner__pi-ai.patch
+
 importers:
 
   .:
@@ -57,7 +62,7 @@ importers:
         version: 0.55.3(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-ai':
         specifier: 0.55.3
-        version: 0.55.3(ws@8.19.0)(zod@4.3.6)
+        version: 0.55.3(patch_hash=2887b1293a79de30a27e05d7509b9ba571847028cb6b4c4f7722bf1cf46d4ae1)(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent':
         specifier: 0.55.3
         version: 0.55.3(ws@8.19.0)(zod@4.3.6)
@@ -7435,7 +7440,7 @@ snapshots:
 
   '@mariozechner/pi-agent-core@0.55.3(ws@8.19.0)(zod@4.3.6)':
     dependencies:
-      '@mariozechner/pi-ai': 0.55.3(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.55.3(patch_hash=2887b1293a79de30a27e05d7509b9ba571847028cb6b4c4f7722bf1cf46d4ae1)(ws@8.19.0)(zod@4.3.6)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -7445,7 +7450,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.55.3(ws@8.19.0)(zod@4.3.6)':
+  '@mariozechner/pi-ai@0.55.3(patch_hash=2887b1293a79de30a27e05d7509b9ba571847028cb6b4c4f7722bf1cf46d4ae1)(ws@8.19.0)(zod@4.3.6)':
     dependencies:
       '@anthropic-ai/sdk': 0.73.0(zod@4.3.6)
       '@aws-sdk/client-bedrock-runtime': 3.1000.0
@@ -7473,7 +7478,7 @@ snapshots:
     dependencies:
       '@mariozechner/jiti': 2.6.5
       '@mariozechner/pi-agent-core': 0.55.3(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.55.3(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.55.3(patch_hash=2887b1293a79de30a27e05d7509b9ba571847028cb6b4c4f7722bf1cf46d4ae1)(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui': 0.55.3
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
@@ -11203,7 +11208,7 @@ snapshots:
       '@line/bot-sdk': 10.6.0
       '@lydell/node-pty': 1.2.0-beta.3
       '@mariozechner/pi-agent-core': 0.55.3(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.55.3(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.55.3(patch_hash=2887b1293a79de30a27e05d7509b9ba571847028cb6b4c4f7722bf1cf46d4ae1)(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent': 0.55.3(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui': 0.55.3
       '@mozilla/readability': 0.6.0
