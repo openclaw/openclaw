@@ -1296,40 +1296,61 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   }
 
   // T-DISC-004: check for dangerous env vars in current environment
-  const DANGEROUS_ENV_VARS = [
+  // High-risk: native code injection vectors — always warn
+  const HIGH_RISK_ENV_VARS = [
     "NODE_OPTIONS",
     "GLIBC_TUNABLES",
-    "JAVA_TOOL_OPTIONS",
-    "JDK_JAVA_OPTIONS",
     "LD_AUDIT",
     "LD_PRELOAD",
     "LD_LIBRARY_PATH",
     "DYLD_INSERT_LIBRARIES",
     "DYLD_LIBRARY_PATH",
-    "PYTHONPATH",
-    "PYTHONSTARTUP",
-    "RUBYOPT",
-    "PERL5OPT",
     "BASH_ENV",
     "SSLKEYLOGFILE",
   ];
-  const dangerousVarsSet = DANGEROUS_ENV_VARS.filter(
-    (v) => typeof env[v] === "string" && env[v].trim().length > 0,
-  );
-  if (dangerousVarsSet.length > 0) {
+  // Lower-risk: language tooling vars routinely set by virtualenvs,
+  // IDEs, and bundler wrappers — surface as info, not warn
+  const LANG_TOOLING_ENV_VARS = [
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "JAVA_TOOL_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+    "RUBYOPT",
+    "PERL5OPT",
+  ];
+  const isNonEmpty = (v: string) => typeof env[v] === "string" && env[v].trim().length > 0;
+  const highRiskSet = HIGH_RISK_ENV_VARS.filter(isNonEmpty);
+  const langToolingSet = LANG_TOOLING_ENV_VARS.filter(isNonEmpty);
+  if (highRiskSet.length > 0) {
     findings.push({
       checkId: "env.dangerous_vars_set",
       severity: "warn",
-      title: dangerousVarsSet.length + " dangerous environment variable(s) set",
+      title: highRiskSet.length + " high-risk environment variable(s) set",
       detail:
-        "The following variables are set in the current environment: " +
-        dangerousVarsSet.join(", ") +
+        "The following native-injection variables are set: " +
+        highRiskSet.join(", ") +
         ". " +
-        "These can be used for code injection or behavior modification if an attacker " +
+        "These can be used for arbitrary code injection if an attacker " +
         "gains exec tool access (T-DISC-004).",
       remediation:
         "Unset these variables unless intentionally configured. " +
         "If required, ensure they are in host-env-security-policy.json blocklist.",
+    });
+  }
+  if (langToolingSet.length > 0) {
+    findings.push({
+      checkId: "env.lang_tooling_vars_set",
+      severity: "info",
+      title: langToolingSet.length + " language-tooling environment variable(s) set",
+      detail:
+        "The following language-tooling variables are set: " +
+        langToolingSet.join(", ") +
+        ". " +
+        "These are commonly set by virtualenvs, IDEs, and bundler wrappers, " +
+        "but could be abused for code injection in a compromised environment (T-DISC-004).",
+      remediation:
+        "No action needed if these are from your normal development environment. " +
+        "Investigate if unexpected.",
     });
   }
 

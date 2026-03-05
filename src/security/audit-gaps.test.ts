@@ -173,6 +173,18 @@ describe("env.dangerous_vars_set", () => {
     });
     expectNoFinding(res, "env.dangerous_vars_set");
   });
+
+  it("emits info when only language-tooling env vars are set", async () => {
+    const cfg: OpenClawConfig = {};
+    const res = await audit(cfg, {
+      env: {
+        PYTHONPATH: "/usr/lib/python3/dist-packages",
+        JAVA_TOOL_OPTIONS: "-Xmx512m",
+      },
+    });
+    expectNoFinding(res, "env.dangerous_vars_set");
+    expectFinding(res, "env.lang_tooling_vars_set", "info");
+  });
 });
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
