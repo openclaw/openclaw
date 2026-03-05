@@ -110,11 +110,20 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     }
     return sanitized;
   }
-  const rendered = marked.parse(`${truncated.text}${suffix}`, {
-    renderer: htmlEscapeRenderer,
-    gfm: true,
-    breaks: true,
-  }) as string;
+  let rendered: string;
+  try {
+    rendered = marked.parse(`${truncated.text}${suffix}`, {
+      renderer: htmlEscapeRenderer,
+      gfm: true,
+      breaks: true,
+    }) as string;
+  } catch (err) {
+    // Fall back to escaped plain text when marked.parse() throws (e.g.
+    // infinite recursion on pathological markdown patterns — #36213).
+    console.warn("[markdown] marked.parse failed, falling back to plain text:", err);
+    const escaped = escapeHtml(`${truncated.text}${suffix}`);
+    rendered = `<pre class="code-block">${escaped}</pre>`;
+  }
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     setCachedMarkdown(input, sanitized);
