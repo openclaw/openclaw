@@ -10,7 +10,15 @@ export function resolveChannelDefaultAccountId<ResolvedAccount>(params: {
   accountIds?: string[];
 }): string {
   const accountIds = params.accountIds ?? params.plugin.config.listAccountIds(params.cfg);
-  return params.plugin.config.defaultAccountId?.(params.cfg) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
+  const configuredDefaultRaw = params.plugin.config.defaultAccountId?.(params.cfg);
+  const configuredDefault = configuredDefaultRaw?.trim() ? configuredDefaultRaw.trim() : null;
+  if (accountIds.length > 0) {
+    if (configuredDefault && accountIds.includes(configuredDefault)) {
+      return configuredDefault;
+    }
+    return accountIds[0];
+  }
+  return configuredDefault ?? DEFAULT_ACCOUNT_ID;
 }
 
 export function formatPairingApproveHint(channelId: string): string {

@@ -93,6 +93,40 @@ function makeTokenPlugin(): ChannelPlugin {
   };
 }
 
+function makeMismatchedDefaultLinkPlugin(): ChannelPlugin {
+  return {
+    id: "bncr",
+    meta: {
+      id: "bncr",
+      label: "Bncr",
+      selectionLabel: "Bncr",
+      docsPath: "/channels/bncr",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["Primary"],
+      defaultAccountId: () => "default",
+      resolveAccount: (_cfg, accountId) => ({
+        name: accountId,
+        enabled: true,
+        token: "bncr-token",
+      }),
+      isConfigured: () => true,
+      isEnabled: () => true,
+    },
+    status: {
+      buildChannelSummary: ({ defaultAccountId }) => ({
+        linked: defaultAccountId === "Primary",
+        configured: true,
+      }),
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
 describe("buildChannelsTable - mattermost token summary", () => {
   it("does not require appToken for mattermost accounts", async () => {
     vi.mocked(listChannelPlugins).mockReturnValue([makeMattermostPlugin()]);
@@ -133,5 +167,18 @@ describe("buildChannelsTable - mattermost token summary", () => {
     expect(tokenRow).toBeDefined();
     expect(tokenRow?.state).toBe("ok");
     expect(tokenRow?.detail).toContain("token");
+  });
+
+  it("uses a real configured account when plugin default account id is stale", async () => {
+    vi.mocked(listChannelPlugins).mockReturnValue([makeMismatchedDefaultLinkPlugin()]);
+
+    const table = await buildChannelsTable({ channels: {} } as never, {
+      showSecrets: false,
+    });
+
+    const bncrRow = table.rows.find((row) => row.id === "bncr");
+    expect(bncrRow).toBeDefined();
+    expect(bncrRow?.state).toBe("ok");
+    expect(bncrRow?.detail).toContain("linked");
   });
 });
