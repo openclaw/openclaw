@@ -3,12 +3,14 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
-import { isLoopbackAddress, isLoopbackHost, rawDataToString } from "./utils.js";
 import {
-  probeAuthenticatedOpenClawRelay,
+  isLoopbackAddress,
+  isLoopbackHost,
+  rawDataToString,
   resolveRelayAcceptedTokensForPort,
   resolveRelayAuthTokenForPort,
-} from "./extension-relay-auth.js";
+} from "./utils.js";
+import { probeAuthenticatedOpenClawRelay } from "./extension-relay-auth.js";
 
 type CdpCommand = {
   id: number;
@@ -156,10 +158,10 @@ function text(res: Duplex, status: number, bodyText: string) {
   const body = Buffer.from(bodyText);
   res.write(
     `HTTP/1.1 ${status} ${status === 200 ? "OK" : "ERR"}\r\n` +
-      "Content-Type: text/plain; charset=utf-8\r\n" +
-      `Content-Length: ${body.length}\r\n` +
-      "Connection: close\r\n" +
-      "\r\n",
+    "Content-Type: text/plain; charset=utf-8\r\n" +
+    `Content-Length: ${body.length}\r\n` +
+    "Connection: close\r\n" +
+    "\r\n",
   );
   res.write(body);
   res.end();
@@ -1117,4 +1119,21 @@ export async function stopChromeExtensionRelayServer(opts: { cdpUrl: string }): 
   }
   await existing.server.stop();
   return true;
+}
+
+// CLI entry point
+const isMain = process.argv[1]?.endsWith("extension-relay.ts") || process.argv[1]?.endsWith("extension-relay.js");
+if (isMain) {
+  const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 18792;
+  const cdpUrl = `http://127.0.0.1:${port}`;
+  ensureChromeExtensionRelayServer({ cdpUrl })
+    .then((server) => {
+      console.log(`[standalone] Extension relay running at ${server.baseUrl}`);
+      console.log(`[standalone] CDP WebSocket: ${server.cdpWsUrl}`);
+      console.log(`[standalone] Set MCP config to use this cdpUrl.`);
+    })
+    .catch((err) => {
+      console.error("[standalone] Failed to start relay:", err);
+      process.exit(1);
+    });
 }
