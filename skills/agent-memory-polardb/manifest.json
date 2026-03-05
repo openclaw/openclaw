@@ -1,65 +1,31 @@
 {
-  "name": "PolarDB Mem0 Long-term Memory",
-  "id": "polardb-mem0",
+  "name": "Agent Memory Management (by PolarDB)",
+  "id": "agent-memory-polardb",
   "version": "1.0.0",
-  "description": "Managed long-term memory service powered by Alibaba Cloud PolarDB. Supports millisecond-level fact extraction and semantic retrieval via the Mem0 protocol.",
-  "author": "PolarDB Team",
-  "icon": "易",
-  "entrypoint": "handler.py",
-  "dependencies": [
-    "mem0ai"
-  ],
-  "env_vars": [
-    {
-      "name": "MEM0_API_KEY",
-      "description": "API Key obtained from the Alibaba Cloud PolarDB Console",
-      "required": true
-    },
-    {
-      "name": "MEM0_ORG_ID",
-      "description": "Your Mem0 Organization ID",
-      "required": true
-    }
-  ],
-  "tools": [
-    {
-      "name": "save_fact",
-      "description": "Proactively save a specific user fact, preference, or context into PolarDB cloud memory.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "fact": {
-            "type": "string",
-            "description": "The core information to remember (e.g., 'User prefers Python for data analysis')."
-          },
-          "user_id": {
-            "type": "string",
-            "description": "Unique identifier for the user.",
-            "default": "default_user"
-          }
-        },
-        "required": ["fact"]
+  "description_for_model": "Long-term memory tool. Use it to store (save_fact), retrieve (search_memories), or clear (delete_all_memories) user-specific facts and preferences across sessions.",  "icon": "易",
+  "description_for_human": "Manages long-term memories via PolarDB.",
+  "auth": {
+    "type": "token",
+    "token_header": "Authorization",
+    "token_prefix": "Token"
+  },
+  "api": {
+    "type": "python",
+    "main_file": "handler.py",
+    "functions": [
+      {
+        "name": "save_fact",
+        "description": "Store user facts/preferences."
+      },
+      {
+        "name": "search_memories",
+        "description": "Search relevant memories by query."
+      },
+      {
+        "name": "delete_all_memories",
+        "description": "Clear all memories for a user."
       }
-    },
-    {
-      "name": "search_memories",
-      "description": "Retrieve relevant historical context or user facts from PolarDB using semantic search.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "query": {
-            "type": "string",
-            "description": "Natural language query or question to search the memory bank."
-          },
-          "user_id": {
-            "type": "string",
-            "description": "Unique identifier for the user.",
-            "default": "default_user"
-          }
-        },
-        "required": ["query"]
-      }
-    }
-  ]
-}
-          
+    ]
+  },
+  "version": "1.0.0"
+}  
