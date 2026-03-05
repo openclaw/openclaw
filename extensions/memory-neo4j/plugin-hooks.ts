@@ -1,7 +1,7 @@
 /**
  * Event hook registrations for the memory-neo4j plugin.
  *
- * Registers: after_compaction, session_end, before_agent_start (×2), agent_bootstrap, agent_end
+ * Registers: after_compaction, session_end, before_agent_start (×1, merged), agent_bootstrap, agent_end
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
@@ -99,184 +99,194 @@ export function registerMemoryHooks(
     }
   });
 
-  // Mid-session core memory refresh: re-inject core memories when context grows past threshold
-  // This counters the "lost in the middle" phenomenon by placing core memories closer to end of context
+  // Merged before_agent_start: mid-session core-memory refresh + auto-recall.
+  //
+  // Both concerns are combined into a single handler to avoid the "last writer wins"
+  // SDK risk where two separate handlers each return prependContext and only the
+  // second one takes effect. Both blocks run independently (guarded by their own
+  // config flags) and their context strings are concatenated into one prependContext.
   const refreshThreshold = cfg.coreMemory.refreshAtContextPercent;
-  if (cfg.coreMemory.enabled && refreshThreshold) {
+  const wantCoreRefresh = cfg.coreMemory.enabled && !!refreshThreshold;
+  const wantAutoRecall = cfg.autoRecall;
+
+  logger.debug?.(`memory-neo4j: autoRecall=${cfg.autoRecall}`);
+
+  if (wantCoreRefresh) {
     logger.debug?.(
       `memory-neo4j: registering before_agent_start hook for mid-session core refresh at ${refreshThreshold}%`,
     );
-    api.on("before_agent_start", async (event, ctx) => {
-      // Skip if context info not available
-      if (!event.contextWindowTokens || !event.estimatedUsedTokens) {
-        return;
-      }
-
-      const sessionKey = ctx.sessionKey ?? "";
-      const agentId = ctx.agentId || "default";
-      const usagePercent = (event.estimatedUsedTokens / event.contextWindowTokens) * 100;
-
-      // Only refresh if we've crossed the threshold
-      if (usagePercent < refreshThreshold) {
-        return;
-      }
-
-      // Check if we've already refreshed recently (prevent over-refreshing)
-      const lastRefreshTokens = midSessionRefreshAt.get(sessionKey) ?? 0;
-      const tokensSinceRefresh = event.estimatedUsedTokens - lastRefreshTokens;
-      if (tokensSinceRefresh < MIN_TOKENS_SINCE_REFRESH) {
-        logger.debug?.(
-          `memory-neo4j: skipping mid-session refresh (only ${tokensSinceRefresh} tokens since last refresh)`,
-        );
-        return;
-      }
-
-      try {
-        const t0 = performance.now();
-        const coreMemories = await db.listCoreForInjection(agentId);
-
-        if (coreMemories.length === 0) {
-          return;
-        }
-
-        // Record this refresh
-        midSessionRefreshAt.set(sessionKey, event.estimatedUsedTokens);
-        touchSession(sessionKey);
-
-        const content = coreMemories.map((m) => `- ${m.text}`).join("\n");
-        const totalMs = performance.now() - t0;
-        logger.info?.(
-          `memory-neo4j: [bench] core-refresh ${totalMs.toFixed(0)}ms at ${usagePercent.toFixed(1)}% context (${coreMemories.length} memories)`,
-        );
-
-        return {
-          prependContext: `<core-memory-refresh>\nReminder of persistent context (you may have seen this earlier, re-stating for recency):\n${content}\n</core-memory-refresh>`,
-        };
-      } catch (err) {
-        logger.warn(`memory-neo4j: mid-session core refresh failed: ${String(err)}`);
-      }
-    });
+  }
+  if (wantAutoRecall) {
+    logger.debug?.("memory-neo4j: registering before_agent_start hook for auto-recall");
   }
 
-  // Auto-recall: inject relevant memories before agent starts
-  logger.debug?.(`memory-neo4j: autoRecall=${cfg.autoRecall}`);
-  if (cfg.autoRecall) {
-    logger.debug?.("memory-neo4j: registering before_agent_start hook for auto-recall");
+  if (wantCoreRefresh || wantAutoRecall) {
     api.on("before_agent_start", async (event, ctx) => {
-      if (!event.prompt || event.prompt.length < 5) {
+      const parts: string[] = [];
+
+      // --- Branch 1: Mid-session core-memory refresh ---
+      // Re-inject core memories when context grows past threshold to counter "lost in the middle".
+      if (wantCoreRefresh && event.contextWindowTokens && event.estimatedUsedTokens) {
+        const sessionKey = ctx.sessionKey ?? "";
+        const agentId = ctx.agentId || "default";
+        const usagePercent = (event.estimatedUsedTokens / event.contextWindowTokens) * 100;
+
+        if (usagePercent >= refreshThreshold!) {
+          const lastRefreshTokens = midSessionRefreshAt.get(sessionKey) ?? 0;
+          const tokensSinceRefresh = event.estimatedUsedTokens - lastRefreshTokens;
+          if (tokensSinceRefresh < MIN_TOKENS_SINCE_REFRESH) {
+            logger.debug?.(
+              `memory-neo4j: skipping mid-session refresh (only ${tokensSinceRefresh} tokens since last refresh)`,
+            );
+          } else {
+            try {
+              const t0 = performance.now();
+              const coreMemories = await db.listCoreForInjection(agentId);
+
+              if (coreMemories.length > 0) {
+                midSessionRefreshAt.set(sessionKey, event.estimatedUsedTokens);
+                touchSession(sessionKey);
+
+                const content = coreMemories.map((m) => `- ${m.text}`).join("\n");
+                const totalMs = performance.now() - t0;
+                logger.info?.(
+                  `memory-neo4j: [bench] core-refresh ${totalMs.toFixed(0)}ms at ${usagePercent.toFixed(1)}% context (${coreMemories.length} memories)`,
+                );
+
+                parts.push(
+                  `<core-memory-refresh>\nReminder of persistent context (you may have seen this earlier, re-stating for recency):\n${content}\n</core-memory-refresh>`,
+                );
+              }
+            } catch (err) {
+              logger.warn(`memory-neo4j: mid-session core refresh failed: ${String(err)}`);
+            }
+          }
+        }
+      }
+
+      // --- Branch 2: Auto-recall ---
+      // Inject semantically relevant memories before the agent starts.
+      if (wantAutoRecall) {
+        if (!event.prompt || event.prompt.length < 5) {
+          // No usable prompt — skip recall but don't block branch 1 result
+        } else {
+          // Skip auto-recall for voice/realtime sessions where latency is critical.
+          // These sessions use short conversational turns that don't benefit from
+          // memory injection, and the ~100-300ms embedding+search overhead matters.
+          const sessionKey = ctx.sessionKey ?? "";
+          if (cfg.autoRecallSkipPattern && cfg.autoRecallSkipPattern.test(sessionKey)) {
+            logger.debug?.(
+              `memory-neo4j: skipping auto-recall for session ${sessionKey} (matches skipPattern)`,
+            );
+          } else {
+            const agentId = ctx.agentId || "default";
+
+            // ~1000 chars keeps us safely within even small embedding contexts
+            // (mxbai-embed-large = 512 tokens). Longer recall queries don't improve
+            // embedding quality — it plateaus well before this limit.
+            const MAX_QUERY_CHARS = 1000;
+            const query =
+              event.prompt.length > MAX_QUERY_CHARS
+                ? event.prompt.slice(0, MAX_QUERY_CHARS)
+                : event.prompt;
+
+            try {
+              const t0 = performance.now();
+              let results = await hybridSearch(
+                db,
+                embeddings,
+                query,
+                3,
+                agentId,
+                extractionConfig.enabled,
+                { graphSearchDepth: cfg.graphSearchDepth, logger },
+              );
+              const tSearch = performance.now();
+
+              // Feature 1: Filter out low-relevance results below min RRF score
+              results = results.filter((r) => r.score >= cfg.autoRecallMinScore);
+
+              // Feature 2: (Removed) Core memory dedup was filtering relevant core memories
+              // from auto-recall results because they were "already in context" from bootstrap.
+              // Problem: by mid-session, bootstrap core memories are buried deep in context
+              // ("lost in the middle"), so the model forgets them. Filtering them from auto-recall
+              // prevented re-surfacing at the point of relevance. Duplicate injection is harmless —
+              // same content appears in both core bootstrap and relevant-memories sections,
+              // reinforcing important context with recency.
+
+              // Feature 3: Filter out memories related to completed tasks
+              const workspaceDir = ctx.workspaceDir;
+              if (workspaceDir) {
+                try {
+                  const completedTasks = await loadCompletedTaskKeywords(workspaceDir);
+                  if (completedTasks.length > 0) {
+                    const before = results.length;
+                    results = results.filter(
+                      (r) => !isRelatedToCompletedTask(r.text, completedTasks),
+                    );
+                    if (results.length < before) {
+                      logger.debug?.(
+                        `memory-neo4j: task-filter removed ${before - results.length} memories related to completed tasks`,
+                      );
+                    }
+                  }
+                } catch (err) {
+                  logger.debug?.(`memory-neo4j: task-filter skipped: ${String(err)}`);
+                }
+              }
+
+              // Layer 3: Filter out memories linked to completed tasks by taskId
+              // This complements Layer 1's keyword-based filter with precise taskId matching
+              if (workspaceDir) {
+                try {
+                  const fs = await import("node:fs/promises");
+                  const path = await import("node:path");
+                  const tasksPath = path.default.join(workspaceDir, "TASKS.md");
+                  const content = await fs.default.readFile(tasksPath, "utf-8");
+                  const ledger = parseTaskLedger(content);
+                  const completedTaskIds = new Set(ledger.completedTasks.map((t) => t.id));
+                  if (completedTaskIds.size > 0) {
+                    const before = results.length;
+                    results = results.filter((r) => !r.taskId || !completedTaskIds.has(r.taskId));
+                    if (results.length < before) {
+                      logger.debug?.(
+                        `memory-neo4j: taskId-filter removed ${before - results.length} memories linked to completed tasks`,
+                      );
+                    }
+                  }
+                } catch {
+                  // TASKS.md doesn't exist or can't be read — skip taskId filter
+                }
+              }
+
+              const totalMs = performance.now() - t0;
+              logger.info?.(
+                `memory-neo4j: [bench] auto-recall ${totalMs.toFixed(0)}ms total (search=${(tSearch - t0).toFixed(0)}ms), ${results.length} results`,
+              );
+
+              if (results.length > 0) {
+                const memoryContext = results.map((r) => `- [${r.category}] ${r.text}`).join("\n");
+
+                logger.debug?.(
+                  `memory-neo4j: auto-recall memories: ${JSON.stringify(results.map((r) => ({ id: r.id, text: r.text.slice(0, 80), score: r.score, vec: r.signals?.vector.rank || "-", bm25: r.signals?.bm25.rank || "-", graph: r.signals?.graph.rank || "-" })))}`,
+                );
+
+                parts.push(
+                  `<relevant-memories>\nThe following memories may be relevant to this conversation:\n${memoryContext}\n</relevant-memories>`,
+                );
+              }
+            } catch (err) {
+              logger.warn(`memory-neo4j: auto-recall failed: ${String(err)}`);
+            }
+          }
+        }
+      }
+
+      if (parts.length === 0) {
         return;
       }
 
-      // Skip auto-recall for voice/realtime sessions where latency is critical.
-      // These sessions use short conversational turns that don't benefit from
-      // memory injection, and the ~100-300ms embedding+search overhead matters.
-      const sessionKey = ctx.sessionKey ?? "";
-      if (cfg.autoRecallSkipPattern && cfg.autoRecallSkipPattern.test(sessionKey)) {
-        logger.debug?.(
-          `memory-neo4j: skipping auto-recall for session ${sessionKey} (matches skipPattern)`,
-        );
-        return;
-      }
-
-      const agentId = ctx.agentId || "default";
-
-      // ~1000 chars keeps us safely within even small embedding contexts
-      // (mxbai-embed-large = 512 tokens). Longer recall queries don't improve
-      // embedding quality — it plateaus well before this limit.
-      const MAX_QUERY_CHARS = 1000;
-      const query =
-        event.prompt.length > MAX_QUERY_CHARS
-          ? event.prompt.slice(0, MAX_QUERY_CHARS)
-          : event.prompt;
-
-      try {
-        const t0 = performance.now();
-        let results = await hybridSearch(
-          db,
-          embeddings,
-          query,
-          3,
-          agentId,
-          extractionConfig.enabled,
-          { graphSearchDepth: cfg.graphSearchDepth, logger },
-        );
-        const tSearch = performance.now();
-
-        // Feature 1: Filter out low-relevance results below min RRF score
-        results = results.filter((r) => r.score >= cfg.autoRecallMinScore);
-
-        // Feature 2: (Removed) Core memory dedup was filtering relevant core memories
-        // from auto-recall results because they were "already in context" from bootstrap.
-        // Problem: by mid-session, bootstrap core memories are buried deep in context
-        // ("lost in the middle"), so the model forgets them. Filtering them from auto-recall
-        // prevented re-surfacing at the point of relevance. Duplicate injection is harmless —
-        // same content appears in both core bootstrap and relevant-memories sections,
-        // reinforcing important context with recency.
-
-        // Feature 3: Filter out memories related to completed tasks
-        const workspaceDir = ctx.workspaceDir;
-        if (workspaceDir) {
-          try {
-            const completedTasks = await loadCompletedTaskKeywords(workspaceDir);
-            if (completedTasks.length > 0) {
-              const before = results.length;
-              results = results.filter((r) => !isRelatedToCompletedTask(r.text, completedTasks));
-              if (results.length < before) {
-                logger.debug?.(
-                  `memory-neo4j: task-filter removed ${before - results.length} memories related to completed tasks`,
-                );
-              }
-            }
-          } catch (err) {
-            logger.debug?.(`memory-neo4j: task-filter skipped: ${String(err)}`);
-          }
-        }
-
-        // Layer 3: Filter out memories linked to completed tasks by taskId
-        // This complements Layer 1's keyword-based filter with precise taskId matching
-        if (workspaceDir) {
-          try {
-            const fs = await import("node:fs/promises");
-            const path = await import("node:path");
-            const tasksPath = path.default.join(workspaceDir, "TASKS.md");
-            const content = await fs.default.readFile(tasksPath, "utf-8");
-            const ledger = parseTaskLedger(content);
-            const completedTaskIds = new Set(ledger.completedTasks.map((t) => t.id));
-            if (completedTaskIds.size > 0) {
-              const before = results.length;
-              results = results.filter((r) => !r.taskId || !completedTaskIds.has(r.taskId));
-              if (results.length < before) {
-                logger.debug?.(
-                  `memory-neo4j: taskId-filter removed ${before - results.length} memories linked to completed tasks`,
-                );
-              }
-            }
-          } catch {
-            // TASKS.md doesn't exist or can't be read — skip taskId filter
-          }
-        }
-
-        const totalMs = performance.now() - t0;
-        logger.info?.(
-          `memory-neo4j: [bench] auto-recall ${totalMs.toFixed(0)}ms total (search=${(tSearch - t0).toFixed(0)}ms), ${results.length} results`,
-        );
-
-        if (results.length === 0) {
-          return;
-        }
-
-        const memoryContext = results.map((r) => `- [${r.category}] ${r.text}`).join("\n");
-
-        logger.debug?.(
-          `memory-neo4j: auto-recall memories: ${JSON.stringify(results.map((r) => ({ id: r.id, text: r.text.slice(0, 80), score: r.score, vec: r.signals?.vector.rank || "-", bm25: r.signals?.bm25.rank || "-", graph: r.signals?.graph.rank || "-" })))}`,
-        );
-
-        return {
-          prependContext: `<relevant-memories>\nThe following memories may be relevant to this conversation:\n${memoryContext}\n</relevant-memories>`,
-        };
-      } catch (err) {
-        logger.warn(`memory-neo4j: auto-recall failed: ${String(err)}`);
-      }
+      return { prependContext: parts.join("\n\n") };
     });
   }
 
