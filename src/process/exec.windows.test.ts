@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -53,13 +54,14 @@ type ExecCall = [
 function expectCmdWrappedInvocation(params: {
   captured: SpawnCall | ExecCall | undefined;
   expectedComSpec: string;
+  expectedCommand: string;
 }) {
   if (!params.captured) {
     throw new Error("expected command wrapper to be called");
   }
   expect(params.captured[0]).toBe(params.expectedComSpec);
   expect(params.captured[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
-  expect(params.captured[1][3]).toContain("pnpm.cmd --version");
+  expect(params.captured[1][3]).toContain(`${params.expectedCommand} --version`);
   expect(params.captured[2].windowsVerbatimArguments).toBe(true);
 }
 
@@ -82,9 +84,29 @@ describe("windows command wrapper behavior", () => {
       const result = await runCommandWithTimeout(["pnpm", "--version"], { timeoutMs: 1000 });
       expect(result.code).toBe(0);
       const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
-      expectCmdWrappedInvocation({ captured, expectedComSpec });
+      expectCmdWrappedInvocation({ captured, expectedComSpec, expectedCommand: "pnpm.cmd" });
     } finally {
       platformSpy.mockRestore();
+    }
+  });
+
+  it("falls back to npm.cmd wrapper in runCommandWithTimeout when npm-cli.js is missing", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      expectCmdWrappedInvocation({ captured, expectedComSpec, expectedCommand: "npm.cmd" });
+    } finally {
+      platformSpy.mockRestore();
+      existsSpy.mockRestore();
     }
   });
 
@@ -106,9 +128,35 @@ describe("windows command wrapper behavior", () => {
     try {
       await runExec("pnpm", ["--version"], 1000);
       const captured = execFileMock.mock.calls[0] as ExecCall | undefined;
-      expectCmdWrappedInvocation({ captured, expectedComSpec });
+      expectCmdWrappedInvocation({ captured, expectedComSpec, expectedCommand: "pnpm.cmd" });
     } finally {
       platformSpy.mockRestore();
+    }
+  });
+
+  it("falls back to npm.cmd wrapper in runExec when npm-cli.js is missing", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
+
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        cb: (err: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        cb(null, "ok", "");
+      },
+    );
+
+    try {
+      await runExec("npm", ["--version"], 1000);
+      const captured = execFileMock.mock.calls[0] as ExecCall | undefined;
+      expectCmdWrappedInvocation({ captured, expectedComSpec, expectedCommand: "npm.cmd" });
+    } finally {
+      platformSpy.mockRestore();
+      existsSpy.mockRestore();
     }
   });
 });

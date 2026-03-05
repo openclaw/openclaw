@@ -65,8 +65,9 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
 
 /**
  * Resolves a command for Windows compatibility.
- * On Windows, non-.exe commands (like pnpm, yarn) are resolved to .cmd; npm/npx
- * are handled by resolveNpmArgvForWindows to avoid spawn EINVAL (no direct .cmd).
+ * On Windows, non-.exe commands (npm, npx, pnpm, yarn) are resolved to .cmd.
+ * npm/npx prefer resolveNpmArgvForWindows, but .cmd fallback is required when
+ * npm-cli.js cannot be found (for example, non-standard Node installs).
  */
 function resolveCommand(command: string): string {
   if (process.platform !== "win32") {
@@ -77,7 +78,7 @@ function resolveCommand(command: string): string {
   if (ext) {
     return command;
   }
-  const cmdCommands = ["pnpm", "yarn"];
+  const cmdCommands = ["npm", "npx", "pnpm", "yarn"];
   if (cmdCommands.includes(basename)) {
     return `${command}.cmd`;
   }
