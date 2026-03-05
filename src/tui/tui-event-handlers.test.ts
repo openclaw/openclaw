@@ -426,4 +426,30 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-silent");
     expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
   });
+
+  it("finalizes local run with streamed text when chat final has no message", () => {
+    const { state, chatLog, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    noteLocalRunId("run-local");
+
+    handleChatEvent({
+      runId: "run-local",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello from stream" },
+    });
+    chatLog.finalizeAssistant.mockClear();
+    chatLog.dropAssistant.mockClear();
+
+    handleChatEvent({
+      runId: "run-local",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("hello from stream", "run-local");
+    expect(chatLog.dropAssistant).not.toHaveBeenCalled();
+  });
 });

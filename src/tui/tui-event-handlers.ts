@@ -179,7 +179,16 @@ export function createEventHandlers(context: EventHandlerContext) {
       const wasActiveRun = state.activeChatRunId === evt.runId;
       if (!evt.message) {
         maybeRefreshHistoryForRun(evt.runId);
-        chatLog.dropAssistant(evt.runId);
+        const finalText = isLocalRunId?.(evt.runId)
+          ? streamAssembler.finalize(evt.runId, evt.message, state.showThinking)
+          : "(no output)";
+        const suppressEmptyExternalPlaceholder =
+          finalText === "(no output)" && !isLocalRunId?.(evt.runId);
+        if (suppressEmptyExternalPlaceholder) {
+          chatLog.dropAssistant(evt.runId);
+        } else {
+          chatLog.finalizeAssistant(finalText, evt.runId);
+        }
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
         tui.requestRender();
         return;
