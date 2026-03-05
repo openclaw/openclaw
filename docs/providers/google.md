@@ -113,6 +113,10 @@ If requests fail on paid tiers, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJ
 OAuth profiles are stored as `google-gemini-cli:<email>` when email is available
 (otherwise `google-gemini-cli:default`), so multiple Google accounts can coexist.
 
+## Antigravity status
+
+Google Antigravity is no longer supported in OpenClaw. Migrate to `google-gemini-cli/*` or another supported provider.
+
 ## Troubleshooting
 
 ### `No API key found for provider "google"`
