@@ -1,9 +1,7 @@
 package ai.openclaw.android
 
-import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import android.view.WindowManager
-import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -25,9 +23,6 @@ class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     WindowCompat.setDecorFitsSystemWindows(window, false)
-    val isDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-    WebView.setWebContentsDebuggingEnabled(isDebuggable)
-    NodeForegroundService.start(this)
     permissionRequester = PermissionRequester(this)
     screenCaptureRequester = ScreenCaptureRequester(this)
     viewModel.camera.attachLifecycleOwner(this)
@@ -55,6 +50,9 @@ class MainActivity : ComponentActivity() {
         }
       }
     }
+
+    // Keep startup path lean: start foreground service after first frame.
+    window.decorView.post { NodeForegroundService.start(this) }
   }
 
   override fun onStart() {

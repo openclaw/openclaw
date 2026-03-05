@@ -32,6 +32,7 @@ Example config:
       heartbeat: {
         every: "30m",
         target: "last", // explicit delivery to last contact (default is "none")
+        directPolicy: "allow", // default: allow direct/DM targets; set "block" to suppress
         // activeHours: { start: "08:00", end: "24:00" },
         // includeReasoning: true, // optional: send separate `Reasoning:` message too
       },
@@ -215,7 +216,9 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   - `last`: deliver to the last used external channel.
   - explicit channel: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`.
   - `none` (default): run the heartbeat but **do not deliver** externally.
-- Direct/DM heartbeat destinations are blocked when target parsing identifies a direct chat (for example `user:<id>`, Telegram user chat IDs, or WhatsApp direct numbers/JIDs).
+- `directPolicy`: controls direct/DM delivery behavior:
+  - `allow` (default): allow direct/DM heartbeat delivery.
+  - `block`: suppress direct/DM delivery (`reason=dm-blocked`).
 - `to`: optional recipient override (channel-specific id, e.g. E.164 for WhatsApp or a Telegram chat id). For Telegram topics/threads, use `<chatId>:topic:<messageThreadId>`.
 - `accountId`: optional account id for multi-account channels. When `target: "last"`, the account id applies to the resolved last channel if it supports accounts; otherwise it is ignored. If the account id does not match a configured account for the resolved channel, delivery is skipped.
 - `prompt`: overrides the default prompt body (not merged).
@@ -236,7 +239,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `session` only affects the run context; delivery is controlled by `target` and `to`.
 - To deliver to a specific channel/recipient, set `target` + `to`. With
   `target: "last"`, delivery uses the last external channel for that session.
-- Heartbeat deliveries never send to direct/DM targets when the destination is identified as direct; those runs still execute, but outbound delivery is skipped.
+- Heartbeat deliveries allow direct/DM targets by default. Set `directPolicy: "block"` to suppress direct-target sends while still running the heartbeat turn.
 - If the main queue is busy, the heartbeat is skipped and retried later.
 - If `target` resolves to no external destination, the run still happens but no
   outbound message is sent.

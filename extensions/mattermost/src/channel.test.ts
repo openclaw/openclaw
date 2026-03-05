@@ -1,6 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
-import { beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk/mattermost";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+const { sendMessageMattermostMock } = vi.hoisted(() => ({
+  sendMessageMattermostMock: vi.fn(),
+}));
+
+vi.mock("./mattermost/send.js", () => ({
+  sendMessageMattermost: sendMessageMattermostMock,
+}));
+
 import { mattermostPlugin } from "./channel.js";
 import { resetMattermostReactionBotUserCacheForTests } from "./mattermost/reactions.js";
 import {
@@ -10,6 +18,14 @@ import {
 } from "./mattermost/reactions.test-helpers.js";
 
 describe("mattermostPlugin", () => {
+  beforeEach(() => {
+    sendMessageMattermostMock.mockReset();
+    sendMessageMattermostMock.mockResolvedValue({
+      messageId: "post-1",
+      channelId: "channel-1",
+    });
+  });
+
   describe("messaging", () => {
     it("keeps @username targets", () => {
       const normalize = mattermostPlugin.messaging?.normalizeTarget;
@@ -86,8 +102,9 @@ describe("mattermostPlugin", () => {
 
       const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
       expect(actions).toContain("react");
-      expect(actions).not.toContain("send");
+      expect(actions).toContain("send");
       expect(mattermostPlugin.actions?.supportsAction?.({ action: "react" })).toBe(true);
+      expect(mattermostPlugin.actions?.supportsAction?.({ action: "send" })).toBe(true);
     });
 
     it("hides react when mattermost is not configured", () => {
@@ -117,7 +134,7 @@ describe("mattermostPlugin", () => {
 
       const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
       expect(actions).not.toContain("react");
-      expect(actions).not.toContain("send");
+      expect(actions).toContain("send");
     });
 
     it("respects per-account actions.reactions in listActions", () => {
@@ -196,6 +213,64 @@ describe("mattermostPlugin", () => {
         { type: "text", text: "Removed reaction :thumbsup: from POST1" },
       ]);
       expect(result?.details).toEqual({});
+    });
+  });
+
+  describe("outbound", () => {
+    it("forwards mediaLocalRoots on sendMedia", async () => {
+      const sendMedia = mattermostPlugin.outbound?.sendMedia;
+      if (!sendMedia) {
+        return;
+      }
+
+      await sendMedia({
+        to: "channel:CHAN1",
+        text: "hello",
+        mediaUrl: "/tmp/workspace/image.png",
+        mediaLocalRoots: ["/tmp/workspace"],
+        accountId: "default",
+        replyToId: "post-root",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          mediaUrl: "/tmp/workspace/image.png",
+          mediaLocalRoots: ["/tmp/workspace"],
+        }),
+      );
+    });
+
+    it("threads resolved cfg on sendText", async () => {
+      const sendText = mattermostPlugin.outbound?.sendText;
+      if (!sendText) {
+        return;
+      }
+      const cfg = {
+        channels: {
+          mattermost: {
+            botToken: "resolved-bot-token",
+            baseUrl: "https://chat.example.com",
+          },
+        },
+      } as OpenClawConfig;
+
+      await sendText({
+        cfg,
+        to: "channel:CHAN1",
+        text: "hello",
+        accountId: "default",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          cfg,
+          accountId: "default",
+        }),
+      );
     });
   });
 

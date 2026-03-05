@@ -10,6 +10,7 @@ import ai.openclaw.android.ScreenCaptureRequester
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -35,12 +36,13 @@ class ScreenRecordManager(private val context: Context) {
             "SCREEN_PERMISSION_REQUIRED: grant Screen Recording permission",
           )
 
-      val durationMs = (parseDurationMs(paramsJson) ?: 10_000).coerceIn(250, 60_000)
-      val fps = (parseFps(paramsJson) ?: 10.0).coerceIn(1.0, 60.0)
+      val params = parseJsonParamsObject(paramsJson)
+      val durationMs = (parseDurationMs(params) ?: 10_000).coerceIn(250, 60_000)
+      val fps = (parseFps(params) ?: 10.0).coerceIn(1.0, 60.0)
       val fpsInt = fps.roundToInt().coerceIn(1, 60)
-      val screenIndex = parseScreenIndex(paramsJson)
-      val includeAudio = parseIncludeAudio(paramsJson) ?: true
-      val format = parseString(paramsJson, key = "format")
+      val screenIndex = parseScreenIndex(params)
+      val includeAudio = parseIncludeAudio(params) ?: true
+      val format = parseString(params, key = "format")
       if (format != null && format.lowercase() != "mp4") {
         throw IllegalArgumentException("INVALID_REQUEST: screen format must be mp4")
       }
@@ -141,55 +143,19 @@ class ScreenRecordManager(private val context: Context) {
     }
   }
 
-  private fun parseDurationMs(paramsJson: String?): Int? =
-    parseNumber(paramsJson, key = "durationMs")?.toIntOrNull()
+  private fun parseDurationMs(params: JsonObject?): Int? =
+    parseJsonInt(params, "durationMs")
 
-  private fun parseFps(paramsJson: String?): Double? =
-    parseNumber(paramsJson, key = "fps")?.toDoubleOrNull()
+  private fun parseFps(params: JsonObject?): Double? =
+    parseJsonDouble(params, "fps")
 
-  private fun parseScreenIndex(paramsJson: String?): Int? =
-    parseNumber(paramsJson, key = "screenIndex")?.toIntOrNull()
+  private fun parseScreenIndex(params: JsonObject?): Int? =
+    parseJsonInt(params, "screenIndex")
 
-  private fun parseIncludeAudio(paramsJson: String?): Boolean? {
-    val raw = paramsJson ?: return null
-    val key = "\"includeAudio\""
-    val idx = raw.indexOf(key)
-    if (idx < 0) return null
-    val colon = raw.indexOf(':', idx + key.length)
-    if (colon < 0) return null
-    val tail = raw.substring(colon + 1).trimStart()
-    return when {
-      tail.startsWith("true") -> true
-      tail.startsWith("false") -> false
-      else -> null
-    }
-  }
+  private fun parseIncludeAudio(params: JsonObject?): Boolean? = parseJsonBooleanFlag(params, "includeAudio")
 
-  private fun parseNumber(paramsJson: String?, key: String): String? {
-    val raw = paramsJson ?: return null
-    val needle = "\"$key\""
-    val idx = raw.indexOf(needle)
-    if (idx < 0) return null
-    val colon = raw.indexOf(':', idx + needle.length)
-    if (colon < 0) return null
-    val tail = raw.substring(colon + 1).trimStart()
-    return tail.takeWhile { it.isDigit() || it == '.' || it == '-' }
-  }
-
-  private fun parseString(paramsJson: String?, key: String): String? {
-    val raw = paramsJson ?: return null
-    val needle = "\"$key\""
-    val idx = raw.indexOf(needle)
-    if (idx < 0) return null
-    val colon = raw.indexOf(':', idx + needle.length)
-    if (colon < 0) return null
-    val tail = raw.substring(colon + 1).trimStart()
-    if (!tail.startsWith('\"')) return null
-    val rest = tail.drop(1)
-    val end = rest.indexOf('\"')
-    if (end < 0) return null
-    return rest.substring(0, end)
-  }
+  private fun parseString(params: JsonObject?, key: String): String? =
+    parseJsonString(params, key)
 
   private fun estimateBitrate(width: Int, height: Int, fps: Int): Int {
     val pixels = width.toLong() * height.toLong()

@@ -11,7 +11,8 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
   type ChannelSetupInput,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/nextcloud-talk";
+import { waitForAbortSignal } from "../../../src/infra/abort-signal.js";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
@@ -261,18 +262,20 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     chunker: (text, limit) => getNextcloudTalkRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
-    sendText: async ({ to, text, accountId, replyToId }) => {
+    sendText: async ({ cfg, to, text, accountId, replyToId }) => {
       const result = await sendMessageNextcloudTalk(to, text, {
         accountId: accountId ?? undefined,
         replyTo: replyToId ?? undefined,
+        cfg: cfg as CoreConfig,
       });
       return { channel: "nextcloud-talk", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) => {
       const messageWithMedia = mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text;
       const result = await sendMessageNextcloudTalk(to, messageWithMedia, {
         accountId: accountId ?? undefined,
         replyTo: replyToId ?? undefined,
+        cfg: cfg as CoreConfig,
       });
       return { channel: "nextcloud-talk", ...result };
     },
@@ -332,7 +335,9 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
         statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
       });
 
-      return { stop };
+      // Keep webhook channels pending for the account lifecycle.
+      await waitForAbortSignal(ctx.abortSignal);
+      stop();
     },
     logoutAccount: async ({ accountId, cfg }) => {
       const nextCfg = { ...cfg } as OpenClawConfig;

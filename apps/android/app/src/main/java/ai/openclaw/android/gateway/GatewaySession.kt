@@ -55,7 +55,7 @@ data class GatewayConnectOptions(
 class GatewaySession(
   private val scope: CoroutineScope,
   private val identityStore: DeviceIdentityStore,
-  private val deviceAuthStore: DeviceAuthStore,
+  private val deviceAuthStore: DeviceAuthTokenStore,
   private val onConnected: (serverName: String?, remoteAddress: String?, mainSessionKey: String?) -> Unit,
   private val onDisconnected: (message: String) -> Unit,
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
@@ -173,6 +173,47 @@ class GatewaySession(
     throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
   }
 
+  suspend fun refreshNodeCanvasCapability(timeoutMs: Long = 8_000): Boolean {
+    val conn = currentConnection ?: return false
+    val response =
+      try {
+        conn.request(
+          "node.canvas.capability.refresh",
+          params = buildJsonObject {},
+          timeoutMs = timeoutMs,
+        )
+      } catch (err: Throwable) {
+        Log.w("OpenClawGateway", "node.canvas.capability.refresh failed: ${err.message ?: err::class.java.simpleName}")
+        return false
+      }
+    if (!response.ok) {
+      val err = response.error
+      Log.w(
+        "OpenClawGateway",
+        "node.canvas.capability.refresh rejected: ${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}",
+      )
+      return false
+    }
+    val payloadObj = response.payloadJson?.let(::parseJsonOrNull)?.asObjectOrNull()
+    val refreshedCapability = payloadObj?.get("canvasCapability").asStringOrNull()?.trim().orEmpty()
+    if (refreshedCapability.isEmpty()) {
+      Log.w("OpenClawGateway", "node.canvas.capability.refresh missing canvasCapability")
+      return false
+    }
+    val scopedCanvasHostUrl = canvasHostUrl?.trim().orEmpty()
+    if (scopedCanvasHostUrl.isEmpty()) {
+      Log.w("OpenClawGateway", "node.canvas.capability.refresh missing local canvasHostUrl")
+      return false
+    }
+    val refreshedUrl = replaceCanvasCapabilityInScopedHostUrl(scopedCanvasHostUrl, refreshedCapability)
+    if (refreshedUrl == null) {
+      Log.w("OpenClawGateway", "node.canvas.capability.refresh unable to rewrite scoped canvas URL")
+      return false
+    }
+    canvasHostUrl = refreshedUrl
+    return true
+  }
+
   private data class RpcResponse(val id: String, val ok: Boolean, val payloadJson: String?, val error: ErrorShape?)
 
   private inner class Connection(
@@ -200,9 +241,7 @@ class GatewaySession(
     suspend fun connect() {
       val scheme = if (tls != null) "wss" else "ws"
       val url = "$scheme://${endpoint.host}:${endpoint.port}"
-      val httpScheme = if (tls != null) "https" else "http"
-      val origin = "$httpScheme://${endpoint.host}:${endpoint.port}"
-      val request = Request.Builder().url(url).header("Origin", origin).build()
+      val request = Request.Builder().url(url).build()
       socket = client.newWebSocket(request, Listener())
       try {
         connectDeferred.await()
@@ -374,7 +413,7 @@ class GatewaySession(
 
       val signedAtMs = System.currentTimeMillis()
       val payload =
-        buildDeviceAuthPayload(
+        DeviceAuthPayload.buildV3(
           deviceId = identity.deviceId,
           clientId = client.id,
           clientMode = client.mode,
@@ -383,6 +422,8 @@ class GatewaySession(
           signedAtMs = signedAtMs,
           token = if (authToken.isNotEmpty()) authToken else null,
           nonce = connectNonce,
+          platform = client.platform,
+          deviceFamily = client.deviceFamily,
         )
       val signature = identityStore.signPayload(payload, identity)
       val publicKey = identityStore.publicKeyBase64Url(identity)
@@ -501,11 +542,16 @@ class GatewaySession(
           } catch (err: Throwable) {
             invokeErrorFromThrowable(err)
           }
-        sendInvokeResult(id, nodeId, result)
+        sendInvokeResult(id, nodeId, result, timeoutMs)
       }
     }
 
-    private suspend fun sendInvokeResult(id: String, nodeId: String, result: InvokeResult) {
+    private suspend fun sendInvokeResult(
+      id: String,
+      nodeId: String,
+      result: InvokeResult,
+      invokeTimeoutMs: Long?,
+    ) {
       val parsedPayload = result.payloadJson?.let { parseJsonOrNull(it) }
       val params =
         buildJsonObject {
@@ -527,24 +573,20 @@ class GatewaySession(
             )
           }
         }
+      val ackTimeoutMs = resolveInvokeResultAckTimeoutMs(invokeTimeoutMs)
       try {
-        request("node.invoke.result", params, timeoutMs = 15_000)
+        request("node.invoke.result", params, timeoutMs = ackTimeoutMs)
       } catch (err: Throwable) {
-        Log.w(loggerTag, "node.invoke.result failed: ${err.message ?: err::class.java.simpleName}")
+        Log.w(
+          loggerTag,
+          "node.invoke.result failed (ackTimeoutMs=$ackTimeoutMs): ${err.message ?: err::class.java.simpleName}",
+        )
       }
     }
 
     private fun invokeErrorFromThrowable(err: Throwable): InvokeResult {
-      val msg = err.message?.trim().takeIf { !it.isNullOrEmpty() } ?: err::class.java.simpleName
-      val parts = msg.split(":", limit = 2)
-      if (parts.size == 2) {
-        val code = parts[0].trim()
-        val rest = parts[1].trim()
-        if (code.isNotEmpty() && code.all { it.isUpperCase() || it == '_' }) {
-          return InvokeResult.error(code = code, message = rest.ifEmpty { msg })
-        }
-      }
-      return InvokeResult.error(code = "UNAVAILABLE", message = msg)
+      val parsed = parseInvokeErrorFromThrowable(err, fallbackMessage = err::class.java.simpleName)
+      return InvokeResult.error(code = parsed.code, message = parsed.message)
     }
 
     private fun failPending() {
@@ -590,33 +632,6 @@ class GatewaySession(
       canvasHostUrl = null
       mainSessionKey = null
     }
-  }
-
-  private fun buildDeviceAuthPayload(
-    deviceId: String,
-    clientId: String,
-    clientMode: String,
-    role: String,
-    scopes: List<String>,
-    signedAtMs: Long,
-    token: String?,
-    nonce: String,
-  ): String {
-    val scopeString = scopes.joinToString(",")
-    val authToken = token.orEmpty()
-    val parts =
-      mutableListOf(
-        "v2",
-        deviceId,
-        clientId,
-        clientMode,
-        role,
-        scopeString,
-        signedAtMs.toString(),
-        authToken,
-        nonce,
-      )
-    return parts.joinToString("|")
   }
 
   private fun normalizeCanvasHostUrl(
@@ -721,4 +736,25 @@ private fun parseJsonOrNull(payload: String): JsonElement? {
   } catch (_: Throwable) {
     null
   }
+}
+
+internal fun replaceCanvasCapabilityInScopedHostUrl(
+  scopedUrl: String,
+  capability: String,
+): String? {
+  val marker = "/__openclaw__/cap/"
+  val markerStart = scopedUrl.indexOf(marker)
+  if (markerStart < 0) return null
+  val capabilityStart = markerStart + marker.length
+  val slashEnd = scopedUrl.indexOf("/", capabilityStart).takeIf { it >= 0 }
+  val queryEnd = scopedUrl.indexOf("?", capabilityStart).takeIf { it >= 0 }
+  val fragmentEnd = scopedUrl.indexOf("#", capabilityStart).takeIf { it >= 0 }
+  val capabilityEnd = listOfNotNull(slashEnd, queryEnd, fragmentEnd).minOrNull() ?: scopedUrl.length
+  if (capabilityEnd <= capabilityStart) return null
+  return scopedUrl.substring(0, capabilityStart) + capability + scopedUrl.substring(capabilityEnd)
+}
+
+internal fun resolveInvokeResultAckTimeoutMs(invokeTimeoutMs: Long?): Long {
+  val normalized = invokeTimeoutMs?.takeIf { it > 0L } ?: 15_000L
+  return normalized.coerceIn(15_000L, 120_000L)
 }

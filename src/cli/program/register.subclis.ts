@@ -261,6 +261,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "secrets",
+    description: "Secrets runtime reload controls",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../secrets-cli.js");
+      mod.registerSecretsCli(program);
+    },
+  },
+  {
     name: "skills",
     description: "List and inspect available skills",
     hasSubcommands: true,

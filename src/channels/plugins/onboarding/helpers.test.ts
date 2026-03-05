@@ -19,6 +19,7 @@ import {
   promptLegacyChannelAllowFrom,
   parseOnboardingEntriesWithParser,
   promptParsedAllowFromForScopedChannel,
+  promptSingleChannelSecretInput,
   promptSingleChannelToken,
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
@@ -287,6 +288,96 @@ describe("promptSingleChannelToken", () => {
   });
 });
 
+describe("promptSingleChannelSecretInput", () => {
+  it("returns use-env action when plaintext mode selects env fallback", async () => {
+    const prompter = {
+      select: vi.fn(async () => "plaintext"),
+      confirm: vi.fn(async () => true),
+      text: vi.fn(async () => ""),
+      note: vi.fn(async () => undefined),
+    };
+
+    const result = await promptSingleChannelSecretInput({
+      cfg: {},
+      // oxlint-disable-next-line typescript/no-explicit-any
+      prompter: prompter as any,
+      providerHint: "telegram",
+      credentialLabel: "Telegram bot token",
+      accountConfigured: false,
+      canUseEnv: true,
+      hasConfigToken: false,
+      envPrompt: "use env",
+      keepPrompt: "keep",
+      inputPrompt: "token",
+      preferredEnvVar: "TELEGRAM_BOT_TOKEN",
+    });
+
+    expect(result).toEqual({ action: "use-env" });
+  });
+
+  it("returns ref + resolved value when external env ref is selected", async () => {
+    process.env.OPENCLAW_TEST_TOKEN = "secret-token";
+    const prompter = {
+      select: vi.fn().mockResolvedValueOnce("ref").mockResolvedValueOnce("env"),
+      confirm: vi.fn(async () => false),
+      text: vi.fn(async () => "OPENCLAW_TEST_TOKEN"),
+      note: vi.fn(async () => undefined),
+    };
+
+    const result = await promptSingleChannelSecretInput({
+      cfg: {},
+      // oxlint-disable-next-line typescript/no-explicit-any
+      prompter: prompter as any,
+      providerHint: "discord",
+      credentialLabel: "Discord bot token",
+      accountConfigured: false,
+      canUseEnv: false,
+      hasConfigToken: false,
+      envPrompt: "use env",
+      keepPrompt: "keep",
+      inputPrompt: "token",
+      preferredEnvVar: "OPENCLAW_TEST_TOKEN",
+    });
+
+    expect(result).toEqual({
+      action: "set",
+      value: {
+        source: "env",
+        provider: "default",
+        id: "OPENCLAW_TEST_TOKEN",
+      },
+      resolvedValue: "secret-token",
+    });
+  });
+
+  it("returns keep action when ref mode keeps an existing configured ref", async () => {
+    const prompter = {
+      select: vi.fn(async () => "ref"),
+      confirm: vi.fn(async () => true),
+      text: vi.fn(async () => ""),
+      note: vi.fn(async () => undefined),
+    };
+
+    const result = await promptSingleChannelSecretInput({
+      cfg: {},
+      // oxlint-disable-next-line typescript/no-explicit-any
+      prompter: prompter as any,
+      providerHint: "telegram",
+      credentialLabel: "Telegram bot token",
+      accountConfigured: true,
+      canUseEnv: false,
+      hasConfigToken: true,
+      envPrompt: "use env",
+      keepPrompt: "keep",
+      inputPrompt: "token",
+      preferredEnvVar: "TELEGRAM_BOT_TOKEN",
+    });
+
+    expect(result).toEqual({ action: "keep" });
+    expect(prompter.text).not.toHaveBeenCalled();
+  });
+});
+
 describe("applySingleTokenPromptResult", () => {
   it("writes env selection as an empty patch on target account", () => {
     const next = applySingleTokenPromptResult({
@@ -552,6 +643,39 @@ describe("patchChannelConfigForAccount", () => {
     expect(next.channels?.slack?.accounts?.work?.enabled).toBe(false);
     expect(next.channels?.slack?.accounts?.work?.botToken).toBe("new-bot");
     expect(next.channels?.slack?.accounts?.work?.appToken).toBe("new-app");
+  });
+
+  it("moves single-account config into default account when patching non-default", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          enabled: true,
+          botToken: "legacy-token",
+          allowFrom: ["100"],
+          groupPolicy: "allowlist",
+          streaming: "partial",
+        },
+      },
+    };
+
+    const next = patchChannelConfigForAccount({
+      cfg,
+      channel: "telegram",
+      accountId: "work",
+      patch: { botToken: "work-token" },
+    });
+
+    expect(next.channels?.telegram?.accounts?.default).toEqual({
+      botToken: "legacy-token",
+      allowFrom: ["100"],
+      groupPolicy: "allowlist",
+      streaming: "partial",
+    });
+    expect(next.channels?.telegram?.botToken).toBeUndefined();
+    expect(next.channels?.telegram?.allowFrom).toBeUndefined();
+    expect(next.channels?.telegram?.groupPolicy).toBeUndefined();
+    expect(next.channels?.telegram?.streaming).toBeUndefined();
+    expect(next.channels?.telegram?.accounts?.work?.botToken).toBe("work-token");
   });
 
   it("supports imessage/signal account-scoped channel patches", () => {
