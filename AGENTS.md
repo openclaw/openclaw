@@ -169,6 +169,21 @@
 - Signal: "update fly" => `fly ssh console -a flawd-bot -C "bash -lc 'cd /data/clawd/openclaw && git pull --rebase origin main'"` then `fly machines restart e825232f34d058 -a flawd-bot`.
 - When working on a GitHub Issue or PR, print the full URL at the end of the task.
 - When answering questions, respond with high-confidence answers only: verify in code; do not guess.
+- Route canonicalization (`chat.send` + cron) rules:
+  - Canonical helpers live in `src/infra/outbound/targets.ts`: `resolveSessionDeliveryTarget(...)` and `resolveSessionRouteDecision(...)`.
+  - Handler contract: any outbound/origin route decision must go through canonical helpers before dispatch (gateway `chat.send`, cron delivery target/dispatch, and follow-up announce paths).
+  - Do **not** derive outbound/origin routes directly from `entry.deliveryContext` / `entry.last*` at call-sites.
+  - Do **not** reimplement main-alias detection, turn-source precedence, or fallback semantics in handlers; those policies belong only in canonical helpers.
+  - Intent contract must remain consistent: `internal_only` blocks external route usage, `external_preferred` may degrade to internal when unresolved, and `external_required` must fail explicitly when unresolved.
+  - Main-session safety contract: when `failClosedMainSessionLastRoute=true`, main/mainKey aliases must not inherit mutable session `last*` route fields unless explicit turn-source or explicit target is provided.
+  - Channel-scoped sessions may still inherit compatible route metadata; plugin/channel-specific normalization stays in `resolveOutboundTarget(...)` / plugin outbound docking, not in caller-specific route derivation branches.
+  - Required parity tests for any route-path change:
+    - main alias fail-closed behavior
+    - channel-scoped inheritance behavior
+    - turn-source precedence over mutable `last*`
+    - `external_required` unresolved failure path
+    - `external_preferred` unresolved fallback path
+    - cron strict (`bestEffort=false`) vs best-effort route-resolution behavior
 - Never update the Carbon dependency.
 - Any dependency with `pnpm.patchedDependencies` must use an exact version (no `^`/`~`).
 - Patching dependencies (pnpm patches, overrides, or vendored changes) requires explicit approval; do not do this by default.
