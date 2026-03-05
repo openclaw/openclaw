@@ -232,6 +232,58 @@ describe("resolveGatewayRuntimeConfig", () => {
     });
   });
 
+  describe("tailscale/bind compatibility", () => {
+    it("rejects tailscale serve with non-loopback bind", async () => {
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: {
+              bind: "lan" as const,
+              auth: TOKEN_AUTH,
+              tailscale: { mode: "serve" as const },
+              controlUi: { allowedOrigins: ["https://control.example.com"] },
+            },
+          },
+          port: 18789,
+        }),
+      ).rejects.toThrow("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
+    });
+
+    it("rejects tailscale funnel with non-loopback bind", async () => {
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: {
+              bind: "lan" as const,
+              auth: {
+                mode: "password" as const,
+                password: "test-password",
+              },
+              tailscale: { mode: "funnel" as const },
+              controlUi: { allowedOrigins: ["https://control.example.com"] },
+            },
+          },
+          port: 18789,
+        }),
+      ).rejects.toThrow("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
+    });
+
+    it("allows tailscale serve with loopback bind", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback" as const,
+            auth: TOKEN_AUTH,
+            tailscale: { mode: "serve" as const },
+          },
+        },
+        port: 18789,
+      });
+      expect(result.tailscaleMode).toBe("serve");
+      expect(result.bindHost).toBe("127.0.0.1");
+    });
+  });
+
   describe("HTTP security headers", () => {
     it("resolves strict transport security header from config", async () => {
       const result = await resolveGatewayRuntimeConfig({
