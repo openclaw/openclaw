@@ -36,7 +36,7 @@ import { Composition } from "remotion";
   fps={30}
   width={1920}
   height={1080}
-/>
+/>;
 ```
 
 ### Animations
@@ -53,6 +53,7 @@ const opacity = interpolate(frame, [0, 30], [0, 1]);
 ## Rule Categories
 
 ### Core
+
 - [rules/compositions.md](rules/compositions.md) - Compositions, Stills, Folders
 - [rules/animations.md](rules/animations.md) - Animation fundamentals
 - [rules/timing.md](rules/timing.md) - interpolate, spring, easing
@@ -61,6 +62,7 @@ const opacity = interpolate(frame, [0, 30], [0, 1]);
 - [rules/trimming.md](rules/trimming.md) - Trimming patterns
 
 ### Media
+
 - [rules/videos.md](rules/videos.md) - Video embedding
 - [rules/audio.md](rules/audio.md) - Audio handling
 - [rules/images.md](rules/images.md) - Image components
@@ -69,6 +71,7 @@ const opacity = interpolate(frame, [0, 30], [0, 1]);
 - [rules/lottie.md](rules/lottie.md) - Lottie animations
 
 ### Text & Captions
+
 - [rules/text-animations.md](rules/text-animations.md) - Typography animations
 - [rules/display-captions.md](rules/display-captions.md) - TikTok-style captions
 - [rules/subtitles.md](rules/subtitles.md) - Subtitle formats
@@ -76,6 +79,7 @@ const opacity = interpolate(frame, [0, 30], [0, 1]);
 - [rules/transcribe-captions.md](rules/transcribe-captions.md) - Transcribe audio
 
 ### Advanced
+
 - [rules/3d.md](rules/3d.md) - Three.js integration
 - [rules/charts.md](rules/charts.md) - Data visualization
 - [rules/maps.md](rules/maps.md) - Mapbox maps
@@ -86,6 +90,7 @@ const opacity = interpolate(frame, [0, 30], [0, 1]);
 - [rules/transparent-videos.md](rules/transparent-videos.md) - Alpha channel
 
 ### Utility
+
 - [rules/assets.md](rules/assets.md) - staticFile usage
 - [rules/tailwind.md](rules/tailwind.md) - TailwindCSS
 - [rules/ffmpeg.md](rules/ffmpeg.md) - FFmpeg commands
