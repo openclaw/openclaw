@@ -55,7 +55,7 @@ const DEFAULT_PDF_OCR_MODE = "auto";
 type PdfOcrMode = "auto" | "off" | "on";
 
 function resolvePdfOcrMode(cfg?: OpenClawConfig): PdfOcrMode {
-  const raw = (cfg?.agents?.defaults as Record<string, unknown> | undefined)?.pdfOcrMode;
+  const raw = cfg?.agents?.defaults?.pdfOcrMode;
   if (raw === "off" || raw === "on" || raw === "auto") {
     return raw;
   }
