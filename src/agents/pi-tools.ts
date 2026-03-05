@@ -504,6 +504,16 @@ export function createOpenClawCodingTools(options?: {
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForMessageProvider, senderIsOwner);
+  if (!senderIsOwner) {
+    const stripped = toolsForMessageProvider.filter((t) => !toolsByAuthorization.includes(t));
+    if (stripped.length > 0) {
+      logWarn(
+        `Stripped ${stripped.length} owner-only tool(s) (${stripped.map((t) => t.name).join(", ")}) ` +
+          `because senderIsOwner=false. To fix, set commands.ownerAllowFrom in your config. ` +
+          `See https://github.com/openclaw/openclaw/issues/25344`,
+      );
+    }
+  }
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),
