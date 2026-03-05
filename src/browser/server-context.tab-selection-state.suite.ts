@@ -54,6 +54,34 @@ function createOldTabCleanupFetchMock(
   });
 }
 
+function createManagedTabListFetchMock(params: {
+  existingTabs: ReturnType<typeof makeManagedTabsWithNew>;
+  onClose: (url: string) => Response | Promise<Response>;
+}): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: unknown) => {
+    const value = String(url);
+    if (value.includes("/json/list")) {
+      return { ok: true, json: async () => params.existingTabs } as unknown as Response;
+    }
+    if (value.includes("/json/close/")) {
+      return await params.onClose(value);
+    }
+    throw new Error(`unexpected fetch: ${value}`);
+  });
+}
+
+async function openManagedTabWithRunningProfile(params: {
+  fetchMock: ReturnType<typeof vi.fn>;
+  url?: string;
+}) {
+  global.fetch = withFetchPreconnect(params.fetchMock);
+  const state = makeState("openclaw");
+  seedRunningProfileState(state);
+  const ctx = createBrowserRouteContext({ getState: () => state });
+  const openclaw = ctx.forProfile("openclaw");
+  return await openclaw.openTab(params.url ?? "http://127.0.0.1:3009");
+}
+
 describe("browser server-context tab selection state", () => {
   it("updates lastTargetId when openTab is created via CDP", async () => {
     const createTargetViaCdp = vi
@@ -99,13 +127,7 @@ describe("browser server-context tab selection state", () => {
     const existingTabs = makeManagedTabsWithNew();
     const fetchMock = createOldTabCleanupFetchMock(existingTabs);
 
-    global.fetch = withFetchPreconnect(fetchMock);
-    const state = makeState("openclaw");
-    seedRunningProfileState(state);
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    const openclaw = ctx.forProfile("openclaw");
-
-    const opened = await openclaw.openTab("http://127.0.0.1:3009");
+    const opened = await openManagedTabWithRunningProfile({ fetchMock });
     expect(opened.targetId).toBe("NEW");
     await expectOldManagedTabClose(fetchMock);
   });
@@ -115,13 +137,7 @@ describe("browser server-context tab selection state", () => {
     const existingTabs = makeManagedTabsWithNew({ newFirst: true });
     const fetchMock = createOldTabCleanupFetchMock(existingTabs, { rejectNewTabClose: true });
 
-    global.fetch = withFetchPreconnect(fetchMock);
-    const state = makeState("openclaw");
-    seedRunningProfileState(state);
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    const openclaw = ctx.forProfile("openclaw");
-
-    const opened = await openclaw.openTab("http://127.0.0.1:3009");
+    const opened = await openManagedTabWithRunningProfile({ fetchMock });
     expect(opened.targetId).toBe("NEW");
     await expectOldManagedTabClose(fetchMock);
     expect(fetchMock).not.toHaveBeenCalledWith(
@@ -170,16 +186,11 @@ describe("browser server-context tab selection state", () => {
   it("does not run managed tab cleanup in attachOnly mode", async () => {
     vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
     const existingTabs = makeManagedTabsWithNew();
-
-    const fetchMock = vi.fn(async (url: unknown) => {
-      const value = String(url);
-      if (value.includes("/json/list")) {
-        return { ok: true, json: async () => existingTabs } as unknown as Response;
-      }
-      if (value.includes("/json/close/")) {
+    const fetchMock = createManagedTabListFetchMock({
+      existingTabs,
+      onClose: () => {
         throw new Error("should not close tabs in attachOnly mode");
-      }
-      throw new Error(`unexpected fetch: ${value}`);
+      },
     });
 
     global.fetch = withFetchPreconnect(fetchMock);
@@ -199,26 +210,18 @@ describe("browser server-context tab selection state", () => {
   it("does not block openTab on slow best-effort cleanup closes", async () => {
     vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
     const existingTabs = makeManagedTabsWithNew();
-
-    const fetchMock = vi.fn(async (url: unknown) => {
-      const value = String(url);
-      if (value.includes("/json/list")) {
-        return { ok: true, json: async () => existingTabs } as unknown as Response;
-      }
-      if (value.includes("/json/close/OLD1")) {
-        return new Promise<Response>(() => {});
-      }
-      throw new Error(`unexpected fetch: ${value}`);
+    const fetchMock = createManagedTabListFetchMock({
+      existingTabs,
+      onClose: (url) => {
+        if (url.includes("/json/close/OLD1")) {
+          return new Promise<Response>(() => {});
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      },
     });
 
-    global.fetch = withFetchPreconnect(fetchMock);
-    const state = makeState("openclaw");
-    seedRunningProfileState(state);
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    const openclaw = ctx.forProfile("openclaw");
-
     const opened = await Promise.race([
-      openclaw.openTab("http://127.0.0.1:3009"),
+      openManagedTabWithRunningProfile({ fetchMock }),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("openTab timed out waiting for cleanup")), 300),
       ),

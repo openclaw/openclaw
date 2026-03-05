@@ -7,6 +7,7 @@ import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./
 import type { DiscordChannelInfo } from "./message-utils.js";
 import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
+import type { ResolvedSystemAccess } from "../system-access-resolver.js";
 
 export type { DiscordSenderIdentity } from "./sender-identity.js";
 import type { DiscordThreadChannel } from "./threading.js";
@@ -48,6 +49,7 @@ export type DiscordMessagePreflightContext = {
   isGroupDm: boolean;
 
   commandAuthorized: boolean;
+  systemAccess: ResolvedSystemAccess;  // RBAC system access level
   baseText: string;
   messageText: string;
   wasMentioned: boolean;

@@ -43,8 +43,13 @@ type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
 type DiscordReactionListenerParams = {
   cfg: LoadedConfig;
-  accountId: string;
   runtime: RuntimeEnv;
+  logger: Logger;
+  onEvent?: () => void;
+} & DiscordReactionRoutingParams;
+
+type DiscordReactionRoutingParams = {
+  accountId: string;
   botUserId?: string;
   dmEnabled: boolean;
   groupDmEnabled: boolean;
@@ -54,8 +59,6 @@ type DiscordReactionListenerParams = {
   groupPolicy: "open" | "allowlist" | "disabled";
   allowNameMatching: boolean;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
-  logger: Logger;
-  onEvent?: () => void;
 };
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
@@ -315,23 +318,15 @@ async function authorizeDiscordReactionIngress(
   return { allowed: true };
 }
 
-async function handleDiscordReactionEvent(params: {
-  data: DiscordReactionEvent;
-  client: Client;
-  action: "added" | "removed";
-  cfg: LoadedConfig;
-  accountId: string;
-  botUserId?: string;
-  dmEnabled: boolean;
-  groupDmEnabled: boolean;
-  groupDmChannels: string[];
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  allowFrom: string[];
-  groupPolicy: "open" | "allowlist" | "disabled";
-  allowNameMatching: boolean;
-  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
-  logger: Logger;
-}) {
+async function handleDiscordReactionEvent(
+  params: {
+    data: DiscordReactionEvent;
+    client: Client;
+    action: "added" | "removed";
+    cfg: LoadedConfig;
+    logger: Logger;
+  } & DiscordReactionRoutingParams,
+) {
   try {
     const { data, client, action, botUserId, guildEntries } = params;
     if (!("user" in data)) {

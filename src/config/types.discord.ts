@@ -1,4 +1,5 @@
 import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
+import type { SystemAccessConfig } from "../discord/system-access-types.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -62,6 +63,8 @@ export type DiscordGuildEntry = {
   users?: string[];
   /** Optional allowlist for guild senders by role ID. */
   roles?: string[];
+  /** System access control configuration (RBAC with access levels 0-4). */
+  systemAccess?: SystemAccessConfig;
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 

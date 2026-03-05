@@ -368,6 +368,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     Timestamp: resolveTimestampMs(message.timestamp),
     ...mediaPayload,
     CommandAuthorized: commandAuthorized,
+    SystemAccessLevel: ctx.systemAccess.level,
+    SystemAccessIsOwner: ctx.systemAccess.isOwner,
     CommandSource: "text" as const,
     // Originating channel for reply routing.
     OriginatingChannel: "discord" as const,

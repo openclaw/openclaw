@@ -156,8 +156,8 @@ async function resolveStickerMedia(params: {
   }
 
   try {
-    const file = await ctx.getFile();
-    if (!file.file_path) {
+    const file = await resolveTelegramFileWithRetry(ctx);
+    if (!file?.file_path) {
       logVerbose("telegram: getFile returned no file_path for sticker");
       return null;
     }

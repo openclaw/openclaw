@@ -34,6 +34,8 @@ export function buildCommandContext(params: {
     channelId: auth.providerId,
     ownerList: auth.ownerList,
     senderIsOwner: auth.senderIsOwner,
+    systemAccessLevel: auth.systemAccessLevel,
+    systemAccessIsOwner: auth.systemAccessIsOwner,
     isAuthorizedSender: auth.isAuthorizedSender,
     senderId: auth.senderId,
     abortKey,

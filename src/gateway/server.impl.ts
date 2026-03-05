@@ -18,6 +18,7 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
@@ -237,9 +238,7 @@ export async function startGatewayServer(
   if (configSnapshot.exists && !configSnapshot.valid) {
     const issues =
       configSnapshot.issues.length > 0
-        ? configSnapshot.issues
-            .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
-            .join("\n")
+        ? formatConfigIssueLines(configSnapshot.issues, "", { normalizeRoot: true }).join("\n")
         : "Unknown validation issue.";
     throw new Error(
       `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
@@ -332,9 +331,7 @@ export async function startGatewayServer(
     if (!freshSnapshot.valid) {
       const issues =
         freshSnapshot.issues.length > 0
-          ? freshSnapshot.issues
-              .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
-              .join("\n")
+          ? formatConfigIssueLines(freshSnapshot.issues, "", { normalizeRoot: true }).join("\n")
           : "Unknown validation issue.";
       throw new Error(`Invalid config at ${freshSnapshot.path}.\n${issues}`);
     }
@@ -435,6 +432,40 @@ export async function startGatewayServer(
   } = runtimeConfig;
   let hooksConfig = runtimeConfig.hooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
+
+  // Auto-configure Control UI for Tailscale Serve mode
+  if (tailscaleMode === "serve") {
+    const currentConfig = loadConfig();
+    let configModified = false;
+
+    // Check if we need to auto-enable controlUi device auth bypass
+    if (
+      !currentConfig.gateway?.controlUi?.dangerouslyDisableDeviceAuth &&
+      !currentConfig.gateway?.controlUi?.allowInsecureAuth
+    ) {
+      log.info(
+        "gateway.tailscale.mode=serve: auto-enabling Control UI device auth bypass (dangerouslyDisableDeviceAuth + allowInsecureAuth)",
+      );
+
+      // Deep clone config to modify it
+      const newConfig = JSON.parse(JSON.stringify(currentConfig)) as OpenClawConfig;
+      if (!newConfig.gateway) newConfig.gateway = {};
+      if (!newConfig.gateway.controlUi) newConfig.gateway.controlUi = {};
+
+      newConfig.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
+      newConfig.gateway.controlUi.allowInsecureAuth = true;
+
+      // Write the updated config
+      await writeConfigFile(CONFIG_PATH, newConfig);
+      configModified = true;
+    }
+
+    if (configModified) {
+      log.info(
+        "gateway.tailscale.mode=serve: config auto-updated for Tailscale Serve compatibility. Restart recommended for changes to take full effect.",
+      );
+    }
+  }
 
   // Create auth rate limiters used by connect/auth flows.
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;

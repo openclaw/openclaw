@@ -131,6 +131,8 @@ export type MsgContext = {
   Surface?: string;
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
+  SystemAccessLevel?: number;  // RBAC access level (0-4)
+  SystemAccessIsOwner?: boolean;  // Whether user is the owner
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;
   /** Gateway client scopes when the message originates from the gateway. */
@@ -159,12 +161,20 @@ export type MsgContext = {
   HookMessages?: string[];
 };
 
-export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
+export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized" | "SystemAccessLevel" | "SystemAccessIsOwner"> & {
   /**
    * Always set by finalizeInboundContext().
    * Default-deny: missing/undefined becomes false.
    */
   CommandAuthorized: boolean;
+  /**
+   * RBAC system access level (0-4). Default: 0 (Chat Only).
+   */
+  SystemAccessLevel: number;
+  /**
+   * Whether sender is the owner (Level 4+ access). Default: false.
+   */
+  SystemAccessIsOwner: boolean;
 };
 
 export type TemplateContext = MsgContext & {

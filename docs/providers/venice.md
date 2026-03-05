@@ -158,7 +158,7 @@ openclaw models list | grep venice
 | `grok-41-fast`           | Grok 4.1 Fast     | 262k             | Reasoning, vision |
 | `grok-code-fast-1`       | Grok Code Fast 1  | 262k             | Reasoning, code   |
 | `kimi-k2-thinking`       | Kimi K2 Thinking  | 262k             | Reasoning         |
-| `minimax-m21`            | MiniMax M2.1      | 202k             | Reasoning         |
+| `minimax-m21`            | MiniMax M2.5      | 202k             | Reasoning         |
 
 ## Model Discovery
 

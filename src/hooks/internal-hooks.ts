@@ -200,8 +200,23 @@ export interface InternalHookEvent {
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
 
-/** Registry of hook handlers by event key */
-const handlers = new Map<string, InternalHookHandler[]>();
+/**
+ * Registry of hook handlers by event key.
+ *
+ * Uses a globalThis singleton so that registerInternalHook and
+ * triggerInternalHook always share the same Map even when the bundler
+ * emits multiple copies of this module into separate chunks (bundle
+ * splitting). Without the singleton, handlers registered in one chunk
+ * are invisible to triggerInternalHook in another chunk, causing hooks
+ * to silently fire with zero handlers.
+ */
+const _g = globalThis as typeof globalThis & {
+  __openclaw_internal_hook_handlers__?: Map<string, InternalHookHandler[]>;
+};
+const handlers = (_g.__openclaw_internal_hook_handlers__ ??= new Map<
+  string,
+  InternalHookHandler[]
+>());
 const log = createSubsystemLogger("internal-hooks");
 
 /**
@@ -323,78 +338,111 @@ export function createInternalHookEvent(
   };
 }
 
-export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
-  if (event.type !== "agent" || event.action !== "bootstrap") {
-    return false;
-  }
-  const context = event.context as Partial<AgentBootstrapHookContext> | null;
+function isHookEventTypeAndAction(
+  event: InternalHookEvent,
+  type: InternalHookEventType,
+  action: string,
+): boolean {
+  return event.type === type && event.action === action;
+}
+
+function getHookContext<T extends Record<string, unknown>>(
+  event: InternalHookEvent,
+): Partial<T> | null {
+  const context = event.context as Partial<T> | null;
   if (!context || typeof context !== "object") {
+    return null;
+  }
+  return context;
+}
+
+function hasStringContextField<T extends Record<string, unknown>>(
+  context: Partial<T>,
+  key: keyof T,
+): boolean {
+  return typeof context[key] === "string";
+}
+
+function hasBooleanContextField<T extends Record<string, unknown>>(
+  context: Partial<T>,
+  key: keyof T,
+): boolean {
+  return typeof context[key] === "boolean";
+}
+
+export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
+  if (!isHookEventTypeAndAction(event, "agent", "bootstrap")) {
     return false;
   }
-  if (typeof context.workspaceDir !== "string") {
+  const context = getHookContext<AgentBootstrapHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  if (!hasStringContextField(context, "workspaceDir")) {
     return false;
   }
   return Array.isArray(context.bootstrapFiles);
 }
 
 export function isGatewayStartupEvent(event: InternalHookEvent): event is GatewayStartupHookEvent {
-  if (event.type !== "gateway" || event.action !== "startup") {
+  if (!isHookEventTypeAndAction(event, "gateway", "startup")) {
     return false;
   }
-  const context = event.context as GatewayStartupHookContext | null;
-  return Boolean(context && typeof context === "object");
+  return Boolean(getHookContext<GatewayStartupHookContext>(event));
 }
 
 export function isMessageReceivedEvent(
   event: InternalHookEvent,
 ): event is MessageReceivedHookEvent {
-  if (event.type !== "message" || event.action !== "received") {
+  if (!isHookEventTypeAndAction(event, "message", "received")) {
     return false;
   }
-  const context = event.context as Partial<MessageReceivedHookContext> | null;
-  if (!context || typeof context !== "object") {
+  const context = getHookContext<MessageReceivedHookContext>(event);
+  if (!context) {
     return false;
   }
-  return typeof context.from === "string" && typeof context.channelId === "string";
+  return hasStringContextField(context, "from") && hasStringContextField(context, "channelId");
 }
 
 export function isMessageSentEvent(event: InternalHookEvent): event is MessageSentHookEvent {
-  if (event.type !== "message" || event.action !== "sent") {
+  if (!isHookEventTypeAndAction(event, "message", "sent")) {
     return false;
   }
-  const context = event.context as Partial<MessageSentHookContext> | null;
-  if (!context || typeof context !== "object") {
+  const context = getHookContext<MessageSentHookContext>(event);
+  if (!context) {
     return false;
   }
   return (
-    typeof context.to === "string" &&
-    typeof context.channelId === "string" &&
-    typeof context.success === "boolean"
+    hasStringContextField(context, "to") &&
+    hasStringContextField(context, "channelId") &&
+    hasBooleanContextField(context, "success")
   );
 }
 
 export function isMessageTranscribedEvent(
   event: InternalHookEvent,
 ): event is MessageTranscribedHookEvent {
-  if (event.type !== "message" || event.action !== "transcribed") {
+  if (!isHookEventTypeAndAction(event, "message", "transcribed")) {
     return false;
   }
-  const context = event.context as Partial<MessageTranscribedHookContext> | null;
-  if (!context || typeof context !== "object") {
+  const context = getHookContext<MessageTranscribedHookContext>(event);
+  if (!context) {
     return false;
   }
-  return typeof context.transcript === "string" && typeof context.channelId === "string";
+  return (
+    hasStringContextField(context, "transcript") && hasStringContextField(context, "channelId")
+  );
 }
 
 export function isMessagePreprocessedEvent(
   event: InternalHookEvent,
 ): event is MessagePreprocessedHookEvent {
-  if (event.type !== "message" || event.action !== "preprocessed") {
+  if (!isHookEventTypeAndAction(event, "message", "preprocessed")) {
     return false;
   }
-  const context = event.context as Partial<MessagePreprocessedHookContext> | null;
-  if (!context || typeof context !== "object") {
+  const context = getHookContext<MessagePreprocessedHookContext>(event);
+  if (!context) {
     return false;
   }
-  return typeof context.channelId === "string";
+  return hasStringContextField(context, "channelId");
 }

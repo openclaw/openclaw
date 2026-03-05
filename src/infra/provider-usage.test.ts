@@ -225,7 +225,7 @@ describe("provider usage loading", () => {
             remains_time: 600,
             current_interval_total_count: 120,
             current_interval_usage_count: 30,
-            model_name: "MiniMax-M2.1",
+            model_name: "MiniMax-M2.5",
           },
         ],
       },

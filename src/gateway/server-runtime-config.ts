@@ -4,6 +4,7 @@ import type {
   GatewayTailscaleConfig,
   loadConfig,
 } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
@@ -18,6 +19,8 @@ import {
   resolveGatewayBindHost,
 } from "./net.js";
 import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
+
+const log = createSubsystemLogger("gateway");
 
 export type GatewayRuntimeConfig = {
   bindHost: string;
@@ -114,12 +117,34 @@ export async function resolveGatewayRuntimeConfig(params: {
   const canvasHostEnabled =
     process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
 
-  const trustedProxies = params.cfg.gateway?.trustedProxies ?? [];
-  const controlUiAllowedOrigins = (params.cfg.gateway?.controlUi?.allowedOrigins ?? [])
+  let trustedProxies = params.cfg.gateway?.trustedProxies ?? [];
+  let controlUiAllowedOrigins = (params.cfg.gateway?.controlUi?.allowedOrigins ?? [])
     .map((value) => value.trim())
     .filter(Boolean);
-  const dangerouslyAllowHostHeaderOriginFallback =
+  let dangerouslyAllowHostHeaderOriginFallback =
     params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
+
+  // Auto-configure settings for Tailscale Serve mode
+  if (tailscaleMode === "serve") {
+    // Automatically trust localhost proxy for Tailscale Serve
+    if (
+      !isTrustedProxyAddress("127.0.0.1", trustedProxies) &&
+      !isTrustedProxyAddress("::1", trustedProxies)
+    ) {
+      trustedProxies = [...trustedProxies, "127.0.0.1", "::1"];
+      log.info(
+        "gateway.tailscale.mode=serve: auto-added 127.0.0.1, ::1 to trustedProxies for Tailscale proxy",
+      );
+    }
+
+    // Enable host-header origin fallback if no explicit origins configured
+    if (controlUiEnabled && controlUiAllowedOrigins.length === 0) {
+      dangerouslyAllowHostHeaderOriginFallback = true;
+      log.info(
+        "gateway.tailscale.mode=serve: auto-enabled dangerouslyAllowHostHeaderOriginFallback for Control UI (no explicit origins configured)",
+      );
+    }
+  }
 
   assertGatewayAuthConfigured(resolvedAuth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
