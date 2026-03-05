@@ -614,6 +614,31 @@ Default slash command settings:
     Note: preview streaming is separate from block streaming. When block streaming is explicitly
     enabled for Discord, OpenClaw skips the preview stream to avoid double streaming.
 
+    Recommended multi-agent chat setup (progress visibility + clean final reply):
+
+```json5
+{
+  channels: {
+    discord: {
+      blockStreaming: true,
+      streamMode: "off", // legacy alias for preview streaming; keeps draft updates off
+    },
+  },
+  agents: {
+    defaults: {
+      blockStreamingBreak: "text_end",
+      verboseDefault: "on",
+    },
+  },
+}
+```
+
+    Why this pattern works:
+
+    - verbose output shows progress/tool activity while the agent runs
+    - block streaming delivers the assistant answer in cleaner chunks
+    - preview edit noise is reduced in busy multi-agent group channels
+
   </Accordion>
 
   <Accordion title="History, context, and thread behavior">
