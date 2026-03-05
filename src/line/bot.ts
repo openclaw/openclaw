@@ -8,6 +8,7 @@ import { resolveLineAccount } from "./accounts.js";
 import { createLineWebhookReplayCache, handleLineWebhookEvents } from "./bot-handlers.js";
 import type { LineInboundContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
+import type { HistoryEntry } from "../auto-reply/reply/history.js";
 import { startLineWebhook } from "./webhook.js";
 
 export interface LineBotOptions {
@@ -42,6 +43,8 @@ export function createLineBot(opts: LineBotOptions): LineBot {
       logVerbose("line: no message handler configured");
     });
   const replayCache = createLineWebhookReplayCache();
+  const groupHistories = new Map<string, HistoryEntry[]>();
+  const groupHistoryLimit = cfg.messages?.groupChat?.historyLimit;
 
   const handleWebhook = async (body: WebhookRequestBody): Promise<void> => {
     if (!body.events || body.events.length === 0) {
@@ -55,6 +58,8 @@ export function createLineBot(opts: LineBotOptions): LineBot {
       mediaMaxBytes,
       processMessage,
       replayCache,
+      groupHistories,
+      groupHistoryLimit,
     });
   };
 
