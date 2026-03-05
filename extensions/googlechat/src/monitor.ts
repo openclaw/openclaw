@@ -310,35 +310,56 @@ async function processMessageWithPipeline(params: {
     accountId: route.accountId,
   });
 
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
-    cfg: config,
-    dispatcherOptions: {
-      ...prefixOptions,
-      deliver: async (payload) => {
-        await deliverGoogleChatReply({
-          payload,
-          account,
-          spaceId,
-          runtime,
-          core,
-          config,
-          statusSink,
-          typingMessageName,
-        });
-        // Only use typing message for first delivery
-        typingMessageName = undefined;
+  try {
+    await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+      ctx: ctxPayload,
+      cfg: config,
+      dispatcherOptions: {
+        ...prefixOptions,
+        deliver: async (payload) => {
+          await deliverGoogleChatReply({
+            payload,
+            account,
+            spaceId,
+            runtime,
+            core,
+            config,
+            statusSink,
+            typingMessageName,
+            isGroup,
+          });
+          typingMessageName = undefined;
+        },
+        onError: (err, info) => {
+          runtime.error?.(
+            `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
+          );
+        },
+        onCleanup: async () => {
+          if (typingMessageName) {
+            try {
+              await deleteGoogleChatMessage({ account, messageName: typingMessageName });
+            } catch (err) {
+              runtime.error?.(`Failed deleting typing message on cleanup: ${String(err)}`);
+            }
+            typingMessageName = undefined;
+          }
+        },
       },
-      onError: (err, info) => {
-        runtime.error?.(
-          `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
-        );
+      replyOptions: {
+        onModelSelected,
       },
-    },
-    replyOptions: {
-      onModelSelected,
-    },
-  });
+    });
+  } finally {
+    if (typingMessageName) {
+      try {
+        await deleteGoogleChatMessage({ account, messageName: typingMessageName });
+      } catch (err) {
+        runtime.error?.(`Failed cleaning up typing message: ${String(err)}`);
+      }
+      typingMessageName = undefined;
+    }
+  }
 }
 
 async function downloadAttachment(
@@ -372,9 +393,12 @@ async function deliverGoogleChatReply(params: {
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
+  isGroup?: boolean;
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
     params;
+  // DMs don't support threading — passing a thread name causes API 400.
+  const thread = params.isGroup ? payload.replyToId : undefined;
   const mediaList = payload.mediaUrls?.length
     ? payload.mediaUrls
     : payload.mediaUrl
@@ -431,7 +455,7 @@ async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],
@@ -463,12 +487,27 @@ async function deliverGoogleChatReply(params: {
             account,
             space: spaceId,
             text: chunk,
-            thread: payload.replyToId,
+            thread,
           });
         }
         statusSink?.({ lastOutboundAt: Date.now() });
       } catch (err) {
-        runtime.error?.(`Google Chat message send failed: ${String(err)}`);
+        runtime.error?.(`Google Chat message send failed (chunk ${i}): ${String(err)}`);
+        // Retry without the thread reference — the most common failure is
+        // "invalid thread resource name" (400). Sending unthreaded is better
+        // than silently losing the message.
+        try {
+          await new Promise((r) => setTimeout(r, 1000));
+          await sendGoogleChatMessage({
+            account,
+            space: spaceId,
+            text: chunk,
+          });
+          statusSink?.({ lastOutboundAt: Date.now() });
+          continue;
+        } catch (retryErr) {
+          runtime.error?.(`Google Chat message retry failed (chunk ${i}): ${String(retryErr)}`);
+        }
       }
     }
   }
