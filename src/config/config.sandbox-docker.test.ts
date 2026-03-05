@@ -7,6 +7,26 @@ import {
 import { validateConfigObject } from "./config.js";
 
 describe("sandbox docker config", () => {
+  it("joins setupCommand arrays with newlines", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              setupCommand: ["apt-get update", "apt-get install -y curl"],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.docker?.setupCommand).toBe(
+        "apt-get update\napt-get install -y curl",
+      );
+    }
+  });
+
   it("accepts safe binds array in sandbox.docker config", () => {
     const res = validateConfigObject({
       agents: {

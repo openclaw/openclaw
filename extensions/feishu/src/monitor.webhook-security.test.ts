@@ -1,18 +1,9 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
-
-vi.mock("@larksuiteoapi/node-sdk", () => ({
-  adaptDefault: vi.fn(
-    () => (_req: unknown, res: { statusCode?: number; end: (s: string) => void }) => {
-      res.statusCode = 200;
-      res.end("ok");
-    },
-  ),
-}));
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
@@ -21,6 +12,32 @@ vi.mock("./probe.js", () => ({
 vi.mock("./client.js", () => ({
   createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
   createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
+}));
+
+vi.mock("./runtime.js", () => ({
+  getFeishuRuntime: () => ({
+    channel: {
+      debounce: {
+        resolveInboundDebounceMs: () => 0,
+        createInboundDebouncer: () => ({
+          enqueue: async () => {},
+          flushKey: async () => {},
+        }),
+      },
+      text: {
+        hasControlCommand: () => false,
+      },
+    },
+  }),
+}));
+
+vi.mock("@larksuiteoapi/node-sdk", () => ({
+  adaptDefault: vi.fn(
+    () => (_req: unknown, res: { statusCode?: number; end: (s: string) => void }) => {
+      res.statusCode = 200;
+      res.end("ok");
+    },
+  ),
 }));
 
 import {

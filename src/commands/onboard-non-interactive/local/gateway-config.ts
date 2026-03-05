@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { randomToken } from "../../onboard-helpers.js";
+import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 export function applyNonInteractiveGatewayConfig(params: {
@@ -49,7 +49,10 @@ export function applyNonInteractiveGatewayConfig(params: {
   }
 
   let nextConfig = params.nextConfig;
-  let gatewayToken = opts.gatewayToken?.trim() || undefined;
+  let gatewayToken =
+    normalizeGatewayTokenInput(opts.gatewayToken) ||
+    normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN) ||
+    undefined;
 
   if (authMode === "token") {
     if (!gatewayToken) {

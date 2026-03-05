@@ -8,10 +8,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
+import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookAgentContext,
-  PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -28,13 +28,13 @@ function addBeforeModelResolveHook(
   ) => PluginHookBeforeModelResolveResult | Promise<PluginHookBeforeModelResolveResult>,
   priority?: number,
 ) {
-  registry.typedHooks.push({
+  addTestHook({
+    registry,
     pluginId,
     hookName: "before_model_resolve",
-    handler,
+    handler: handler as PluginHookRegistration["handler"],
     priority,
-    source: "test",
-  } as PluginHookRegistration);
+  });
 }
 
 function addBeforePromptBuildHook(
@@ -46,36 +46,16 @@ function addBeforePromptBuildHook(
   ) => PluginHookBeforePromptBuildResult | Promise<PluginHookBeforePromptBuildResult>,
   priority?: number,
 ) {
-  registry.typedHooks.push({
+  addTestHook({
+    registry,
     pluginId,
     hookName: "before_prompt_build",
-    handler,
+    handler: handler as PluginHookRegistration["handler"],
     priority,
-    source: "test",
-  } as PluginHookRegistration);
+  });
 }
 
-function addLegacyBeforeAgentStartHook(
-  registry: PluginRegistry,
-  pluginId: string,
-  handler: () => PluginHookBeforeAgentStartResult | Promise<PluginHookBeforeAgentStartResult>,
-  priority?: number,
-) {
-  registry.typedHooks.push({
-    pluginId,
-    hookName: "before_agent_start",
-    handler,
-    priority,
-    source: "test",
-  } as PluginHookRegistration);
-}
-
-const stubCtx: PluginHookAgentContext = {
-  agentId: "test-agent",
-  sessionKey: "sk",
-  sessionId: "sid",
-  workspaceDir: "/tmp",
-};
+const stubCtx: PluginHookAgentContext = TEST_PLUGIN_AGENT_CTX;
 
 describe("model override pipeline wiring", () => {
   let registry: PluginRegistry;
@@ -109,10 +89,15 @@ describe("model override pipeline wiring", () => {
         modelOverride: "llama3.3:8b",
         providerOverride: "ollama",
       }));
-      addLegacyBeforeAgentStartHook(registry, "legacy-hook", () => ({
-        modelOverride: "gpt-4o",
-        providerOverride: "openai",
-      }));
+      addTestHook({
+        registry,
+        pluginId: "legacy-hook",
+        hookName: "before_agent_start",
+        handler: (() => ({
+          modelOverride: "gpt-4o",
+          providerOverride: "openai",
+        })) as PluginHookRegistration["handler"],
+      });
 
       const runner = createHookRunner(registry);
       const explicit = await runner.runBeforeModelResolve({ prompt: "sensitive" }, stubCtx);
@@ -151,9 +136,14 @@ describe("model override pipeline wiring", () => {
       addBeforePromptBuildHook(registry, "new-hook", () => ({
         prependContext: "new context",
       }));
-      addLegacyBeforeAgentStartHook(registry, "legacy-hook", () => ({
-        prependContext: "legacy context",
-      }));
+      addTestHook({
+        registry,
+        pluginId: "legacy-hook",
+        hookName: "before_agent_start",
+        handler: (() => ({
+          prependContext: "legacy context",
+        })) as PluginHookRegistration["handler"],
+      });
 
       const runner = createHookRunner(registry);
       const promptBuild = await runner.runBeforePromptBuild(
@@ -207,7 +197,12 @@ describe("model override pipeline wiring", () => {
 
       addBeforeModelResolveHook(registry, "plugin-a", () => ({}));
       addBeforePromptBuildHook(registry, "plugin-b", () => ({}));
-      addLegacyBeforeAgentStartHook(registry, "plugin-c", () => ({}));
+      addTestHook({
+        registry,
+        pluginId: "plugin-c",
+        hookName: "before_agent_start",
+        handler: (() => ({})) as PluginHookRegistration["handler"],
+      });
 
       const runner2 = createHookRunner(registry);
       expect(runner2.hasHooks("before_model_resolve")).toBe(true);

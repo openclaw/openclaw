@@ -245,4 +245,30 @@ describe("cron run log", () => {
       expect(getPendingCronRunLogWriteCountForTests()).toBe(0);
     });
   });
+
+  it("read drains pending fire-and-forget writes", async () => {
+    await withRunLogDir("openclaw-cron-log-drain-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-drain.jsonl");
+
+      // Fire-and-forget write (simulates the `void appendCronRunLog(...)` pattern
+      // in server-cron.ts). Do NOT await.
+      const writePromise = appendCronRunLog(logPath, {
+        ts: 42,
+        jobId: "job-drain",
+        action: "finished",
+        status: "ok",
+        summary: "drain-test",
+      });
+      void writePromise.catch(() => undefined);
+
+      // Read should see the entry because it drains pending writes.
+      const entries = await readCronRunLogEntries(logPath, { limit: 10 });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.ts).toBe(42);
+      expect(entries[0]?.summary).toBe("drain-test");
+
+      // Clean up
+      await writePromise.catch(() => undefined);
+    });
+  });
 });

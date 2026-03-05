@@ -6,6 +6,14 @@ export function parseTelegramReplyToMessageId(replyToId?: string | null): number
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function parseIntegerId(value: string): number | undefined {
+  if (!/^-?\d+$/.test(value)) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 export function parseTelegramThreadId(threadId?: string | number | null): number | undefined {
   if (threadId == null) {
     return undefined;
@@ -17,6 +25,8 @@ export function parseTelegramThreadId(threadId?: string | number | null): number
   if (!trimmed) {
     return undefined;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  // DM topic session keys may scope thread ids as "<chatId>:<threadId>".
+  const scopedMatch = /^-?\d+:(-?\d+)$/.exec(trimmed);
+  const rawThreadId = scopedMatch ? scopedMatch[1] : trimmed;
+  return parseIntegerId(rawThreadId);
 }

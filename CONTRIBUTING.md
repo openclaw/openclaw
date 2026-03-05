@@ -74,6 +74,7 @@ Welcome to the lobster tank! 🦞
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
+- **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 
 ## Control UI Decorators
 

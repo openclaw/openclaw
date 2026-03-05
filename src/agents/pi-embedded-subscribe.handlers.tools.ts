@@ -18,11 +18,21 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
+import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
-/** Track tool execution start times and args for after_tool_call hook */
-const toolStartData = new Map<string, { startTime: number; args: unknown }>();
+type ToolStartRecord = {
+  startTime: number;
+  args: unknown;
+};
+
+/** Track tool execution start data for after_tool_call hook. */
+const toolStartData = new Map<string, ToolStartRecord>();
+
+function buildToolStartKey(runId: string, toolCallId: string): string {
+  return `${runId}:${toolCallId}`;
+}
 
 function isCronAddAction(args: unknown): boolean {
   if (!args || typeof args !== "object") {
@@ -181,9 +191,10 @@ export async function handleToolExecutionStart(
   const toolName = normalizeToolName(rawToolName);
   const toolCallId = String(evt.toolCallId);
   const args = evt.args;
+  const runId = ctx.params.runId;
 
   // Track start time and args for after_tool_call hook
-  toolStartData.set(toolCallId, { startTime: Date.now(), args });
+  toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: Date.now(), args });
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -301,12 +312,14 @@ export async function handleToolExecutionEnd(
 ) {
   const toolName = normalizeToolName(String(evt.toolName));
   const toolCallId = String(evt.toolCallId);
+  const runId = ctx.params.runId;
   const isError = Boolean(evt.isError);
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
-  const startData = toolStartData.get(toolCallId);
-  toolStartData.delete(toolCallId);
+  const toolStartKey = buildToolStartKey(runId, toolCallId);
+  const startData = toolStartData.get(toolStartKey);
+  toolStartData.delete(toolStartKey);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const meta = callSummary?.meta;
   ctx.state.toolMetas.push({ toolName, meta });
@@ -363,6 +376,11 @@ export async function handleToolExecutionEnd(
     startData?.args && typeof startData.args === "object"
       ? (startData.args as Record<string, unknown>)
       : {};
+  const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
+  const afterToolCallArgs =
+    adjustedArgs && typeof adjustedArgs === "object"
+      ? (adjustedArgs as Record<string, unknown>)
+      : startArgs;
   const isMessagingSend =
     pendingMediaUrls.length > 0 ||
     (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
@@ -415,10 +433,11 @@ export async function handleToolExecutionEnd(
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
-    const toolArgs = startData?.args;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
-      params: (toolArgs && typeof toolArgs === "object" ? toolArgs : {}) as Record<string, unknown>,
+      params: afterToolCallArgs,
+      runId,
+      toolCallId,
       result: sanitizedResult,
       error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
       durationMs,
@@ -426,8 +445,11 @@ export async function handleToolExecutionEnd(
     void hookRunnerAfter
       .runAfterToolCall(hookEvent, {
         toolName,
-        agentId: undefined,
-        sessionKey: undefined,
+        agentId: ctx.params.agentId,
+        sessionKey: ctx.params.sessionKey,
+        sessionId: ctx.params.sessionId,
+        runId,
+        toolCallId,
       })
       .catch((err) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);

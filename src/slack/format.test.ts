@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownToSlackMrkdwn } from "./format.js";
+import { markdownToSlackMrkdwn, normalizeSlackOutboundText } from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 describe("markdownToSlackMrkdwn", () => {
@@ -57,6 +57,10 @@ describe("markdownToSlackMrkdwn", () => {
       "*Important:* Check the _docs_ at <https://example.com|link>\n\n• first\n• second",
     );
   });
+
+  it("does not throw when input is undefined at runtime", () => {
+    expect(markdownToSlackMrkdwn(undefined as unknown as string)).toBe("");
+  });
 });
 
 describe("escapeSlackMrkdwn", () => {
@@ -66,5 +70,11 @@ describe("escapeSlackMrkdwn", () => {
 
   it("escapes slack and mrkdwn control characters", () => {
     expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode\\_\\*\\`\\~&lt;&amp;&gt;\\\\");
+  });
+});
+
+describe("normalizeSlackOutboundText", () => {
+  it("normalizes markdown for outbound send/update paths", () => {
+    expect(normalizeSlackOutboundText(" **bold** ")).toBe("*bold*");
   });
 });
