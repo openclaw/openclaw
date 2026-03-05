@@ -185,6 +185,14 @@ function isGenericChannelConfigured(cfg: OpenClawConfig, channelId: string): boo
   return recordHasKeys(entry);
 }
 
+function hasImplicitAccountScopedChannelEnable(channelConfig: Record<string, unknown>): boolean {
+  if (Object.prototype.hasOwnProperty.call(channelConfig, "enabled")) {
+    return false;
+  }
+  const accounts = channelConfig.accounts;
+  return isRecord(accounts) && Object.keys(accounts).length > 0;
+}
+
 export function isChannelConfigured(
   cfg: OpenClawConfig,
   channelId: string,
@@ -515,7 +523,11 @@ export function applyPluginAutoEnable(params: {
             ) {
               return false;
             }
-            return (channelConfig as { enabled?: unknown }).enabled === true;
+            const typedChannelConfig = channelConfig as Record<string, unknown>;
+            if (typedChannelConfig.enabled === true) {
+              return true;
+            }
+            return hasImplicitAccountScopedChannelEnable(typedChannelConfig);
           })()
         : next.plugins?.entries?.[entry.pluginId]?.enabled === true;
     if (alreadyEnabled && !allowMissing) {

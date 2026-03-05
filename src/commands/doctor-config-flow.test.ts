@@ -107,6 +107,54 @@ describe("doctor config flow", () => {
     ).toBe(false);
   });
 
+  it("does not warn for account-scoped telegram configs that omit top-level policy keys", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "123:abc",
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["123456"],
+              allowFrom: ["123456"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not mark account-scoped telegram config as a repair write", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          telegram: {
+            accounts: {
+              default: {
+                botToken: "123:abc",
+                groupPolicy: "allowlist",
+                groupAllowFrom: ["123456"],
+                allowFrom: ["123456"],
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect((result as { shouldWriteConfig?: boolean }).shouldWriteConfig).toBe(false);
+  });
+
   it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {

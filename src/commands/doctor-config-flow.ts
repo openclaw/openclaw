@@ -1152,6 +1152,20 @@ function hasAllowFromEntries(list?: Array<string | number>) {
   return Array.isArray(list) && list.map((v) => String(v).trim()).filter(Boolean).length > 0;
 }
 
+function isAccountScopedTelegramSourceConfig(channelConfig: Record<string, unknown>): boolean {
+  const accounts = asObjectRecord(channelConfig.accounts);
+  if (!accounts || Object.keys(accounts).length === 0) {
+    return false;
+  }
+  for (const key of Object.keys(channelConfig)) {
+    if (key === "accounts" || key === "defaultAccount") {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;
   changes: string[];
@@ -1311,12 +1325,13 @@ async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise
  * allowlist. Common after upgrades that remove external allowlist
  * file support.
  */
-function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
+function detectEmptyAllowlistPolicy(cfg: OpenClawConfig, sourceConfig?: OpenClawConfig): string[] {
   const channels = cfg.channels;
   if (!channels || typeof channels !== "object") {
     return [];
   }
 
+  const sourceChannels = asObjectRecord(sourceConfig?.channels);
   const warnings: string[] = [];
 
   const usesSenderBasedGroupAllowlist = (channelName?: string): boolean => {
@@ -1414,7 +1429,16 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     if (!channelConfig || typeof channelConfig !== "object") {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, undefined, channelName);
+
+    const sourceChannel = asObjectRecord(sourceChannels?.[channelName]);
+    const skipTopLevelAllowlistCheck =
+      channelName === "telegram" &&
+      Boolean(sourceChannel) &&
+      isAccountScopedTelegramSourceConfig(sourceChannel);
+
+    if (!skipTopLevelAllowlistCheck) {
+      checkAccount(channelConfig, `channels.${channelName}`, undefined, channelName);
+    }
 
     const accounts = channelConfig.accounts;
     if (accounts && typeof accounts === "object") {
@@ -1905,7 +1929,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       cfg = allowlistRepair.config;
     }
 
-    const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
+    const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate, snapshot.resolved);
     if (emptyAllowlistWarnings.length > 0) {
       note(emptyAllowlistWarnings.join("\n"), "Doctor warnings");
     }
@@ -1962,7 +1986,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       );
     }
 
-    const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
+    const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate, snapshot.resolved);
     if (emptyAllowlistWarnings.length > 0) {
       note(emptyAllowlistWarnings.join("\n"), "Doctor warnings");
     }

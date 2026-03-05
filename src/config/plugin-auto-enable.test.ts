@@ -83,6 +83,26 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.allow).toBeUndefined();
   });
 
+  it("does not auto-enable built-in channels when config is account-scoped", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          telegram: {
+            accounts: {
+              default: {
+                botToken: "123:abc",
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.channels?.telegram?.enabled).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
   it("ignores channels.modelByChannel for plugin auto-enable", () => {
     const result = applyPluginAutoEnable({
       config: {
