@@ -4,7 +4,7 @@ import { Readable } from "stream";
 import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { normalizeFeishuExternalKey, stripFeishuReactionSuffix } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
@@ -298,7 +298,7 @@ export async function sendImageFeishu(params: {
 
   if (replyToMessageId) {
     const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
+      path: { message_id: stripFeishuReactionSuffix(replyToMessageId) },
       data: {
         content,
         msg_type: "image",
@@ -345,7 +345,7 @@ export async function sendFileFeishu(params: {
 
   if (replyToMessageId) {
     const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
+      path: { message_id: stripFeishuReactionSuffix(replyToMessageId) },
       data: {
         content,
         msg_type: msgType,
