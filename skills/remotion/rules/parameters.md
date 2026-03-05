@@ -106,4 +106,3 @@ Then use it in the schema:
 export const MyCompositionSchema = z.object({
   color: zColor(),
 });
-```
