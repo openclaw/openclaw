@@ -292,3 +292,21 @@ export function isRecoverableUncaughtException(error: unknown): boolean {
 
   return false;
 }
+
+/**
+ * Install an uncaughtException handler that recovers from transient errors
+ * (e.g. undici TLS race conditions) instead of crashing the process.
+ */
+export function installUncaughtExceptionHandler(): void {
+  process.on("uncaughtException", (error) => {
+    if (isRecoverableUncaughtException(error)) {
+      console.warn(
+        "[openclaw] Non-fatal uncaught exception (continuing):",
+        formatUncaughtError(error),
+      );
+      return;
+    }
+    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+    process.exit(1);
+  });
+}

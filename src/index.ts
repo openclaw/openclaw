@@ -28,7 +28,7 @@ import {
   PortInUseError,
 } from "./infra/ports.js";
 import { assertSupportedRuntime } from "./infra/runtime-guard.js";
-import { isRecoverableUncaughtException } from "./infra/unhandled-rejections.js";
+import { installUncaughtExceptionHandler } from "./infra/unhandled-rejections.js";
 import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "./logging.js";
 import { runCommandWithTimeout, runExec } from "./process/exec.js";
@@ -82,17 +82,7 @@ if (isMain) {
   // These log the error and exit gracefully instead of crashing without trace.
   installUnhandledRejectionHandler();
 
-  process.on("uncaughtException", (error) => {
-    if (isRecoverableUncaughtException(error)) {
-      console.warn(
-        "[openclaw] Non-fatal uncaught exception (continuing):",
-        formatUncaughtError(error),
-      );
-      return;
-    }
-    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
-    process.exit(1);
-  });
+  installUncaughtExceptionHandler();
 
   void program.parseAsync(process.argv).catch((err) => {
     console.error("[openclaw] CLI failed:", formatUncaughtError(err));
