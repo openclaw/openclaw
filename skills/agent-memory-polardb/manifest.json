@@ -15,15 +15,38 @@
     "functions": [
       {
         "name": "save_fact",
-        "description": "Store user facts/preferences."
+        "description": "Save a user preference or fact.",
+        "parameters": {,
+          "type": "object",
+          "properties": {
+            "user_id": { "type": "string", "description": "Unique user identifier" },
+            "fact": { "type": "string", "description": "The fact to remember" }
+          },
+          "required": ["user_id", "fact"]
+        }
       },
       {
         "name": "search_memories",
-        "description": "Search relevant memories by query."
+        "description": "Search history for user context.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "user_id": { "type": "string", "description": "Unique user identifier" },
+            "query": { "type": "string", "description": "Search terms" }
+          },
+          "required": ["user_id", "query"]
+        }
       },
       {
         "name": "delete_all_memories",
-        "description": "Clear all memories for a user."
+        "description": "Clear all memory data for a user.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "user_id": { "type": "string", "description": "Unique user identifier" }
+          },
+          "required": ["user_id"]
+        }
       }
     ]
   },
