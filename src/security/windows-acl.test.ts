@@ -492,6 +492,10 @@ Successfully processed 1 files`;
       expectTrustedOnly([aclEntry({ principal: "AUTORIDAD NT\\SYSTEM" })]);
     });
 
+    it("classifies Russian SYSTEM (NT AUTHORITY\\СИСТЕМА) as trusted", () => {
+      expectTrustedOnly([aclEntry({ principal: "NT AUTHORITY\\СИСТЕМА" })]);
+    });
+
     it("French Windows full scenario: user + Système only → no untrusted", () => {
       const entries: WindowsAclEntry[] = [
         aclEntry({ principal: "MYPC\\Pierre" }),
