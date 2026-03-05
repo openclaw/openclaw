@@ -11,16 +11,39 @@ import type { FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 
+const REPLY_TARGET_UNAVAILABLE_HINTS = [
+  "withdrawn",
+  "not found",
+  "message is not found",
+  "message was withdrawn",
+  "cannot reply",
+  "can not reply",
+  "not support reply",
+  "unsupported reply",
+  "reply target",
+  "不支持回复",
+  "无法回复",
+  "消息已撤回",
+  "消息不存在",
+] as const;
+
+function isReplyTargetUnavailableMessage(message: string | undefined): boolean {
+  const normalized = message?.toLowerCase() ?? "";
+  if (!normalized) {
+    return false;
+  }
+  return REPLY_TARGET_UNAVAILABLE_HINTS.some((hint) => normalized.includes(hint));
+}
+
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
     return true;
   }
-  const msg = response.msg?.toLowerCase() ?? "";
-  return msg.includes("withdrawn") || msg.includes("not found");
+  return isReplyTargetUnavailableMessage(response.msg);
 }
 
-/** Check whether a thrown error indicates a withdrawn/not-found reply target. */
-function isWithdrawnReplyError(err: unknown): boolean {
+/** Check whether a thrown error indicates the reply target is unavailable/unsupported. */
+function isReplyTargetUnavailableError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) {
     return false;
   }
@@ -29,12 +52,28 @@ function isWithdrawnReplyError(err: unknown): boolean {
   if (typeof code === "number" && WITHDRAWN_REPLY_ERROR_CODES.has(code)) {
     return true;
   }
+  if (isReplyTargetUnavailableMessage((err as { message?: string; msg?: string }).msg)) {
+    return true;
+  }
+  if (isReplyTargetUnavailableMessage((err as { message?: string; msg?: string }).message)) {
+    return true;
+  }
   // AxiosError shape: err.response.data.code
-  const response = (err as { response?: { data?: { code?: number; msg?: string } } }).response;
+  const response = (
+    err as {
+      response?: { data?: { code?: number; msg?: string; message?: string } };
+    }
+  ).response;
   if (
     typeof response?.data?.code === "number" &&
     WITHDRAWN_REPLY_ERROR_CODES.has(response.data.code)
   ) {
+    return true;
+  }
+  if (isReplyTargetUnavailableMessage(response?.data?.msg)) {
+    return true;
+  }
+  if (isReplyTargetUnavailableMessage(response?.data?.message)) {
     return true;
   }
   return false;
@@ -308,7 +347,7 @@ export async function sendMessageFeishu(
         },
       });
     } catch (err) {
-      if (!isWithdrawnReplyError(err)) {
+      if (!isReplyTargetUnavailableError(err)) {
         throw err;
       }
       return sendFallbackDirect(client, directParams, "Feishu send failed");
@@ -352,7 +391,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
         },
       });
     } catch (err) {
-      if (!isWithdrawnReplyError(err)) {
+      if (!isReplyTargetUnavailableError(err)) {
         throw err;
       }
       return sendFallbackDirect(client, directParams, "Feishu card send failed");

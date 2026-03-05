@@ -21,7 +21,7 @@ vi.mock("./runtime.js", () => ({
 
 import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 
-describe("Feishu reply fallback for withdrawn/deleted targets", () => {
+describe("Feishu reply fallback for unavailable/unsupported targets", () => {
   const replyMock = vi.fn();
   const createMock = vi.fn();
 
@@ -103,6 +103,28 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  it("falls back to create for unsupported reply targets", async () => {
+    replyMock.mockResolvedValue({
+      code: 999999,
+      msg: "not support reply for this message type",
+    });
+    createMock.mockResolvedValue({
+      code: 0,
+      data: { message_id: "om_reply_unsupported_fallback" },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as never,
+      to: "user:ou_target",
+      text: "hello",
+      replyToMessageId: "om_card_parent",
+    });
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(createMock).toHaveBeenCalledTimes(1);
+    expect(result.messageId).toBe("om_reply_unsupported_fallback");
+  });
+
   it("falls back to create when reply throws a withdrawn SDK error", async () => {
     const sdkError = Object.assign(new Error("request failed"), { code: 230011 });
     replyMock.mockRejectedValue(sdkError);
@@ -143,6 +165,26 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(replyMock).toHaveBeenCalledTimes(1);
     expect(createMock).toHaveBeenCalledTimes(1);
     expect(result.messageId).toBe("om_axios_fallback");
+  });
+
+  it("falls back to create when card reply throws an unsupported-target error", async () => {
+    const sdkError = new Error("cannot reply to this message type");
+    replyMock.mockRejectedValue(sdkError);
+    createMock.mockResolvedValue({
+      code: 0,
+      data: { message_id: "om_card_unsupported_fallback" },
+    });
+
+    const result = await sendCardFeishu({
+      cfg: {} as never,
+      to: "user:ou_target",
+      card: { schema: "2.0" },
+      replyToMessageId: "om_parent",
+    });
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(createMock).toHaveBeenCalledTimes(1);
+    expect(result.messageId).toBe("om_card_unsupported_fallback");
   });
 
   it("re-throws non-withdrawn thrown errors for text messages", async () => {
