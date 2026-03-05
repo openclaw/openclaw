@@ -18,19 +18,51 @@ const resolveChannelOverride = (params: {
   return resolveMs(params.byChannel[params.channel]);
 };
 
+const resolveSessionIdOverride = (params: {
+  bySessionId?: Record<string, number>;
+  sessionId?: string;
+}): number | undefined => {
+  if (!params.bySessionId || !params.sessionId) {
+    return undefined;
+  }
+  // Exact match first.
+  const exact = resolveMs(params.bySessionId[params.sessionId]);
+  if (exact !== undefined) {
+    return exact;
+  }
+  // Prefix match: find the longest matching prefix.
+  let best: number | undefined;
+  let bestLen = 0;
+  for (const [prefix, ms] of Object.entries(params.bySessionId)) {
+    if (params.sessionId.startsWith(prefix) && prefix.length > bestLen) {
+      const resolved = resolveMs(ms);
+      if (resolved !== undefined) {
+        best = resolved;
+        bestLen = prefix.length;
+      }
+    }
+  }
+  return best;
+};
+
 export function resolveInboundDebounceMs(params: {
   cfg: OpenClawConfig;
   channel: string;
+  sessionId?: string;
   overrideMs?: number;
 }): number {
   const inbound = params.cfg.messages?.inbound;
   const override = resolveMs(params.overrideMs);
+  const bySessionId = resolveSessionIdOverride({
+    bySessionId: inbound?.bySessionId,
+    sessionId: params.sessionId,
+  });
   const byChannel = resolveChannelOverride({
     byChannel: inbound?.byChannel,
     channel: params.channel,
   });
   const base = resolveMs(inbound?.debounceMs);
-  return override ?? byChannel ?? base ?? 0;
+  return override ?? bySessionId ?? byChannel ?? base ?? 0;
 }
 
 type DebounceBuffer<T> = {

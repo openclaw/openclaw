@@ -25,6 +25,8 @@ export type InboundDebounceByProvider = Record<string, number>;
 export type InboundDebounceConfig = {
   debounceMs?: number;
   byChannel?: InboundDebounceByProvider;
+  /** Per-session-key debounce overrides (ms). Keyed by session key prefix, e.g. "discord:default:1234567890". */
+  bySessionId?: Record<string, number>;
 };
 
 export type BroadcastStrategy = "parallel" | "sequential";

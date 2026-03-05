@@ -3,6 +3,7 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "../../channels/inbound-debounce-policy.js";
+import { resolveInboundDebounceMs } from "../../auto-reply/inbound-debounce.js";
 import { createRunStateMachine } from "../../channels/run-state-machine.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { danger } from "../../globals.js";
@@ -242,6 +243,25 @@ export function createDiscordMessageHandler(
         return null;
       }
       return `discord:${params.accountId}:${channelId}:${authorId}`;
+    },
+    resolveDebounceMs: (entry) => {
+      const message = entry.data.message;
+      if (!message) {
+        return undefined;
+      }
+      const channelId = resolveDiscordMessageChannelId({
+        message,
+        eventChannelId: entry.data.channel_id,
+      });
+      if (!channelId) {
+        return undefined;
+      }
+      const sessionId = `discord:${params.accountId}:${channelId}`;
+      return resolveInboundDebounceMs({
+        cfg: params.cfg,
+        channel: "discord",
+        sessionId,
+      }) || undefined;
     },
     shouldDebounce: (entry) => {
       const message = entry.data.message;

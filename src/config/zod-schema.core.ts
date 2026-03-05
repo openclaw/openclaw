@@ -586,6 +586,9 @@ export const InboundDebounceSchema = z
   .object({
     debounceMs: z.number().int().nonnegative().optional(),
     byChannel: DebounceMsBySurfaceSchema,
+    bySessionId: z
+      .record(z.string(), z.number().int().nonnegative())
+      .optional(),
   })
   .strict()
   .optional();

@@ -31,6 +31,7 @@ export function createChannelInboundDebouncer<T>(
   params: Omit<InboundDebounceCreateParams<T>, "debounceMs"> & {
     cfg: OpenClawConfig;
     channel: string;
+    sessionId?: string;
     debounceMsOverride?: number;
   },
 ): {
@@ -40,9 +41,10 @@ export function createChannelInboundDebouncer<T>(
   const debounceMs = resolveInboundDebounceMs({
     cfg: params.cfg,
     channel: params.channel,
+    sessionId: params.sessionId,
     overrideMs: params.debounceMsOverride,
   });
-  const { cfg: _cfg, channel: _channel, debounceMsOverride: _override, ...rest } = params;
+  const { cfg: _cfg, channel: _channel, sessionId: _sessionId, debounceMsOverride: _override, ...rest } = params;
   const debouncer = createInboundDebouncer<T>({
     debounceMs,
     ...rest,
