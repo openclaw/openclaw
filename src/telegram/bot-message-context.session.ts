@@ -62,6 +62,7 @@ export async function buildTelegramInboundContextPayload(params: {
   commandAuthorized: boolean;
   locationData?: import("../channels/location.js").NormalizedLocation;
   options?: TelegramMessageContextOptions;
+  topicName?: string;
   dmAllowFrom?: Array<string | number>;
 }): Promise<{
   ctxPayload: ReturnType<typeof finalizeInboundContext>;
@@ -94,6 +95,7 @@ export async function buildTelegramInboundContextPayload(params: {
     commandAuthorized,
     locationData,
     options,
+    topicName,
     dmAllowFrom,
   } = params;
   const replyTarget = describeReplyTarget(msg);
@@ -196,6 +198,7 @@ export async function buildTelegramInboundContextPayload(params: {
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,
     GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
+    TopicName: isForum ? topicName : undefined,
     GroupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
     SenderName: senderName,
     SenderId: senderId || undefined,
