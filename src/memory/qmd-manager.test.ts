@@ -131,12 +131,11 @@ describe("QmdMemoryManager", () => {
     logDebugMock.mockClear();
     logInfoMock.mockClear();
     tmpRoot = path.join(fixtureRoot, `case-${fixtureCount++}`);
-    workspaceDir = path.join(tmpRoot, "workspace");
-    stateDir = path.join(tmpRoot, "state");
     await fs.mkdir(tmpRoot);
-    // Only workspace must exist for configured collection paths; state paths are
-    // created lazily by manager code when needed.
+    workspaceDir = path.join(tmpRoot, "workspace");
     await fs.mkdir(workspaceDir);
+    stateDir = path.join(tmpRoot, "state");
+    await fs.mkdir(stateDir);
     process.env.OPENCLAW_STATE_DIR = stateDir;
     cfg = {
       agents: {
@@ -153,7 +152,7 @@ describe("QmdMemoryManager", () => {
     } as OpenClawConfig;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
     delete process.env.OPENCLAW_STATE_DIR;
     delete (globalThis as Record<string, unknown>).__openclawMcporterDaemonStart;
@@ -502,6 +501,71 @@ describe("QmdMemoryManager", () => {
     expect(legacyCollections.has("memory-root")).toBe(false);
     expect(legacyCollections.has("memory-alt")).toBe(false);
     expect(legacyCollections.has("memory-dir")).toBe(false);
+  });
+
+  it("remaps extra collections to existing qmd collection names when add conflicts on path", async () => {
+    const familySessionsPath = path.join(tmpRoot, "family-sessions");
+    await fs.mkdir(familySessionsPath, { recursive: true });
+    cfg = {
+      agents: {
+        list: [
+          {
+            id: agentId,
+            default: true,
+            workspace: workspaceDir,
+            memorySearch: {
+              qmd: {
+                extraCollections: [{ path: familySessionsPath, pattern: "**/*.md" }],
+              },
+            },
+          },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        const jsonData = JSON.stringify([
+          { name: "workspace-main", path: workspaceDir, pattern: "**/*.md" },
+          { name: "sessions-family", path: familySessionsPath, pattern: "**/*.md" },
+        ]);
+        emitAndClose(child, "stdout", jsonData, 0);
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const pathArg = args[2] ?? "";
+        if (path.resolve(pathArg) === path.resolve(familySessionsPath)) {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stderr", "A collection already exists for this path and pattern", 1);
+          return child;
+        }
+        return createMockChild();
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+
+    // Verify the remap was logged
+    expect(logInfoMock).toHaveBeenCalledWith(
+      expect.stringContaining("remapped to existing collection sessions-family"),
+    );
+
+    // Verify the aliased QMD-side name is in collectionRoots so search results
+    // from that collection won't be silently dropped by toDocLocation().
+    const roots = (manager as unknown as { collectionRoots: Map<string, unknown> }).collectionRoots;
+    expect(roots.has("sessions-family")).toBe(true);
+
+    await manager.close();
   });
 
   it("migrates unscoped legacy collections from plain-text collection list output", async () => {
@@ -886,7 +950,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("resolves bare qmd command to a Windows-compatible spawn invocation", async () => {
+  it("uses qmd.cmd on Windows when qmd command is bare", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
       const { manager } = await createManager({ mode: "status" });
@@ -894,23 +958,11 @@ describe("QmdMemoryManager", () => {
 
       const qmdCalls = spawnMock.mock.calls.filter((call: unknown[]) => {
         const args = call[1] as string[] | undefined;
-        return (
-          Array.isArray(args) &&
-          args.some((token) => token === "update" || token === "search" || token === "query")
-        );
+        return Array.isArray(args) && args.length > 0;
       });
       expect(qmdCalls.length).toBeGreaterThan(0);
       for (const call of qmdCalls) {
-        const command = String(call[0]);
-        const options = call[2] as { shell?: boolean } | undefined;
-        if (/(^|[\\/])qmd(?:\.cmd)?$/i.test(command)) {
-          // Wrapper unresolved: keep `.cmd` and use shell for PATHEXT lookup.
-          expect(command.toLowerCase().endsWith("qmd.cmd")).toBe(true);
-          expect(options?.shell).toBe(true);
-        } else {
-          // Wrapper resolved to node/exe entrypoint: shell fallback should not be used.
-          expect(options?.shell).not.toBe(true);
-        }
+        expect(call[0]).toBe("qmd.cmd");
       }
 
       await manager.close();
@@ -1415,20 +1467,11 @@ describe("QmdMemoryManager", () => {
       const { manager } = await createManager();
       await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
 
-      const mcporterCall = spawnMock.mock.calls.find((call: unknown[]) =>
-        (call[1] as string[] | undefined)?.includes("call"),
+      const mcporterCall = spawnMock.mock.calls.find(
+        (call: unknown[]) => (call[1] as string[] | undefined)?.[0] === "call",
       );
       expect(mcporterCall).toBeDefined();
-      const callCommand = mcporterCall?.[0];
-      expect(typeof callCommand).toBe("string");
-      const options = mcporterCall?.[2] as { shell?: boolean } | undefined;
-      if (isMcporterCommand(callCommand)) {
-        expect(callCommand).toBe("mcporter.cmd");
-        expect(options?.shell).toBe(true);
-      } else {
-        // If wrapper entrypoint resolution succeeded, spawn may invoke node/exe directly.
-        expect(options?.shell).not.toBe(true);
-      }
+      expect(mcporterCall?.[0]).toBe("mcporter.cmd");
 
       await manager.close();
     } finally {
@@ -1946,10 +1989,10 @@ describe("QmdMemoryManager", () => {
   });
 
   it("reuses exported session markdown files when inputs are unchanged", async () => {
+    const writeFileSpy = vi.spyOn(fs, "writeFile");
     const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "session-1.jsonl");
-    const exportFile = path.join(stateDir, "agents", agentId, "qmd", "sessions", "session-1.md");
     await fs.writeFile(
       sessionFile,
       '{"type":"message","message":{"role":"user","content":"hello"}}\n',
@@ -1972,17 +2015,24 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager();
 
-    try {
-      await manager.sync({ reason: "manual" });
-      const firstExport = await fs.readFile(exportFile, "utf-8");
-      expect(firstExport).toContain("hello");
+    const reasonCount = writeFileSpy.mock.calls.length;
+    await manager.sync({ reason: "manual" });
+    const firstExportWrites = writeFileSpy.mock.calls.length;
+    expect(firstExportWrites).toBe(reasonCount + 1);
 
-      await manager.sync({ reason: "manual" });
-      const secondExport = await fs.readFile(exportFile, "utf-8");
-      expect(secondExport).toBe(firstExport);
-    } finally {
-      await manager.close();
-    }
+    await manager.sync({ reason: "manual" });
+    expect(writeFileSpy.mock.calls.length).toBe(firstExportWrites);
+
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"user","content":"follow-up update"}}\n',
+      "utf-8",
+    );
+    await manager.sync({ reason: "manual" });
+    expect(writeFileSpy.mock.calls.length).toBe(firstExportWrites + 1);
+
+    await manager.close();
+    writeFileSpy.mockRestore();
   });
 
   it("fails closed when sqlite index is busy during doc lookup or search", async () => {
