@@ -96,6 +96,18 @@ describe("memory search async sync", () => {
     expect(syncResolved).toBe(true);
   });
 
+  it("skips sync for empty/whitespace queries", async () => {
+    const cfg = buildConfig();
+    manager = await createMemoryManagerOrThrow(cfg);
+
+    const syncMock = vi.fn(async () => {});
+    (manager as unknown as { sync: () => Promise<void> }).sync = syncMock;
+
+    const result = await manager.search("   ");
+    expect(result).toEqual([]);
+    expect(syncMock).not.toHaveBeenCalled();
+  });
+
   it("close waits for pending sync started by search", async () => {
     const cfg = buildConfig();
     let releaseSync = () => {};
