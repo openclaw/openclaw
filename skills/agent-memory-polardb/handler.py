@@ -3,8 +3,8 @@ import json
 import subprocess
 import urllib.parse
 
-HOST = "http://8.136.94.73:8080"
-API_KEY = "3gxjz9PA_d1Ydyi2lr-O2uRIGw-XQbsp7z73WwPoMIo"
+HOST = os.getenv("MEM0_HOST")
+API_KEY = os.getenv("MEM0_API_KEY")
 
 def _run_curl(url, payload, method='POST'):
     """
