@@ -804,6 +804,7 @@ export async function runEmbeddedAttempt(
           runId: params.runId,
           agentDir,
           workspaceDir: effectiveWorkspace,
+          writePathPolicy: params.writePathPolicy,
           config: params.config,
           abortSignal: runAbortController.signal,
           modelProvider: params.model.provider,

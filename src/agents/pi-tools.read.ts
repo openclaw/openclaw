@@ -25,6 +25,11 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
+import {
+  assertToolWritePathAllowed,
+  normalizeToolWritePathPolicy,
+  type ToolWritePathPolicy,
+} from "./tool-write-path-policy.js";
 
 export {
   CLAUDE_PARAM_GROUPS,
@@ -352,6 +357,44 @@ async function normalizeReadImageResult(
 
 export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return wrapToolWorkspaceRootGuardWithOptions(tool, root);
+}
+
+export function wrapToolWritePathPolicyGuard(
+  tool: AnyAgentTool,
+  root: string,
+  policy: ToolWritePathPolicy | undefined,
+  options?: {
+    containerWorkdir?: string;
+  },
+): AnyAgentTool {
+  const normalizedPolicy = normalizeToolWritePathPolicy(policy);
+  if (!normalizedPolicy) {
+    return tool;
+  }
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const normalized = normalizeToolParams(args);
+      const record =
+        normalized ??
+        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+      const filePath = record?.path;
+      if (typeof filePath === "string" && filePath.trim()) {
+        const candidatePath = mapContainerPathToWorkspaceRoot({
+          filePath,
+          root,
+          containerWorkdir: options?.containerWorkdir,
+        });
+        assertToolWritePathAllowed({
+          policy: normalizedPolicy,
+          workspaceRoot: root,
+          candidatePath,
+          cwd: root,
+        });
+      }
+      return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+    },
+  };
 }
 
 function mapContainerPathToWorkspaceRoot(params: {

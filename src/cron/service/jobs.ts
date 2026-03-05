@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeCronAgentTurnPathPolicy } from "../path-policy.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,
@@ -673,6 +674,9 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
   }
+  if ("paths" in patch) {
+    next.paths = normalizeCronAgentTurnPathPolicy(patch.paths);
+  }
   if (typeof patch.timeoutSeconds === "number") {
     next.timeoutSeconds = patch.timeoutSeconds;
   }
@@ -755,6 +759,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     message: patch.message,
     model: patch.model,
     thinking: patch.thinking,
+    paths: normalizeCronAgentTurnPathPolicy(patch.paths),
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,

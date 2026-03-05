@@ -5,6 +5,7 @@ import {
   hasLegacyDeliveryHints,
   stripLegacyDeliveryFields,
 } from "./legacy-delivery.js";
+import { normalizeCronAgentTurnPathPolicy } from "./path-policy.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
 import { inferLegacyName } from "./service/normalize.js";
@@ -103,7 +104,8 @@ function coercePayload(payload: UnknownRecord) {
       typeof next.model === "string" ||
       typeof next.thinking === "string" ||
       typeof next.timeoutSeconds === "number" ||
-      typeof next.allowUnsafeExternalContent === "boolean";
+      typeof next.allowUnsafeExternalContent === "boolean" ||
+      isRecord(next.paths);
     if (hasMessage) {
       next.kind = "agentTurn";
     } else if (hasText) {
@@ -147,6 +149,14 @@ function coercePayload(payload: UnknownRecord) {
       }
     } else {
       delete next.thinking;
+    }
+  }
+  if ("paths" in next) {
+    const normalizedPaths = normalizeCronAgentTurnPathPolicy(next.paths);
+    if (normalizedPaths) {
+      next.paths = normalizedPaths;
+    } else {
+      delete next.paths;
     }
   }
   if ("timeoutSeconds" in next) {
@@ -262,6 +272,12 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
   ) {
     payload.allowUnsafeExternalContent = next.allowUnsafeExternalContent;
   }
+  if (!isRecord(payload.paths)) {
+    const normalizedPaths = normalizeCronAgentTurnPathPolicy(next.paths);
+    if (normalizedPaths) {
+      payload.paths = normalizedPaths;
+    }
+  }
 }
 
 function copyTopLevelLegacyDeliveryFields(next: UnknownRecord, payload: UnknownRecord) {
@@ -300,6 +316,7 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.allowUnsafeExternalContent;
   delete next.message;
   delete next.text;
+  delete next.paths;
   delete next.deliver;
   delete next.channel;
   delete next.to;

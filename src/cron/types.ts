@@ -87,6 +87,11 @@ type CronAgentTurnPayloadFields = {
   model?: string;
   /** Optional per-job fallback models; overrides agent/global fallbacks when defined. */
   fallbacks?: string[];
+  /**
+   * Optional write/edit/apply_patch path policy for this isolated cron run.
+   * Relative patterns are resolved from the agent workspace root.
+   */
+  paths?: CronAgentTurnPathPolicy;
   thinking?: string;
   timeoutSeconds?: number;
   allowUnsafeExternalContent?: boolean;
@@ -105,6 +110,11 @@ type CronAgentTurnPayload = {
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
 } & Partial<CronAgentTurnPayloadFields>;
+
+export type CronAgentTurnPathPolicy = {
+  allow?: string[];
+  deny?: string[];
+};
 
 export type CronJobState = {
   nextRunAtMs?: number;
