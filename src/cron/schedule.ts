@@ -30,6 +30,21 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
   return next;
 }
 
+export function coerceFiniteScheduleNumber(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind === "at") {
     // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
@@ -51,8 +66,13 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   }
 
   if (schedule.kind === "every") {
-    const everyMs = Math.max(1, Math.floor(schedule.everyMs));
-    const anchor = Math.max(0, Math.floor(schedule.anchorMs ?? nowMs));
+    const everyMsRaw = coerceFiniteScheduleNumber(schedule.everyMs);
+    if (everyMsRaw === undefined) {
+      return undefined;
+    }
+    const everyMs = Math.max(1, Math.floor(everyMsRaw));
+    const anchorRaw = coerceFiniteScheduleNumber(schedule.anchorMs);
+    const anchor = Math.max(0, Math.floor(anchorRaw ?? nowMs));
     if (nowMs < anchor) {
       return anchor;
     }
@@ -106,6 +126,35 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   }
 
   return nextMs;
+}
+
+export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
+  if (schedule.kind !== "cron") {
+    return undefined;
+  }
+  const cronSchedule = schedule as { expr?: unknown; cron?: unknown };
+  const exprSource = typeof cronSchedule.expr === "string" ? cronSchedule.expr : cronSchedule.cron;
+  if (typeof exprSource !== "string") {
+    throw new Error("invalid cron schedule: expr is required");
+  }
+  const expr = exprSource.trim();
+  if (!expr) {
+    return undefined;
+  }
+  const cron = resolveCachedCron(expr, resolveCronTimezone(schedule.tz));
+  const previousRuns = cron.previousRuns(1, new Date(nowMs));
+  const previous = previousRuns[0];
+  if (!previous) {
+    return undefined;
+  }
+  const previousMs = previous.getTime();
+  if (!Number.isFinite(previousMs)) {
+    return undefined;
+  }
+  if (previousMs >= nowMs) {
+    return undefined;
+  }
+  return previousMs;
 }
 
 export function clearCronScheduleCacheForTest(): void {
