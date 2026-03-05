@@ -27,7 +27,10 @@ import {
   listAgentEntries,
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
-import { buildAuthChoiceGroups } from "../../commands/auth-choice-options.js";
+import {
+  buildAuthChoiceGroups,
+  resolveAuthChoiceToGroupId,
+} from "../../commands/auth-choice-options.js";
 import { applyAuthChoice } from "../../commands/auth-choice.js";
 import type { AuthChoice } from "../../commands/onboard-types.js";
 import {
@@ -911,6 +914,16 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const agentDir = resolveAgentDir(cfg, agentId);
     const authChoice = String(params.authChoice ?? "") as AuthChoice;
+    // Validate that authChoice is a known value before proceeding.
+    const tokenProvider = resolveAuthChoiceToGroupId(authChoice);
+    if (!tokenProvider) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unknown authChoice "${authChoice}"`),
+      );
+      return;
+    }
     const apiKey = typeof params.apiKey === "string" ? params.apiKey.trim() : undefined;
     const useEnvVar = Boolean(params.useEnvVar);
 
@@ -940,7 +953,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         agentId,
         opts: {
           token: apiKey,
-          tokenProvider: authChoice,
+          tokenProvider,
           secretInputMode: useEnvVar ? "ref" : undefined,
         },
       });

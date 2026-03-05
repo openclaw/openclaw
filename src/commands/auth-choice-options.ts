@@ -300,6 +300,25 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   { value: "custom-api-key", label: "Custom Provider" },
 ];
 
+// Reverse lookup: AuthChoice → AuthChoiceGroupId (built once on first call)
+let _choiceToGroupId: Map<AuthChoice, AuthChoiceGroupId> | undefined;
+function getChoiceToGroupIdMap(): Map<AuthChoice, AuthChoiceGroupId> {
+  if (!_choiceToGroupId) {
+    _choiceToGroupId = new Map();
+    for (const group of AUTH_CHOICE_GROUP_DEFS) {
+      for (const choice of group.choices) {
+        _choiceToGroupId.set(choice, group.value);
+      }
+    }
+  }
+  return _choiceToGroupId;
+}
+
+/** Returns the canonical provider group ID for an AuthChoice, or undefined if unknown. */
+export function resolveAuthChoiceToGroupId(authChoice: AuthChoice): AuthChoiceGroupId | undefined {
+  return getChoiceToGroupIdMap().get(authChoice);
+}
+
 export function formatAuthChoiceChoicesForCli(params?: {
   includeSkip?: boolean;
   includeLegacyAliases?: boolean;
