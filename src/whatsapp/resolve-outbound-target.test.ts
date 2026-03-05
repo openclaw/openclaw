@@ -136,7 +136,18 @@ describe("resolveWhatsAppOutboundTarget", () => {
 
     it("denies message when target is not in allowList", () => {
       mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
-      expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "implicit" });
+      const result = resolveWhatsAppOutboundTarget({
+        to: PRIMARY_TARGET,
+        allowFrom: [SECONDARY_TARGET],
+        mode: "implicit",
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected resolution to fail");
+      }
+      expect(result.error.message).toContain(
+        `Target "${PRIMARY_TARGET}" is not listed in the configured WhatsApp allowFrom policy.`,
+      );
     });
 
     it("handles mixed numeric and string allowList entries", () => {
