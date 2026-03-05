@@ -132,6 +132,12 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  statusSink?: (patch: {
+    connected?: boolean;
+    lastEventAt?: number;
+    lastInboundAt?: number;
+    lastError?: string | null;
+  }) => void;
 };
 
 /**
@@ -231,7 +237,7 @@ function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
 ): void {
-  const { cfg, accountId, runtime, chatHistories, fireAndForget } = context;
+  const { cfg, accountId, runtime, chatHistories, fireAndForget, statusSink } = context;
   const core = getFeishuRuntime();
   const inboundDebounceMs = core.channel.debounce.resolveInboundDebounceMs({
     cfg,
@@ -262,6 +268,15 @@ function registerEventHandlers(
     const botOpenId = botOpenIds.get(accountId);
     const parsed = parseFeishuMessageEvent(event, botOpenId);
     return parsed.content.trim();
+  };
+  const markInboundActivity = () => {
+    const now = Date.now();
+    statusSink?.({
+      connected: true,
+      lastEventAt: now,
+      lastInboundAt: now,
+      lastError: null,
+    });
   };
   const recordSuppressedMessageIds = async (
     entries: FeishuMessageEvent[],
@@ -377,6 +392,7 @@ function registerEventHandlers(
 
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
+      markInboundActivity();
       const processMessage = async () => {
         const event = data as unknown as FeishuMessageEvent;
         await inboundDebouncer.enqueue(event);
@@ -394,9 +410,11 @@ function registerEventHandlers(
       }
     },
     "im.message.message_read_v1": async () => {
+      markInboundActivity();
       // Ignore read receipts
     },
     "im.chat.member.bot.added_v1": async (data) => {
+      markInboundActivity();
       try {
         const event = data as unknown as FeishuBotAddedEvent;
         log(`feishu[${accountId}]: bot added to chat ${event.chat_id}`);
@@ -405,6 +423,7 @@ function registerEventHandlers(
       }
     },
     "im.chat.member.bot.deleted_v1": async (data) => {
+      markInboundActivity();
       try {
         const event = data as unknown as { chat_id: string };
         log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
@@ -413,6 +432,7 @@ function registerEventHandlers(
       }
     },
     "im.message.reaction.created_v1": async (data) => {
+      markInboundActivity();
       const processReaction = async () => {
         const event = data as FeishuReactionCreatedEvent;
         const myBotId = botOpenIds.get(accountId);
@@ -457,9 +477,11 @@ function registerEventHandlers(
       }
     },
     "im.message.reaction.deleted_v1": async () => {
+      markInboundActivity();
       // Ignore reaction removals
     },
     "card.action.trigger": async (data: unknown) => {
+      markInboundActivity();
       try {
         const event = data as unknown as FeishuCardActionEvent;
         const promise = handleFeishuCardAction({
@@ -491,10 +513,18 @@ export type MonitorSingleAccountParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   botOpenIdSource?: BotOpenIdSource;
+  statusSink?: (patch: {
+    connected?: boolean;
+    lastConnectedAt?: number;
+    lastDisconnect?: { at: number; status?: number; error?: string };
+    lastEventAt?: number;
+    lastInboundAt?: number;
+    lastError?: string | null;
+  }) => void;
 };
 
 export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
-  const { cfg, account, runtime, abortSignal } = params;
+  const { cfg, account, runtime, abortSignal, statusSink } = params;
   const { accountId } = account;
   const log = runtime?.log ?? console.log;
 
@@ -505,6 +535,12 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       : await fetchBotOpenIdForMonitor(account, { runtime, abortSignal });
   botOpenIds.set(accountId, botOpenId ?? "");
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
+  statusSink?.({
+    connected: true,
+    lastConnectedAt: Date.now(),
+    lastEventAt: Date.now(),
+    lastError: null,
+  });
 
   const connectionMode = account.config.connectionMode ?? "websocket";
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {
@@ -525,10 +561,25 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     runtime,
     chatHistories,
     fireAndForget: true,
+    statusSink,
   });
 
   if (connectionMode === "webhook") {
-    return monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher });
+    return monitorWebhook({
+      account,
+      accountId,
+      runtime,
+      abortSignal,
+      eventDispatcher,
+      statusSink,
+    });
   }
-  return monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
+  return monitorWebSocket({
+    account,
+    accountId,
+    runtime,
+    abortSignal,
+    eventDispatcher,
+    statusSink,
+  });
 }
