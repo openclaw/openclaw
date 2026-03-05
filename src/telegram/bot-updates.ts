@@ -12,6 +12,9 @@ export type MediaGroupEntry = {
     ctx: TelegramContext;
   }>;
   timer: ReturnType<typeof setTimeout>;
+  // Set to true by whichever path (timer or drain) processes this entry first,
+  // so the other path becomes a no-op and cannot produce duplicate dispatches.
+  flushed?: boolean;
 };
 
 export type TelegramUpdateKeyContext = {

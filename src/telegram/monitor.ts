@@ -61,7 +61,7 @@ const TELEGRAM_POLL_RESTART_POLICY = {
   jitter: 0.25,
 };
 
-type TelegramBot = ReturnType<typeof createTelegramBot>;
+type TelegramBotResult = ReturnType<typeof createTelegramBot>;
 
 const isGetUpdatesConflict = (err: unknown) => {
   if (!err || typeof err !== "object") {
@@ -212,7 +212,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       );
     };
 
-    const createPollingBot = async (): Promise<TelegramBot | undefined> => {
+    const createPollingBot = async (): Promise<TelegramBotResult | undefined> => {
       try {
         return createTelegramBot({
           token,
@@ -237,7 +237,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       }
     };
 
-    const ensureWebhookCleanup = async (bot: TelegramBot): Promise<"ready" | "retry" | "exit"> => {
+    const ensureWebhookCleanup = async (
+      bot: TelegramBotResult["bot"],
+    ): Promise<"ready" | "retry" | "exit"> => {
       if (webhookCleared) {
         return "ready";
       }
@@ -258,7 +260,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       }
     };
 
-    const runPollingCycle = async (bot: TelegramBot): Promise<"continue" | "exit"> => {
+    const runPollingCycle = async (botResult: TelegramBotResult): Promise<"continue" | "exit"> => {
+      const { bot, drain } = botResult;
       const runner = run(bot, runnerOptions);
       activeRunner = runner;
       let stopPromise: Promise<void> | undefined;
@@ -316,17 +319,24 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       } finally {
         opts.abortSignal?.removeEventListener("abort", stopOnAbort);
         await stopRunner();
+        // Flush timer-buffered messages (media groups, text fragments, debounce
+        // windows) and persist the update-offset watermark before stopping the bot.
+        // Without this drain, updates already confirmed to Telegram via getUpdates
+        // are silently lost when the process exits (e.g. on systemd restart).
+        await drain().catch((err) => {
+          log(`[telegram] drain error on shutdown: ${formatErrorMessage(err)}`);
+        });
         await stopBot();
       }
     };
 
     while (!opts.abortSignal?.aborted) {
-      const bot = await createPollingBot();
-      if (!bot) {
+      const botResult = await createPollingBot();
+      if (!botResult) {
         continue;
       }
 
-      const cleanupState = await ensureWebhookCleanup(bot);
+      const cleanupState = await ensureWebhookCleanup(botResult.bot);
       if (cleanupState === "retry") {
         continue;
       }
@@ -334,7 +344,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         return;
       }
 
-      const state = await runPollingCycle(bot);
+      const state = await runPollingCycle(botResult);
       if (state === "exit") {
         return;
       }

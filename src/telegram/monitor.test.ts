@@ -63,6 +63,10 @@ const { createdBotStops } = vi.hoisted(() => ({
   createdBotStops: [] as Array<ReturnType<typeof vi.fn<() => void>>>,
 }));
 
+const { createdBotDrains } = vi.hoisted(() => ({
+  createdBotDrains: [] as Array<ReturnType<typeof vi.fn<() => Promise<void>>>>,
+}));
+
 const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
   computeBackoff: vi.fn(() => 0),
   sleepWithAbort: vi.fn(async () => undefined),
@@ -154,7 +158,9 @@ vi.mock("./bot.js", () => ({
       }
       await api.sendMessage(chatId, `echo:${text}`, { parse_mode: "HTML" });
     };
-    return {
+    const drain = vi.fn(async () => undefined);
+    createdBotDrains.push(drain);
+    const bot = {
       on: vi.fn(),
       api,
       me: { username: "mybot" },
@@ -162,6 +168,7 @@ vi.mock("./bot.js", () => ({
       stop,
       start: vi.fn(),
     };
+    return { bot, drain };
   },
   createTelegramWebhookCallback: vi.fn(),
 }));
@@ -211,6 +218,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     resetUnhandledRejection();
     createTelegramBotErrors.length = 0;
     createdBotStops.length = 0;
+    createdBotDrains.length = 0;
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -373,6 +381,27 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     expect(createdBotStops.length).toBe(1);
     expect(createdBotStops[0]).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls drain before stopping bot on graceful shutdown", async () => {
+    const abort = new AbortController();
+
+    mockRunOnceAndAbort(abort);
+
+    await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+    const drain = createdBotDrains[0];
+    const stop = createdBotStops[0];
+    expect(drain).toBeDefined();
+    expect(stop).toBeDefined();
+    expect(drain).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(1);
+
+    // Verify drain was awaited before stop by checking invocation order on the mocks.
+    // Both are called exactly once; drain's mock call index must precede stop's.
+    const drainCallIdx = drain.mock.invocationCallOrder[0];
+    const stopCallIdx = stop.mock.invocationCallOrder[0];
+    expect(drainCallIdx).toBeLessThan(stopCallIdx);
   });
 
   it("surfaces non-recoverable errors", async () => {

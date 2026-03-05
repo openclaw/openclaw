@@ -2259,4 +2259,110 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
+
+  it("drain() flushes pending media group buffers before timer fires", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    try {
+      const { drain } = createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      // Send two messages belonging to the same media group
+      await handler({
+        update: { update_id: 901 },
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 456, username: "testuser" },
+          message_id: 801,
+          date: 1736380800,
+          media_group_id: "drain-test-group",
+          caption: "drain test",
+          photo: [{ file_id: "drain-p1" }],
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/drain-p1.jpg" }),
+      });
+      await handler({
+        update: { update_id: 902 },
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 456, username: "testuser" },
+          message_id: 802,
+          date: 1736380800,
+          media_group_id: "drain-test-group",
+          photo: [{ file_id: "drain-p2" }],
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/drain-p2.jpg" }),
+      });
+
+      // The timer hasn't fired yet; nothing processed
+      expect(replySpy).not.toHaveBeenCalled();
+
+      // Calling drain() must flush the buffered media group immediately
+      await drain();
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0]?.[0] as { MediaPaths?: string[] };
+      expect(payload.MediaPaths).toHaveLength(2);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("drain() flushes pending text fragment buffers before timer fires", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    useFrozenTime("2026-02-20T00:00:00.000Z");
+    try {
+      const { drain } = createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      const part1 = "X".repeat(4100);
+
+      await handler({
+        update: { update_id: 911 },
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 456, username: "testuser" },
+          message_id: 811,
+          date: 1736380800,
+          text: part1,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      // Fragment buffered; nothing dispatched yet
+      expect(replySpy).not.toHaveBeenCalled();
+
+      // drain() must flush the fragment immediately without waiting for the timer
+      await drain();
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      useRealTime();
+    }
+  });
 });
