@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { expectPosixMode } from "../config/config.backup-rotation.test-helpers.js";
 import {
   appendCronRunLog,
   DEFAULT_CRON_RUN_LOG_KEEP_LINES,
@@ -95,7 +96,7 @@ describe("cron run log", () => {
 
       // Defense in depth: log files should be owner-only.
       const stat = await fs.stat(logPath);
-      expect(stat.mode & 0o777).toBe(0o600);
+      expectPosixMode(stat.mode, 0o600);
     });
   });
 

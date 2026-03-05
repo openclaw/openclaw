@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectPosixMode } from "../config/config.backup-rotation.test-helpers.js";
 import { createCronStoreHarness } from "./service.test-harness.js";
 import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
 import type { CronStoreFile } from "./types.js";
@@ -82,8 +83,8 @@ describe("cron store", () => {
     // Defense in depth: store and backup should be owner-only.
     const currentStat = await fs.stat(store.storePath);
     const backupStat = await fs.stat(`${store.storePath}.bak`);
-    expect(currentStat.mode & 0o777).toBe(0o600);
-    expect(backupStat.mode & 0o777).toBe(0o600);
+    expectPosixMode(currentStat.mode, 0o600);
+    expectPosixMode(backupStat.mode, 0o600);
   });
 });
 
