@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { DiscordProbe } from "../../discord/probe.js";
 import type { DiscordTokenResolution } from "../../discord/token.js";
@@ -261,6 +261,30 @@ describe("channel plugin loader", () => {
     expect(await loadChannelOutboundAdapter("msteams")).toBe(msteamsOutbound);
     setActivePluginRegistry(registryWithMSTeamsV2);
     expect(await loadChannelOutboundAdapter("msteams")).toBe(msteamsOutboundV2);
+  });
+
+  it("memoizes missing plugin lookups within the active registry version", async () => {
+    const registry = createTestRegistry([
+      { pluginId: "msteams", plugin: msteamsPlugin, source: "test" },
+    ]);
+    setActivePluginRegistry(registry, "registry-miss-cache");
+
+    const findSpy = vi.spyOn(registry.channels, "find");
+    expect(await loadChannelPlugin("missing-plugin-id")).toBeUndefined();
+    expect(await loadChannelPlugin("missing-plugin-id")).toBeUndefined();
+    expect(findSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears cached misses when the registry is re-activated", async () => {
+    const registry = createTestRegistry([]);
+    setActivePluginRegistry(registry, "registry-miss-refresh");
+    expect(await loadChannelPlugin("slack")).toBeUndefined();
+
+    const slackPlugin: ChannelPlugin = createChannelTestPluginBase({ id: "slack", label: "Slack" });
+    registry.channels = [{ pluginId: "slack", plugin: slackPlugin, source: "test" }];
+    setActivePluginRegistry(registry, "registry-miss-refresh");
+
+    expect(await loadChannelPlugin("slack")).toBe(slackPlugin);
   });
 
   it("returns undefined when plugin has no outbound adapter", async () => {
