@@ -66,15 +66,15 @@ function mergeRuntimeSnapshot(
       continue;
     }
     const accountRuntimeMap = runtimeAccounts[channelId];
+    const hasAccountRuntimeMap = !!accountRuntimeMap && Object.keys(accountRuntimeMap).length > 0;
     const preferredRuntimeAccount =
-      accountRuntimeMap && currentChannel.accountId
+      hasAccountRuntimeMap && currentChannel.accountId
         ? accountRuntimeMap[currentChannel.accountId]
         : undefined;
-    let nextChannel = mergeRuntimeFields(
-      currentChannel,
-      preferredRuntimeAccount ?? runtimeChannel,
-    ) as ChannelHealthSummary;
-    if (accountRuntimeMap && Object.keys(accountRuntimeMap).length > 0) {
+    const channelRuntime =
+      preferredRuntimeAccount ?? (hasAccountRuntimeMap ? undefined : runtimeChannel);
+    let nextChannel = mergeRuntimeFields(currentChannel, channelRuntime) as ChannelHealthSummary;
+    if (hasAccountRuntimeMap) {
       const currentAccounts = currentChannel.accounts ?? {};
       let nextAccounts = currentAccounts;
       for (const [accountId, runtimeAccount] of Object.entries(accountRuntimeMap)) {

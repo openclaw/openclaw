@@ -1043,6 +1043,61 @@ describe("gateway healthHandlers.status scope handling", () => {
     expect(payload.channels.whatsapp.running).toBe(true);
     expect(payload.channels.whatsapp.connected).toBe(true);
   });
+
+  it("does not apply default runtime channel state when selected account has no runtime entry", async () => {
+    const refreshed = createHealthSummary(false, false);
+    refreshed.channels.whatsapp.accountId = "ghost";
+    refreshed.channels.whatsapp.accounts = {
+      default: {
+        accountId: "default",
+        configured: true,
+        linked: true,
+        running: false,
+        connected: false,
+      },
+      ghost: {
+        accountId: "ghost",
+        configured: false,
+        linked: false,
+        running: false,
+        connected: false,
+      },
+    };
+    const runtime = {
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          running: true,
+          connected: true,
+        },
+      },
+      channelAccounts: {
+        whatsapp: {
+          default: {
+            accountId: "default",
+            running: true,
+            connected: true,
+          },
+        },
+      },
+    };
+
+    const { respond } = await runHealth({
+      cached: null,
+      refreshed,
+      runtime,
+      probe: true,
+    });
+    const payload = respond.mock.calls[0]?.[1] as ReturnType<typeof createHealthSummary>;
+
+    expect(payload.channels.whatsapp.accountId).toBe("ghost");
+    expect(payload.channels.whatsapp.running).toBe(false);
+    expect(payload.channels.whatsapp.connected).toBe(false);
+    expect(payload.channels.whatsapp.accounts.default.running).toBe(true);
+    expect(payload.channels.whatsapp.accounts.default.connected).toBe(true);
+    expect(payload.channels.whatsapp.accounts.ghost.running).toBe(false);
+    expect(payload.channels.whatsapp.accounts.ghost.connected).toBe(false);
+  });
 });
 
 describe("logs.tail", () => {
