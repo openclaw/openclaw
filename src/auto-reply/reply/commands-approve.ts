@@ -1,5 +1,9 @@
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
+import {
+  isTelegramExecApprovalApprover,
+  isTelegramExecApprovalClientEnabled,
+} from "../../telegram/exec-approvals.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -82,6 +86,29 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
 
   if (!parsed.ok) {
     return { shouldContinue: false, reply: { text: parsed.error } };
+  }
+
+  if (params.command.channel === "telegram") {
+    if (
+      !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
+    ) {
+      return {
+        shouldContinue: false,
+        reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
+      };
+    }
+    if (
+      !isTelegramExecApprovalApprover({
+        cfg: params.cfg,
+        accountId: params.ctx.AccountId,
+        senderId: params.command.senderId,
+      })
+    ) {
+      return {
+        shouldContinue: false,
+        reply: { text: "❌ You are not authorized to approve exec requests on Telegram." },
+      };
+    }
   }
 
   const missingScope = requireGatewayClientScopeForInternalChannel(params, {

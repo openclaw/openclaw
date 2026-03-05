@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { buildExecApprovalPendingReplyPayload } from "../infra/exec-approval-reply.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -139,6 +140,46 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
   return urls;
 }
 
+function readExecApprovalPendingDetails(result: unknown): {
+  approvalId: string;
+  approvalSlug: string;
+  expiresAtMs?: number;
+  host: "gateway" | "node";
+  command: string;
+  cwd?: string;
+  nodeId?: string;
+  warningText?: string;
+} | null {
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+  const outer = result as Record<string, unknown>;
+  const details =
+    outer.details && typeof outer.details === "object" && !Array.isArray(outer.details)
+      ? (outer.details as Record<string, unknown>)
+      : outer;
+  if (details.status !== "approval-pending") {
+    return null;
+  }
+  const approvalId = typeof details.approvalId === "string" ? details.approvalId.trim() : "";
+  const approvalSlug = typeof details.approvalSlug === "string" ? details.approvalSlug.trim() : "";
+  const command = typeof details.command === "string" ? details.command : "";
+  const host = details.host === "node" ? "node" : details.host === "gateway" ? "gateway" : null;
+  if (!approvalId || !approvalSlug || !command || !host) {
+    return null;
+  }
+  return {
+    approvalId,
+    approvalSlug,
+    expiresAtMs: typeof details.expiresAtMs === "number" ? details.expiresAtMs : undefined,
+    host,
+    command,
+    cwd: typeof details.cwd === "string" ? details.cwd : undefined,
+    nodeId: typeof details.nodeId === "string" ? details.nodeId : undefined,
+    warningText: typeof details.warningText === "string" ? details.warningText : undefined,
+  };
+}
+
 function emitToolResultOutput(params: {
   ctx: ToolHandlerContext;
   toolName: string;
@@ -149,6 +190,28 @@ function emitToolResultOutput(params: {
 }) {
   const { ctx, toolName, meta, isToolError, result, sanitizedResult } = params;
   if (!ctx.params.onToolResult) {
+    return;
+  }
+
+  const approvalPending = readExecApprovalPendingDetails(result);
+  if (!isToolError && approvalPending) {
+    try {
+      void ctx.params.onToolResult(
+        buildExecApprovalPendingReplyPayload({
+          approvalId: approvalPending.approvalId,
+          approvalSlug: approvalPending.approvalSlug,
+          command: approvalPending.command,
+          cwd: approvalPending.cwd,
+          host: approvalPending.host,
+          nodeId: approvalPending.nodeId,
+          expiresAtMs: approvalPending.expiresAtMs,
+          warningText: approvalPending.warningText,
+        }),
+      );
+      ctx.state.deterministicApprovalPromptSent = true;
+    } catch {
+      // ignore delivery failures
+    }
     return;
   }
 

@@ -321,6 +321,7 @@ export async function processGatewayAllowlist(
           host: "gateway",
           command: params.command,
           cwd: params.workdir,
+          warningText,
         },
       },
     };

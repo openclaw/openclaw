@@ -22,7 +22,7 @@ import { normalizePollInput, type PollInput } from "../polls.js";
 import { loadWebMedia } from "../web/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { buildTelegramThreadParams } from "./bot/helpers.js";
+import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
@@ -86,6 +86,16 @@ type TelegramReactionOpts = {
   remove?: boolean;
   verbose?: boolean;
   retry?: RetryConfig;
+};
+
+type TelegramTypingOpts = {
+  cfg?: ReturnType<typeof loadConfig>;
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: TelegramApiOverride;
+  retry?: RetryConfig;
+  messageThreadId?: number;
 };
 
 function resolveTelegramMessageIdOrThrow(
@@ -775,6 +785,39 @@ export async function sendMessageTelegram(
     direction: "outbound",
   });
   return { messageId: String(messageId), chatId: String(res?.chat?.id ?? chatId) };
+}
+
+export async function sendTypingTelegram(
+  to: string,
+  opts: TelegramTypingOpts = {},
+): Promise<{ ok: true }> {
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const target = parseTelegramTarget(to);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: target.chatId,
+    persistTarget: to,
+    verbose: opts.verbose,
+  });
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+  });
+  const threadParams = buildTypingThreadParams(target.messageThreadId ?? opts.messageThreadId);
+  await requestWithDiag(
+    () =>
+      api.sendChatAction(
+        chatId,
+        "typing",
+        threadParams as Parameters<TelegramApi["sendChatAction"]>[2],
+      ),
+    "typing",
+  );
+  return { ok: true };
 }
 
 export async function reactMessageTelegram(

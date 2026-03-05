@@ -60,4 +60,5 @@ export type ExecToolDetails =
       command: string;
       cwd?: string;
       nodeId?: string;
+      warningText?: string;
     };

@@ -377,6 +377,7 @@ export async function executeNodeHostCommand(
         command: params.command,
         cwd: params.workdir,
         nodeId,
+        warningText,
       },
     };
   }

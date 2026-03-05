@@ -293,7 +293,12 @@ describe("/approve command", () => {
   it("accepts Telegram command mentions for /approve", async () => {
     const cfg = {
       commands: { text: true },
-      channels: { telegram: { allowFrom: ["*"] } },
+      channels: {
+        telegram: {
+          allowFrom: ["*"],
+          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
+        },
+      },
     } as OpenClawConfig;
     const params = buildParams("/approve@bot abc12345 allow-once", cfg, {
       Provider: "telegram",
@@ -317,7 +322,12 @@ describe("/approve command", () => {
   it("surfaces unknown or expired approval id errors", async () => {
     const cfg = {
       commands: { text: true },
-      channels: { telegram: { allowFrom: ["*"] } },
+      channels: {
+        telegram: {
+          allowFrom: ["*"],
+          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
+        },
+      },
     } as OpenClawConfig;
     const params = buildParams("/approve abc12345 allow-once", cfg, {
       Provider: "telegram",
@@ -330,6 +340,45 @@ describe("/approve command", () => {
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("unknown or expired approval id");
+  });
+
+  it("rejects Telegram /approve when telegram exec approvals are disabled", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc12345 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Telegram exec approvals are not enabled");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects Telegram /approve from non-approvers", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: {
+        telegram: {
+          allowFrom: ["*"],
+          execApprovals: { enabled: true, approvers: ["999"], target: "dm" },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc12345 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("not authorized to approve");
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("rejects gateway clients without approvals scope", async () => {
