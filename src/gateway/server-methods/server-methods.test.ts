@@ -666,6 +666,134 @@ describe("exec approval handlers", () => {
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("accepts unique short approval id prefixes", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const respond = vi.fn();
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+    };
+
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-12345678-aaaa");
+    void manager.register(record, 60_000);
+
+    await resolveExecApproval({
+      handlers,
+      id: "approval-1234",
+      respond,
+      context,
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
+  });
+
+  it("rejects ambiguous short approval id prefixes", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const respond = vi.fn();
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+    };
+
+    void manager.register(
+      manager.create({ command: "echo one" }, 60_000, "approval-abcd-1111"),
+      60_000,
+    );
+    void manager.register(
+      manager.create({ command: "echo two" }, 60_000, "approval-abcd-2222"),
+      60_000,
+    );
+
+    await resolveExecApproval({
+      handlers,
+      id: "approval-abcd",
+      respond,
+      context,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("ambiguous approval id prefix"),
+      }),
+    );
+  });
+
+  it("returns deterministic unknown/expired message for missing approval ids", async () => {
+    const { handlers, respond, context } = createExecApprovalFixture();
+
+    await resolveExecApproval({
+      handlers,
+      id: "missing-approval-id",
+      respond,
+      context,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "unknown or expired approval id",
+      }),
+    );
+  });
+
+  it("resolves only the targeted approval id when multiple requests are pending", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+      hasExecApprovalClients: () => true,
+    };
+    const respondOne = vi.fn();
+    const respondTwo = vi.fn();
+
+    const requestOne = requestExecApproval({
+      handlers,
+      respond: respondOne,
+      context,
+      params: { id: "approval-one", host: "gateway", timeoutMs: 60_000 },
+    });
+    const requestTwo = requestExecApproval({
+      handlers,
+      respond: respondTwo,
+      context,
+      params: { id: "approval-two", host: "gateway", timeoutMs: 60_000 },
+    });
+
+    await drainApprovalRequestTicks();
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-one",
+      respond: resolveRespond,
+      context,
+    });
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-one")?.decision).toBe("allow-once");
+    expect(manager.getSnapshot("approval-two")?.decision).toBeUndefined();
+    expect(manager.getSnapshot("approval-two")?.resolvedAtMs).toBeUndefined();
+
+    expect(manager.expire("approval-two", "test-expire")).toBe(true);
+    await requestOne;
+    await requestTwo;
+
+    expect(respondOne).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-one", decision: "allow-once" }),
+      undefined,
+    );
+    expect(respondTwo).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-two", decision: null }),
+      undefined,
+    );
+  });
+
   it("forwards turn-source metadata to exec approval forwarding", async () => {
     vi.useFakeTimers();
     try {

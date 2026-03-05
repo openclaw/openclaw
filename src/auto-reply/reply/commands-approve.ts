@@ -4,7 +4,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
-const COMMAND = "/approve";
+const COMMAND_WITH_MENTION_REGEX = /^\/approve(?:@[^\s]+)?(?:\s|$)/i;
 
 const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {
   allow: "allow-once",
@@ -25,10 +25,11 @@ type ParsedApproveCommand =
 
 function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith(COMMAND)) {
+  const commandMatch = trimmed.match(COMMAND_WITH_MENTION_REGEX);
+  if (!commandMatch) {
     return null;
   }
-  const rest = trimmed.slice(COMMAND.length).trim();
+  const rest = trimmed.slice(commandMatch[0].length).trim();
   if (!rest) {
     return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
   }

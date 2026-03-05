@@ -25,6 +25,7 @@ import {
   resolveExecHostApprovalContext,
 } from "./bash-tools.exec-host-shared.js";
 import {
+  buildApprovalPendingMessage,
   DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
   emitExecSystemEvent,
@@ -131,6 +132,12 @@ export async function processGatewayAllowlist(
     }) ||
     requiresHeredocApproval ||
     obfuscation.detected;
+  const hasCommandChain = /&&|\|\||;|\r|\n/.test(params.command);
+  if (requiresAsk && hasCommandChain) {
+    throw new Error(
+      "exec approval requires a single command segment. Split chained commands so each elevated step is approved separately.",
+    );
+  }
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires explicit approval in allowlist mode.",
@@ -303,9 +310,14 @@ export async function processGatewayAllowlist(
         content: [
           {
             type: "text",
-            text:
-              `${warningText}Approval required (id ${approvalSlug}). ` +
-              "Approve to run; updates will arrive after completion.",
+            text: buildApprovalPendingMessage({
+              warningText,
+              approvalSlug,
+              approvalId,
+              command: params.command,
+              cwd: params.workdir,
+              host: "gateway",
+            }),
           },
         ],
         details: {
