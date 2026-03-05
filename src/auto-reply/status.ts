@@ -256,7 +256,7 @@ const readUsageFromSessionLog = (
     }
     const tail = buf.toString("utf-8");
     let newlineIdx = -1;
-    const lines = (offset > 0 ? tail.slice((newlineIdx = tail.indexOf("\n")) >= 0 ? newlineIdx + 1 : 0) : tail).split(/\n+/);
+    const lines = (offset > 0 ? ((newlineIdx = tail.indexOf("\n")) >= 0 ? tail.slice(newlineIdx + 1) : '') : tail).split(/\n+/);
 
     let input = 0;
     let output = 0;
