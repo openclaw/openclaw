@@ -192,4 +192,3 @@ const scaled = frequencies.map((value) => {
   const db = 20 * Math.log10(value);
   return (db - minDb) / (maxDb - minDb);
 });
-```
