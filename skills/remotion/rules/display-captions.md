@@ -124,4 +124,3 @@ return (
 - Place captions file in the `public/` folder and use `staticFile()`
 - Use `useDelayRender()` to prevent rendering before captions load
 - Consider responsive design for different video dimensions
-- Test with different `combineTokensWithinMilliseconds` values to find optimal pacing
