@@ -64,11 +64,23 @@ describe("checkExecBlockedPath", () => {
   });
 
   it("returns null when config file is missing", () => {
+    const err = new Error("ENOENT") as NodeJS.ErrnoException;
+    err.code = "ENOENT";
     readFileSyncSpy.mockImplementation(() => {
-      throw new Error("ENOENT");
+      throw err;
     });
     _resetExecBlockedPaths();
     expect(checkExecBlockedPath("cat ~/.ssh/id_rsa")).toBeNull();
+  });
+
+  it("throws on permission errors (fail closed)", () => {
+    const err = new Error("EACCES") as NodeJS.ErrnoException;
+    err.code = "EACCES";
+    readFileSyncSpy.mockImplementation(() => {
+      throw err;
+    });
+    _resetExecBlockedPaths();
+    expect(() => checkExecBlockedPath("test")).toThrow("failed to read");
   });
 
   it("throws on invalid config format", () => {

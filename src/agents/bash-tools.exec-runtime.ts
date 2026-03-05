@@ -300,8 +300,20 @@ function getExecBlockedPaths(): string[] {
     if (err instanceof Error && err.message.startsWith("exec-blocked-paths:")) {
       throw err;
     }
-    // File not found: no blocking configured (valid state)
-    _execBlockedPaths = [];
+    // ENOENT: file not found — no blocking configured (valid state)
+    if (
+      err &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      _execBlockedPaths = [];
+    } else {
+      // EACCES, EPERM, etc.: fail closed
+      throw new Error(`exec-blocked-paths: failed to read ${configPath}: ${String(err)}`, {
+        cause: err,
+      });
+    }
   }
   return _execBlockedPaths;
 }
