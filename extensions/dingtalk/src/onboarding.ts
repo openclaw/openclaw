@@ -277,17 +277,11 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
     });
 
     if (secretResult.action === "use-env") {
-      clientId = process.env.DINGTALK_CLIENT_ID?.trim() ?? null;
       next = {
         ...next,
         channels: {
           ...next.channels,
-          dingtalk: {
-            ...next.channels?.dingtalk,
-            enabled: true,
-            clientId: clientId ?? undefined,
-            clientSecret: { source: "env", provider: "env", id: "DINGTALK_CLIENT_SECRET" },
-          },
+          dingtalk: { ...next.channels?.dingtalk, enabled: true },
         },
       };
     } else if (secretResult.action === "set") {

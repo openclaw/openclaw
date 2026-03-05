@@ -29,9 +29,9 @@ export async function monitorSingleAccount(params: {
     onMessage: (downstream: DWClientDownStream) => {
       try {
         const msg = JSON.parse(downstream.data) as DingtalkRobotMessage;
-        const messageId = msg.msgId ?? downstream.headers?.messageId;
+        const rawMessageId = msg.msgId ?? downstream.headers?.messageId;
+        const messageId = rawMessageId ? `${account.accountId}:${rawMessageId}` : undefined;
 
-        // 消息去重：check() 返回 true 表示已存在（重复），同时自动标记新 key
         if (messageId && dedupeCache.check(messageId)) {
           log(`dingtalk[${account.accountId}]: skipping duplicate message ${messageId}`);
           return;

@@ -1,5 +1,6 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/dingtalk";
 import { resolveDingtalkAccount } from "./accounts.js";
+import { sendImageMessage } from "./media.js";
 import { getDingtalkRuntime } from "./runtime.js";
 import { sendTextMessage, sendMarkdownMessage, sendMessageDingtalk } from "./send.js";
 import { containsMarkdown } from "./text-utils.js";
@@ -70,10 +71,22 @@ export const dingtalkOutbound: ChannelOutboundAdapter = {
     }
 
     if (mediaUrl) {
-      const result = await sendTextMessage({
+      const isImage = /\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/i.test(mediaUrl);
+      if (isImage) {
+        const result = await sendImageMessage({
+          account,
+          ...target,
+          photoURL: mediaUrl,
+        });
+        return { channel: "dingtalk", messageId: result.processQueryKey ?? "", ...result };
+      }
+
+      // Non-image media: send as markdown link (DingTalk robot API has limited file-send support)
+      const result = await sendMarkdownMessage({
         account,
         ...target,
-        text: `[File] ${mediaUrl}`,
+        title: "File",
+        text: `[Download file](${mediaUrl})`,
       });
       return { channel: "dingtalk", messageId: result.processQueryKey ?? "", ...result };
     }

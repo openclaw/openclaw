@@ -176,9 +176,11 @@ export async function handleDingtalkMessage(params: {
   }
 
   // --- DM 策略检查 / DM policy check ---
+  const configAllowFrom = dingtalkCfg?.allowFrom ?? [];
+  let effectiveAllowFrom = configAllowFrom;
+
   if (isDirect) {
     const dmPolicy = dingtalkCfg?.dmPolicy ?? "pairing";
-    const configAllowFrom = dingtalkCfg?.allowFrom ?? [];
 
     if (dmPolicy === "allowlist") {
       const allowed = configAllowFrom.some(
@@ -197,7 +199,7 @@ export async function handleDingtalkMessage(params: {
         accountId: account.accountId,
       });
       const storeAllowFrom = await pairing.readAllowFromStore().catch(() => []);
-      const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];
+      effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];
       const allowed = effectiveAllowFrom.some(
         (entry) => String(entry).trim() === ctx.senderStaffId || String(entry).trim() === "*",
       );
@@ -238,7 +240,9 @@ export async function handleDingtalkMessage(params: {
     cfg,
   );
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const commandAllowFrom = dingtalkCfg?.allowFrom ?? [];
+  const commandAllowFrom = isGroup
+    ? (groupConfig?.allowFrom ?? configAllowFrom)
+    : effectiveAllowFrom;
   const senderAllowedForCommands = commandAllowFrom.some(
     (entry) => String(entry).trim() === ctx.senderStaffId || String(entry).trim() === "*",
   );
