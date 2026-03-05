@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
-import { connectGateway } from "./app-gateway.ts";
+import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  options: { clientVersion?: string };
   emitClose: (info: {
     code: number;
     reason?: string;
@@ -34,6 +35,7 @@ vi.mock("./gateway.ts", () => {
 
     constructor(
       private opts: {
+        clientVersion?: string;
         onClose?: (info: {
           code: number;
           reason: string;
@@ -46,6 +48,7 @@ vi.mock("./gateway.ts", () => {
       gatewayClientInstances.push({
         start: this.start,
         stop: this.stop,
+        options: { clientVersion: this.opts.clientVersion },
         emitClose: (info) => {
           this.opts.onClose?.({
             code: info.code,
@@ -100,6 +103,7 @@ function createHost() {
     assistantName: "OpenClaw",
     assistantAvatar: null,
     assistantAgentId: null,
+    serverVersion: null,
     sessionKey: "main",
     chatRunId: null,
     refreshSessionsAfterChat: new Set<string>(),
@@ -225,5 +229,47 @@ describe("connectGateway", () => {
 
     expect(host.lastError).toContain("gateway token mismatch");
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
+  });
+});
+
+describe("resolveControlUiClientVersion", () => {
+  it("returns serverVersion for same-origin websocket targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "ws://localhost:8787",
+        serverVersion: "2026.3.3",
+        pageUrl: "http://localhost:8787/openclaw/",
+      }),
+    ).toBe("2026.3.3");
+  });
+
+  it("returns serverVersion for same-origin relative targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "/ws",
+        serverVersion: "2026.3.3",
+        pageUrl: "https://control.example.com/openclaw/",
+      }),
+    ).toBe("2026.3.3");
+  });
+
+  it("returns serverVersion for same-origin http targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "https://control.example.com/ws",
+        serverVersion: "2026.3.3",
+        pageUrl: "https://control.example.com/openclaw/",
+      }),
+    ).toBe("2026.3.3");
+  });
+
+  it("omits serverVersion for cross-origin targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "wss://gateway.example.com",
+        serverVersion: "2026.3.3",
+        pageUrl: "https://control.example.com/openclaw/",
+      }),
+    ).toBeUndefined();
   });
 });
