@@ -185,13 +185,14 @@ export async function handleDingtalkMessage(params: {
     ctx.content,
     cfg,
   );
+  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const commandAllowFrom = dingtalkCfg?.allowFrom ?? [];
   const senderAllowedForCommands = commandAllowFrom.some(
     (entry) => String(entry).trim() === ctx.senderStaffId || String(entry).trim() === "*",
   );
   const commandAuthorized = shouldComputeCommandAuthorized
     ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
-        useAccessGroups: false,
+        useAccessGroups,
         authorizers: [
           { configured: commandAllowFrom.length > 0, allowed: senderAllowedForCommands },
         ],
