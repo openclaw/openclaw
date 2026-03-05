@@ -102,6 +102,24 @@ function buildStatusTopicCommandContext() {
   };
 }
 
+function buildStatusTopicCommandContextWithoutForumFlag() {
+  return {
+    match: "",
+    message: {
+      message_id: 3,
+      date: Math.floor(Date.now() / 1000),
+      chat: {
+        id: -1001234567890,
+        type: "supergroup" as const,
+        title: "OpenClaw",
+      },
+      is_topic_message: true,
+      message_thread_id: 42,
+      from: { id: 200, username: "bob" },
+    },
+  };
+}
+
 function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
   allowFrom?: string[];
@@ -265,6 +283,47 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       >
     )[0]?.[0];
     expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(boundSessionKey);
+  });
+
+  it("routes topic commands when is_topic_message is set without chat.is_forum", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "topic-agent" }, { id: "group-agent" }],
+      },
+      bindings: [
+        {
+          agentId: "topic-agent",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "group", id: "-1001234567890:topic:42" },
+          },
+        },
+        {
+          agentId: "group-agent",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "group", id: "-1001234567890" },
+          },
+        },
+      ],
+    };
+    const { handler } = registerAndResolveStatusHandler({
+      cfg,
+      allowFrom: ["200"],
+      groupAllowFrom: ["200"],
+    });
+    await handler(buildStatusTopicCommandContextWithoutForumFlag());
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandTargetSessionKey?: string } }]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toContain(
+      "agent:topic-agent:telegram:group:-1001234567890:topic:42",
+    );
   });
 
   it("aborts native command dispatch when configured ACP topic binding cannot initialize", async () => {

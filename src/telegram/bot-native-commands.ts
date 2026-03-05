@@ -141,6 +141,14 @@ type RegisterTelegramNativeCommandsParams = {
   opts: { token: string };
 };
 
+function isTelegramForumCommandMessage(msg: NonNullable<TelegramNativeCommandContext["message"]>) {
+  if ((msg.chat as { is_forum?: boolean }).is_forum === true) {
+    return true;
+  }
+  // Some topic updates omit chat.is_forum but still mark topic messages explicitly.
+  return (msg as { is_topic_message?: boolean }).is_topic_message === true;
+}
+
 async function resolveTelegramCommandAuth(params: {
   msg: NonNullable<TelegramNativeCommandContext["message"]>;
   bot: Bot;
@@ -173,7 +181,7 @@ async function resolveTelegramCommandAuth(params: {
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
-  const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+  const isForum = isTelegramForumCommandMessage(msg);
   const threadSpec = resolveTelegramThreadSpec({
     isGroup,
     isForum,
