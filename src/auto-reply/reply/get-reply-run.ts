@@ -277,26 +277,7 @@ export async function runPreparedReply(
     groupSystemPrompt,
   ].filter(Boolean);
 
-  // Inject operator-controlled system prompt from file (agents.defaults.systemPromptFile).
-  // Resolved relative to the config file; agent cannot modify it. Fails open on read error.
-  const systemPromptFilePath = cfg.agents?.defaults?.systemPromptFile;
-  if (systemPromptFilePath) {
-    const resolvedPath = path.isAbsolute(systemPromptFilePath)
-      ? systemPromptFilePath
-      : path.resolve(path.dirname(CONFIG_PATH), systemPromptFilePath);
-    try {
-      const fileContent = (await readFile(resolvedPath, "utf8")).trim();
-      if (fileContent) {
-        extraSystemPromptParts.push(fileContent);
-      }
-    } catch (err) {
-      logVerbose(
-        `[system-prompt-file] Could not read systemPromptFile "${resolvedPath}": ${(err as NodeJS.ErrnoException).message}`,
-      );
-    }
-  }
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   if (
@@ -362,6 +343,26 @@ export async function runPreparedReply(
   });
   if (queuedSystemPrompt) {
     extraSystemPromptParts.push(queuedSystemPrompt);
+  }
+  // Inject operator-controlled system prompt from file (agents.defaults.systemPromptFile).
+  // Injected AFTER queuedSystemPrompt so it appears last in the system prompt, giving it the
+  // highest LLM weight and ensuring it cannot be overridden by queued/deferred content.
+  // Resolved relative to the config file; agent cannot modify it. Fails open on read error.
+  const systemPromptFilePath = cfg.agents?.defaults?.systemPromptFile;
+  if (systemPromptFilePath) {
+    const resolvedPath = path.isAbsolute(systemPromptFilePath)
+      ? systemPromptFilePath
+      : path.resolve(path.dirname(CONFIG_PATH), systemPromptFilePath);
+    try {
+      const fileContent = (await readFile(resolvedPath, "utf8")).trim();
+      if (fileContent) {
+        extraSystemPromptParts.push(fileContent);
+      }
+    } catch (err) {
+      logVerbose(
+        `[system-prompt-file] Could not read systemPromptFile "${resolvedPath}": ${(err as NodeJS.ErrnoException).message}`,
+      );
+    }
   }
   prefixedBodyBase = appendUntrustedContext(prefixedBodyBase, sessionCtx.UntrustedContext);
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
