@@ -136,6 +136,12 @@ function createWebSearchSchema(provider: (typeof SEARCH_PROVIDERS)[number]) {
             "Locale code for UI elements in language-region format (e.g., 'en-US', 'de-DE', 'fr-FR', 'tr-TR'). Must include region subtag.",
         }),
       ),
+      domain_filter: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "Domain filter (max 20). Allowlist: ['nature.com'] or denylist: ['-reddit.com']. Cannot mix.",
+        }),
+      ),
     });
   }
 
@@ -783,6 +789,20 @@ function normalizeBraveLanguageParams(params: { search_lang?: string; ui_lang?: 
 }
 
 /**
+ * Translates a domain_filter array into inline Brave Goggles rules.
+ * Allowlist (no `-` prefix): generic `$discard` + `$boost,site=` per domain.
+ * Denylist (`-` prefix): `$discard,site=` per domain.
+ */
+function buildBraveDomainGoggles(domains: string[]): string {
+  const isDenylist = domains[0]?.startsWith("-");
+  if (isDenylist) {
+    return domains.map((d) => `$discard,site=${d.slice(1)}`).join("\n");
+  }
+  const boostRules = domains.map((d) => `$boost,site=${d}`);
+  return ["$discard", ...boostRules].join("\n");
+}
+
+/**
  * Normalizes freshness shortcut to the provider's expected format.
  * Accepts both Brave format (pd/pw/pm/py) and Perplexity format (day/week/month/year).
  * For Brave, also accepts date ranges (YYYY-MM-DDtoYYYY-MM-DD).
@@ -1332,6 +1352,9 @@ async function runWebSearch(params: {
   } else if (params.dateBefore) {
     url.searchParams.set("freshness", `1970-01-01to${params.dateBefore}`);
   }
+  if (params.searchDomainFilter && params.searchDomainFilter.length > 0) {
+    url.searchParams.set("goggles", buildBraveDomainGoggles(params.searchDomainFilter));
+  }
 
   const mapped = await withTrustedWebSearchEndpoint(
     {
@@ -1411,7 +1434,7 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : "Search the web using Brave Search API. Supports domain, region, language, and freshness filtering. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1543,10 +1566,10 @@ export function createWebSearchTool(options?: {
         });
       }
       const domainFilter = readStringArrayParam(params, "domain_filter");
-      if (domainFilter && domainFilter.length > 0 && provider !== "perplexity") {
+      if (domainFilter && domainFilter.length > 0 && !["brave", "perplexity"].includes(provider)) {
         return jsonResult({
           error: "unsupported_domain_filter",
-          message: `domain_filter is not supported by the ${provider} provider. Only Perplexity supports domain filtering.`,
+          message: `domain_filter is not supported by the ${provider} provider. Only Brave and Perplexity support domain filtering.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1619,5 +1642,6 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  buildBraveDomainGoggles,
   resolveRedirectUrl: resolveCitationRedirectUrl,
 } as const;

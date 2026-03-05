@@ -208,6 +208,71 @@ describe("web_search country and language parameters", () => {
   });
 });
 
+describe("web_search brave domain_filter via goggles", () => {
+  const priorFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+    webSearchTesting.SEARCH_CACHE.clear();
+  });
+
+  async function runBraveDomainFilterSearch(domainFilter: string[]) {
+    const mockFetch = installMockFetch({ web: { results: [] } });
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const result = await tool?.execute?.("call-1", {
+      query: "test",
+      domain_filter: domainFilter,
+    });
+    return { mockFetch, result };
+  }
+
+  it("sets goggles param with allowlist rules for Brave", async () => {
+    const { mockFetch } = await runBraveDomainFilterSearch(["nature.com", "science.org"]);
+    expect(mockFetch).toHaveBeenCalled();
+    const url = new URL(mockFetch.mock.calls[0][0] as string);
+    const goggles = url.searchParams.get("goggles");
+    expect(goggles).toBe("$discard\n$boost,site=nature.com\n$boost,site=science.org");
+  });
+
+  it("sets goggles param with denylist rules for Brave", async () => {
+    const { mockFetch } = await runBraveDomainFilterSearch(["-reddit.com", "-pinterest.com"]);
+    expect(mockFetch).toHaveBeenCalled();
+    const url = new URL(mockFetch.mock.calls[0][0] as string);
+    const goggles = url.searchParams.get("goggles");
+    expect(goggles).toBe("$discard,site=reddit.com\n$discard,site=pinterest.com");
+  });
+
+  it("rejects mixed allowlist/denylist for Brave", async () => {
+    const { mockFetch, result } = await runBraveDomainFilterSearch([
+      "nature.com",
+      "-reddit.com",
+    ]);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "invalid_domain_filter" });
+  });
+
+  it("rejects more than 20 domains for Brave", async () => {
+    const domains = Array.from({ length: 21 }, (_, i) => `domain${i}.com`);
+    const { mockFetch, result } = await runBraveDomainFilterSearch(domains);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "invalid_domain_filter" });
+  });
+
+  it("does not set goggles param when domain_filter is omitted", async () => {
+    const mockFetch = installMockFetch({ web: { results: [] } });
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    await tool?.execute?.("call-1", { query: "test" });
+    expect(mockFetch).toHaveBeenCalled();
+    const url = new URL(mockFetch.mock.calls[0][0] as string);
+    expect(url.searchParams.has("goggles")).toBe(false);
+  });
+});
+
 describe("web_search provider proxy dispatch", () => {
   const priorFetch = global.fetch;
 

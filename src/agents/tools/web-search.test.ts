@@ -15,6 +15,7 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  buildBraveDomainGoggles,
 } = __testing;
 
 describe("web_search brave language param normalization", () => {
@@ -269,5 +270,29 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("buildBraveDomainGoggles", () => {
+  it("builds allowlist with generic $discard and per-domain $boost rules", () => {
+    expect(buildBraveDomainGoggles(["nature.com", "science.org"])).toBe(
+      "$discard\n$boost,site=nature.com\n$boost,site=science.org",
+    );
+  });
+
+  it("builds allowlist for a single domain", () => {
+    expect(buildBraveDomainGoggles(["example.com"])).toBe("$discard\n$boost,site=example.com");
+  });
+
+  it("builds denylist with per-domain $discard rules, stripping the - prefix", () => {
+    expect(buildBraveDomainGoggles(["-reddit.com", "-pinterest.com"])).toBe(
+      "$discard,site=reddit.com\n$discard,site=pinterest.com",
+    );
+  });
+
+  it("builds denylist for a single domain", () => {
+    expect(buildBraveDomainGoggles(["-spam.example.com"])).toBe(
+      "$discard,site=spam.example.com",
+    );
   });
 });
