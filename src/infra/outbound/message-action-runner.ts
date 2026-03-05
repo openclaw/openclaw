@@ -528,6 +528,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       toolContext: input.toolContext,
       deps: input.deps,
       dryRun,
+      // Propagate the invoking session key so message:sent internal hooks fire
+      // even for direct agent responses where no outbound mirror is set. (#35557)
+      sessionKey: input.sessionKey,
       mirror:
         outboundRoute && !dryRun
           ? {
