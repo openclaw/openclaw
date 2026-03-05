@@ -209,27 +209,21 @@ export function applyJobResult(
         // after the current run ended.  Prevents spin-loops when the
         // schedule computation lands in the same second due to
         // timezone/croner edge cases (see #17821).
-        const minNext = result.endedAt + MIN_REFIRE_GAP_MS;
-        const computedNext = naturalNext !== undefined ? Math.max(naturalNext, minNext) : minNext;
-        
-        if (computedNext <= result.endedAt) {
+        if (naturalNext !== undefined && naturalNext <= result.endedAt) {
           state.deps.log.warn(
             {
               jobId: job.id,
               jobName: job.name,
-              computedNext,
+              naturalNext,
               endedAt: result.endedAt,
               schedule: job.schedule,
             },
-            "cron: computed nextRunAtMs is in the past, recomputing from next second",
+            "cron: natural nextRunAtMs is in the past; applying min refire floor",
           );
-         
-          const retryNext = computeJobNextRunAtMs(job, result.endedAt + 1000);
-          job.state.nextRunAtMs =
-            retryNext !== undefined && retryNext > result.endedAt ? retryNext : computedNext;
-        } else {
-          job.state.nextRunAtMs = computedNext;
         }
+
+        const minNext = result.endedAt + MIN_REFIRE_GAP_MS;
+        job.state.nextRunAtMs = naturalNext !== undefined ? Math.max(naturalNext, minNext) : minNext;
       } else {
         job.state.nextRunAtMs = naturalNext;
       }
