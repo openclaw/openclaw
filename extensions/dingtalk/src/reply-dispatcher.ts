@@ -5,35 +5,29 @@ import {
 import { sendTextMessage, sendMarkdownMessage } from "./send.js";
 import { sendDingtalkCard, updateDingtalkCard } from "./card.js";
 import { getDingtalkRuntime } from "./runtime.js";
+import { containsMarkdown } from "./text-utils.js";
 import type { DingtalkMessageContext, ResolvedDingtalkAccount } from "./types.js";
-
-/**
- * 判断文本是否包含 Markdown 元素 / Detect if text contains Markdown elements
- */
-function containsMarkdown(text: string): boolean {
-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text) ||
-    /^#{1,6}\s/m.test(text) || /\*\*.+?\*\*/.test(text) || /\[.+?\]\(.+?\)/.test(text);
-}
 
 /**
  * 创建钉钉回复分发器 / Create DingTalk reply dispatcher
  */
 export function createDingtalkReplyDispatcher(params: {
+  cfg: import("openclaw/plugin-sdk/dingtalk").ClawdbotConfig;
   account: ResolvedDingtalkAccount;
   ctx: DingtalkMessageContext;
   log: (...args: unknown[]) => void;
 }) {
-  const { account, ctx, log } = params;
+  const { cfg, account, ctx, log } = params;
   const core = getDingtalkRuntime();
   const streamingEnabled = account.config?.streaming !== false;
 
   const textChunkLimit = core.channel.text.resolveTextChunkLimit(
-    {} as any,
+    cfg,
     "dingtalk",
     account.accountId,
     { fallbackLimit: 2000 },
   );
-  const chunkMode = core.channel.text.resolveChunkMode({} as any, "dingtalk");
+  const chunkMode = core.channel.text.resolveChunkMode(cfg, "dingtalk");
 
   // 流式卡片状态 / Streaming card state
   let cardBizId: string | null = null;

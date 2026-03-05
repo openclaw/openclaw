@@ -8,6 +8,7 @@ import {
 import { resolveDingtalkAccount } from "./accounts.js";
 import { createDingtalkReplyDispatcher } from "./reply-dispatcher.js";
 import { getDingtalkRuntime } from "./runtime.js";
+import { sendTextMessage } from "./send.js";
 import type {
   DingtalkRobotMessage,
   DingtalkMessageContext,
@@ -162,14 +163,32 @@ export async function handleDingtalkMessage(params: {
         log(
           `dingtalk[${account.accountId}]: sender ${ctx.senderStaffId} not paired, requesting pairing`,
         );
-        const { code } = await pairing.upsertPairingRequest({
+        const { code, created } = await pairing.upsertPairingRequest({
           id: ctx.senderStaffId,
           meta: { name: ctx.senderNick },
         });
-        // TODO: send pairing reply to user via DingTalk message
-        log(
-          `dingtalk[${account.accountId}]: pairing code ${code} for ${ctx.senderStaffId}`,
-        );
+        if (created) {
+          log(
+            `dingtalk[${account.accountId}]: pairing code ${code} for ${ctx.senderStaffId}`,
+          );
+          try {
+            await sendTextMessage({
+              account,
+              conversationType: "1",
+              conversationId: "",
+              senderStaffId: ctx.senderStaffId,
+              text: core.channel.pairing.buildPairingReply({
+                channel: "dingtalk",
+                idLine: `Your DingTalk user id: ${ctx.senderStaffId}`,
+                code,
+              }),
+            });
+          } catch (err) {
+            log(
+              `dingtalk[${account.accountId}]: failed to send pairing reply: ${err}`,
+            );
+          }
+        }
         return;
       }
     }
@@ -215,6 +234,7 @@ export async function handleDingtalkMessage(params: {
   });
 
   const { dispatcher, replyOptions, markDispatchIdle } = createDingtalkReplyDispatcher({
+    cfg,
     account,
     ctx,
     log,
