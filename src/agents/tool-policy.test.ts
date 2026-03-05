@@ -73,6 +73,8 @@ describe("tool-policy", () => {
   it("normalizes tool names and aliases", () => {
     expect(normalizeToolName(" BASH ")).toBe("exec");
     expect(normalizeToolName("apply-patch")).toBe("apply_patch");
+    expect(normalizeToolName("fs.readFile")).toBe("read");
+    expect(normalizeToolName("system.exec")).toBe("exec");
     expect(normalizeToolName("READ")).toBe("read");
   });
 
