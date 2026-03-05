@@ -10,7 +10,7 @@ import type {
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
+  clearConsumedHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
@@ -446,6 +446,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         historyMap: Map<string, HistoryEntry[]>;
         historyKey: string;
         limit: number;
+        consumedCount: number;
       }
     | undefined;
 
@@ -540,6 +541,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
           historyMap,
           historyKey,
           limit: historyLimit,
+          consumedCount: pendingEntries.length,
         };
       }
     }
@@ -547,10 +549,11 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
 
   await processMessage(messageContext);
   if (pendingHistoryToClear) {
-    clearHistoryEntriesIfEnabled({
+    clearConsumedHistoryEntriesIfEnabled({
       historyMap: pendingHistoryToClear.historyMap,
       historyKey: pendingHistoryToClear.historyKey,
       limit: pendingHistoryToClear.limit,
+      consumedCount: pendingHistoryToClear.consumedCount,
     });
   }
 }

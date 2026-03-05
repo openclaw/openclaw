@@ -172,6 +172,30 @@ export function clearHistoryEntriesIfEnabled(params: {
   clearHistoryEntries({ historyMap: params.historyMap, historyKey: params.historyKey });
 }
 
+export function clearConsumedHistoryEntriesIfEnabled(params: {
+  historyMap: Map<string, HistoryEntry[]>;
+  historyKey: string;
+  limit: number;
+  consumedCount: number;
+}): void {
+  if (params.limit <= 0) {
+    return;
+  }
+  const consumedCount = Math.max(0, Math.floor(params.consumedCount));
+  if (consumedCount <= 0) {
+    return;
+  }
+  const current = params.historyMap.get(params.historyKey) ?? [];
+  if (current.length === 0) {
+    return;
+  }
+  if (consumedCount >= current.length) {
+    params.historyMap.set(params.historyKey, []);
+    return;
+  }
+  params.historyMap.set(params.historyKey, current.slice(consumedCount));
+}
+
 export function buildHistoryContextFromEntries(params: {
   entries: HistoryEntry[];
   currentMessage: string;

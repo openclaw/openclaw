@@ -889,4 +889,70 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
     expect(groupHistories.has("line:group:group-2")).toBe(false);
   });
+
+  it("preserves newly appended pending history entries during mentioned turn processing", async () => {
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    groupHistories.set("line:group:group-3", [{ sender: "user:old", body: "older context" }]);
+    buildLineMessageContextMock.mockResolvedValueOnce({
+      ctxPayload: {
+        From: "line:group:group-3",
+        Body: "@openclaw current",
+        BodyForAgent: "@openclaw current",
+        RawBody: "@openclaw current",
+      },
+      replyToken: "reply-token",
+      route: { agentId: "default", sessionKey: "line:group:group-3" },
+      isGroup: true,
+      userId: "user-3",
+      groupId: "group-3",
+      accountId: "default",
+    });
+    const processMessage = vi.fn(async () => {
+      const current = groupHistories.get("line:group:group-3") ?? [];
+      groupHistories.set("line:group:group-3", [
+        ...current,
+        { sender: "user:new", body: "arrived during processing" },
+      ]);
+    });
+    const event = {
+      type: "message",
+      message: { id: "m-mention-5", type: "text", text: "@openclaw current" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-3", userId: "user-3" },
+      mode: "active",
+      webhookEventId: "evt-mention-5",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: {
+          line: {
+            groupPolicy: "open",
+            groups: { "group-3": { requireMention: true } },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open", groups: { "group-3": { requireMention: true } } },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+      groupHistories,
+      groupHistoryLimit: 5,
+    });
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(groupHistories.get("line:group:group-3")).toEqual([
+      { sender: "user:new", body: "arrived during processing" },
+    ]);
+  });
 });
