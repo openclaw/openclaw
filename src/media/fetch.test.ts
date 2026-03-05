@@ -54,6 +54,46 @@ describe("fetchRemoteMedia", () => {
     ).rejects.toThrow("exceeds maxBytes");
   });
 
+  it("includes stream warnings when overflow cleanup emits non-fatal reader errors", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+
+    const reader = {
+      read: vi
+        .fn<() => Promise<ReadableStreamReadResult<Uint8Array>>>()
+        .mockResolvedValueOnce({ done: false, value: new Uint8Array([1, 2, 3]) }),
+      cancel: vi.fn(async () => {
+        throw new Error("cancel failed");
+      }),
+      releaseLock: vi.fn(() => undefined),
+    };
+
+    const fetchImpl = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: new Headers(),
+          body: {
+            getReader: () => reader,
+          },
+          arrayBuffer: async () => new ArrayBuffer(0),
+          url: "https://example.com/file.bin",
+        }) as unknown as Response,
+    );
+
+    await expect(
+      fetchRemoteMedia({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        maxBytes: 2,
+        lookupFn,
+      }),
+    ).rejects.toThrow("stream warning: cancel: Error: cancel failed");
+  });
+
   it("blocks private IP literals before fetching", async () => {
     const fetchImpl = vi.fn();
     await expect(

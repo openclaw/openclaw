@@ -1,8 +1,14 @@
+export type ReadResponseWithLimitReaderError = {
+  phase: "cancel" | "releaseLock";
+  error: unknown;
+};
+
 export async function readResponseWithLimit(
   res: Response,
   maxBytes: number,
   opts?: {
     onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
+    onReaderError?: (params: ReadResponseWithLimitReaderError) => void;
   },
 ): Promise<Buffer> {
   const onOverflow =
@@ -33,7 +39,9 @@ export async function readResponseWithLimit(
         if (total > maxBytes) {
           try {
             await reader.cancel();
-          } catch {}
+          } catch (error) {
+            opts?.onReaderError?.({ phase: "cancel", error });
+          }
           throw onOverflow({ size: total, maxBytes, res });
         }
         chunks.push(value);
@@ -42,7 +50,9 @@ export async function readResponseWithLimit(
   } finally {
     try {
       reader.releaseLock();
-    } catch {}
+    } catch (error) {
+      opts?.onReaderError?.({ phase: "releaseLock", error });
+    }
   }
 
   return Buffer.concat(
