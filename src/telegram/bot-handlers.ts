@@ -1,5 +1,5 @@
-import type { Bot } from "grammy";
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
+import type { Bot } from "grammy";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   createInboundDebouncer,
@@ -518,20 +518,24 @@ export const registerTelegramHandlers = ({
       ctx,
       bot,
     } = params;
-    
+
     // Helper to send auth hint if bot is mentioned
     const sendAuthHint = async () => {
       if (msg && botUsername && hasBotMention(msg, botUsername)) {
         try {
-          await bot.api.sendMessage(chatId, "You are not authorized to use this bot in this group.", {
-            reply_parameters: { message_id: msg.message_id },
-          });
+          await bot.api.sendMessage(
+            chatId,
+            "You are not authorized to use this bot in this group.",
+            {
+              reply_parameters: { message_id: msg.message_id },
+            },
+          );
         } catch (err) {
           logVerbose(`Failed to send auth hint: ${err}`);
         }
       }
     };
-    
+
     const baseAccess = evaluateTelegramGroupBaseAccess({
       isGroup,
       groupConfig,
@@ -688,7 +692,8 @@ export const registerTelegramHandlers = ({
     context: TelegramEventAuthorizationContext;
     bot: Bot;
   }): Promise<TelegramEventAuthorizationResult> => {
-    const { chatId, chatTitle, isGroup, senderId, senderUsername, mode, context, ctx, bot } = params;
+    const { chatId, chatTitle, isGroup, senderId, senderUsername, mode, context, ctx, bot } =
+      params;
     const {
       dmPolicy,
       resolvedThreadId,
