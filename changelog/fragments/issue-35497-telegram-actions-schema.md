@@ -1,0 +1,1 @@
+- Config/Telegram: strict schema validation now accepts `channels.telegram.actions.editMessage` and `channels.telegram.actions.createForumTopic`, matching existing Telegram action config types. Fixes #35497. Thanks @vincentkoc.
