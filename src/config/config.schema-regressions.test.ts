@@ -126,6 +126,7 @@ describe("config schema regressions", () => {
           },
           pdfMaxBytesMb: 12,
           pdfMaxPages: 25,
+          pdfOcrMode: "auto",
         },
       },
     });
@@ -147,6 +148,24 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.issues.some((issue) => issue.path.includes("agents.defaults.pdfMax"))).toBe(true);
+    }
+  });
+
+  it("rejects invalid pdf OCR mode", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          pdfModel: { primary: "openai/gpt-5-mini" },
+          pdfOcrMode: "enabled",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path.includes("agents.defaults.pdfOcrMode"))).toBe(
+        true,
+      );
     }
   });
 

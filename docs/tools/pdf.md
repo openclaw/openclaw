@@ -14,7 +14,7 @@ read_when:
 Quick behavior:
 
 - Native provider mode for Anthropic and Google model providers.
-- Extraction fallback mode for other providers (extract text first, then page images when needed).
+- Extraction fallback mode for other providers (extract text first, optional OCR fallback, then page images when needed).
 - Supports single (`pdf`) or multi (`pdfs`) input, max 10 PDFs per call.
 
 ## Availability
@@ -73,14 +73,16 @@ Fallback mode is used for non-native providers.
 Flow:
 
 1. Extract text from selected pages (up to `agents.defaults.pdfMaxPages`, default `20`).
-2. If extracted text length is below `200` chars, render selected pages to PNG images and include them.
-3. Send extracted content plus prompt to the selected model.
+2. If extracted text length is below `200` chars, optionally run Mistral OCR based on `agents.defaults.pdfOcrMode`.
+3. If OCR is unavailable/fails/returns weak text, render selected pages to PNG images and include them.
+4. Send extracted content plus prompt to the selected model.
 
 Fallback details:
 
 - Page image extraction uses a pixel budget of `4,000,000`.
 - If the target model does not support image input and there is no extractable text, the tool errors.
 - Extraction fallback requires `pdfjs-dist` (and `@napi-rs/canvas` for image rendering).
+- OCR fallback uses Mistral OCR when enabled; this sends PDF bytes to Mistral over network.
 
 ## Config
 
@@ -94,10 +96,17 @@ Fallback details:
       },
       pdfMaxBytesMb: 10,
       pdfMaxPages: 20,
+      pdfOcrMode: "auto", // auto | off | on
     },
   },
 }
 ```
+
+`pdfOcrMode` behavior:
+
+- `"auto"` (default): attempt OCR only when extraction text is weak and Mistral auth is available.
+- `"off"`: disable OCR fallback.
+- `"on"`: require OCR readiness when weak-text PDFs need OCR.
 
 See [Configuration Reference](/gateway/configuration-reference) for full field details.
 
@@ -109,6 +118,7 @@ Common `details` fields:
 
 - `model`: resolved model ref (`provider/model`)
 - `native`: `true` for native provider mode, `false` for fallback
+- `ocrProvider`: optional provider id when OCR fallback was used (`"mistral"`)
 - `attempts`: fallback attempts that failed before success
 
 Path fields:
@@ -123,6 +133,7 @@ Path fields:
 - Too many PDFs: returns structured error in `details.error = "too_many_pdfs"`
 - Unsupported reference scheme: returns `details.error = "unsupported_pdf_reference"`
 - Native mode with `pages`: throws clear `pages is not supported with native PDF providers` error
+- OCR mode `"on"` with missing Mistral auth: throws clear OCR auth error
 
 ## Examples
 
