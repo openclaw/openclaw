@@ -4,9 +4,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  VERSION,
   readVersionFromBuildInfoForModuleUrl,
   readVersionFromPackageJsonForModuleUrl,
+  resolveBinaryVersion,
   resolveRuntimeServiceVersion,
+  resolveUsableRuntimeVersion,
   resolveVersionFromModuleUrl,
 } from "./version.js";
 
@@ -94,6 +97,42 @@ describe("version resolution", () => {
     expect(resolveVersionFromModuleUrl("not-a-valid-url")).toBeNull();
   });
 
+  it("resolves binary version with explicit precedence", async () => {
+    await withTempDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2.3.4" });
+      const moduleUrl = await ensureModuleFixture(root);
+      expect(
+        resolveBinaryVersion({
+          moduleUrl,
+          injectedVersion: "9.9.9",
+          bundledVersion: "8.8.8",
+          fallback: "0.0.0",
+        }),
+      ).toBe("9.9.9");
+      expect(
+        resolveBinaryVersion({
+          moduleUrl,
+          bundledVersion: "8.8.8",
+          fallback: "0.0.0",
+        }),
+      ).toBe("2.3.4");
+      expect(
+        resolveBinaryVersion({
+          moduleUrl: "not-a-valid-url",
+          bundledVersion: "8.8.8",
+          fallback: "0.0.0",
+        }),
+      ).toBe("8.8.8");
+      expect(
+        resolveBinaryVersion({
+          moduleUrl: "not-a-valid-url",
+          bundledVersion: "   ",
+          fallback: "0.0.0",
+        }),
+      ).toBe("0.0.0");
+    });
+  });
+
   it("prefers OPENCLAW_VERSION over service and package versions", () => {
     expect(
       resolveRuntimeServiceVersion({
@@ -104,14 +143,24 @@ describe("version resolution", () => {
     ).toBe("9.9.9");
   });
 
-  it("uses service and package fallbacks and ignores blank env values", () => {
+  it("normalizes runtime version candidate for fallback handling", () => {
+    expect(resolveUsableRuntimeVersion(undefined)).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion(" \t ")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("0.0.0")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion(" 0.0.0 ")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("2026.3.2")).toBe("2026.3.2");
+    expect(resolveUsableRuntimeVersion(" 2026.3.2 ")).toBe("2026.3.2");
+  });
+
+  it("prefers runtime VERSION over service/package markers and ignores blank env values", () => {
     expect(
       resolveRuntimeServiceVersion({
         OPENCLAW_VERSION: "   ",
         OPENCLAW_SERVICE_VERSION: "  2.0.0  ",
         npm_package_version: "1.0.0",
       }),
-    ).toBe("2.0.0");
+    ).toBe(VERSION);
 
     expect(
       resolveRuntimeServiceVersion({
@@ -119,7 +168,7 @@ describe("version resolution", () => {
         OPENCLAW_SERVICE_VERSION: "\t",
         npm_package_version: " 1.0.0-package ",
       }),
-    ).toBe("1.0.0-package");
+    ).toBe(VERSION);
 
     expect(
       resolveRuntimeServiceVersion(
@@ -130,6 +179,6 @@ describe("version resolution", () => {
         },
         "fallback",
       ),
-    ).toBe("fallback");
+    ).toBe(VERSION);
   });
 });

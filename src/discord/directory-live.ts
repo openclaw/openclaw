@@ -2,6 +2,7 @@ import type { DirectoryConfigParams } from "../channels/plugins/directory-config
 import type { ChannelDirectoryEntry } from "../channels/plugins/types.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { fetchDiscord } from "./api.js";
+import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import { normalizeDiscordToken } from "./token.js";
 
@@ -23,7 +24,7 @@ function resolveDiscordDirectoryAccess(
   params: DirectoryConfigParams,
 ): DiscordDirectoryAccess | null {
   const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
-  const token = normalizeDiscordToken(account.token);
+  const token = normalizeDiscordToken(account.token, "channels.discord.token");
   if (!token) {
     return null;
   }
@@ -102,6 +103,16 @@ export async function listDiscordDirectoryPeersLive(
       if (!user?.id) {
         continue;
       }
+      rememberDiscordDirectoryUser({
+        accountId: params.accountId,
+        userId: user.id,
+        handles: [
+          user.username,
+          user.global_name,
+          member.nick,
+          user.username ? `@${user.username}` : null,
+        ],
+      });
       const name = member.nick?.trim() || user.global_name?.trim() || user.username?.trim();
       rows.push({
         kind: "user",

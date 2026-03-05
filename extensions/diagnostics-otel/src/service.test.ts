@@ -98,16 +98,18 @@ vi.mock("@opentelemetry/semantic-conventions", () => ({
   ATTR_SERVICE_NAME: "service.name",
 }));
 
-vi.mock("openclaw/plugin-sdk", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk")>("openclaw/plugin-sdk");
+vi.mock("openclaw/plugin-sdk/diagnostics-otel", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/diagnostics-otel")>(
+    "openclaw/plugin-sdk/diagnostics-otel",
+  );
   return {
     ...actual,
     registerLogTransport: registerLogTransportMock,
   };
 });
 
-import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
-import { emitDiagnosticEvent } from "openclaw/plugin-sdk";
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/diagnostics-otel";
+import { emitDiagnosticEvent } from "openclaw/plugin-sdk/diagnostics-otel";
 import { createDiagnosticsOtelService } from "./service.js";
 
 const OTEL_TEST_STATE_DIR = "/tmp/openclaw-diagnostics-otel-test";

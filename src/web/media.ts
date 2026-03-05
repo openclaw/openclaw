@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
+import { type MediaKind, maxBytesForKind } from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import {
   convertHeicToJpeg,
@@ -13,7 +13,7 @@ import {
   resizeToJpeg,
 } from "../media/image-ops.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
-import { detectMime, extensionForMime } from "../media/mime.js";
+import { detectMime, extensionForMime, kindFromMime } from "../media/mime.js";
 import { resolveUserPath } from "../utils.js";
 
 export type WebMediaResult = {
@@ -333,7 +333,7 @@ async function loadWebMediaInternal(
           : maxBytes;
     const fetched = await fetchRemoteMedia({ url: mediaUrl, maxBytes: fetchCap, ssrfPolicy });
     const { buffer, contentType, fileName } = fetched;
-    const kind = mediaKindFromMime(contentType);
+    const kind = kindFromMime(contentType);
     return await clampAndFinalize({ buffer, contentType, kind, fileName });
   }
 
@@ -385,7 +385,7 @@ async function loadWebMediaInternal(
     }
   }
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
-  const kind = mediaKindFromMime(mime);
+  const kind = kindFromMime(mime);
   let fileName = path.basename(mediaUrl) || undefined;
   if (fileName && !path.extname(fileName) && mime) {
     const ext = extensionForMime(mime);

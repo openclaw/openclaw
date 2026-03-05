@@ -30,6 +30,13 @@ function normalizeToken(value: string | undefined | null): string {
   return (value ?? "").trim().toLowerCase();
 }
 
+export function scopedHeartbeatWakeOptions<T extends object>(
+  sessionKey: string,
+  wakeOptions: T,
+): T | (T & { sessionKey: string }) {
+  return parseAgentSessionKey(sessionKey) ? { ...wakeOptions, sessionKey } : wakeOptions;
+}
+
 export function normalizeMainKey(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
   return trimmed ? trimmed.toLowerCase() : DEFAULT_MAIN_KEY;
@@ -97,6 +104,11 @@ export function normalizeAgentId(value: string | undefined | null): string {
       .replace(TRAILING_DASH_RE, "")
       .slice(0, 64) || DEFAULT_AGENT_ID
   );
+}
+
+export function isValidAgentId(value: string | undefined | null): boolean {
+  const trimmed = (value ?? "").trim();
+  return Boolean(trimmed) && VALID_ID_RE.test(trimmed);
 }
 
 export function sanitizeAgentId(value: string | undefined | null): string {
