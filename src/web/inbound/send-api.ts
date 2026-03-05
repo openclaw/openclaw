@@ -23,6 +23,8 @@ export function createWebSendApi(params: {
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
   };
   defaultAccountId: string;
+  /** Resolve a phone-based JID (e.g. 12069106512@s.whatsapp.net) to its LID. */
+  getLIDForPN?: (pn: string) => Promise<string | null>;
 }) {
   return {
     sendMessage: async (
@@ -93,6 +95,24 @@ export function createWebSendApi(params: {
       participant?: string,
     ): Promise<void> => {
       const jid = toWhatsappJid(chatJid);
+      // For group messages, the reaction key must include the original sender's
+      // participant JID. WhatsApp migrated group keys to LID-based JIDs, but
+      // callers typically supply a phone number. Resolve it to the LID via
+      // Baileys' signal key store so the reaction key matches the message key.
+      let resolvedParticipant = participant;
+      if (jid.endsWith("@g.us") && participant && params.getLIDForPN) {
+        const participantJid = toWhatsappJid(participant);
+        if (participantJid.endsWith("@s.whatsapp.net")) {
+          try {
+            const lid = await params.getLIDForPN(participantJid);
+            if (lid) {
+              resolvedParticipant = lid;
+            }
+          } catch {
+            // Fall through to phone-based JID.
+          }
+        }
+      }
       await params.sock.sendMessage(jid, {
         react: {
           text: emoji,
@@ -100,7 +120,7 @@ export function createWebSendApi(params: {
             remoteJid: jid,
             id: messageId,
             fromMe,
-            participant: participant ? toWhatsappJid(participant) : undefined,
+            participant: resolvedParticipant ? toWhatsappJid(resolvedParticipant) : undefined,
           },
         },
       } as AnyMessageContent);
