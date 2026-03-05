@@ -260,18 +260,28 @@ export const buildTelegramMessageContext = async ({
   const configuredBinding = configuredRoute.configuredBinding;
   const configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
   route = configuredRoute.route;
-  const requiresExplicitAccountBinding = (candidate: ResolvedAgentRoute): boolean =>
+  const needsAccountScopedFallbackRoute = (candidate: ResolvedAgentRoute): boolean =>
     candidate.accountId !== DEFAULT_ACCOUNT_ID && candidate.matchedBy === "default";
-  // Fail closed for named Telegram accounts when route resolution falls back to
-  // default-agent routing. This prevents cross-account DM/session contamination.
-  if (requiresExplicitAccountBinding(route)) {
-    logInboundDrop({
-      log: logVerbose,
+  if (needsAccountScopedFallbackRoute(route)) {
+    // Keep non-default account traffic routable while forcing account-scoped session
+    // keys to avoid cross-account contamination when dmScope falls back to "main".
+    const fallbackSessionKey = buildAgentSessionKey({
+      agentId: route.agentId,
       channel: "telegram",
-      reason: "non-default account requires explicit binding",
-      target: route.accountId,
-    });
-    return null;
+      accountId: route.accountId,
+      peer: isGroup
+        ? { kind: "group", id: `${route.accountId}:${peerId}` }
+        : { kind: "direct", id: peerId },
+      dmScope: isGroup ? freshCfg.session?.dmScope : "per-account-channel-peer",
+      identityLinks: freshCfg.session?.identityLinks,
+    }).toLowerCase();
+    route = {
+      ...route,
+      sessionKey: fallbackSessionKey,
+    };
+    logVerbose(
+      `telegram: account-scoped fallback route applied for ${route.accountId} -> ${fallbackSessionKey}`,
+    );
   }
   // Calculate groupAllowOverride first - it's needed for both DM and group allowlist checks
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
