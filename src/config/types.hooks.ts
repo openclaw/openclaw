@@ -43,7 +43,13 @@ export type HookMappingConfig = {
 
 export type HooksGmailTailscaleMode = "off" | "serve" | "funnel";
 
+export type GmailCliMode = "gog" | "gws";
+
 export type HooksGmailConfig = {
+  /** CLI backend for Gmail Pub/Sub: "gog" (push, default) or "gws" (pull). */
+  cli?: GmailCliMode;
+  /** GCP project ID (required for gws, auto-detected from gog credentials). */
+  project?: string;
   account?: string;
   label?: string;
   topic?: string;

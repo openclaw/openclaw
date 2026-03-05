@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import type { GmailCliMode } from "../config/config.js";
 import { danger } from "../globals.js";
 import {
   type GmailRunOptions,
@@ -30,22 +31,23 @@ export function registerWebhooksCli(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/webhooks", "docs.openclaw.ai/cli/webhooks")}\n`,
     );
 
-  const gmail = webhooks.command("gmail").description("Gmail Pub/Sub hooks (via gogcli)");
+  const gmail = webhooks.command("gmail").description("Gmail Pub/Sub hooks (via gog or gws)");
 
   gmail
     .command("setup")
     .description("Configure Gmail watch + Pub/Sub + OpenClaw hooks")
+    .option("--cli <mode>", "CLI backend for Gmail Pub/Sub: gog (push, default) or gws (pull)")
     .requiredOption("--account <email>", "Gmail account to watch")
-    .option("--project <id>", "GCP project id (OAuth client owner)")
+    .option("--project <id>", "GCP project id (required for gws, auto-detected for gog)")
     .option("--topic <name>", "Pub/Sub topic name", DEFAULT_GMAIL_TOPIC)
     .option("--subscription <name>", "Pub/Sub subscription name", DEFAULT_GMAIL_SUBSCRIPTION)
     .option("--label <label>", "Gmail label to watch", DEFAULT_GMAIL_LABEL)
     .option("--hook-url <url>", "OpenClaw hook URL")
     .option("--hook-token <token>", "OpenClaw hook token")
-    .option("--push-token <token>", "Push token for gog watch serve")
-    .option("--bind <host>", "gog watch serve bind host", DEFAULT_GMAIL_SERVE_BIND)
-    .option("--port <port>", "gog watch serve port", String(DEFAULT_GMAIL_SERVE_PORT))
-    .option("--path <path>", "gog watch serve path", DEFAULT_GMAIL_SERVE_PATH)
+    .option("--push-token <token>", "Push token for watch serve (gog only)")
+    .option("--bind <host>", "Watch serve bind host (gog only)", DEFAULT_GMAIL_SERVE_BIND)
+    .option("--port <port>", "Watch serve port (gog only)", String(DEFAULT_GMAIL_SERVE_PORT))
+    .option("--path <path>", "Watch serve path (gog only)", DEFAULT_GMAIL_SERVE_PATH)
     .option("--include-body", "Include email body snippets", true)
     .option("--max-bytes <n>", "Max bytes for body snippets", String(DEFAULT_GMAIL_MAX_BYTES))
     .option(
@@ -73,17 +75,18 @@ export function registerWebhooksCli(program: Command) {
 
   gmail
     .command("run")
-    .description("Run gog watch serve + auto-renew loop")
+    .description("Run Gmail watch service (gog serve or gws pull)")
+    .option("--cli <mode>", "CLI backend for Gmail Pub/Sub: gog (push, default) or gws (pull)")
     .option("--account <email>", "Gmail account to watch")
     .option("--topic <topic>", "Pub/Sub topic path (projects/.../topics/..)")
     .option("--subscription <name>", "Pub/Sub subscription name")
     .option("--label <label>", "Gmail label to watch")
     .option("--hook-url <url>", "OpenClaw hook URL")
     .option("--hook-token <token>", "OpenClaw hook token")
-    .option("--push-token <token>", "Push token for gog watch serve")
-    .option("--bind <host>", "gog watch serve bind host")
-    .option("--port <port>", "gog watch serve port")
-    .option("--path <path>", "gog watch serve path")
+    .option("--push-token <token>", "Push token for watch serve (gog only)")
+    .option("--bind <host>", "Watch serve bind host (gog only)")
+    .option("--port <port>", "Watch serve port (gog only)")
+    .option("--path <path>", "Watch serve path (gog only)")
     .option("--include-body", "Include email body snippets")
     .option("--max-bytes <n>", "Max bytes for body snippets")
     .option("--renew-minutes <n>", "Renew watch every N minutes")
@@ -128,8 +131,20 @@ function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
   };
 }
 
+function parseCliMode(raw: unknown): GmailCliMode | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === "gog" || trimmed === "gws") {
+    return trimmed;
+  }
+  throw new Error(`Invalid --cli value "${raw}"; expected "gog" or "gws"`);
+}
+
 function parseGmailCommonOptions(raw: Record<string, unknown>) {
   return {
+    cli: parseCliMode(raw.cli),
     topic: stringOption(raw.topic),
     subscription: stringOption(raw.subscription),
     label: stringOption(raw.label),
@@ -152,6 +167,7 @@ function gmailOptionsFromCommon(
   common: ReturnType<typeof parseGmailCommonOptions>,
 ): Omit<GmailRunOptions, "account"> {
   return {
+    cli: common.cli,
     topic: common.topic,
     subscription: common.subscription,
     label: common.label,

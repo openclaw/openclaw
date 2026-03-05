@@ -1,8 +1,12 @@
 /**
  * Gmail Watcher Service
  *
- * Automatically starts `gog gmail watch serve` when the gateway starts,
+ * Automatically starts the Gmail watcher when the gateway starts,
  * if hooks.gmail is configured with an account.
+ *
+ * Supports two backends:
+ * - gog (default): push-based via `gog gmail watch serve`
+ * - gws: pull-based via `gws gmail +watch` (NDJSON on stdout)
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -10,10 +14,12 @@ import { hasBinary } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { createNdjsonLineHandler } from "./gmail-gws-bridge.js";
 import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
 import {
   buildGogWatchServeArgs,
   buildGogWatchStartArgs,
+  buildGwsWatchArgs,
   type GmailHookRuntimeConfig,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
@@ -31,15 +37,16 @@ let renewInterval: ReturnType<typeof setInterval> | null = null;
 let shuttingDown = false;
 let currentConfig: GmailHookRuntimeConfig | null = null;
 
-/**
- * Check if gog binary is available
- */
 function isGogAvailable(): boolean {
   return hasBinary("gog");
 }
 
+function isGwsAvailable(): boolean {
+  return hasBinary("gws");
+}
+
 /**
- * Start the Gmail watch (registers with Gmail API)
+ * Start the Gmail watch via gog (registers with Gmail API).
  */
 async function startGmailWatch(
   cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">,
@@ -61,7 +68,7 @@ async function startGmailWatch(
 }
 
 /**
- * Spawn the gog gmail watch serve process
+ * Spawn the gog gmail watch serve process.
  */
 function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   const args = buildGogWatchServeArgs(cfg);
@@ -120,40 +127,79 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   return child;
 }
 
-export type GmailWatcherStartResult = {
-  started: boolean;
-  reason?: string;
-};
+/**
+ * Spawn the gws gmail +watch process (pull-based, NDJSON on stdout).
+ */
+export function spawnGwsWatch(cfg: GmailHookRuntimeConfig): ChildProcess {
+  const args = buildGwsWatchArgs(cfg);
+  log.info(`starting gws ${args.join(" ")}`);
+
+  const child = spawn("gws", args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: false,
+  });
+
+  const handleLine = createNdjsonLineHandler(
+    {
+      hookUrl: cfg.hookUrl,
+      hookToken: cfg.hookToken,
+      includeBody: cfg.includeBody,
+      maxBytes: cfg.maxBytes,
+    },
+    log,
+  );
+
+  // Buffer partial lines from stdout (NDJSON may arrive in chunks)
+  let buffer = "";
+  child.stdout?.on("data", (data: Buffer) => {
+    buffer += data.toString();
+    const lines = buffer.split("\n");
+    // Keep last (possibly incomplete) segment in the buffer
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      handleLine(line);
+    }
+  });
+
+  child.stderr?.on("data", (data: Buffer) => {
+    const line = data.toString().trim();
+    if (line) {
+      log.warn(`[gws] ${line}`);
+    }
+  });
+
+  child.on("error", (err) => {
+    log.error(`gws process error: ${String(err)}`);
+  });
+
+  child.on("exit", (code, signal) => {
+    // Flush remaining buffer
+    if (buffer.trim()) {
+      handleLine(buffer);
+      buffer = "";
+    }
+    if (shuttingDown) {
+      return;
+    }
+    log.warn(`gws exited (code=${code}, signal=${signal}); restarting in 5s`);
+    watcherProcess = null;
+    setTimeout(() => {
+      if (shuttingDown || !currentConfig) {
+        return;
+      }
+      watcherProcess = spawnGwsWatch(currentConfig);
+    }, 5000);
+  });
+
+  return child;
+}
 
 /**
- * Start the Gmail watcher service.
- * Called automatically by the gateway if hooks.gmail is configured.
+ * Start the gog-based watcher (push model).
  */
-export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatcherStartResult> {
-  // Check if gmail hooks are configured
-  if (!cfg.hooks?.enabled) {
-    return { started: false, reason: "hooks not enabled" };
-  }
-
-  if (!cfg.hooks?.gmail?.account) {
-    return { started: false, reason: "no gmail account configured" };
-  }
-
-  // Check if gog is available
-  const gogAvailable = isGogAvailable();
-  if (!gogAvailable) {
-    return { started: false, reason: "gog binary not found" };
-  }
-
-  // Resolve the full runtime config
-  const resolved = resolveGmailHookRuntimeConfig(cfg, {});
-  if (!resolved.ok) {
-    return { started: false, reason: resolved.error };
-  }
-
-  const runtimeConfig = resolved.value;
-  currentConfig = runtimeConfig;
-
+async function startGogWatcher(
+  runtimeConfig: GmailHookRuntimeConfig,
+): Promise<GmailWatcherStartResult> {
   // Set up Tailscale endpoint if needed
   if (runtimeConfig.tailscale.mode !== "off") {
     try {
@@ -197,8 +243,62 @@ export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatch
   log.info(
     `gmail watcher started for ${runtimeConfig.account} (renew every ${runtimeConfig.renewEveryMinutes}m)`,
   );
-
   return { started: true };
+}
+
+/**
+ * Start the gws-based watcher (pull model, no Tailscale, no renewal).
+ */
+function startGwsWatcher(runtimeConfig: GmailHookRuntimeConfig): GmailWatcherStartResult {
+  shuttingDown = false;
+  watcherProcess = spawnGwsWatch(runtimeConfig);
+  log.info(`gmail watcher (gws) started for ${runtimeConfig.account}`);
+  return { started: true };
+}
+
+export type GmailWatcherStartResult = {
+  started: boolean;
+  reason?: string;
+};
+
+/**
+ * Start the Gmail watcher service.
+ * Called automatically by the gateway if hooks.gmail is configured.
+ */
+export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatcherStartResult> {
+  if (!cfg.hooks?.enabled) {
+    return { started: false, reason: "hooks not enabled" };
+  }
+
+  if (!cfg.hooks?.gmail?.account) {
+    return { started: false, reason: "no gmail account configured" };
+  }
+
+  const cliMode = cfg.hooks.gmail.cli ?? "gog";
+
+  if (cliMode === "gws") {
+    if (!isGwsAvailable()) {
+      return { started: false, reason: "gws binary not found" };
+    }
+  } else {
+    if (!isGogAvailable()) {
+      return { started: false, reason: "gog binary not found" };
+    }
+  }
+
+  // Resolve the full runtime config
+  const resolved = resolveGmailHookRuntimeConfig(cfg, {});
+  if (!resolved.ok) {
+    return { started: false, reason: resolved.error };
+  }
+
+  const runtimeConfig = resolved.value;
+  currentConfig = runtimeConfig;
+
+  if (cliMode === "gws") {
+    return startGwsWatcher(runtimeConfig);
+  }
+  return startGogWatcher(runtimeConfig);
 }
 
 /**
