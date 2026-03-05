@@ -14,8 +14,13 @@ import {
 } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
-import { normalizeModelSelection, resolveSubagentSpawnModelSelection } from "./model-selection.js";
+import {
+  normalizeModelSelection,
+  parseModelRef,
+  resolveSubagentSpawnModelSelection,
+} from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
@@ -390,12 +395,21 @@ export async function spawnSubagentDirect(
   const lockedTargetModelSelection =
     normalizeModelSelection(targetAgentConfig?.subagents?.model) ??
     normalizeModelSelection(targetAgentConfig?.model);
-
-  if (
+  const requestedModelRef = requestedModelSelection
+    ? parseModelRef(requestedModelSelection, DEFAULT_PROVIDER)
+    : null;
+  const lockedTargetModelRef = lockedTargetModelSelection
+    ? parseModelRef(lockedTargetModelSelection, DEFAULT_PROVIDER)
+    : null;
+  const hasModelLockConflict =
     requestedModelSelection &&
     lockedTargetModelSelection &&
-    requestedModelSelection !== lockedTargetModelSelection
-  ) {
+    (requestedModelRef && lockedTargetModelRef
+      ? requestedModelRef.provider !== lockedTargetModelRef.provider ||
+        requestedModelRef.model !== lockedTargetModelRef.model
+      : requestedModelSelection !== lockedTargetModelSelection);
+
+  if (hasModelLockConflict) {
     return {
       status: "forbidden",
       error:

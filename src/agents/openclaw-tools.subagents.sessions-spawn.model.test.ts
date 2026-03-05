@@ -271,6 +271,62 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("sessions_spawn allows same-model override for model-locked target agent", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: { subagents: { model: "anthropic/claude-sonnet-4-5" } },
+        list: [{ id: "research", model: { primary: "google-gemini-cli/gemini-3.1-pro-preview" } }],
+      },
+    });
+    const calls: GatewayCall[] = [];
+    mockPatchAndSingleAgentRun({ calls, runId: "run-model-lock-same" });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-model-lock-same", {
+      task: "do thing",
+      model: "google-gemini-cli/gemini-3.1-pro-preview",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+    expect(calls.some((call) => call.method === "agent")).toBe(true);
+  });
+
+  it("sessions_spawn allows normalized model override for model-locked target agent", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: { subagents: { model: "anthropic/claude-sonnet-4-5" } },
+        list: [{ id: "research", model: { primary: "anthropic/claude-opus-4-5" } }],
+      },
+    });
+    const calls: GatewayCall[] = [];
+    mockPatchAndSingleAgentRun({ calls, runId: "run-model-lock-normalized" });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-model-lock-normalized", {
+      task: "do thing",
+      model: "opus-4.5",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+    expect(calls.some((call) => call.method === "agent")).toBe(true);
+  });
+
   it("sessions_spawn fails when model patch is rejected", async () => {
     const calls: GatewayCall[] = [];
     mockLongRunningSpawnFlow({
