@@ -48,12 +48,12 @@ describe("parseProviderError", () => {
     });
 
     it("Retry-After: '03' (leading zero) → retryAfterMs = 3000", async () => {
-    const res = mockResponse(429, { "retry-after": "03" });
-    const err = await parseProviderError("anthropic", res);
-    expect(err.retryAfterMs).toBe(3000);
-  });
+      const res = mockResponse(429, { "retry-after": "03" });
+      const err = await parseProviderError("anthropic", res);
+      expect(err.retryAfterMs).toBe(3000);
+    });
 
-  it("negative numeric retry-after → retryAfterMs = 0, not negative", async () => {
+    it("negative numeric retry-after → retryAfterMs = 0, not negative", async () => {
       const res = mockResponse(429, { "retry-after": "-5" });
       const err = await parseProviderError("anthropic", res);
       expect(err.retryAfterMs).toBe(0);
