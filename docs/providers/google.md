@@ -33,7 +33,7 @@ openclaw onboard --gemini-api-key "$GEMINI_API_KEY"
 ```json5
 {
   env: { GEMINI_API_KEY: "AIza..." },
-  agents: { defaults: { model: { primary: "google/gemini-3-pro-preview" } } },
+  agents: { defaults: { model: { primary: "google/gemini-3.1-pro-preview" } } },
 }
 ```
 
@@ -72,12 +72,12 @@ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
 ### Set a Vertex model
 
 ```bash
-openclaw models set google-vertex/gemini-3-pro-preview
+openclaw models set google-vertex/gemini-3.1-pro-preview
 ```
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "google-vertex/gemini-3-pro-preview" } } },
+  agents: { defaults: { model: { primary: "google-vertex/gemini-3.1-pro-preview" } } },
 }
 ```
 

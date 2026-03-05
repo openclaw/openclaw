@@ -153,7 +153,7 @@ openclaw models list | grep venice
 | `claude-sonnet-45`       | Claude Sonnet 4.5 | 202k             | Reasoning, vision |
 | `openai-gpt-52`          | GPT-5.2           | 262k             | Reasoning         |
 | `openai-gpt-52-codex`    | GPT-5.2 Codex     | 262k             | Reasoning, vision |
-| `gemini-3-pro-preview`   | Gemini 3 Pro      | 202k             | Reasoning, vision |
+| `gemini-3.1-pro-preview` | Gemini 3 Pro      | 202k             | Reasoning, vision |
 | `gemini-3-flash-preview` | Gemini 3 Flash    | 262k             | Reasoning, vision |
 | `grok-41-fast`           | Grok 4.1 Fast     | 262k             | Reasoning, vision |
 | `grok-code-fast-1`       | Grok Code Fast 1  | 262k             | Reasoning, code   |
