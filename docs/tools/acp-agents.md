@@ -408,6 +408,24 @@ Restart the gateway after changing these values.
 >
 > If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions degrade gracefully instead of crashing.
 
+## Session visibility and monitoring
+
+ACP sessions are not regular subagents. If you need to inspect ACP runs from another session (for example with `sessions_history`), make sure session visibility allows it.
+
+Recommended config for operator-wide inspection:
+
+```bash
+openclaw config set tools.sessions.visibility all
+```
+
+Then restart the gateway and re-run your session inspection commands.
+
+Operational notes:
+
+- ACP sessions may not appear under `/subagents list` because they are managed by ACP runtime plumbing, not subagent runtime.
+- If an ACP run appears stalled, check gateway logs plus host process state (`ps`) before deciding whether to cancel/kill the session.
+- For non-interactive ACP usage, validate permission settings before spawn (`permissionMode=approve-all` is the safe baseline for write/exec heavy tasks).
+
 ## Troubleshooting
 
 | Symptom                                                                  | Likely cause                                                                    | Fix                                                                                                                                                               |
