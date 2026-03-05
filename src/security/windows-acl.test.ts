@@ -519,6 +519,22 @@ Successfully processed 1 files`;
     });
   });
 
+  describe("summarizeWindowsAcl — NT AUTHORITY edge principals", () => {
+    it("keeps NT AUTHORITY\\ANONYMOUS LOGON as world", () => {
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: "NT AUTHORITY\\ANONYMOUS LOGON" })];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.untrustedWorld).toHaveLength(1);
+      expect(summary.trusted).toHaveLength(0);
+    });
+
+    it("keeps NT AUTHORITY\\INTERACTIVE as group", () => {
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: "NT AUTHORITY\\INTERACTIVE" })];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.untrustedGroup).toHaveLength(1);
+      expect(summary.trusted).toHaveLength(0);
+    });
+  });
+
   describe("formatIcaclsResetCommand — uses SID for SYSTEM", () => {
     it("uses *S-1-5-18 instead of SYSTEM in reset command", () => {
       const cmd = formatIcaclsResetCommand("C:\\test.json", {

@@ -41,6 +41,8 @@ const TRUSTED_BASE = new Set([
 ]);
 const WORLD_SUFFIXES = ["\\users", "\\authenticated users"];
 const TRUSTED_SUFFIXES = ["\\administrators", "\\system", "\\système"];
+const NT_AUTHORITY_WORLD_SUFFIXES = new Set(["anonymous logon", "everyone"]);
+const NT_AUTHORITY_GROUP_SUFFIXES = new Set(["network", "interactive"]);
 
 const SID_RE = /^s-\d+-\d+(-\d+)+$/i;
 const TRUSTED_SIDS = new Set([
@@ -109,9 +111,16 @@ function classifyPrincipal(
   }
 
   // Locale/encoding guard: icacls can emit localized NT AUTHORITY account names
-  // with mojibake in non-UTF8 shells. Treat NT AUTHORITY principals as trusted
-  // (after explicit world-principal checks above) to avoid false positives.
+  // with mojibake in non-UTF8 shells. Keep clearly dangerous principals untrusted,
+  // then trust the remaining NT AUTHORITY variants to avoid localized false positives.
   if (normalized.startsWith("nt authority\\")) {
+    const suffix = normalized.slice("nt authority\\".length);
+    if (NT_AUTHORITY_WORLD_SUFFIXES.has(suffix)) {
+      return "world";
+    }
+    if (NT_AUTHORITY_GROUP_SUFFIXES.has(suffix)) {
+      return "group";
+    }
     return "trusted";
   }
 
