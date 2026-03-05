@@ -386,6 +386,13 @@ export async function fetchFirecrawlContent(params: {
     signal: withTimeout(undefined, params.timeoutSeconds * 1000),
   });
 
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(
+      `Firecrawl fetch failed (${res.status}): ${wrapWebContent(detail || res.statusText, "web_fetch")}`.trim(),
+    );
+  }
+
   const payload = (await res.json()) as {
     success?: boolean;
     data?: {
@@ -401,7 +408,7 @@ export async function fetchFirecrawlContent(params: {
     error?: string;
   };
 
-  if (!res.ok || payload?.success === false) {
+  if (payload?.success === false) {
     const detail = payload?.error ?? "";
     throw new Error(
       `Firecrawl fetch failed (${res.status}): ${wrapWebContent(detail || res.statusText, "web_fetch")}`.trim(),
