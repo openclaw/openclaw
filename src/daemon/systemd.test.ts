@@ -18,7 +18,7 @@ import {
 
 describe("systemd availability", () => {
   beforeEach(() => {
-    execFileMock.mockClear();
+    execFileMock.mockReset();
   });
 
   it("returns true when systemctl --user succeeds", async () => {
@@ -40,11 +40,34 @@ describe("systemd availability", () => {
     });
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(false);
   });
+
+  it("falls back to machine user scope when --user bus is unavailable", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        const err = new Error(
+          "Failed to connect to user scope bus via local transport",
+        ) as Error & {
+          stderr?: string;
+          code?: number;
+        };
+        err.stderr =
+          "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined";
+        err.code = 1;
+        cb(err, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--machine", "debian@", "--user", "status"]);
+        cb(null, "", "");
+      });
+
+    await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
+  });
 });
 
 describe("isSystemdServiceEnabled", () => {
   beforeEach(() => {
-    execFileMock.mockClear();
+    execFileMock.mockReset();
   });
 
   it("returns false when systemctl is not present", async () => {
@@ -81,13 +104,23 @@ describe("isSystemdServiceEnabled", () => {
 
   it("throws when systemctl is-enabled fails for non-state errors", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
-    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
-      const err = new Error("Failed to connect to bus") as Error & { code?: number };
-      err.code = 1;
-      cb(err, "", "Failed to connect to bus");
-    });
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+        const err = new Error("Failed to connect to bus") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "Failed to connect to bus");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args[0]).toBe("--machine");
+        expect(String(args[1])).toMatch(/^[^@]+@$/);
+        expect(args.slice(2)).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+        const err = new Error("permission denied") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "permission denied");
+      });
     await expect(isSystemdServiceEnabled({ env: {} })).rejects.toThrow(
-      "systemctl is-enabled unavailable: Failed to connect to bus",
+      "systemctl is-enabled unavailable: permission denied",
     );
   });
 
@@ -216,7 +249,7 @@ describe("parseSystemdExecStart", () => {
 
 describe("systemd service control", () => {
   beforeEach(() => {
-    execFileMock.mockClear();
+    execFileMock.mockReset();
   });
 
   it("stops the resolved user unit", async () => {
@@ -266,5 +299,95 @@ describe("systemd service control", () => {
         env: {},
       }),
     ).rejects.toThrow("systemctl stop failed: permission denied");
+  });
+
+  it("targets the sudo caller's user scope when SUDO_USER is set", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--machine", "debian@", "--user", "status"]);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual([
+          "--machine",
+          "debian@",
+          "--user",
+          "restart",
+          "openclaw-gateway.service",
+        ]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await restartSystemdService({ stdout, env: { SUDO_USER: "debian" } });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+  });
+
+  it("keeps direct --user scope when SUDO_USER is root", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "restart", "openclaw-gateway.service"]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await restartSystemdService({ stdout, env: { SUDO_USER: "root", USER: "root" } });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+  });
+
+  it("falls back to machine user scope for restart when user bus env is missing", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        const err = new Error("Failed to connect to user scope bus") as Error & {
+          stderr?: string;
+          code?: number;
+        };
+        err.stderr =
+          "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined";
+        err.code = 1;
+        cb(err, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--machine", "debian@", "--user", "status"]);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "restart", "openclaw-gateway.service"]);
+        const err = new Error("Failed to connect to user scope bus") as Error & {
+          stderr?: string;
+          code?: number;
+        };
+        err.stderr = "Failed to connect to user scope bus";
+        err.code = 1;
+        cb(err, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual([
+          "--machine",
+          "debian@",
+          "--user",
+          "restart",
+          "openclaw-gateway.service",
+        ]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await restartSystemdService({ stdout, env: { USER: "debian" } });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
   });
 });
