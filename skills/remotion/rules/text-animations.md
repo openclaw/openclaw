@@ -12,6 +12,7 @@ Based on `useCurrentFrame()`, reduce the string character by character to create
 ## Typewriter Effect
 
 Fetch the official Remotion typewriter example for advanced patterns:
+
 ```
 WebFetch: https://www.remotion.dev/docs/animating-properties
 ```
@@ -21,6 +22,7 @@ Always use string slicing for typewriter effects. Never use per-character opacit
 ## Word Highlighting
 
 For word highlighting animation (like with a highlighter pen), see the official Remotion documentation:
+
 ```
 WebFetch: https://www.remotion.dev/docs/animating-properties#interpolate-colors
 ```
