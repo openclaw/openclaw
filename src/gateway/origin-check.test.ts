@@ -217,11 +217,12 @@ describe("checkBrowserOrigin", () => {
         requestHost: "127.0.0.1:18789",
         requestForwardedHost: "gateway.tailnet.ts.net:443",
         origin: "https://gateway.tailnet.ts.net",
-        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        allowedOrigins: [],
+        allowHostHeaderOriginFallback: true,
       });
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.matchedBy).toBe("allowlist");
+        expect(result.matchedBy).toBe("host-header-fallback");
       }
     });
 
