@@ -599,8 +599,17 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.log(theme.warn("`--keep-config` is deprecated, use `--keep-files`."));
       }
 
-      // Find plugin by id or name
-      const plugin = report.plugins.find((p) => p.id === id || p.name === id);
+      const hasConfigEntry = (pluginId: string) => pluginId in (cfg.plugins?.entries ?? {});
+      const hasConfigInstall = (pluginId: string) => pluginId in (cfg.plugins?.installs ?? {});
+
+      // Prefer managed plugin matches when duplicate IDs are detected.
+      // If the requested plugin is duplicated, only one instance may be tracked
+      // in config and is the one we can safely uninstall.
+      const candidates = report.plugins.filter((p) => p.id === id || p.name === id);
+      const managedCandidate = candidates.find(
+        (candidate) => hasConfigEntry(candidate.id) || hasConfigInstall(candidate.id),
+      );
+      const plugin = managedCandidate ?? candidates.at(0);
       const pluginId = plugin?.id ?? id;
 
       // Check if plugin exists in config
