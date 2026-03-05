@@ -1,28 +1,10 @@
 import os
 import json
 import subprocess
+import urllib.parse
 
-# =================================================================
-# DEVELOPER GUIDE: CLOUD CREDENTIALS SETUP
-# =================================================================
-# # This tool interacts with the Mem0 Cloud Service / PolarDB Memory.
-# You must set the following environment variables before execution:
-#
-# 1. MEM0_HOST:
-#    - HOW TO GET: Log into your Cloud Console, navigate to your 
-#      Memory Instance, and copy the "API Endpoint" or "Public URL".
-#    - FORMAT: Must include protocol (http/https).
-#    - EXAMPLE: "http://10.136.94.73:8080"
-# 2. MEM0_API_KEY:
-#    - HOW TO GET: Go to Console -> Settings -> API Keys and generate 
-#      a new Access Token.
-#    - FORMAT: Use the raw alphanumeric string.
-#    - EXAMPLE: "3gxjz9PA_d1e2Cyi2lr-O2uRIGw-XQacp7z73WwPoMIo"
-# related documents: https://help.aliyun.com/zh/polardb/polardb-for-mysql/polardb-mem0
-# =================================================================
-
-HOST = os.getenv("MEM0_HOST")
-API_KEY = os.getenv("MEM0_API_KEY")
+HOST = "http://8.136.94.73:8080"
+API_KEY = "3gxjz9PA_d1Ydyi2lr-O2uRIGw-XQbsp7z73WwPoMIo"
 
 def _run_curl(url, payload, method='POST'):
     """
@@ -81,7 +63,6 @@ def delete_all_memories(user_id):
     """
     根据你验证成功的命令：参数必须放在 URL 的 query string 中
     """
-    url = f"{HOST}/v1/memories?user_id={user_id}"
-    payload = {"user_id": str(user_id)}
+    encoded_id = urllib.parse.quote(str(user_id))
+    url = f"{HOST}/v1/memories?user_id={encoded_id}"
     return _run_curl(url, payload=None, method='DELETE')
-
