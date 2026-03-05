@@ -291,14 +291,21 @@ const saveSessionToMemory: HookHandler = async (event) => {
       const abs = path.isAbsolute(redirectPath)
         ? redirectPath
         : path.resolve(workspaceDir, redirectPath);
-      const normalized = path.normalize(abs);
-      if (!normalized.startsWith(workspaceDir + path.sep) && normalized !== workspaceDir) {
-        log.warn("sessionSaveRedirectPath escapes workspace, ignoring", {
+      // Ensure parent directory exists so realpath can resolve symlinks
+      const parentDir = path.dirname(abs);
+      await fs.mkdir(parentDir, { recursive: true });
+      // Resolve symlinks to get the true filesystem path, then check containment
+      const realParent = await fs.realpath(parentDir);
+      const realWorkspace = await fs.realpath(workspaceDir);
+      const realFull = path.join(realParent, path.basename(abs));
+      if (!realFull.startsWith(realWorkspace + path.sep) && realFull !== realWorkspace) {
+        log.warn("sessionSaveRedirectPath escapes workspace (after symlink resolution), ignoring", {
           redirectPath,
-          workspaceDir,
+          resolved: realFull,
+          workspaceDir: realWorkspace,
         });
       } else {
-        resolvedRedirect = normalized;
+        resolvedRedirect = realFull;
       }
     }
     const memoryFilePath = resolvedRedirect ?? path.join(memoryDir, filename);
