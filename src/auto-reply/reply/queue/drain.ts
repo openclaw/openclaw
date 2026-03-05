@@ -63,6 +63,19 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
   };
 }
 
+function buildQueuedMessageMetadataBlock(item: FollowupRun): string | undefined {
+  const messageId = item.messageId?.trim();
+  if (!messageId) {
+    return undefined;
+  }
+  return [
+    "Queued message metadata (trusted queue data):",
+    "```json",
+    JSON.stringify({ message_id: messageId }, null, 2),
+    "```",
+  ].join("\n");
+}
+
 export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
@@ -114,7 +127,11 @@ export function scheduleFollowupDrain(
             title: "[Queued messages while agent was busy]",
             items,
             summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
+            renderItem: (item, idx) =>
+              ["---", `Queued #${idx + 1}`, buildQueuedMessageMetadataBlock(item), item.prompt]
+                .filter(Boolean)
+                .join("\n")
+                .trim(),
           });
           await runFollowup({
             prompt,
