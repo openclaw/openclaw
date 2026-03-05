@@ -319,6 +319,32 @@ export function resolveAuthChoiceToGroupId(authChoice: AuthChoice): AuthChoiceGr
   return getChoiceToGroupIdMap().get(authChoice);
 }
 
+/**
+ * Auth choices that require interactive input beyond {apiKey, useEnvVar}.
+ * These cannot be driven by agents.auth.set's non-interactive prompter.
+ */
+export const AGENTS_AUTH_SET_UNSUPPORTED_CHOICES = new Set<AuthChoice>([
+  // OAuth / device / portal flows
+  "oauth",
+  "setup-token",
+  "claude-cli",
+  "codex-cli",
+  "token",
+  "openai-codex",
+  "chutes",
+  "minimax-portal",
+  "github-copilot",
+  "google-gemini-cli",
+  "copilot-proxy",
+  "qwen-portal",
+  // Multi-field flows (need URL, IDs, or extra params)
+  "vllm",
+  "cloudflare-ai-gateway-api-key",
+  "custom-api-key",
+  // No-op
+  "skip",
+]) satisfies ReadonlySet<AuthChoice>;
+
 export function formatAuthChoiceChoicesForCli(params?: {
   includeSkip?: boolean;
   includeLegacyAliases?: boolean;

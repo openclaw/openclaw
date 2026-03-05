@@ -28,6 +28,7 @@ import {
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
 import {
+  AGENTS_AUTH_SET_UNSUPPORTED_CHOICES,
   buildAuthChoiceGroups,
   resolveAuthChoiceToGroupId,
 } from "../../commands/auth-choice-options.js";
@@ -868,6 +869,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const { groups } = buildAuthChoiceGroups({ store: stubStore, includeSkip: false });
 
     const providers = groups
+      .map((group) => ({
+        ...group,
+        // Exclude methods that require interactive setup agents.auth.set can't drive.
+        options: group.options.filter((opt) => !AGENTS_AUTH_SET_UNSUPPORTED_CHOICES.has(opt.value)),
+      }))
       .filter((group) => group.options.length > 0)
       .map((group) => ({
         id: group.value,
@@ -914,13 +920,24 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const agentDir = resolveAgentDir(cfg, agentId);
     const authChoice = String(params.authChoice ?? "") as AuthChoice;
-    // Validate that authChoice is a known value before proceeding.
+    // Validate authChoice is known and supported by the non-interactive prompter.
     const tokenProvider = resolveAuthChoiceToGroupId(authChoice);
     if (!tokenProvider) {
       respond(
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, `unknown authChoice "${authChoice}"`),
+      );
+      return;
+    }
+    if (AGENTS_AUTH_SET_UNSUPPORTED_CHOICES.has(authChoice)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `authChoice "${authChoice}" requires interactive setup`,
+        ),
       );
       return;
     }
@@ -936,7 +953,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
       select: async <T>(p: { options: Array<{ value: T }>; initialValue?: T }) =>
         p.initialValue ?? p.options[0]?.value ?? ("" as T),
       multiselect: async <T>(p: { initialValues?: T[] }) => p.initialValues ?? [],
-      text: async (p: { initialValue?: string }) => p.initialValue ?? "",
+      text: async (p) => {
+        const value = p.initialValue ?? "";
+        const error = p.validate?.(value);
+        if (error) {
+          throw new Error(error);
+        }
+        return value;
+      },
       confirm: async (p: { initialValue?: boolean }) => p.initialValue ?? false,
       progress: () => ({ update: () => {}, stop: () => {} }),
     };
