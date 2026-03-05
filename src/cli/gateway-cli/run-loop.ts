@@ -201,6 +201,9 @@ export async function runGatewayLoop(params: {
         // to respawn a new process which on macOS loses TCC permissions
         // (Full Disk Access) granted to the original process.
         gatewayLog.error(`gateway failed to start: ${String(err)}`);
+        // Also emit via runtime.error so the message is visible even when
+        // subsystem logs are filtered (e.g. --claude-cli-logs mode).
+        params.runtime.error(`Gateway failed to start: ${String(err)}`);
         exitProcess(1);
         return;
       }

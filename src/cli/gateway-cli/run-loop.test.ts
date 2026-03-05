@@ -378,6 +378,10 @@ describe("runGatewayLoop", () => {
       expect(gatewayLog.error).toHaveBeenCalledWith(
         expect.stringContaining("Invalid config at openclaw.json"),
       );
+      // runtime.error is also called so the message is visible when subsystem logs are filtered.
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Gateway failed to start"),
+      );
     });
   });
 
