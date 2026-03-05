@@ -1,3 +1,34 @@
+import fs from "node:fs";
+import path from "node:path";
+
+function loadEnv() {
+  const possiblePaths = [
+    path.join(process.cwd(), ".env"),
+    path.join(process.cwd(), "..", ".env"),
+  ];
+  for (const envPath of possiblePaths) {
+    try {
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, "utf8");
+        content.split("\n").forEach((line) => {
+          const m = line.match(/^\s*([^#=]+)\s*=\s*(.*)$/);
+          if (m) {
+            const key = m[1].trim();
+            const val = m[2].trim().replace(/^['"](.*)['"]$/, "$1");
+            if (!process.env[key]) process.env[key] = val;
+          }
+        });
+        return envPath;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
+const loadedEnv = loadEnv();
+
 import { createServer } from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
 import {
@@ -365,6 +396,7 @@ if (isMain) {
     .then(s => {
       const gatewayToken = process.env.MCP_WEB_ADAPTER_TOKEN || "default-token";
       console.log(`[standalone] Relay running at ${s.baseUrl}`);
+      if (loadedEnv) console.log(`[standalone] Config loaded from: ${loadedEnv}`);
       console.log(`[standalone] CDP WebSocket: ${s.cdpWsUrl}`);
       console.log(`[standalone] --- Authentication ---`);
       console.log(`[standalone] Master Token (MCP_WEB_ADAPTER_TOKEN): ${gatewayToken === "default-token" ? "(using default-token)" : gatewayToken}`);

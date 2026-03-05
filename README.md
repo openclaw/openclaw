@@ -30,7 +30,8 @@ The server defaults to port `18792`.
 ### 2. Install the Extension
 1. Open Chrome and navigate to `chrome://extensions`.
 2. Enable **Developer mode**.
-3. Click **Load unpacked** and select the `extension/` directory.
+3. Click **Load unpacked** and select the **`extension/`** folder in the root of the project:
+   `C:\Users\User\Downloads\workspace\OpenClaw Helper\extension`
 4. Open the extension options and set the **Relay Port** (`18792`) and the **Auth Token**.
 
 ### 3. Connect MCP
