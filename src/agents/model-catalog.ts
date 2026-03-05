@@ -35,18 +35,10 @@ let importPiSdk = defaultImportPiSdk;
 const CODEX_PROVIDER = "openai-codex";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
+const OPENAI_CODEX_GPT54_MODEL_ID = "gpt-5.4";
 const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
 
-function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
-  const hasSpark = models.some(
-    (entry) =>
-      entry.provider === CODEX_PROVIDER &&
-      entry.id.toLowerCase() === OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-  );
-  if (hasSpark) {
-    return;
-  }
-
+function applyOpenAICodexForwardCompatFallbacks(models: ModelCatalogEntry[]): void {
   const baseModel = models.find(
     (entry) =>
       entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === OPENAI_CODEX_GPT53_MODEL_ID,
@@ -55,11 +47,30 @@ function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
     return;
   }
 
-  models.push({
-    ...baseModel,
-    id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-    name: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-  });
+  const hasSpark = models.some(
+    (entry) =>
+      entry.provider === CODEX_PROVIDER &&
+      entry.id.toLowerCase() === OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
+  );
+  if (!hasSpark) {
+    models.push({
+      ...baseModel,
+      id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
+      name: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
+    });
+  }
+
+  const hasGpt54 = models.some(
+    (entry) =>
+      entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === OPENAI_CODEX_GPT54_MODEL_ID,
+  );
+  if (!hasGpt54) {
+    models.push({
+      ...baseModel,
+      id: OPENAI_CODEX_GPT54_MODEL_ID,
+      name: OPENAI_CODEX_GPT54_MODEL_ID,
+    });
+  }
 }
 
 function normalizeConfiguredModelInput(input: unknown): ModelInputType[] | undefined {
@@ -218,7 +229,7 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
-      applyOpenAICodexSparkFallback(models);
+      applyOpenAICodexForwardCompatFallbacks(models);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.

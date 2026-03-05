@@ -85,7 +85,7 @@ describe("loadModelCatalog", () => {
     }
   });
 
-  it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.3-codex exists", async () => {
+  it("adds openai-codex forward-compat fallbacks when base gpt-5.3-codex exists", async () => {
     mockPiDiscoveryModels([
       {
         id: "gpt-5.3-codex",
@@ -109,9 +109,18 @@ describe("loadModelCatalog", () => {
         id: "gpt-5.3-codex-spark",
       }),
     );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.4",
+      }),
+    );
     const spark = result.find((entry) => entry.id === "gpt-5.3-codex-spark");
     expect(spark?.name).toBe("gpt-5.3-codex-spark");
     expect(spark?.reasoning).toBe(true);
+    const gpt54 = result.find((entry) => entry.id === "gpt-5.4");
+    expect(gpt54?.name).toBe("gpt-5.4");
+    expect(gpt54?.reasoning).toBe(true);
   });
 
   it("merges configured models for opted-in non-pi-native providers", async () => {

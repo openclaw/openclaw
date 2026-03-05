@@ -244,9 +244,24 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
   });
+
+  it("treats openai-codex gpt-5.4 as a modern model", () => {
+    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4" })).toBe(true);
+  });
 });
 
 describe("resolveForwardCompatModel", () => {
+  it("resolves openai-codex gpt-5.4 via codex template", () => {
+    const registry = createRegistry({
+      "openai-codex/gpt-5.3-codex": {
+        ...createTemplateModel("openai-codex", "gpt-5.3-codex"),
+        api: "openai-codex-responses",
+      },
+    });
+    const model = resolveForwardCompatModel("openai-codex", "gpt-5.4", registry);
+    expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4" });
+  });
+
   it("resolves anthropic opus 4.6 via 4.5 template", () => {
     const registry = createRegistry({
       "anthropic/claude-opus-4-5": createTemplateModel("anthropic", "claude-opus-4-5"),
