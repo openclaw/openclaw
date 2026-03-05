@@ -215,7 +215,12 @@ export function rewriteLastAssistantContent(messages: AgentMessage[], newContent
  * entries are ignored (defensive).
  */
 export function rewriteAllAssistantContent(messages: AgentMessage[], newContents: string[]): void {
-  const assistantMsgs = messages.filter((m) => m.role === "assistant" && "content" in m);
+  // Only count text-bearing assistant messages — matching getRunScopedMessages
+  // and assistantTexts counting. Tool-call-only messages are skipped to keep
+  // allContent indices aligned.
+  const assistantMsgs = messages.filter(
+    (m) => m.role === "assistant" && extractAssistantText(m).length > 0,
+  );
   if (newContents.length !== assistantMsgs.length) {
     log.warn(
       `rewriteAllAssistantContent: allContent length (${newContents.length}) differs from ` +
