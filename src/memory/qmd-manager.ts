@@ -6,12 +6,7 @@ import readline from "node:readline";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgram,
-} from "../plugin-sdk/windows-spawn.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { deriveQmdScopeChannel, deriveQmdScopeChatType, isQmdScopeAllowed } from "./qmd-scope.js";
 import {
@@ -32,6 +27,7 @@ import type {
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 import type {
   ResolvedMemoryBackendConfig,
+  ResolvedQmdCollection,
   ResolvedQmdConfig,
   ResolvedQmdMcporterConfig,
 } from "./backend-config.js";
@@ -68,23 +64,6 @@ function resolveWindowsCommandShim(command: string): string {
     return `${trimmed}.cmd`;
   }
   return command;
-}
-
-function resolveSpawnInvocation(params: {
-  command: string;
-  args: string[];
-  env: NodeJS.ProcessEnv;
-  packageName: string;
-}) {
-  const program = resolveWindowsSpawnProgram({
-    command: resolveWindowsCommandShim(params.command),
-    platform: process.platform,
-    env: params.env,
-    execPath: process.execPath,
-    packageName: params.packageName,
-    allowShellFallback: true,
-  });
-  return materializeWindowsSpawnProgram(program, params.args);
 }
 
 function hasHanScript(value: string): boolean {
@@ -187,8 +166,8 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
-  private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
+  private readonly collectionAliases = new Map<string, string>();
   private readonly sources = new Set<MemorySource>();
   private readonly docPathCache = new Map<
     string,
@@ -239,9 +218,6 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.env = {
       ...process.env,
       XDG_CONFIG_HOME: this.xdgConfigHome,
-      // workaround for upstream bug https://github.com/tobi/qmd/issues/132
-      // QMD doesn't respect XDG_CONFIG_HOME:
-      QMD_CONFIG_DIR: this.xdgConfigHome,
       XDG_CACHE_HOME: this.xdgCacheHome,
       NO_COLOR: "1",
     };
@@ -265,7 +241,6 @@ export class QmdMemoryManager implements MemorySearchManager {
         },
       ];
     }
-    this.managedCollectionNames = this.computeManagedCollectionNames();
   }
 
   private async initialize(mode: QmdManagerMode): Promise<void> {
@@ -314,10 +289,12 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private bootstrapCollections(): void {
     this.collectionRoots.clear();
+    this.collectionAliases.clear();
     this.sources.clear();
     for (const collection of this.qmd.collections) {
       const kind: MemorySource = collection.kind === "sessions" ? "sessions" : "memory";
       this.collectionRoots.set(collection.name, { path: collection.path, kind });
+      this.collectionAliases.set(collection.name, collection.name);
       this.sources.add(kind);
     }
   }
@@ -362,11 +339,38 @@ export class QmdMemoryManager implements MemorySearchManager {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (this.isCollectionAlreadyExistsError(message)) {
+          const existingName = this.findCollectionByPath(collection, existing);
+          if (existingName) {
+            this.collectionAliases.set(collection.name, existingName);
+            if (!this.collectionRoots.has(existingName)) {
+              const rootKind: MemorySource = collection.kind === "sessions" ? "sessions" : "memory";
+              this.collectionRoots.set(existingName, { path: collection.path, kind: rootKind });
+            }
+            log.info(
+              `qmd collection ${collection.name} remapped to existing collection ${existingName} (same path)`,
+            );
+          }
           continue;
         }
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
     }
+  }
+
+  private findCollectionByPath(
+    target: ResolvedQmdCollection,
+    existing: Map<string, ListedCollection>,
+  ): string | undefined {
+    const normalizedPath = path.resolve(target.path);
+    for (const [name, details] of existing) {
+      if (name === target.name) {
+        continue;
+      }
+      if (details.path && path.resolve(details.path) === normalizedPath) {
+        return name;
+      }
+    }
+    return undefined;
   }
 
   private async migrateLegacyUnscopedCollections(
@@ -1093,17 +1097,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     opts?: { timeoutMs?: number; discardOutput?: boolean },
   ): Promise<{ stdout: string; stderr: string }> {
     return await new Promise((resolve, reject) => {
-      const spawnInvocation = resolveSpawnInvocation({
-        command: this.qmd.command,
-        args,
-        env: this.env,
-        packageName: "qmd",
-      });
-      const child = spawn(spawnInvocation.command, spawnInvocation.argv, {
+      const child = spawn(resolveWindowsCommandShim(this.qmd.command), args, {
         env: this.env,
         cwd: this.workspaceDir,
-        shell: spawnInvocation.shell,
-        windowsHide: spawnInvocation.windowsHide,
       });
       let stdout = "";
       let stderr = "";
@@ -1199,18 +1195,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     opts?: { timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string }> {
     return await new Promise((resolve, reject) => {
-      const spawnInvocation = resolveSpawnInvocation({
-        command: "mcporter",
-        args,
-        env: this.env,
-        packageName: "mcporter",
-      });
-      const child = spawn(spawnInvocation.command, spawnInvocation.argv, {
+      const child = spawn(resolveWindowsCommandShim("mcporter"), args, {
         // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
         env: this.env,
         cwd: this.workspaceDir,
-        shell: spawnInvocation.shell,
-        windowsHide: spawnInvocation.windowsHide,
       });
       let stdout = "";
       let stderr = "";
@@ -1416,17 +1404,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (cutoff && entry.mtimeMs < cutoff) {
         continue;
       }
-      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
-      const target = path.join(exportDir, targetName);
+      const target = path.join(exportDir, `${path.basename(sessionFile, ".jsonl")}.md`);
       tracked.add(sessionFile);
       const state = this.exportedSessionState.get(sessionFile);
       if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
-        await writeFileWithinRoot({
-          rootDir: exportDir,
-          relativePath: targetName,
-          data: this.renderSessionMarkdown(entry),
-          encoding: "utf-8",
-        });
+        await fs.writeFile(target, this.renderSessionMarkdown(entry), "utf-8");
       }
       this.exportedSessionState.set(sessionFile, {
         hash: entry.hash,
@@ -1918,19 +1900,19 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private listManagedCollectionNames(): string[] {
-    return this.managedCollectionNames;
-  }
-
-  private computeManagedCollectionNames(): string[] {
     const seen = new Set<string>();
     const names: string[] = [];
     for (const collection of this.qmd.collections) {
-      const name = collection.name?.trim();
-      if (!name || seen.has(name)) {
+      const configName = collection.name?.trim();
+      if (!configName) {
         continue;
       }
-      seen.add(name);
-      names.push(name);
+      const resolved = this.collectionAliases.get(configName) ?? configName;
+      if (seen.has(resolved)) {
+        continue;
+      }
+      seen.add(resolved);
+      names.push(resolved);
     }
     return names;
   }
