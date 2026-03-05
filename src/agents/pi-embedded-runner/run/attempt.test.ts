@@ -147,8 +147,13 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   async function invokeWrappedStream(
     baseFn: (...args: never[]) => unknown,
     allowedToolNames?: Set<string>,
+    decodeHtmlEntitiesInArguments?: boolean,
   ) {
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, allowedToolNames);
+    const wrappedFn = wrapStreamFnTrimToolCallNames(
+      baseFn as never,
+      allowedToolNames,
+      decodeHtmlEntitiesInArguments,
+    );
     return await wrappedFn({} as never, {} as never, {} as never);
   }
 
@@ -294,6 +299,92 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expect(finalToolCall.name).toBe("read");
     expect(finalToolCall.id).toBe("call_42");
+  });
+
+  it("decodes HTML entities in tool call arguments when enabled", async () => {
+    const partialToolCall = {
+      type: "toolCall",
+      name: " read ",
+      arguments: "{&quot;path&quot;:&quot;/tmp/a&amp;b&quot;}",
+    };
+    const finalToolCall = {
+      type: "toolCall",
+      name: " read ",
+      arguments: "{&quot;path&quot;:&quot;/tmp/c&amp;d&quot;}",
+    };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, undefined, true);
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.arguments).toBe('{"path":"/tmp/a&b"}');
+    expect(finalToolCall.arguments).toBe('{"path":"/tmp/c&d"}');
+  });
+
+  it("decodes HTML entities in toolUse/functionCall input when enabled", async () => {
+    const partialToolUse = {
+      type: "toolUse",
+      name: " read ",
+      input: "{&quot;path&quot;:&quot;/tmp/a&amp;b&quot;}",
+    };
+    const finalFunctionCall = {
+      type: "functionCall",
+      name: " read ",
+      input: "{&quot;path&quot;:&quot;/tmp/c&amp;d&quot;}",
+    };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolUse] },
+    };
+    const finalMessage = { role: "assistant", content: [finalFunctionCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, undefined, true);
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolUse.input).toBe('{"path":"/tmp/a&b"}');
+    expect(finalFunctionCall.input).toBe('{"path":"/tmp/c&d"}');
+  });
+
+  it("leaves HTML entities unchanged when decoding is disabled", async () => {
+    const finalToolCall = {
+      type: "toolCall",
+      name: " read ",
+      arguments: "{&quot;path&quot;:&quot;/tmp/a&amp;b&quot;}",
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    expect(finalToolCall.arguments).toBe("{&quot;path&quot;:&quot;/tmp/a&amp;b&quot;}");
   });
 });
 
