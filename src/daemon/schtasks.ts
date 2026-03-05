@@ -7,6 +7,7 @@ import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { VERSION } from "../version.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -310,12 +311,36 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
   stdout.write(`${formatLine("Stopped Scheduled Task", taskName)}\n`);
 }
 
+/**
+ * Patch OPENCLAW_SERVICE_VERSION in an existing gateway.cmd script to the
+ * current binary version. Called before restart so the Control UI always
+ * reports the correct version after an npm global update.
+ */
+async function patchTaskScriptVersion(env: GatewayServiceEnv): Promise<void> {
+  const scriptPath = resolveTaskScriptPath(env);
+  let content: string;
+  try {
+    content = await fs.readFile(scriptPath, "utf8");
+  } catch {
+    return;
+  }
+  const updated = content.replace(
+    /^(set OPENCLAW_SERVICE_VERSION=).+$/im,
+    `$1${VERSION}`,
+  );
+  if (updated !== content) {
+    await fs.writeFile(scriptPath, updated, "utf8");
+  }
+}
+
 export async function restartScheduledTask({
   stdout,
   env,
 }: GatewayServiceControlArgs): Promise<void> {
   await assertSchtasksAvailable();
-  const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
+  const resolvedEnv = env ?? (process.env as GatewayServiceEnv);
+  await patchTaskScriptVersion(resolvedEnv);
+  const taskName = resolveTaskName(resolvedEnv);
   await execSchtasks(["/End", "/TN", taskName]);
   const res = await execSchtasks(["/Run", "/TN", taskName]);
   if (res.code !== 0) {
