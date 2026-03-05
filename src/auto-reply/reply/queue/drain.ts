@@ -35,6 +35,11 @@ type OriginRoutingMetadata = Pick<
   "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
 >;
 
+function normalizeQueueMessageId(value: string | undefined): string | undefined {
+  const messageId = value?.trim();
+  return messageId ? messageId : undefined;
+}
+
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
   return {
     originatingChannel: items.find((item) => item.originatingChannel)?.originatingChannel,
@@ -45,6 +50,29 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
       (item) => item.originatingThreadId != null && item.originatingThreadId !== "",
     )?.originatingThreadId,
   };
+}
+
+function resolveQueuedMessageId(items: FollowupRun[]): string | undefined {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const messageId = normalizeQueueMessageId(items[index]?.messageId);
+    if (messageId) {
+      return messageId;
+    }
+  }
+  return undefined;
+}
+
+function buildQueuedMessageMetadataBlock(item: FollowupRun): string | undefined {
+  const messageId = normalizeQueueMessageId(item.messageId);
+  if (!messageId) {
+    return undefined;
+  }
+  return [
+    "Queued message metadata (trusted queue data):",
+    "```json",
+    JSON.stringify({ message_id: messageId }, null, 2),
+    "```",
+  ].join("\n");
 }
 
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
@@ -114,11 +142,16 @@ export function scheduleFollowupDrain(
             title: "[Queued messages while agent was busy]",
             items,
             summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
+            renderItem: (item, idx) =>
+              ["---", `Queued #${idx + 1}`, buildQueuedMessageMetadataBlock(item), item.prompt]
+                .filter(Boolean)
+                .join("\n")
+                .trim(),
           });
           await runFollowup({
             prompt,
             run,
+            messageId: resolveQueuedMessageId(items),
             enqueuedAt: Date.now(),
             ...routing,
           });
@@ -140,6 +173,7 @@ export function scheduleFollowupDrain(
               await runFollowup({
                 prompt: summaryPrompt,
                 run,
+                messageId: normalizeQueueMessageId(item.messageId),
                 enqueuedAt: Date.now(),
                 originatingChannel: item.originatingChannel,
                 originatingTo: item.originatingTo,
