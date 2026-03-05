@@ -268,7 +268,7 @@ describe("formatSecurityFixResult", () => {
       stateDir: "/home/u/.openclaw",
       configPath: "/home/u/.openclaw/openclaw.json",
       configWritten: true,
-      changes: ["logging.redactSensitive=off -> \"tools\""],
+      changes: ['logging.redactSensitive=off -> "tools"'],
       actions: [
         { kind: "chmod", path: "/home/u/.openclaw", mode: 0o700, ok: true },
         { kind: "chmod", path: "/home/u/.openclaw/openclaw.json", mode: 0o600, ok: true },
