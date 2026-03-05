@@ -203,6 +203,11 @@ export const buildTelegramMessageContext = async ({
     !isGroup && groupConfig && "dmPolicy" in groupConfig
       ? (groupConfig.dmPolicy ?? dmPolicy)
       : dmPolicy;
+  const topicName =
+    (msg as { forum_topic_created?: { name?: string } }).forum_topic_created?.name ??
+    (msg as { reply_to_message?: { forum_topic_created?: { name?: string } } }).reply_to_message
+      ?.forum_topic_created?.name ??
+    undefined;
   const peerId = isGroup
     ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
     : resolveTelegramDirectPeerId({ chatId, senderId });
@@ -762,6 +767,7 @@ export const buildTelegramMessageContext = async ({
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,
     GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
+    TopicName: isForum ? topicName : undefined,
     GroupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
     SenderName: senderName,
     SenderId: senderId || undefined,
