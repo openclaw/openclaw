@@ -17,9 +17,20 @@ let globalRegistry: PluginRegistry | null = null;
 
 /**
  * Initialize the global hook runner with a plugin registry.
- * Called once when plugins are loaded during gateway startup.
+ *
+ * Only the FIRST call sets up the runner. Subsequent calls from
+ * `loadOpenClawPlugins` (e.g. per-agent tool resolution with a different
+ * workspaceDir) are no-ops.  This prevents a cache-miss registry — which
+ * lacks core hooks like task-enforcer — from replacing the runner that was
+ * set up during gateway startup.
+ *
+ * Use `resetGlobalHookRunner()` (tests) or `forceReinitializeGlobalHookRunner()`
+ * to explicitly replace the runner when needed.
  */
 export function initializeGlobalHookRunner(registry: PluginRegistry): void {
+  if (globalHookRunner) {
+    return;
+  }
   globalRegistry = registry;
   globalHookRunner = createHookRunner(registry, {
     logger: {
@@ -34,6 +45,22 @@ export function initializeGlobalHookRunner(registry: PluginRegistry): void {
   if (hookCount > 0) {
     log.info(`hook runner initialized with ${hookCount} registered hooks`);
   }
+}
+
+/**
+ * Force-replace the global hook runner with a new registry.
+ * Use only for explicit config reloads — NOT from loadOpenClawPlugins().
+ */
+export function forceReinitializeGlobalHookRunner(registry: PluginRegistry): void {
+  globalRegistry = registry;
+  globalHookRunner = createHookRunner(registry, {
+    logger: {
+      debug: (msg) => log.debug(msg),
+      warn: (msg) => log.warn(msg),
+      error: (msg) => log.error(msg),
+    },
+    catchErrors: true,
+  });
 }
 
 /**
