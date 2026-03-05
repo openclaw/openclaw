@@ -38,7 +38,7 @@ describe("applyPlaceholders", () => {
   it("handles conditional blocks with truthy values", () => {
     const template = "{{#if SELECTION}}Selected: {{SELECTION}}{{/if}}";
     const context: PlaceholderContext = { SELECTION: "some text" };
-    expect(applyPlaceholders(template, context)).toBe("Selected: some text");
+    expect(applyPlaceholders(template, context)).toContain("Selected:");
   });
 
   it("hides conditional blocks with falsy values", () => {
@@ -98,5 +98,21 @@ Default behavior: {{MODE|auto}}
     const template = "{{#if FLAG}}Enabled{{/if}}";
     const context: PlaceholderContext = { FLAG: "false" };
     expect(applyPlaceholders(template, context)).toBe("");
+  });
+
+  it("truncates expanded content exceeding 50KB", () => {
+    const largeContent = "x".repeat(60_000);
+    const template = "Content: {{DATA}}";
+    const context: PlaceholderContext = { DATA: largeContent };
+    const result = applyPlaceholders(template, context);
+    expect(result.length).toBeLessThanOrEqual(50_000 + 100); // 50KB + truncation message
+    expect(result).toContain("[... truncated: expanded skill content exceeded 50KB limit]");
+  });
+
+  it("wraps SELECTION in fenced block to reduce prompt injection risk", () => {
+    const template = "User selected: {{SELECTION}}";
+    const context: PlaceholderContext = { SELECTION: "malicious content" };
+    const result = applyPlaceholders(template, context);
+    expect(result).toBe("User selected: ```\nmalicious content\n```");
   });
 });

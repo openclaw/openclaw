@@ -61,6 +61,8 @@ function isTruthy(value: string | undefined): boolean {
   return trimmed.length > 0 && trimmed.toLowerCase() !== "false";
 }
 
+const MAX_EXPANDED_LENGTH = 50_000; // 50KB safety limit
+
 export function applyPlaceholders(template: string, context: PlaceholderContext): string {
   const tokens = tokenize(template);
   const output: string[] = [];
@@ -90,7 +92,12 @@ export function applyPlaceholders(template: string, context: PlaceholderContext)
     } else if (token.kind === "placeholder") {
       const value = context[token.key];
       if (value !== undefined && value.trim().length > 0) {
-        output.push(value);
+        // Wrap SELECTION in fenced block to reduce prompt injection risk
+        if (token.key === "SELECTION") {
+          output.push("```\n" + value + "\n```");
+        } else {
+          output.push(value);
+        }
       } else if (token.defaultValue !== undefined) {
         output.push(token.defaultValue);
       }
@@ -98,5 +105,13 @@ export function applyPlaceholders(template: string, context: PlaceholderContext)
     }
   }
 
-  return output.join("");
+  const result = output.join("");
+
+  // Safety: truncate if expanded content exceeds limit
+  if (result.length > MAX_EXPANDED_LENGTH) {
+    const truncated = result.slice(0, MAX_EXPANDED_LENGTH);
+    return truncated + "\n\n[... truncated: expanded skill content exceeded 50KB limit]";
+  }
+
+  return result;
 }
