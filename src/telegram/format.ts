@@ -312,7 +312,14 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
   const chunks: MarkdownIR[] = [];
   let cursor = 0;
   while (cursor < ir.text.length) {
-    const end = Math.min(ir.text.length, cursor + normalizedLimit);
+    // Find the last whitespace before the limit to avoid breaking mid-word
+    let end = Math.min(ir.text.length, cursor + normalizedLimit);
+    if (end < ir.text.length) {
+      const lastSpace = ir.text.lastIndexOf(" ", end);
+      if (lastSpace > cursor) {
+        end = lastSpace;
+      }
+    }
     chunks.push({
       text: ir.text.slice(cursor, end),
       styles: sliceStyleSpans(ir.styles, cursor, end),
