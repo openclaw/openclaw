@@ -57,7 +57,9 @@ describe("normalizeBlueBubblesMessagingTarget", () => {
     expect(normalizeBlueBubblesMessagingTarget("iMessage;+;chat660250192681427962")).toBe(
       "chat_guid:iMessage;+;chat660250192681427962",
     );
-    expect(normalizeBlueBubblesMessagingTarget("iMessage;-;+19257864429")).toBe("+19257864429");
+    expect(normalizeBlueBubblesMessagingTarget("iMessage;-;+19257864429")).toBe(
+      "imessage:+19257864429",
+    );
   });
 
   it("normalizes chat<digits> pattern to chat_identifier format", () => {
