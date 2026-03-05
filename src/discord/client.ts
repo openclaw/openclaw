@@ -1,4 +1,5 @@
 import { RequestClient } from "@buape/carbon";
+import { ProxyAgent } from "undici";
 import { loadConfig } from "../config/config.js";
 import { createDiscordRetryRunner, type RetryRunner } from "../infra/retry-policy.js";
 import type { RetryConfig } from "../infra/retry.js";
@@ -27,8 +28,20 @@ function resolveToken(params: { explicit?: string; accountId: string; fallbackTo
   return fallback;
 }
 
-function resolveRest(token: string, rest?: RequestClient) {
-  return rest ?? new RequestClient(token);
+function resolveRest(params: { token: string; proxyUrl?: string; rest?: RequestClient }) {
+  if (params.rest) {
+    return params.rest;
+  }
+  const proxy = params.proxyUrl?.trim();
+  if (!proxy) {
+    return new RequestClient(params.token);
+  }
+  // Carbon's RequestClient uses global fetch by default; provide an undici dispatcher
+  // so REST calls can traverse an HTTP proxy (e.g. Clash, Squid).
+  return new RequestClient(params.token, { dispatcher: new ProxyAgent(proxy) } as unknown as Record<
+    string,
+    unknown
+  >);
 }
 
 export function createDiscordRestClient(opts: DiscordClientOpts, cfg = loadConfig()) {
@@ -38,7 +51,7 @@ export function createDiscordRestClient(opts: DiscordClientOpts, cfg = loadConfi
     accountId: account.accountId,
     fallbackToken: account.token,
   });
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveRest({ token, proxyUrl: account.config.proxy, rest: opts.rest });
   return { token, rest, account };
 }
 

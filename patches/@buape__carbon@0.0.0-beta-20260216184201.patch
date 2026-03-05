@@ -1,0 +1,54 @@
+diff --git a/dist/src/classes/RequestClient.d.ts b/dist/src/classes/RequestClient.d.ts
+index a45b74eed9b297db6a9b71c116298007aa585faa..e531141269c2525c6a1af5d46eaef8d473762934 100644
+--- a/dist/src/classes/RequestClient.d.ts
++++ b/dist/src/classes/RequestClient.d.ts
+@@ -42,6 +42,11 @@ export type RequestClientOptions = {
+      * @default 1000
+      */
+     maxQueueSize?: number;
++    /**
++     * Optional undici dispatcher (ProxyAgent, EnvHttpProxyAgent, etc) to use for all REST calls.
++     * When unset, RequestClient uses the runtime global fetch implementation.
++     */
++    dispatcher?: unknown;
+ };
+ export type QueuedRequest = {
+     method: string;
+diff --git a/dist/src/classes/RequestClient.js b/dist/src/classes/RequestClient.js
+index 1cd3130df8b2cd71a240f8b028a71680628cf0fd..6fc768fa1656c21431382086f25a91e609f16d25 100644
+--- a/dist/src/classes/RequestClient.js
++++ b/dist/src/classes/RequestClient.js
+@@ -1,3 +1,4 @@
++import { fetch as undiciFetch } from "undici";
+ import { DiscordError } from "../errors/DiscordError.js";
+ import { RateLimitError } from "../errors/RatelimitError.js";
+ const defaultOptions = {
+@@ -188,13 +189,22 @@ export class RequestClient {
+             }, timeoutMs);
+         }
+         let response;
++        const init = {
++            method,
++            headers,
++            body,
++            signal: this.abortController.signal
++        };
+         try {
+-            response = await fetch(url, {
+-                method,
+-                headers,
+-                body,
+-                signal: this.abortController.signal
+-            });
++            if (this.options.dispatcher) {
++                response = await undiciFetch(url, {
++                    ...init,
++                    dispatcher: this.options.dispatcher
++                });
++            }
++            else {
++                response = await fetch(url, init);
++            }
+         }
+         finally {
+             if (timeoutId) {
