@@ -11,6 +11,7 @@ import {
 
 const DEFAULT_RESUME_PROMPT =
   "Continue where you left off. The OpenClaw gateway restarted while you were running.";
+const MAX_RESUME_ATTEMPTS = 10;
 
 export async function maybeResumeInflightAgentRunsAfterRestart(params: {
   cfg: OpenClawConfig;
@@ -53,6 +54,9 @@ export async function maybeResumeInflightAgentRunsAfterRestart(params: {
   for (const entry of inflight) {
     const runId = entry.runId?.trim();
     if (!runId) {
+      continue;
+    }
+    if ((entry.resumeCount ?? 0) >= MAX_RESUME_ATTEMPTS) {
       continue;
     }
     const baseOpts = entry.opts;
