@@ -115,7 +115,19 @@ Cron 是 Gateway 内置的调度器，独立于 AI 模型运行。它类似于 L
       --announce
     ```
 
-### 3.3 代码实现关键点
+### 3.3 通过聊天窗口使用 (Chat Interface)
+
+除了命令行，你还可以直接在聊天窗口（包括 Web UI、飞书、Slack 等已连接的渠道）中通过自然语言让 Agent 创建 Cron 任务。OpenClaw 的 Agent 默认集成了 `cron` 工具。
+
+**示例指令:**
+
+- "每天早上 9 点提醒我开晨会。"
+- "10 分钟后叫醒我。"
+- "每周五下午 5 点生成一份周报并发送给我。"
+
+Agent 会自动将这些自然语言转换为底层的 `cron.add` 工具调用。
+
+### 3.4 代码实现关键点
 
 - **服务层**: `src/cron/service.ts` 实现了调度逻辑、作业存储和执行触发。
 - **工具层**: `src/agents/tools/cron-tool.ts` 允许 Agent 自己创建和管理 Cron 任务（Agent 可以“给自己定闹钟”）。
