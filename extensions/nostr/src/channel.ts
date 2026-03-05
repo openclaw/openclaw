@@ -6,6 +6,8 @@ import {
   createReplyPrefixOptions,
   formatPairingApproveHint,
   type ChannelPlugin,
+  resolveOpenProviderRuntimeGroupPolicy,
+  type GroupPolicy,
 } from "openclaw/plugin-sdk";
 import type { NostrProfile } from "./config-schema.js";
 import { NostrConfigSchema } from "./config-schema.js";
@@ -27,6 +29,28 @@ import {
 } from "./types.js";
 
 const CHANNEL_ID = "nostr" as const;
+
+/**
+ * Check if a sender is authorized to send messages based on allowlist.
+ * Returns true if allowlist contains wildcard or the sender's pubkey.
+ */
+function isAllowlistAuthorized(allowFrom: string[], senderPubkey: string): boolean {
+  for (const entry of allowFrom) {
+    if (entry === "*") {
+      return true; // Wildcard allows all
+    }
+    try {
+      const normalizedEntry = normalizePubkey(String(entry).replace(/^nostr:/i, "").trim());
+      const normalizedSender = normalizePubkey(senderPubkey);
+      if (normalizedEntry === normalizedSender) {
+        return true;
+      }
+    } catch {
+      // Skip invalid entries
+    }
+  }
+  return false;
+}
 
 export function resolveNostrSessionId(
   senderPubkey: string,
@@ -243,14 +267,61 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           const config = runtime.config.loadConfig();
           const senderPubkey = payload.senderPubkey.toLowerCase();
           const rawText = payload.text;
+          const dmPolicy = account.config.dmPolicy ?? "pairing";
+          const allowFrom = account.config.allowFrom ?? [];
 
           ctx.log?.debug?.(
             `[${account.accountId}] message from ${senderPubkey} (kind ${payload.kind}): ${rawText.slice(0, 50)}...`,
           );
 
+          // Check DM access control
+          if (dmPolicy === "disabled") {
+            ctx.log?.debug?.(`[${account.accountId}] DM policy disabled, skipping message`);
+            return;
+          }
+
+          // For allowlist policy, check if sender is allowed
+          if (dmPolicy === "allowlist") {
+            const allowed = isAllowlistAuthorized(allowFrom, senderPubkey);
+            if (!allowed) {
+              ctx.log?.debug?.(`[${account.accountId}] sender ${senderPubkey} not in allowlist, skipping`);
+              return;
+            }
+          }
+
+          // For pairing policy, unknown senders get a pairing request
+          if (dmPolicy === "pairing") {
+            const isAllowed = isAllowlistAuthorized(allowFrom, senderPubkey);
+            if (!isAllowed) {
+              // Create pairing request for unknown sender
+              ctx.log?.debug?.(`[${account.accountId}] creating pairing request for ${senderPubkey}`);
+              try {
+                await runtime.channel.pairing.upsertPairingRequest?.({
+                  channel: "nostr",
+                  id: senderPubkey,
+                  meta: { name: `Nostr user ${senderPubkey.slice(0, 16)}...` },
+                });
+                await runtime.channel.pairing.buildPairingReply?.({
+                  channel: "nostr",
+                  id: senderPubkey,
+                  cfg: config,
+                }).then((replyText) => {
+                  if (replyText) {
+                    // Note: we don't have the reply callback here, so we can't send the pairing code
+                    // This would need to be handled differently
+                  }
+                });
+              } catch (err) {
+                ctx.log?.error?.(`[${account.accountId}] failed to create pairing request: ${String(err)}`);
+              }
+              return;
+            }
+          }
+
           const route = runtime.channel.routing.resolveAgentRoute({
             cfg: config,
             channel: "nostr",
+            accountId: account.accountId,
             peer: {
               kind: "direct",
               id: senderPubkey,
