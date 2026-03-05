@@ -458,6 +458,52 @@ describe("resolveCommandAuthorization", () => {
       expect(deniedAuth.isAuthorizedSender).toBe(false);
     });
   });
+
+  it("grants senderIsOwner for internal channel with operator.admin scope", () => {
+    const cfg = {} as OpenClawConfig;
+    const ctx = {
+      Provider: "webchat",
+      Surface: "webchat",
+      GatewayClientScopes: ["operator.admin"],
+    } as MsgContext;
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(auth.senderIsOwner).toBe(true);
+  });
+
+  it("does not grant senderIsOwner for internal channel without admin scope", () => {
+    const cfg = {} as OpenClawConfig;
+    const ctx = {
+      Provider: "webchat",
+      Surface: "webchat",
+      GatewayClientScopes: ["operator.approvals"],
+    } as MsgContext;
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(auth.senderIsOwner).toBe(false);
+  });
+
+  it("does not grant senderIsOwner for external channel even with admin scope", () => {
+    const cfg = {} as OpenClawConfig;
+    const ctx = {
+      Provider: "telegram",
+      Surface: "telegram",
+      From: "telegram:12345",
+      GatewayClientScopes: ["operator.admin"],
+    } as MsgContext;
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(auth.senderIsOwner).toBe(false);
+  });
 });
 
 describe("control command parsing", () => {
