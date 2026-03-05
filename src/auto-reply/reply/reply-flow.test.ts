@@ -690,6 +690,40 @@ describe("followup queue deduplication", () => {
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
   });
 
+  it("includes original provider message_id metadata in collect prompts", async () => {
+    const key = `test-collect-message-id-metadata-${Date.now()}`;
+    const done = createDeferred<void>();
+    let collectedPrompt = "";
+    const runFollowup = async (run: FollowupRun) => {
+      collectedPrompt = run.prompt;
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt:
+          'Conversation info (untrusted metadata):\\n```json\\n{"message_id":"om_x_queue_placeholder"}\\n```',
+        messageId: "om_platform_original_123",
+        originatingChannel: "slack",
+        originatingTo: "channel:C123",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(collectedPrompt).toContain("Queued message metadata (trusted queue data):");
+    expect(collectedPrompt).toContain('"message_id": "om_platform_original_123"');
+  });
+
   it("deduplicates exact prompt when routing matches and no message id", async () => {
     const key = `test-dedup-whatsapp-${Date.now()}`;
     const settings: QueueSettings = {
