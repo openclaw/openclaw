@@ -206,12 +206,13 @@ export const FeishuConfigSchema = z
     connectionMode: FeishuConnectionModeSchema.optional().default("websocket"),
     webhookPath: z.string().optional().default("/feishu/events"),
     ...FeishuSharedConfigShape,
+    replyInThread: ReplyInThreadSchema.default("disabled"),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     reactionNotifications: ReactionNotificationModeSchema.optional().default("own"),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     requireMention: z.boolean().optional().default(true),
-    groupSessionScope: GroupSessionScopeSchema,
-    topicSessionMode: TopicSessionModeSchema,
+    groupSessionScope: GroupSessionScopeSchema.default("group"),
+    topicSessionMode: TopicSessionModeSchema.default("disabled"),
     // Dynamic agent creation for DM users
     dynamicAgentCreation: DynamicAgentCreationSchema,
     // Optimization flags

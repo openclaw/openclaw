@@ -9,6 +9,9 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.webhookPath).toBe("/feishu/events");
     expect(result.dmPolicy).toBe("pairing");
     expect(result.groupPolicy).toBe("allowlist");
+    expect(result.groupSessionScope).toBe("group");
+    expect(result.topicSessionMode).toBe("disabled");
+    expect(result.replyInThread).toBe("disabled");
     expect(result.requireMention).toBe(true);
   });
 
@@ -22,6 +25,9 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.accounts?.main?.dmPolicy).toBeUndefined();
     expect(result.accounts?.main?.groupPolicy).toBeUndefined();
     expect(result.accounts?.main?.requireMention).toBeUndefined();
+    expect(result.accounts?.main?.groupSessionScope).toBeUndefined();
+    expect(result.accounts?.main?.topicSessionMode).toBeUndefined();
+    expect(result.accounts?.main?.replyInThread).toBeUndefined();
   });
 
   it("rejects top-level webhook mode without verificationToken", () => {
@@ -112,9 +118,9 @@ describe("FeishuConfigSchema replyInThread", () => {
     expect(result.replyInThread).toBe("enabled");
   });
 
-  it("defaults replyInThread to undefined when not set", () => {
+  it("defaults replyInThread to disabled when not set", () => {
     const result = FeishuConfigSchema.parse({});
-    expect(result.replyInThread).toBeUndefined();
+    expect(result.replyInThread).toBe("disabled");
   });
 
   it("rejects invalid replyInThread value", () => {
