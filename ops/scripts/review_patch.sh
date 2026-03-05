@@ -13,6 +13,18 @@ fi
 
 echo "[review_patch] patch format OK"
 
+# Reject patches without hunks
+if ! grep -q '^@@' "$PATCH_FILE"; then
+  echo "[review_patch] EMPTY PATCH — rejecting"
+  exit 1
+fi
+
+# Reject empty patches (no hunks)
+if ! grep -q '^@@' "$PATCH_FILE"; then
+  echo "[review_patch] EMPTY PATCH — rejecting"
+  exit 1
+fi
+
 # Ask reviewer agent to evaluate the patch
 REVIEW=$(openclaw-safe agent \
   --agent dir-architecture-01 \

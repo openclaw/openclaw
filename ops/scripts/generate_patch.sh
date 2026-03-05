@@ -16,7 +16,7 @@ fi
 
 echo "[generate_patch] collecting repository context..."
 
-REPO_CONTEXT=$(git ls-files | head -n 50 || true)
+REPO_CONTEXT=$(git ls-files | grep -E '\.(sh|py|js|ts|json|yaml|yml)$' | head -n 200 || true)
 
 FILE_SAMPLE=""
 
@@ -29,6 +29,8 @@ $(sed -n '1,200p' "$f")"
   fi
 done
 
+FUNCTION_INDEX=$(grep -nE '^[a-zA-Z0-9_]+\(\)\s*\{' ops/scripts/*.sh 2>/dev/null || true)
+
 echo "[generate_patch] goal: $goal"
 
 openclaw-safe agent \
@@ -39,6 +41,10 @@ openclaw-safe agent \
 
 Repository files (partial list):
 $REPO_CONTEXT
+
+Likely files to modify should be selected from the repository list above.
+Choose the most relevant file before generating the patch.
+Focus on scripts in ops/scripts if the task relates to the task runner or automation.
 
 Relevant code references:
 $FILE_SAMPLE
