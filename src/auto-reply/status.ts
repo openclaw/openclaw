@@ -255,7 +255,8 @@ const readUsageFromSessionLog = (
       fs.closeSync(fd);
     }
     const tail = buf.toString("utf-8");
-    const lines = (offset > 0 ? tail.slice(tail.indexOf("\n") + 1) : tail).split(/\n+/);
+    let newlineIdx = -1;
+    const lines = (offset > 0 ? tail.slice((newlineIdx = tail.indexOf("\n")) >= 0 ? newlineIdx + 1 : 0) : tail).split(/\n+/);
 
     let input = 0;
     let output = 0;
@@ -722,6 +723,7 @@ function groupCommandsByCategory(
 }
 
 export function buildHelpMessage(cfg?: OpenClawConfig): string {
+    let newlineIdx = -1;
   const lines = ["ℹ️ Help", ""];
 
   lines.push("Session");
@@ -866,6 +868,7 @@ export function buildCommandsMessagePaginated(
   const items = buildCommandItems(commands, pluginCommands);
 
   if (!isTelegram) {
+    let newlineIdx = -1;
     const lines = ["ℹ️ Slash commands", ""];
     lines.push(formatCommandList(items));
     return {
@@ -884,6 +887,7 @@ export function buildCommandsMessagePaginated(
   const endIndex = startIndex + COMMANDS_PER_PAGE;
   const pageItems = items.slice(startIndex, endIndex);
 
+    let newlineIdx = -1;
   const lines = [`ℹ️ Commands (${currentPage}/${totalPages})`, ""];
   lines.push(formatCommandList(pageItems));
 
