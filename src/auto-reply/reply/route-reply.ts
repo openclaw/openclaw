@@ -152,7 +152,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       session: outboundSession,
       abortSignal,
       mirror:
-        params.mirror !== false && params.sessionKey
+        params.mirror !== false && params.sessionKey && normalizedChannel !== "imessage"
           ? {
               sessionKey: params.sessionKey,
               agentId: resolvedAgentId,

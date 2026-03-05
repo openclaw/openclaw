@@ -415,6 +415,22 @@ describe("routeReply", () => {
       }),
     );
   });
+
+  it("does not mirror imessage replies by default", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "imessage",
+      to: "imessage:+15551234567",
+      sessionKey: "agent:main:main",
+      cfg: {} as never,
+    });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: undefined,
+      }),
+    );
+  });
 });
 
 const emptyRegistry = createRegistry([]);
