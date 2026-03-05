@@ -200,10 +200,14 @@ export async function checkInboundAccessControl(params: {
           if (pairingConfig?.notifyOwner && pairingConfig.ownerChat) {
             const senderName = (params.pushName ?? "").trim() || "Unknown";
             const includeMessage = pairingConfig.includeMessage !== false;
+            const MAX_PREVIEW_LENGTH = 500;
+            const rawBody = params.messageBody ?? "";
+            const sanitizedBody = rawBody
+              .replace(/[*_`~]/g, "")
+              .slice(0, MAX_PREVIEW_LENGTH)
+              .concat(rawBody.length > MAX_PREVIEW_LENGTH ? "…" : "");
             const messagePreview =
-              includeMessage && params.messageBody
-                ? `\n\n📝 Message:\n"${params.messageBody}"`
-                : "";
+              includeMessage && sanitizedBody ? `\n\n📝 Message:\n"${sanitizedBody}"` : "";
             const notificationText = [
               `📩 *New pairing request*`,
               ``,
