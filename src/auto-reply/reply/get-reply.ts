@@ -1,5 +1,6 @@
 import {
   resolveAgentDir,
+  resolveAgentIdFromSessionKey,
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
@@ -67,11 +68,11 @@ export async function getReplyFromConfig(
     sessionKey: agentSessionKey,
     config: cfg,
   });
-  const mergedSkillFilter = mergeSkillFilters(
+  let mergedSkillFilter = mergeSkillFilters(
     opts?.skillFilter,
     resolveAgentSkillsFilter(cfg, agentId),
   );
-  const resolvedOpts =
+  let resolvedOpts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
   const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
@@ -171,6 +172,15 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+
+  const parentSessionKey = sessionEntry?.spawnedBy?.trim();
+  if (parentSessionKey) {
+    const parentAgentId = resolveAgentIdFromSessionKey(parentSessionKey);
+    const parentSkillFilter = resolveAgentSkillsFilter(cfg, parentAgentId);
+    mergedSkillFilter = mergeSkillFilters(mergedSkillFilter, parentSkillFilter);
+    resolvedOpts =
+      mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
+  }
 
   await applyResetModelOverride({
     cfg,
