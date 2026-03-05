@@ -165,6 +165,7 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   const sessionStoreEntry = resolveSessionStoreEntry(ctx, cfg);
+  const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
@@ -328,7 +329,7 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       cfg,
       dispatcher,
-      sessionKey,
+      sessionKey: acpDispatchSessionKey,
       inboundAudio,
       sessionTtsAuto,
       ttsChannel,
@@ -433,6 +434,32 @@ export async function dispatchReplyFromConfig(params: {
       },
       cfg,
     );
+
+    if (ctx.AcpDispatchTailAfterReset === true) {
+      // Command handling prepared a trailing prompt after ACP in-place reset.
+      // Route that tail through ACP now (same turn) instead of embedded dispatch.
+      ctx.AcpDispatchTailAfterReset = false;
+      const acpTailDispatch = await tryDispatchAcpReply({
+        ctx,
+        cfg,
+        dispatcher,
+        sessionKey: acpDispatchSessionKey,
+        inboundAudio,
+        sessionTtsAuto,
+        ttsChannel,
+        shouldRouteToOriginating,
+        originatingChannel,
+        originatingTo,
+        shouldSendToolSummaries,
+        bypassForCommand: false,
+        onReplyStart: params.replyOptions?.onReplyStart,
+        recordProcessed,
+        markIdle,
+      });
+      if (acpTailDispatch) {
+        return acpTailDispatch;
+      }
+    }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
 

@@ -369,6 +369,16 @@ export type PluginHookBeforePromptBuildEvent = {
 export type PluginHookBeforePromptBuildResult = {
   systemPrompt?: string;
   prependContext?: string;
+  /**
+   * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).
+   * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
+   */
+  prependSystemContext?: string;
+  /**
+   * Appended to the agent system prompt so providers can cache it (e.g. prompt caching).
+   * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
+   */
+  appendSystemContext?: string;
 };
 
 // before_agent_start hook (legacy compatibility: combines both phases)
