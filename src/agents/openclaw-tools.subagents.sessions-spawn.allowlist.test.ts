@@ -165,7 +165,6 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     expect(getChildSessionKey()?.startsWith("agent:beta:subagent:")).toBe(true);
   });
 
-
   it("sessions_spawn forbids cross-agent spawning when not allowed", async () => {
     setSessionsSpawnConfigOverride({
       session: {

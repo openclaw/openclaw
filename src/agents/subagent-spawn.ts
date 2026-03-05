@@ -354,8 +354,9 @@ export async function spawnSubagentDirect(
         .map((value) => normalizeAgentId(value).toLowerCase()),
     );
     const configuredSet = new Set(
-      (Array.isArray(cfg.agents?.list) ? cfg.agents.list : [])
-        .map((entry) => normalizeAgentId(entry.id).toLowerCase()),
+      (Array.isArray(cfg.agents?.list) ? cfg.agents.list : []).map((entry) =>
+        normalizeAgentId(entry.id).toLowerCase(),
+      ),
     );
     const isAllowed = allowAny
       ? true
