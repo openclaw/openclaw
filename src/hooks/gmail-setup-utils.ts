@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { hasBinary } from "../agents/skills.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { defaultRuntime } from "../runtime.ts";
 import { resolveUserPath } from "../utils.js";
 import { normalizeServePath } from "./gmail.js";
 
@@ -165,7 +166,74 @@ async function runGcloudCommand(
   });
 }
 
-export async function ensureDependency(bin: string, brewArgs: string[]) {
+type DependencyInstallOptions = {
+  silent?: boolean;
+};
+
+async function installWithBrew(
+  bin: string,
+  brewArgs: string[],
+  options?: DependencyInstallOptions,
+): Promise<void> {
+  const brewEnv = bin === "gcloud" ? await gcloudEnv() : undefined;
+  if (!options?.silent) {
+    defaultRuntime.log(`Dependency ${bin} not found; installing with Homebrew...`);
+  }
+  const result = await runCommandWithTimeout(["brew", "install", ...brewArgs], {
+    timeoutMs: 600_000,
+    env: brewEnv,
+  });
+  if (result.code !== 0) {
+    throw new Error(`brew install failed for ${bin}: ${result.stderr || result.stdout}`);
+  }
+  if (!hasBinary(bin)) {
+    throw new Error(`${bin} still not available after brew install`);
+  }
+}
+
+export async function ensureDependencies(
+  brewArgsMap: Record<string, string[]>,
+  options?: DependencyInstallOptions,
+) {
+  const errors: string[] = [];
+  const missingBins: Array<{ bin: string; brewArgs: string[] }> = [];
+  for (const [bin, brewArgs] of Object.entries(brewArgsMap)) {
+    if (bin === "gcloud" && ensureGcloudOnPath()) {
+      continue;
+    }
+    if (hasBinary(bin)) {
+      continue;
+    }
+    missingBins.push({ bin, brewArgs });
+  }
+  if (missingBins.length === 0) {
+    return;
+  }
+  if (process.platform !== "darwin") {
+    throw new Error(
+      `Missing dependencies: ${missingBins.map((m) => m.bin).join(", ")}. Install them manually and retry.`,
+    );
+  }
+  if (!hasBinary("brew")) {
+    throw new Error("Homebrew not installed (install brew and retry)");
+  }
+  for (const { bin, brewArgs } of missingBins) {
+    try {
+      await installWithBrew(bin, brewArgs, options);
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : String(err));
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(`Failed to install dependencies:\n${errors.join("\n")}`);
+  }
+}
+
+export async function ensureDependency(
+  bin: string,
+  brewArgs: string[],
+  options?: DependencyInstallOptions,
+) {
   if (bin === "gcloud" && ensureGcloudOnPath()) {
     return;
   }
@@ -178,17 +246,7 @@ export async function ensureDependency(bin: string, brewArgs: string[]) {
   if (!hasBinary("brew")) {
     throw new Error("Homebrew not installed (install brew and retry)");
   }
-  const brewEnv = bin === "gcloud" ? await gcloudEnv() : undefined;
-  const result = await runCommandWithTimeout(["brew", "install", ...brewArgs], {
-    timeoutMs: 600_000,
-    env: brewEnv,
-  });
-  if (result.code !== 0) {
-    throw new Error(`brew install failed for ${bin}: ${result.stderr || result.stdout}`);
-  }
-  if (!hasBinary(bin)) {
-    throw new Error(`${bin} still not available after brew install`);
-  }
+  await installWithBrew(bin, brewArgs, options);
 }
 
 export async function ensureGcloudAuth() {
