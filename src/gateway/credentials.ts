@@ -170,14 +170,28 @@ export function resolveGatewayCredentialsFromConfig(params: {
   const envToken = readGatewayTokenEnv(env, includeLegacyEnv);
   const envPassword = readGatewayPasswordEnv(env, includeLegacyEnv);
 
-  const remoteToken = trimToUndefined(remote?.token);
-  const remotePassword = trimToUndefined(remote?.password);
-  const localToken = trimToUndefined(params.cfg.gateway?.auth?.token);
-  const localPassword = trimToUndefined(params.cfg.gateway?.auth?.password);
   const localTokenRef = resolveSecretInputRef({
     value: params.cfg.gateway?.auth?.token,
     defaults,
   }).ref;
+  const localPasswordRef = resolveSecretInputRef({
+    value: params.cfg.gateway?.auth?.password,
+    defaults,
+  }).ref;
+  const remoteTokenRef = resolveSecretInputRef({
+    value: remote?.token,
+    defaults,
+  }).ref;
+  const remotePasswordRef = resolveSecretInputRef({
+    value: remote?.password,
+    defaults,
+  }).ref;
+  const remoteToken = remoteTokenRef ? undefined : trimToUndefined(remote?.token);
+  const remotePassword = remotePasswordRef ? undefined : trimToUndefined(remote?.password);
+  const localToken = localTokenRef ? undefined : trimToUndefined(params.cfg.gateway?.auth?.token);
+  const localPassword = localPasswordRef
+    ? undefined
+    : trimToUndefined(params.cfg.gateway?.auth?.password);
 
   const localTokenPrecedence = params.localTokenPrecedence ?? "env-first";
   const localPasswordPrecedence = params.localPasswordPrecedence ?? "env-first";
@@ -208,10 +222,6 @@ export function resolveGatewayCredentialsFromConfig(params: {
         authMode !== "none" &&
         authMode !== "trusted-proxy" &&
         !localResolved.password);
-    const localPasswordRef = resolveSecretInputRef({
-      value: params.cfg.gateway?.auth?.password,
-      defaults,
-    }).ref;
     if (localTokenRef && !localResolved.token && !envToken && localTokenCanWin) {
       throwUnresolvedGatewaySecretInput("gateway.auth.token");
     }
@@ -239,14 +249,6 @@ export function resolveGatewayCredentialsFromConfig(params: {
         ? firstDefined([envPassword, remotePassword, localPassword])
         : firstDefined([remotePassword, envPassword, localPassword]);
 
-  const remoteTokenRef = resolveSecretInputRef({
-    value: remote?.token,
-    defaults,
-  }).ref;
-  const remotePasswordRef = resolveSecretInputRef({
-    value: remote?.password,
-    defaults,
-  }).ref;
   const localTokenCanWin =
     authMode === "token" ||
     (authMode !== "password" && authMode !== "none" && authMode !== "trusted-proxy");

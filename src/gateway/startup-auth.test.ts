@@ -170,6 +170,30 @@ describe("ensureGatewayStartupAuth", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("resolves env-template gateway.auth.token before env-token short-circuiting", async () => {
+    const result = await ensureGatewayStartupAuth({
+      cfg: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "${OPENCLAW_GATEWAY_TOKEN}",
+          },
+        },
+      },
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "resolved-token",
+      } as NodeJS.ProcessEnv,
+      persist: true,
+    });
+
+    expect(result.generatedToken).toBeUndefined();
+    expect(result.persistedGeneratedToken).toBe(false);
+    expect(result.auth.mode).toBe("token");
+    expect(result.auth.token).toBe("resolved-token");
+    expect(result.cfg.gateway?.auth?.token).toBe("${OPENCLAW_GATEWAY_TOKEN}");
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("fails when gateway.auth.token SecretRef is active and unresolved", async () => {
     await expect(
       ensureGatewayStartupAuth({

@@ -132,17 +132,22 @@ function hasGatewayTokenCandidate(params: {
   );
 }
 
-function hasGatewayTokenOverrideCandidate(params: {
-  env: NodeJS.ProcessEnv;
-  authOverride?: GatewayAuthConfig;
-}): boolean {
-  const envToken =
-    params.env.OPENCLAW_GATEWAY_TOKEN?.trim() || params.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
-  if (envToken) {
-    return true;
-  }
+function hasGatewayTokenOverrideCandidate(params: { authOverride?: GatewayAuthConfig }): boolean {
   return Boolean(
     typeof params.authOverride?.token === "string" && params.authOverride.token.trim().length > 0,
+  );
+}
+
+function hasGatewayTokenEnvCandidate(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim());
+}
+
+function hasGatewayTokenConfigRef(cfg: OpenClawConfig): boolean {
+  return Boolean(
+    resolveSecretInputRef({
+      value: cfg.gateway?.auth?.token,
+      defaults: cfg.secrets?.defaults,
+    }).ref,
   );
 }
 
@@ -168,7 +173,10 @@ function shouldResolveGatewayTokenSecretRef(params: {
   env: NodeJS.ProcessEnv;
   authOverride?: GatewayAuthConfig;
 }): boolean {
-  if (hasGatewayTokenOverrideCandidate(params)) {
+  if (hasGatewayTokenOverrideCandidate({ authOverride: params.authOverride })) {
+    return false;
+  }
+  if (hasGatewayTokenEnvCandidate(params.env) && !hasGatewayTokenConfigRef(params.cfg)) {
     return false;
   }
   const explicitMode = params.authOverride?.mode ?? params.cfg.gateway?.auth?.mode;

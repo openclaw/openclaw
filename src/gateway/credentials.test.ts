@@ -140,6 +140,47 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     ).toThrow("gateway.auth.password");
   });
 
+  it("treats env-template local tokens as SecretRefs instead of plaintext", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: cfg({
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: "${OPENCLAW_GATEWAY_TOKEN}",
+          },
+        },
+      }),
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+      } as NodeJS.ProcessEnv,
+      includeLegacyEnv: false,
+    });
+
+    expect(resolved).toEqual({
+      token: "env-token",
+      password: undefined,
+    });
+  });
+
+  it("throws when env-template local token SecretRef is unresolved in token mode", () => {
+    expect(() =>
+      resolveGatewayCredentialsFromConfig({
+        cfg: cfg({
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: "${OPENCLAW_GATEWAY_TOKEN}",
+            },
+          },
+        }),
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+      }),
+    ).toThrow("gateway.auth.token");
+  });
+
   it("ignores unresolved local password ref when local auth mode is none", () => {
     const resolved = resolveGatewayCredentialsFromConfig({
       cfg: {

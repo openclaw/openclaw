@@ -25,6 +25,7 @@ import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
+import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
 import type {
   GatewayWizardSettings,
   QuickstartGatewayDefaults,
@@ -182,9 +183,12 @@ export async function configureGatewayForOnboarding(
     if (tokenMode === "ref") {
       if (flow === "quickstart" && quickstartTokenRef) {
         gatewayTokenInput = quickstartTokenRef;
-        if (quickstartTokenRef.source === "env") {
-          gatewayToken = process.env[quickstartTokenRef.id]?.trim();
-        }
+        gatewayToken = await resolveOnboardingSecretInputString({
+          config: nextConfig,
+          value: quickstartTokenRef,
+          path: "gateway.auth.token",
+          env: process.env,
+        });
       } else {
         const resolved = await promptSecretRefForOnboarding({
           provider: "gateway-auth-token",
