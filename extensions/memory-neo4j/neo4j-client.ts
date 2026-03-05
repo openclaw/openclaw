@@ -2255,11 +2255,17 @@ Return JSON: {"classification": "SUPERSEDES"|"COMPLEMENTS"|"UNRELATED"}`,
       // OR one entity's alias matches the other's name.
       // Keep the entity with more mentions, or the shorter/more canonical name
       // if mention counts are equal.
+      // Use fulltext index pre-filter to avoid O(N²) Cartesian product.
+      // For each entity e1, db.index.fulltext.queryNodes uses the Lucene BM25
+      // index to find a small candidate set e2, reducing complexity from
+      // O(N²) to O(N × k) where k is the average candidate set size (~2–10).
       const result = await session.run(
-        `MATCH (e1:Entity), (e2:Entity)
-         WHERE e1.name < e2.name
+        `MATCH (e1:Entity)
+         WHERE size(e1.name) > 2
+         CALL db.index.fulltext.queryNodes('entity_fulltext_index', e1.name) YIELD node AS e2
+         WHERE e2.id <> e1.id
+           AND e1.name < e2.name
            AND e1.type = e2.type
-           AND size(e1.name) > 2
            AND size(e2.name) > 2
            AND (
              e1.name CONTAINS e2.name

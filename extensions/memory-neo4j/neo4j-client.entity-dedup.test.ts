@@ -216,6 +216,19 @@ describe("Entity Deduplication", () => {
       // Verify minimum name length filter
       expect(query).toContain("size(e1.name) > 2");
     });
+
+    it("uses fulltext index pre-filter instead of Cartesian product", async () => {
+      mockSession.run.mockResolvedValueOnce({ records: [] });
+
+      await client.findDuplicateEntityPairs();
+
+      const query = mockSession.run.mock.calls[0][0] as string;
+      // Verify the query uses the fulltext index (not a bare MATCH (e1), (e2) Cartesian)
+      expect(query).toContain("db.index.fulltext.queryNodes");
+      expect(query).toContain("entity_fulltext_index");
+      // Verify self-pairs are excluded
+      expect(query).toContain("e2.id <> e1.id");
+    });
   });
 
   // --------------------------------------------------------------------------
