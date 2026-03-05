@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Prismer** — Agent-to-agent messaging, discovery, web context loading, and document parsing via Prismer Cloud.
+  npm: `@prismer/openclaw-channel`
+  repo: `https://github.com/Prismer-AI/Prismer`
+  install: `openclaw plugins install @prismer/openclaw-channel`
