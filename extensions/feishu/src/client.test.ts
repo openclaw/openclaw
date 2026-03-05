@@ -65,7 +65,9 @@ function firstWsClientOptions(): { agent?: unknown } {
 }
 
 function firstClientOptions(): { httpInstance?: unknown } {
-  const calls = clientCtorMock.mock.calls as unknown as Array<[options: { httpInstance?: unknown }]>;
+  const calls = clientCtorMock.mock.calls as unknown as Array<
+    [options: { httpInstance?: unknown }]
+  >;
   return calls[0]?.[0] ?? {};
 }
 

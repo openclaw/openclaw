@@ -20,7 +20,7 @@ function getProxyAgent(): HttpsProxyAgent<string> | undefined {
  */
 function createHttpInstance(): ReturnType<typeof axios.create> | undefined {
   const agent = getProxyAgent();
-  if (!agent) return undefined;  // Return undefined when no proxy is configured
+  if (!agent) return undefined; // Return undefined when no proxy is configured
   return axios.create({
     httpsAgent: agent,
     httpAgent: agent,
