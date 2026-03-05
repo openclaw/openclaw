@@ -5,6 +5,8 @@
     "type": "module",
     "main": "server/extension-relay.js",
     "dependencies": {
+        "dotenv": "^17.3.1",
+        "puppeteer-core": "^24.38.0",
         "ws": "^8.19.0"
     },
     "scripts": {

@@ -148,6 +148,7 @@ export async function ensureChromeExtensionRelayServer(opts) {
 
   const extensionReconnectGraceMs = envMsOrDefault("OPENCLAW_EXTENSION_RELAY_RECONNECT_GRACE_MS", DEFAULT_EXTENSION_RECONNECT_GRACE_MS);
   let currentLockTab = !!opts.lockTab;
+  let lockedTabSessionId = null;
   console.log(`[browser/extension-relay] Relay starting on ${info.host}:${info.port} (lockTab=${currentLockTab})`);
 
   const initPromise = (async () => {
@@ -249,6 +250,16 @@ export async function ensureChromeExtensionRelayServer(opts) {
           throw new Error("target not found");
         }
         default: {
+          if (currentLockTab) {
+            if (!cmd.params?.sessionId && !cmd.sessionId) {
+              // Targeted commands usually have a session. If not, we check if we should block.
+              // For simplicity, if Locked, we only allow commands if a tab is locked and it matches.
+            }
+            if (lockedTabSessionId && (cmd.sessionId !== lockedTabSessionId && cmd.params?.sessionId !== lockedTabSessionId)) {
+              throw new Error("Relay is LOCKED to another tab.");
+            }
+          }
+
           const id = nextExtensionId++;
           return await sendToExtension({ id, method: "forwardCDPCommand", params: { method: cmd.method, sessionId: cmd.sessionId, params: cmd.params } });
         }
@@ -299,6 +310,42 @@ export async function ensureChromeExtensionRelayServer(opts) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(payload));
         return;
+      }
+
+      if (path === "/extension/status") {
+        const token = getRelayAuthTokenFromRequest(req, url);
+        if (!token || !relayAuthTokens.has(token)) {
+          res.writeHead(401);
+          res.end("Unauthorized");
+          return;
+        }
+
+        if (req.method === "GET") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true, lockTab: currentLockTab }));
+          return;
+        }
+
+        if (req.method === "PUT") {
+          let body = "";
+          req.on("data", (chunk) => { body += chunk; });
+          req.on("end", () => {
+            try {
+              const data = JSON.parse(body);
+              if (typeof data.lockTab === "boolean") {
+                currentLockTab = data.lockTab;
+                if (!currentLockTab) lockedTabSessionId = null;
+                console.log(`[browser/extension-relay] lockTab updated: ${currentLockTab}`);
+              }
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ ok: true, lockTab: currentLockTab }));
+            } catch {
+              res.writeHead(400);
+              res.end("Invalid JSON");
+            }
+          });
+          return;
+        }
       }
 
       if (path.match(/^\/json(\/list)?\/?$/) && (req.method === "GET" || req.method === "PUT")) {
@@ -362,8 +409,22 @@ export async function ensureChromeExtensionRelayServer(opts) {
           }
         } else if (parsed?.method === "forwardCDPEvent") {
           broadcastToCdpClients({ method: parsed.params.method, params: parsed.params.params, sessionId: parsed.params.sessionId });
-          if (parsed.params.method === "Target.attachedToTarget") connectedTargets.set(parsed.params.params.sessionId, { sessionId: parsed.params.params.sessionId, targetId: parsed.params.params.targetInfo.targetId, targetInfo: parsed.params.params.targetInfo });
-          else if (parsed.params.method === "Target.detachedFromTarget") connectedTargets.delete(parsed.params.params.sessionId);
+          if (parsed.params.method === "Target.attachedToTarget") {
+            const sid = parsed.params.params.sessionId;
+            connectedTargets.set(sid, { sessionId: sid, targetId: parsed.params.params.targetInfo.targetId, targetInfo: parsed.params.params.targetInfo });
+            if (currentLockTab && !lockedTabSessionId) {
+              lockedTabSessionId = sid;
+              console.log(`[browser/extension-relay] Locked to first attached tab: ${sid}`);
+            }
+          }
+          else if (parsed.params.method === "Target.detachedFromTarget") {
+            const sid = parsed.params.params.sessionId;
+            connectedTargets.delete(sid);
+            if (lockedTabSessionId === sid) {
+              lockedTabSessionId = null;
+              console.log(`[browser/extension-relay] Unlocked (locked tab detached)`);
+            }
+          }
         }
       });
       ws.on("close", () => { if (extensionWs === ws) { extensionWs = null; scheduleExtensionDisconnectCleanup(); clearInterval(pingId); } });

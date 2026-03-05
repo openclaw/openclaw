@@ -18,14 +18,15 @@ Extract repetitive text structures (e.g., chapters or paragraphs) from a web pag
 
 ## Flow Execution Example
 
-Here's how to structure a Node.js utility script (`downloader.mjs`) using `child_process.execSync` to run openclaw CLI tools:
+You can now use the restored `scripts/run-node.js` CLI to capture indexed snapshots and automate interactions. This tool connects to the relay and produces a text-based tree where each interactive element has a reference index (e.g., `[e001]`).
 
 ```javascript
 import { execSync } from 'child_process';
 import { appendFileSync } from 'fs';
 
 function run(cmd) {
-    return execSync(cmd, { encoding: 'utf8', stdio: 'pipe' });
+    // Note: run-node.js is the restored CLI replacement for run-node.mjs
+    return execSync(`node scripts/run-node.js ${cmd}`, { encoding: 'utf8', stdio: 'pipe' });
 }
 
 async function sleep(ms) {
@@ -34,30 +35,36 @@ async function sleep(ms) {
 
 async function extractChapters() {
     for (let i = 0; i < 3; i++) {
-        const snapshotRaw = run(`node scripts/run-node.mjs browser snapshot`);
-        const lines = snapshotRaw.split('\\n');
+        // 1. Capture a snapshot to identify elements
+        const snapshotRaw = run(`browser snapshot`);
+        const lines = snapshotRaw.split('\n');
         
         let paragraphs = [];
         let nextChapterRef = null;
 
         for (const line of lines) {
-            // Match any standard paragraph tag element
-            const pMatch = line.match(/^\\s*-\\s*paragraph\\s*(?:\\[ref=([^\]]+)\\])?:\\s*(.*)$/);
-            if (pMatch) paragraphs.push(pMatch[2].trim());
+            // Find paragraphs (these usually appear as StaticText or generic nodes in AXTree)
+            if (line.includes('paragraph') || line.includes('StaticText')) {
+                const text = line.split('"')[1]; // Basic parser for the snapshot output
+                if (text && text.length > 20) paragraphs.push(text.trim());
+            }
 
-            // Match Next Chapter navigation button
-            const nextMatch = line.match(/^.*link\\s+"[^"]*Next Chapter[^"]*"\\s*\\[ref=([^\]]+)\\].*/i);
-            if (nextMatch && !nextChapterRef) nextChapterRef = nextMatch[1];
+            // Match Next Chapter navigation button by its ref
+            if (line.toLowerCase().includes('next chapter') || line.toLowerCase().includes('next')) {
+                const refMatch = line.match(/\[(e\d+)\]/);
+                if (refMatch && !nextChapterRef) nextChapterRef = refMatch[1];
+            }
         }
 
-        // Output parsing
-        const chapterText = paragraphs.join('\\n\\n');
-        appendFileSync("paragraphs_out.txt", `\\n\\n--- Chapter ---\\n\\n\\n${chapterText}\\n\\n`);
+        // 2. Save extracted content
+        const chapterText = paragraphs.join('\n\n');
+        appendFileSync("paragraphs_out.txt", `\n\n--- Chapter Extracted ---\n\n${chapterText}\n\n`);
 
+        // 3. Navigate to next page using the index ref
         if (nextChapterRef) {
-            // Automate clicking 
-            run(`node scripts/run-node.mjs browser click ${nextChapterRef}`);
-            await sleep(5000); // Important to wait for the new page load
+            console.log(`Clicking next: ${nextChapterRef}`);
+            run(`browser click ${nextChapterRef}`);
+            await sleep(6000); // Wait for page navigation
         } else {
             console.log("No Next Chapter found.");
             break;
@@ -69,4 +76,4 @@ extractChapters();
 ```
 
 ## When To Use
-Run this node execution script or implement parts of this workflow whenever the objective requires saving reading content (books, comics text, forum thread posts) that span multiple pages incrementally using `openclaw browser`. 
+Use this workflow whenever the goal is systematic data extraction from multi-page web content. The `browser snapshot` command builds a map of the page's accessibility tree, making it easy for both humans and models to pinpoint exact elements for interaction.
