@@ -89,12 +89,13 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
   const isXai = isXaiProvider(options?.modelProvider, options?.modelId);
+  const isOllamaLike = isOllamaLikeProvider(options?.modelProvider);
 
   function applyProviderCleaning(s: unknown): unknown {
     if (isGeminiProvider && !isAnthropicProvider) {
       return cleanSchemaForGemini(s);
     }
-    if (isXai) {
+    if (isXai || isOllamaLike) {
       return stripXaiUnsupportedKeywords(s);
     }
     return s;
@@ -196,6 +197,20 @@ export function normalizeToolParameters(
     // Merging properties preserves useful enums like `action` while keeping schemas portable.
     parameters: applyProviderCleaning(flattenedSchema),
   };
+}
+
+/**
+ * Ollama / llama.cpp converts JSON Schema → GBNF grammar at request time.
+ * Constraint keywords like maxLength and maxItems generate repetition rules
+ * ({0,N}) that exceed llama.cpp's sane defaults when N is large, causing a
+ * hard parse error.  Reuse the same stripping logic already applied for xAI.
+ */
+function isOllamaLikeProvider(modelProvider?: string): boolean {
+  if (!modelProvider) {
+    return false;
+  }
+  const lower = modelProvider.toLowerCase();
+  return lower.includes("ollama") || lower === "llama" || lower.includes("llama-server");
 }
 
 /**
