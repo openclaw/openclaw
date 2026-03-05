@@ -4,7 +4,9 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveAuthStorePath } from "../../agents/auth-profiles/paths.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -25,18 +27,30 @@ import {
   listAgentEntries,
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
-import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { buildAuthChoiceGroups } from "../../commands/auth-choice-options.js";
+import { applyAuthChoice } from "../../commands/auth-choice.js";
+import type { AuthChoice } from "../../commands/onboard-types.js";
+import {
+  clearConfigCache,
+  createConfigIO,
+  loadConfig,
+  writeConfigFile,
+} from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
 import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
 import { isNotFoundPathError } from "../../infra/path-guards.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
+import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateAgentsAuthProvidersParams,
+  validateAgentsAuthSetParams,
   validateAgentsCreateParams,
   validateAgentsDeleteParams,
   validateAgentsFilesGetParams,
@@ -384,6 +398,45 @@ function isConfiguredAgent(cfg: ReturnType<typeof loadConfig>, agentId: string):
   return findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
 }
 
+// Maps common authChoice values to their primary env var name for detection in the UI.
+const AUTH_CHOICE_ENV_VARS: Partial<Record<string, string>> = {
+  apiKey: "ANTHROPIC_API_KEY",
+  "openai-api-key": "OPENAI_API_KEY",
+  "gemini-api-key": "GEMINI_API_KEY",
+  "openrouter-api-key": "OPENROUTER_API_KEY",
+  "mistral-api-key": "MISTRAL_API_KEY",
+  "xai-api-key": "XAI_API_KEY",
+  "moonshot-api-key": "MOONSHOT_API_KEY",
+  "moonshot-api-key-cn": "MOONSHOT_API_KEY",
+  "kimi-code-api-key": "KIMI_API_KEY",
+  "kilocode-api-key": "KILOCODE_API_KEY",
+  "ai-gateway-api-key": "AI_GATEWAY_API_KEY",
+  "cloudflare-ai-gateway-api-key": "CLOUDFLARE_AI_GATEWAY_API_KEY",
+  "litellm-api-key": "LITELLM_API_KEY",
+  "openrouter-api-key-cn": "OPENROUTER_API_KEY",
+  "together-api-key": "TOGETHER_API_KEY",
+  "venice-api-key": "VENICE_API_KEY",
+  "huggingface-api-key": "HF_TOKEN",
+  "synthetic-api-key": "SYNTHETIC_API_KEY",
+  "qianfan-api-key": "QIANFAN_API_KEY",
+  "zai-api-key": "ZAI_API_KEY",
+  "zai-coding-global": "ZAI_API_KEY",
+  "zai-coding-cn": "ZAI_API_KEY",
+  "zai-global": "ZAI_API_KEY",
+  "zai-cn": "ZAI_API_KEY",
+  "xiaomi-api-key": "XIAOMI_API_KEY",
+  "volcengine-api-key": "VOLCENGINE_API_KEY",
+  "byteplus-api-key": "BYTEPLUS_API_KEY",
+  "opencode-zen": "OPENCODE_API_KEY",
+  "minimax-api": "MINIMAX_API_KEY",
+  "minimax-api-key-cn": "MINIMAX_API_KEY",
+  "minimax-api-lightning": "MINIMAX_API_KEY",
+};
+
+function resolveProviderEnvVar(authChoice: string): string | undefined {
+  return AUTH_CHOICE_ENV_VARS[authChoice];
+}
+
 function respondAgentNotFound(respond: RespondFn, agentId: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
 }
@@ -521,11 +574,42 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const agentDir = resolveAgentDir(nextConfig, agentId);
     nextConfig = applyAgentConfig(nextConfig, { agentId, agentDir });
 
+    // Apply optional model override.
+    const modelParam = resolveOptionalStringParam(params.model);
+    if (modelParam) {
+      nextConfig = applyAgentConfig(nextConfig, { agentId, model: modelParam });
+    }
+
     // Ensure workspace & transcripts exist BEFORE writing config so a failure
     // here does not leave a broken config entry behind.
     const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
     await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
     await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
+
+    // Optionally copy auth profiles from the default agent.
+    if (params.copyAuthFromDefault) {
+      const defaultAgentId = resolveDefaultAgentId(cfg);
+      if (defaultAgentId !== agentId) {
+        const sourceAuthPath = resolveAuthStorePath(resolveAgentDir(cfg, defaultAgentId));
+        const destAuthPath = resolveAuthStorePath(agentDir);
+        const srcNorm = path.resolve(sourceAuthPath).toLowerCase();
+        const dstNorm = path.resolve(destAuthPath).toLowerCase();
+        if (srcNorm !== dstNorm) {
+          try {
+            await fs.access(sourceAuthPath);
+            try {
+              await fs.access(destAuthPath);
+            } catch {
+              // Destination doesn't exist — copy source to it.
+              await fs.mkdir(path.dirname(destAuthPath), { recursive: true });
+              await fs.copyFile(sourceAuthPath, destAuthPath);
+            }
+          } catch {
+            // Source doesn't exist; skip silently.
+          }
+        }
+      }
+    }
 
     await writeConfigFile(nextConfig);
 
@@ -761,5 +845,117 @@ export const agentsHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+  },
+  "agents.auth.providers": ({ params, respond }) => {
+    if (!validateAgentsAuthProvidersParams(params)) {
+      respondInvalidMethodParams(
+        respond,
+        "agents.auth.providers",
+        validateAgentsAuthProvidersParams.errors,
+      );
+      return;
+    }
+
+    // Build a minimal stub store (no actual disk reads needed for static provider list).
+    const stubStore = { profiles: {} } as Parameters<typeof buildAuthChoiceGroups>[0]["store"];
+    const { groups } = buildAuthChoiceGroups({ store: stubStore, includeSkip: false });
+
+    const providers = groups
+      .filter((group) => group.options.length > 0)
+      .map((group) => ({
+        id: group.value,
+        label: group.label,
+        ...(group.hint ? { hint: group.hint } : {}),
+        methods: group.options.map((opt) => {
+          // Check if the corresponding env var has a value.
+          const envVar = resolveProviderEnvVar(opt.value);
+          const envVal = envVar ? process.env[envVar] : undefined;
+          const envVarMasked =
+            envVal && envVal.length > 8
+              ? `${envVal.slice(0, 4)}…${envVal.slice(-4)}`
+              : envVal
+                ? "***"
+                : undefined;
+          return {
+            id: opt.value,
+            label: opt.label,
+            ...(opt.hint ? { hint: opt.hint } : {}),
+            ...(envVar ? { envVar } : {}),
+            ...(envVarMasked ? { envVarMasked } : {}),
+          };
+        }),
+      }));
+
+    respond(true, { providers }, undefined);
+  },
+  "agents.auth.set": async ({ params, respond }) => {
+    if (!validateAgentsAuthSetParams(params)) {
+      respondInvalidMethodParams(respond, "agents.auth.set", validateAgentsAuthSetParams.errors);
+      return;
+    }
+
+    // Read directly from disk — agents.auth.set is often called immediately after
+    // agents.create, so both the config cache and the runtime snapshot (used by
+    // loadConfig()) may still reflect the pre-create state.
+    clearConfigCache();
+    const cfg = createConfigIO().loadConfig();
+    const agentId = normalizeAgentId(String(params.agentId ?? ""));
+    if (!isConfiguredAgent(cfg, agentId)) {
+      respondAgentNotFound(respond, agentId);
+      return;
+    }
+
+    const agentDir = resolveAgentDir(cfg, agentId);
+    const authChoice = String(params.authChoice ?? "") as AuthChoice;
+    const apiKey = typeof params.apiKey === "string" ? params.apiKey.trim() : undefined;
+    const useEnvVar = Boolean(params.useEnvVar);
+
+    // Create a silent prompter: pre-provided token short-circuits all prompts in
+    // applyAuthChoice, so this only needs to handle note/progress calls.
+    const silentPrompter: WizardPrompter = {
+      intro: async () => {},
+      outro: async () => {},
+      note: async () => {},
+      select: async <T>(p: { options: Array<{ value: T }>; initialValue?: T }) =>
+        p.initialValue ?? p.options[0]?.value ?? ("" as T),
+      multiselect: async <T>(p: { initialValues?: T[] }) => p.initialValues ?? [],
+      text: async (p: { initialValue?: string }) => p.initialValue ?? "",
+      confirm: async (p: { initialValue?: boolean }) => p.initialValue ?? false,
+      progress: () => ({ update: () => {}, stop: () => {} }),
+    };
+
+    let authResult: Awaited<ReturnType<typeof applyAuthChoice>>;
+    try {
+      authResult = await applyAuthChoice({
+        authChoice,
+        config: cfg,
+        prompter: silentPrompter,
+        runtime: defaultRuntime,
+        agentDir,
+        setDefaultModel: false,
+        agentId,
+        opts: {
+          token: apiKey,
+          tokenProvider: authChoice,
+          secretInputMode: useEnvVar ? "ref" : undefined,
+        },
+      });
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `auth setup failed: ${String(err)}`),
+      );
+      return;
+    }
+
+    let nextConfig = authResult.config;
+    const model = authResult.agentModelOverride;
+    if (model) {
+      nextConfig = applyAgentConfig(nextConfig, { agentId, model });
+    }
+    await writeConfigFile(nextConfig);
+
+    respond(true, { ok: true as const, agentId, ...(model ? { model } : {}) }, undefined);
   },
 };

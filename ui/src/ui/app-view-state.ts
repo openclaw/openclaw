@@ -128,6 +128,27 @@ export type AppViewState = {
   agentsList: AgentsListResult | null;
   agentsError: string | null;
   agentsSelectedId: string | null;
+  agentAddOpen: boolean;
+  agentAddSubmitting: boolean;
+  agentAddError: string | null;
+  agentAddName: string;
+  agentAddCopyAuth: boolean;
+  agentAddProvider: string;
+  agentAddAuthMethod: string;
+  agentAddApiKey: string;
+  agentAddUseEnvVar: boolean;
+  agentAddProviders: Array<{
+    id: string;
+    label: string;
+    hint?: string;
+    methods: Array<{
+      id: string;
+      label: string;
+      hint?: string;
+      envVar?: string;
+      envVarMasked?: string;
+    }>;
+  }> | null;
   toolsCatalogLoading: boolean;
   toolsCatalogError: string | null;
   toolsCatalogResult: ToolsCatalogResult | null;

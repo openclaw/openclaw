@@ -16,6 +16,11 @@ import {
   AgentsCreateParamsSchema,
   type AgentsCreateResult,
   AgentsCreateResultSchema,
+  AgentsAuthProvidersParamsSchema,
+  AgentsAuthProvidersResultSchema,
+  type AgentsAuthSetParams,
+  AgentsAuthSetParamsSchema,
+  AgentsAuthSetResultSchema,
   type AgentsUpdateParams,
   AgentsUpdateParamsSchema,
   type AgentsUpdateResult,
@@ -266,6 +271,11 @@ export const validateAgentsFilesGetParams = ajv.compile<AgentsFilesGetParams>(
 export const validateAgentsFilesSetParams = ajv.compile<AgentsFilesSetParams>(
   AgentsFilesSetParamsSchema,
 );
+export const validateAgentsAuthProvidersParams = ajv.compile(AgentsAuthProvidersParamsSchema);
+export const validateAgentsAuthProvidersResult = ajv.compile(AgentsAuthProvidersResultSchema);
+export const validateAgentsAuthSetParams =
+  ajv.compile<AgentsAuthSetParams>(AgentsAuthSetParamsSchema);
+export const validateAgentsAuthSetResult = ajv.compile(AgentsAuthSetResultSchema);
 export const validateNodePairRequestParams = ajv.compile<NodePairRequestParams>(
   NodePairRequestParamsSchema,
 );

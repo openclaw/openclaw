@@ -31,6 +31,39 @@ import {
 
 export type AgentsPanel = "overview" | "files" | "tools" | "skills" | "channels" | "cron";
 
+export type AgentAuthProvider = {
+  id: string;
+  label: string;
+  hint?: string;
+  methods: Array<{
+    id: string;
+    label: string;
+    hint?: string;
+    envVar?: string;
+    envVarMasked?: string;
+  }>;
+};
+
+export type AgentAddState = {
+  open: boolean;
+  submitting: boolean;
+  error: string | null;
+  name: string;
+  copyAuth: boolean;
+  provider: string;
+  authMethod: string;
+  apiKey: string;
+  useEnvVar: boolean;
+  providers: AgentAuthProvider[] | null;
+};
+
+export type AgentAddModalProps = {
+  agentAdd: AgentAddState;
+  onAddAgentClose: () => void;
+  onAddAgentFieldChange: (field: keyof AgentAddState, value: unknown) => void;
+  onAddAgentSubmit: () => void;
+};
+
 export type AgentsProps = {
   loading: boolean;
   error: string | null;
@@ -67,7 +100,12 @@ export type AgentsProps = {
   toolsCatalogError: string | null;
   toolsCatalogResult: ToolsCatalogResult | null;
   skillsFilter: string;
+  agentAdd: AgentAddState;
   onRefresh: () => void;
+  onAddAgentOpen: () => void;
+  onAddAgentClose: () => void;
+  onAddAgentFieldChange: (field: keyof AgentAddState, value: unknown) => void;
+  onAddAgentSubmit: () => void;
   onSelectAgent: (agentId: string) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
   onLoadFiles: (agentId: string) => void;
@@ -115,9 +153,12 @@ export function renderAgents(props: AgentsProps) {
             <div class="card-title">Agents</div>
             <div class="card-sub">${agents.length} configured.</div>
           </div>
-          <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onRefresh}>
-            ${props.loading ? "Loading…" : "Refresh"}
-          </button>
+          <div class="row" style="gap: 8px;">
+            <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onRefresh}>
+              ${props.loading ? "Loading…" : "Refresh"}
+            </button>
+            <button class="btn btn--sm primary" @click=${props.onAddAgentOpen}>Add</button>
+          </div>
         </div>
         ${
           props.error
@@ -288,6 +329,186 @@ export function renderAgents(props: AgentsProps) {
               `
         }
       </section>
+    </div>
+  `;
+}
+
+export function renderAddAgentModal(props: AgentAddModalProps) {
+  const { agentAdd: s } = props;
+  const selectedProvider = s.providers?.find((p) => p.id === s.provider) ?? null;
+  const selectedMethod = selectedProvider?.methods.find((m) => m.id === s.authMethod) ?? null;
+  const needsApiKey = Boolean(s.authMethod) && !s.useEnvVar;
+  const hasEnvVar = Boolean(selectedMethod?.envVarMasked);
+
+  return html`
+    <div
+      class="agent-add-overlay"
+      role="dialog"
+      aria-modal="true"
+      @click=${(e: Event) => {
+        if ((e.target as HTMLElement).classList.contains("agent-add-overlay")) {
+          props.onAddAgentClose();
+        }
+      }}
+    >
+      <div class="agent-add-card">
+        <div class="agent-add-header">
+          <div class="agent-add-title">Add Agent</div>
+          <button class="agent-add-close" type="button" @click=${props.onAddAgentClose}>✕</button>
+        </div>
+
+        ${s.error ? html`<div class="callout danger" style="margin-top: 12px;">${s.error}</div>` : nothing}
+
+        <div class="agent-add-body">
+          <!-- Name -->
+          <label class="field">
+            <span>Agent name <span style="color: var(--danger);">*</span></span>
+            <input
+              .value=${s.name}
+              placeholder="e.g. research"
+              ?disabled=${s.submitting}
+              @input=${(e: Event) =>
+                props.onAddAgentFieldChange("name", (e.target as HTMLInputElement).value)}
+            />
+          </label>
+
+          <!-- Copy auth from main -->
+          <label class="agent-add-toggle">
+            <input
+              type="checkbox"
+              .checked=${s.copyAuth}
+              ?disabled=${s.submitting}
+              @change=${(e: Event) =>
+                props.onAddAgentFieldChange("copyAuth", (e.target as HTMLInputElement).checked)}
+            />
+            <span>Copy auth profiles from "main"</span>
+          </label>
+
+          <!-- Optional: Model / Auth provider -->
+          <div class="agent-add-section-label">Model / Auth provider <span class="muted">(optional)</span></div>
+          ${
+            !s.providers
+              ? html`
+                  <div class="muted" style="font-size: 13px">Loading providers…</div>
+                `
+              : html`
+                  <label class="field">
+                    <span>Provider</span>
+                    <select
+                      .value=${s.provider}
+                      ?disabled=${s.submitting}
+                      @change=${(e: Event) => {
+                        const val = (e.target as HTMLSelectElement).value;
+                        props.onAddAgentFieldChange("provider", val);
+                        props.onAddAgentFieldChange("authMethod", "");
+                        props.onAddAgentFieldChange("apiKey", "");
+                        props.onAddAgentFieldChange("useEnvVar", false);
+                      }}
+                    >
+                      <option value="">— Skip —</option>
+                      ${s.providers.map(
+                        (p) =>
+                          html`<option value=${p.id}>${p.label}${p.hint ? ` — ${p.hint}` : ""}</option>`,
+                      )}
+                    </select>
+                  </label>
+                  ${
+                    selectedProvider && selectedProvider.methods.length > 1
+                      ? html`
+                          <label class="field">
+                            <span>${selectedProvider.label} auth method</span>
+                            <select
+                              .value=${s.authMethod}
+                              ?disabled=${s.submitting}
+                              @change=${(e: Event) => {
+                                const val = (e.target as HTMLSelectElement).value;
+                                props.onAddAgentFieldChange("authMethod", val);
+                                props.onAddAgentFieldChange("apiKey", "");
+                                props.onAddAgentFieldChange("useEnvVar", false);
+                              }}
+                            >
+                              <option value="">— Select —</option>
+                              ${selectedProvider.methods.map(
+                                (m) => html`<option value=${m.id}>${m.label}</option>`,
+                              )}
+                            </select>
+                          </label>
+                        `
+                      : nothing
+                  }
+                  ${
+                    s.authMethod
+                      ? html`
+                          <div class="agent-add-section-label">How do you want to provide the API key?</div>
+                          ${
+                            hasEnvVar
+                              ? html`
+                                  <label class="agent-add-toggle">
+                                    <input
+                                      type="checkbox"
+                                      .checked=${s.useEnvVar}
+                                      ?disabled=${s.submitting}
+                                      @change=${(e: Event) => {
+                                        props.onAddAgentFieldChange(
+                                          "useEnvVar",
+                                          (e.target as HTMLInputElement).checked,
+                                        );
+                                        if ((e.target as HTMLInputElement).checked) {
+                                          props.onAddAgentFieldChange("apiKey", "");
+                                        }
+                                      }}
+                                    />
+                                    <span>
+                                      Use existing
+                                      <span class="mono">${selectedMethod?.envVar}</span>
+                                      (env: <span class="mono">${selectedMethod?.envVar}</span>,
+                                      <span class="mono">${selectedMethod?.envVarMasked}</span>)
+                                    </span>
+                                  </label>
+                                `
+                              : nothing
+                          }
+                          ${
+                            needsApiKey
+                              ? html`
+                                  <label class="field">
+                                    <span>Paste API key now</span>
+                                    <input
+                                      type="password"
+                                      .value=${s.apiKey}
+                                      placeholder="sk-…"
+                                      ?disabled=${s.submitting}
+                                      @input=${(e: Event) =>
+                                        props.onAddAgentFieldChange(
+                                          "apiKey",
+                                          (e.target as HTMLInputElement).value,
+                                        )}
+                                    />
+                                  </label>
+                                `
+                              : nothing
+                          }
+                        `
+                      : nothing
+                  }
+                `
+          }
+        </div>
+
+        <div class="agent-add-footer">
+          <button class="btn btn--sm" type="button" ?disabled=${s.submitting} @click=${props.onAddAgentClose}>
+            Cancel
+          </button>
+          <button
+            class="btn btn--sm primary"
+            type="button"
+            ?disabled=${s.submitting || !s.name.trim()}
+            @click=${props.onAddAgentSubmit}
+          >
+            ${s.submitting ? "Creating…" : "Create Agent"}
+          </button>
+        </div>
+      </div>
     </div>
   `;
 }

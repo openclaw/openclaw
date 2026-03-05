@@ -50,6 +50,8 @@ export const AgentsCreateParamsSchema = Type.Object(
     workspace: NonEmptyString,
     emoji: Type.Optional(Type.String()),
     avatar: Type.Optional(Type.String()),
+    model: Type.Optional(NonEmptyString),
+    copyAuthFromDefault: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -265,6 +267,55 @@ export const ToolsCatalogResultSchema = Type.Object(
     agentId: NonEmptyString,
     profiles: Type.Array(ToolCatalogProfileSchema),
     groups: Type.Array(ToolCatalogGroupSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsAuthProvidersParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const AgentsAuthMethodSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    label: NonEmptyString,
+    hint: Type.Optional(Type.String()),
+    envVar: Type.Optional(NonEmptyString),
+    envVarMasked: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsAuthProviderSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    label: NonEmptyString,
+    hint: Type.Optional(Type.String()),
+    methods: Type.Array(AgentsAuthMethodSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsAuthProvidersResultSchema = Type.Object(
+  {
+    providers: Type.Array(AgentsAuthProviderSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsAuthSetParamsSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    authChoice: NonEmptyString,
+    apiKey: Type.Optional(Type.String()),
+    useEnvVar: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsAuthSetResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    agentId: NonEmptyString,
+    model: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
