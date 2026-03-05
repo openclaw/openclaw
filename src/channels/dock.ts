@@ -295,13 +295,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           resolveLineAccount({ cfg, accountId: accountId ?? undefined }).config.allowFrom ?? [],
         ),
       formatAllowFrom: ({ allowFrom }) =>
-        trimAllowFromEntries(allowFrom)
-          .map((entry) =>
-            entry
-              .replace(/^line:/i, "")
-              .replace(/^user:/i, ""),
-          )
-          .map((entry) => entry.toLowerCase()),
+        formatAllowFromWithReplacements(allowFrom, [/^line:/i, /^user:/i]),
     },
     groups: {
       resolveRequireMention: ({ cfg, accountId, groupId }) => {
