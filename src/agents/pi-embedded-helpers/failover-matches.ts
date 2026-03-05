@@ -15,12 +15,16 @@ const ERROR_PATTERNS = {
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
     "overloaded",
-    "service unavailable",
+    // Match "service unavailable" only when combined with an explicit overload
+    // indicator — a generic 503 from a proxy/CDN should not be classified as
+    // provider-overload (#32828).
+    /service[_ ]unavailable.*(?:overload|capacity|high[_ ]demand)|(?:overload|capacity|high[_ ]demand).*service[_ ]unavailable/i,
     "high demand",
   ],
   timeout: [
     "timeout",
     "timed out",
+    "service unavailable",
     "deadline exceeded",
     "context deadline exceeded",
     "connection error",
