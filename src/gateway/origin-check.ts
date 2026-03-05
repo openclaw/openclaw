@@ -26,14 +26,26 @@ function parseOrigin(
   }
 }
 
-function normalizeHostWithoutPort(host: string | undefined): string | undefined {
+function normalizeHostToMatchUrlHost(host: string | undefined): string | undefined {
   const normalized = normalizeHostHeader(host);
   if (!normalized) {
     return undefined;
   }
-  // Strip default ports (:80 for http, :443 for https) to match URL.host behavior
-  // URL.host keeps non-standard ports (e.g., :18789) but strips defaults
-  return normalized.replace(/:(80|443)$/, "").toLowerCase();
+  // Use URL parsing to exactly match URL.host semantics
+  // This strips default ports (:80 for http, :443 for https) but keeps non-standard ports
+  // e.g., "gateway.ts.net:443" with https:// becomes "gateway.ts.net"
+  // e.g., "gateway.ts.net:80" with http:// becomes "gateway.ts.net"
+  // e.g., "gateway.ts.net:8080" stays "gateway.ts.net:8080"
+  // e.g., "gateway.ts.net:443" with http:// stays "gateway.ts.net:443"
+  try {
+    // Try as full URL first
+    const url = new URL(normalized);
+    return url.host.toLowerCase();
+  } catch {
+    // Fallback: if it's just a host:port without scheme, assume https (common for X-Forwarded-Host)
+    // and strip :443 only (common case for HTTPS gateways)
+    return normalized.replace(/:443$/, "").toLowerCase();
+  }
 }
 
 export function checkBrowserOrigin(params: {
@@ -58,7 +70,7 @@ export function checkBrowserOrigin(params: {
     return { ok: true, matchedBy: "allowlist" };
   }
 
-  const requestForwardedHost = normalizeHostWithoutPort(params.requestForwardedHost);
+  const requestForwardedHost = normalizeHostToMatchUrlHost(params.requestForwardedHost);
   if (requestForwardedHost) {
     // Security: Origin MUST match the forwarded host (cross-validation)
     if (parsedOrigin.host !== requestForwardedHost) {
@@ -73,7 +85,7 @@ export function checkBrowserOrigin(params: {
     }
   }
 
-  const directRequestHost = normalizeHostWithoutPort(params.requestHost);
+  const directRequestHost = normalizeHostToMatchUrlHost(params.requestHost);
   if (
     params.allowHostHeaderOriginFallback === true &&
     parsedOrigin.host === directRequestHost
