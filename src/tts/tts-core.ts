@@ -200,7 +200,7 @@ export function parseTtsDirectives(
             if (!policy.allowModelId) {
               break;
             }
-            if (!isValidOpenAIModel(rawValue)) {
+            if (!isValidOpenAIModel(rawValue, openaiBaseUrl)) {
               warnings.push(`invalid OpenAI model "${rawValue}"`);
               break;
             }
@@ -432,7 +432,7 @@ export function parseTtsDirectives(
   if (deferredGenericModel) {
     if (overrides.provider === "openai") {
       if (!overrides.openai?.model) {
-        if (!isValidOpenAIModel(deferredGenericModel)) {
+        if (!isValidOpenAIModel(deferredGenericModel, openaiBaseUrl)) {
           warnings.push(`invalid OpenAI model "${deferredGenericModel}"`);
         } else {
           overrides.openai = { ...overrides.openai, model: deferredGenericModel };
@@ -459,7 +459,7 @@ export function parseTtsDirectives(
         if (!overrides.minimax?.model) {
           overrides.minimax = { ...overrides.minimax, model: deferredGenericModel };
         }
-      } else if (isValidOpenAIModel(deferredGenericModel)) {
+      } else if (isValidOpenAIModel(deferredGenericModel, openaiBaseUrl)) {
         if (!overrides.openai?.model) {
           overrides.openai = { ...overrides.openai, model: deferredGenericModel };
         }
