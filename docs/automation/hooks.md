@@ -261,7 +261,8 @@ Triggered when messages are received or sent:
 - **`message:received`**: When an inbound message is received from any channel. Fires early in processing before media understanding. Content may contain raw placeholders like `<media:audio>` for media attachments that haven't been processed yet.
 - **`message:transcribed`**: When a message has been fully processed, including audio transcription and link understanding. At this point, `transcript` contains the full transcript text for audio messages. Use this hook when you need access to transcribed audio content.
 - **`message:preprocessed`**: Fires for every message after all media + link understanding completes, giving hooks access to the fully enriched body (transcripts, image descriptions, link summaries) before the agent sees it.
-- **`message:sent`**: When an outbound message is successfully sent
+- **`message:beforeSend`**: Fires **before** an outbound message is delivered to the channel. Handlers may mutate `event.context.content` to change what gets sent, or set `event.context.suppress = true` to cancel delivery entirely. All handlers must complete within 5 seconds (configurable); if the timeout is exceeded the hook is abandoned and the message is sent with whatever mutations have been applied so far (fail-open). See [Mutating & Suppressing Messages](#mutating--suppressing-messages-messagesbeforeEnd) below.
+- **`message:sent`**: When an outbound message is successfully sent (fire-and-forget, after delivery)
 
 #### Message Event Context
 
@@ -289,7 +290,19 @@ Message events include rich context about the message:
   }
 }
 
-// message:sent context
+// message:beforeSend context  ← fires BEFORE delivery; handlers may mutate
+{
+  to: string,             // Recipient identifier
+  content: string,        // Message content — MUTATE THIS to change what gets sent
+  channelId: string,      // Channel (e.g., "whatsapp", "telegram", "discord")
+  accountId?: string,     // Provider account ID
+  conversationId?: string, // Chat/conversation ID
+  isGroup?: boolean,      // Whether this is a group/channel message
+  groupId?: string,       // Group/channel identifier
+  suppress?: boolean,     // Set to true to cancel delivery entirely
+}
+
+// message:sent context  ← fires AFTER delivery (fire-and-forget)
 {
   to: string,             // Recipient identifier
   content: string,        // Message content that was sent
@@ -344,6 +357,61 @@ const handler = async (event) => {
 
 export default handler;
 ```
+
+#### Mutating & Suppressing Messages (`message:beforeSend`)
+
+The `message:beforeSend` hook is the only message event that **blocks delivery** until handlers
+complete. Use it when you need to intercept an outbound message and either transform or discard it.
+
+**Use cases:**
+
+- **Signature injection** — append a standard footer or AI-generated signature to every reply
+- **PII filtering** — scan content for personal data and redact before it leaves your system
+- **Content transformation** — translate, reformat, or summarise replies
+- **Compliance enforcement** — log or gate messages matching certain patterns
+- **Multi-agent pipeline** — a secondary agent reviews/rewrites content before delivery
+
+**Mutating content:**
+
+```typescript
+// HOOK.md: events: ["message:beforeSend"]
+const handler = async (event) => {
+  if (event.type !== "message" || event.action !== "beforeSend") return;
+
+  // Append a signature to every outbound message.
+  event.context.content = event.context.content + "\n\n— Sent via MyBot";
+};
+
+export default handler;
+```
+
+**Suppressing delivery:**
+
+```typescript
+const BLOCKED_WORDS = ["confidential", "internal-only"];
+
+const handler = async (event) => {
+  if (event.type !== "message" || event.action !== "beforeSend") return;
+
+  const content = String(event.context.content).toLowerCase();
+  if (BLOCKED_WORDS.some((w) => content.includes(w))) {
+    event.context.suppress = true; // message will not be sent
+  }
+};
+
+export default handler;
+```
+
+**Behaviour guarantees:**
+
+- All registered handlers run sequentially (same order as registration).
+- The hook has a hard **5-second timeout**. If handlers take longer, the hook is abandoned and
+  the message is sent with whatever mutations have already been applied.
+- If a handler **throws**, the error is logged but delivery still proceeds (fail-open).
+- Content mutations from _all_ handlers are cumulative — each handler sees the result of the
+  previous one's mutation.
+- `message:beforeSend` fires **after** any `message_sending` plugin hook, so plugin-level
+  mutations are visible to internal hook handlers.
 
 ### Tool Result Hooks (Plugin API)
 
