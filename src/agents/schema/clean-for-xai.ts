@@ -48,8 +48,13 @@ export function isXaiProvider(modelProvider?: string, modelId?: string): boolean
   if (provider.includes("xai") || provider.includes("x-ai")) {
     return true;
   }
+  const lowerModelId = modelId?.toLowerCase() ?? "";
   // OpenRouter proxies to xAI when the model id starts with "x-ai/"
-  if (provider === "openrouter" && modelId?.toLowerCase().startsWith("x-ai/")) {
+  if (provider === "openrouter" && lowerModelId.startsWith("x-ai/")) {
+    return true;
+  }
+  // Venice proxies to xAI/Grok models
+  if (provider === "venice" && lowerModelId.includes("grok")) {
     return true;
   }
   return false;
