@@ -16,7 +16,7 @@ function asText(text: string): TextContent {
 function collectTextSegments(content: ReadonlyArray<TextContent | ImageContent>): string[] {
   const parts: string[] = [];
   for (const block of content) {
-    if (block.type === "text") {
+    if (block.type === "text" && typeof block.text === "string") {
       parts.push(block.text);
     }
   }
@@ -99,7 +99,7 @@ function hasImageBlocks(content: ReadonlyArray<TextContent | ImageContent>): boo
 function estimateTextAndImageChars(content: ReadonlyArray<TextContent | ImageContent>): number {
   let chars = 0;
   for (const block of content) {
-    if (block.type === "text") {
+    if (block.type === "text" && typeof block.text === "string") {
       chars += block.text.length;
     }
     if (block.type === "image") {

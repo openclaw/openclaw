@@ -94,6 +94,27 @@ describe("pruneContextMessages", () => {
     ).not.toThrow();
   });
 
+  it("does not crash on user message with malformed text block (missing text string)", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text" } as unknown as { type: "text"; text: string },
+          { type: "text", text: "valid part" },
+        ],
+        timestamp: Date.now(),
+      },
+      makeAssistant([{ type: "text", text: "reply" }]),
+    ];
+    expect(() =>
+      pruneContextMessages({
+        messages,
+        settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        ctx: CONTEXT_WINDOW_1M,
+      }),
+    ).not.toThrow();
+  });
+
   it("handles well-formed thinking blocks correctly", () => {
     const messages: AgentMessage[] = [
       makeUser("hello"),
