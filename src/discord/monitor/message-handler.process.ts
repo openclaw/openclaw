@@ -12,7 +12,7 @@ import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.j
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../../channels/ack-reactions.js";
-import { logTypingFailure, logAckFailure } from "../../channels/logging.js";
+import { escapeQuotedLogValue, logTypingFailure, logAckFailure } from "../../channels/logging.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import {
@@ -415,7 +415,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   if (shouldLogVerbose()) {
     const preview = truncateUtf16Safe(combinedBody, 200).replace(/\n/g, "\\n");
     logVerbose(
-      `discord inbound: channel=${messageChannelId} deliver=${deliverTarget} from=${ctxPayload.From} preview="${preview}"`,
+      `discord inbound: channel=${messageChannelId} deliver=${deliverTarget} from=${ctxPayload.From} preview="${escapeQuotedLogValue(preview)}"`,
     );
   }
 

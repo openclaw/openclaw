@@ -12,6 +12,7 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "../../channels/inbound-debounce-policy.js";
+import { escapeQuotedLogValue } from "../../channels/logging.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
@@ -360,7 +361,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose(
         `imessage inbound: chatId=${chatId ?? "unknown"} from=${ctxPayload.From} len=${
           String(ctxPayload.Body ?? "").length
-        } preview="${preview}"`,
+        } preview="${escapeQuotedLogValue(preview)}"`,
       );
     }
 
