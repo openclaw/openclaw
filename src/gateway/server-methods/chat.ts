@@ -34,8 +34,10 @@ import { type ChatImageContent, parseMessageWithAttachments } from "../chat-atta
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import {
   GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_NAMES,
   GATEWAY_CLIENT_MODES,
   hasGatewayClientCap,
+  normalizeGatewayClientName,
 } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -891,14 +893,20 @@ export const chatHandlers: GatewayRequestHandlers = {
         typeof sessionScopeParts[1] === "string" &&
         sessionChannelHint === routeChannelCandidate;
       const clientMode = client?.connect?.client?.mode;
+      const clientId = normalizeGatewayClientName(clientInfo?.id);
+      const isTuiClient =
+        clientId === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+        (clientInfo?.displayName ?? "").trim().toLowerCase() === "openclaw-tui";
       const isFromWebchatClient =
-        isWebchatClient(client?.connect?.client) || clientMode === GATEWAY_CLIENT_MODES.UI;
+        isWebchatClient(client?.connect?.client) ||
+        (clientMode === GATEWAY_CLIENT_MODES.UI && !isTuiClient);
       const configuredMainKey = (cfg.session?.mainKey ?? "main").trim().toLowerCase();
       const isConfiguredMainSessionScope =
         normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
       // Channel-agnostic session scopes (main, direct:<peer>, etc.) can leak
       // stale routes across surfaces. Allow configured main sessions from
-      // non-Webchat/UI clients (e.g., CLI, backend) to keep the last external route.
+      // non-Webchat clients (including TUI, CLI, backend) to keep the last
+      // external route.
       const canInheritDeliverableRoute = Boolean(
         sessionChannelHint &&
         sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&

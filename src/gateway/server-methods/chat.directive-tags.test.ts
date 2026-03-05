@@ -4,7 +4,11 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../protocol/client-info.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
@@ -608,6 +612,50 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         OriginatingChannel: "webchat",
         OriginatingTo: undefined,
         AccountId: undefined,
+      }),
+    );
+  });
+
+  it("chat.send allows TUI deliver on configured main sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-main-tui-routes-");
+    mockState.mainSessionKey = "main";
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:6812765697",
+        accountId: "default",
+      },
+      lastChannel: "telegram",
+      lastTo: "telegram:6812765697",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-main-tui-routes",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.UI,
+            id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            displayName: "openclaw-tui",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:main",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:6812765697",
+        AccountId: "default",
       }),
     );
   });
