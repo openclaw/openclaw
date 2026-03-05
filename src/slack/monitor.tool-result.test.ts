@@ -465,9 +465,10 @@ describe("monitorSlackProvider tool results", () => {
     expect(reactMock).toHaveBeenCalledTimes(1);
     expect(sendMock).toHaveBeenCalledTimes(2);
     const statusCall = sendMock.mock.calls.find((call) =>
-      String(call[1]).includes("Status: analyzing"),
+      String(call[1]).includes("*Status update*\nstate: analyzing"),
     );
-    expect(statusCall?.[1]).toContain("checking Grafana dashboards for matching alerts");
+    expect(statusCall?.[1]).toContain("progress:");
+    expect(statusCall?.[1]).toContain("- checking Grafana dashboards for matching alerts");
     expect(statusCall?.[2]).toMatchObject({ threadTs: "123" });
     const sentTexts = sendMock.mock.calls.map((call) => String(call[1]));
     expect(sentTexts).toContain("PFX final reply");

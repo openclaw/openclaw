@@ -71,5 +71,5 @@ export function applyAppendOnlyStreamUpdate(params: {
 
 export function buildStatusFinalPreviewText(updateCount: number): string {
   const dots = ".".repeat((Math.max(1, updateCount) % 3) + 1);
-  return `Status: thinking${dots}`;
+  return `*Status update*\nstate: thinking${dots}`;
 }
