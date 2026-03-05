@@ -30,6 +30,7 @@ import {
   validateSessionsCompactParams,
   validateSessionsDeleteParams,
   validateSessionsListParams,
+  type SessionsPatchParams,
   validateSessionsPatchParams,
   validateSessionsPreviewParams,
   validateSessionsResetParams,
@@ -80,6 +81,7 @@ function resolveGatewaySessionTargetFromKey(key: string) {
 
 function rejectWebchatSessionMutation(params: {
   action: "patch" | "delete";
+  patch?: SessionsPatchParams;
   client: GatewayClient | null;
   isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
   respond: RespondFn;
@@ -88,6 +90,9 @@ function rejectWebchatSessionMutation(params: {
     return false;
   }
   if (params.client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI) {
+    return false;
+  }
+  if (params.action === "patch" && isLabelOnlyPatch(params.patch)) {
     return false;
   }
   params.respond(
@@ -99,6 +104,13 @@ function rejectWebchatSessionMutation(params: {
     ),
   );
   return true;
+}
+
+function isLabelOnlyPatch(patch: SessionsPatchParams | undefined): boolean {
+  if (!patch || !("label" in patch)) {
+    return false;
+  }
+  return Object.keys(patch).every((key) => key === "label" || key === "key");
 }
 
 function migrateAndPruneSessionStoreKey(params: {
@@ -411,7 +423,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (rejectWebchatSessionMutation({ action: "patch", client, isWebchatConnect, respond })) {
+    if (
+      rejectWebchatSessionMutation({
+        action: "patch",
+        patch: p,
+        client,
+        isWebchatConnect,
+        respond,
+      })
+    ) {
       return;
     }
 
