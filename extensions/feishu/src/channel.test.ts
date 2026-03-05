@@ -9,6 +9,12 @@ vi.mock("./probe.js", () => ({
 
 import { feishuPlugin } from "./channel.js";
 
+describe("feishuPlugin metadata", () => {
+  it("prefers session lookup for announce target resolution", () => {
+    expect(feishuPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
+});
+
 describe("feishuPlugin.status.probeAccount", () => {
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
