@@ -162,44 +162,177 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+/** Read a single File into a ChatAttachment via FileReader. */
+function readFileAsAttachment(file: File): Promise<ChatAttachment | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      resolve({
+        id: generateAttachmentId(),
+        dataUrl: reader.result as string,
+        mimeType: file.type,
+      });
+    });
+    // Resolve null on error/abort so Promise.all always settles
+    // and a single bad file doesn't block the entire batch.
+    reader.addEventListener("error", () => resolve(null));
+    reader.addEventListener("abort", () => resolve(null));
+    reader.readAsDataURL(file);
+  });
+}
+
+// Mutable refs to the latest attachments state, updated on every render.
+// Async callbacks read from these refs instead of stale props closures.
+let latestAttachments: ChatAttachment[] = [];
+let latestOnAttachmentsChange: ((attachments: ChatAttachment[]) => void) | undefined;
+
+// Accumulator for concurrent async batches. When multiple addFilesAsAttachments
+// calls resolve before a render (e.g. rapid paste + drop), their results collect
+// here and are flushed together in a single microtask, preventing one batch from
+// overwriting another's files.
+let pendingAttachments: ChatAttachment[] = [];
+let flushScheduled = false;
+
+function flushPendingAttachments() {
+  flushScheduled = false;
+  if (pendingAttachments.length === 0 || !latestOnAttachmentsChange) {
+    return;
+  }
+  const toAdd = pendingAttachments;
+  pendingAttachments = [];
+  const merged = [...latestAttachments, ...toAdd];
+  // Update the module-level ref immediately so that if another batch
+  // flushes before Lit re-renders, it sees the combined state — not
+  // the stale pre-flush snapshot.
+  latestAttachments = merged;
+  latestOnAttachmentsChange(merged);
+}
+
+/**
+ * Batch-read files and append via accumulator to avoid race conditions.
+ * Multiple concurrent calls (rapid paste + drop) collect into pendingAttachments
+ * and flush together in a single microtask, ensuring no batch overwrites another.
+ */
+function addFilesAsAttachments(files: File[]) {
+  if (!latestOnAttachmentsChange || files.length === 0) {
+    return;
+  }
+  void Promise.all(files.map(readFileAsAttachment)).then((results) => {
+    const newAttachments = results.filter((att): att is ChatAttachment => att !== null);
+    if (newAttachments.length === 0) {
+      return;
+    }
+    pendingAttachments.push(...newAttachments);
+    if (!flushScheduled) {
+      flushScheduled = true;
+      queueMicrotask(flushPendingAttachments);
+    }
+  });
+}
+
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
   if (!items || !props.onAttachmentsChange) {
     return;
   }
 
-  const imageItems: DataTransferItem[] = [];
+  const files: File[] = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (item.type.startsWith("image/")) {
-      imageItems.push(item);
+      const file = item.getAsFile();
+      if (file) {
+        files.push(file);
+      }
     }
   }
 
-  if (imageItems.length === 0) {
+  if (files.length === 0) {
     return;
   }
 
   e.preventDefault();
+  addFilesAsAttachments(files);
+}
 
-  for (const item of imageItems) {
-    const file = item.getAsFile();
-    if (!file) {
-      continue;
+/** Handle file input change (from attach or camera buttons). */
+function handleFileInput(e: Event, props: ChatProps) {
+  const input = e.target as HTMLInputElement;
+  const fileList = input.files;
+  if (!fileList || !props.onAttachmentsChange) {
+    return;
+  }
+  // Filter to image/* even though the input has accept="image/*",
+  // as some browsers may allow non-image files through the picker.
+  const files: File[] = [];
+  for (let i = 0; i < fileList.length; i++) {
+    const file = fileList[i];
+    if (file && file.type.startsWith("image/")) {
+      files.push(file);
     }
+  }
+  addFilesAsAttachments(files);
+  // Reset so re-selecting the same file triggers change again
+  input.value = "";
+}
 
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
-        id: generateAttachmentId(),
-        dataUrl,
-        mimeType: file.type,
-      };
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
-    });
-    reader.readAsDataURL(file);
+/** Handle drag-and-drop of files onto the chat area. */
+function handleDrop(e: DragEvent, props: ChatProps) {
+  const target = e.currentTarget as HTMLElement;
+  target.classList.remove("chat--drag-over");
+
+  const fileList = e.dataTransfer?.files;
+  if (!fileList || fileList.length === 0) {
+    return; // Not a file drop — let native behavior handle it
+  }
+
+  // Always cancel file drops to prevent the browser from navigating away
+  // (its default action for dropped files). We filter to images below.
+  e.preventDefault();
+  e.stopPropagation();
+
+  if (!props.onAttachmentsChange || !props.connected) {
+    return;
+  }
+  const files: File[] = [];
+  for (let i = 0; i < fileList.length; i++) {
+    const file = fileList[i];
+    if (file && file.type.startsWith("image/")) {
+      files.push(file);
+    }
+  }
+  if (files.length > 0) {
+    addFilesAsAttachments(files);
+  }
+}
+
+function handleDragOver(e: DragEvent, props: ChatProps) {
+  // Only show the drop overlay when the drag payload contains files
+  // and the chat is connected (compose is enabled).
+  if (!props.connected) {
+    return;
+  }
+  const hasFiles = e.dataTransfer?.types?.includes("Files") ?? false;
+  if (!hasFiles) {
+    return; // Let non-file drags (text, URLs) pass through to native behavior
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  const target = e.currentTarget as HTMLElement;
+  target.classList.add("chat--drag-over");
+}
+
+function handleDragLeave(e: DragEvent) {
+  const hasFiles = e.dataTransfer?.types?.includes("Files") ?? false;
+  if (!hasFiles) {
+    return;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  const target = e.currentTarget as HTMLElement;
+  // Only remove overlay if leaving the container entirely, not child elements
+  if (!target.contains(e.relatedTarget as Node)) {
+    target.classList.remove("chat--drag-over");
   }
 }
 
@@ -237,7 +370,15 @@ function renderAttachmentPreview(props: ChatProps) {
   `;
 }
 
+// Scoped element refs for file inputs (avoids global ID collisions)
+let fileInputEl: HTMLInputElement | null = null;
+let cameraInputEl: HTMLInputElement | null = null;
+
 export function renderChat(props: ChatProps) {
+  // Update mutable refs so async attachment callbacks always read latest state
+  latestAttachments = props.attachments ?? [];
+  latestOnAttachmentsChange = props.onAttachmentsChange;
+
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
@@ -315,7 +456,19 @@ export function renderChat(props: ChatProps) {
   `;
 
   return html`
-    <section class="card chat">
+    <section
+      class="card chat"
+      @drop=${(e: DragEvent) => handleDrop(e, props)}
+      @dragover=${(e: DragEvent) => handleDragOver(e, props)}
+      @dragleave=${handleDragLeave}
+    >
+      <div class="chat-drop-overlay" aria-hidden="true">
+        <div class="chat-drop-overlay__content">
+          ${icons.image}
+          <span>Drop images here</span>
+        </div>
+      </div>
+
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
 
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
@@ -423,6 +576,51 @@ export function renderChat(props: ChatProps) {
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
+          <!-- Hidden file inputs (scoped via ref to avoid global ID collisions) -->
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            class="chat-compose__file-input"
+            ${ref((el) => {
+              fileInputEl = el as HTMLInputElement | null;
+            })}
+            @change=${(e: Event) => handleFileInput(e, props)}
+          />
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            class="chat-compose__file-input"
+            ${ref((el) => {
+              cameraInputEl = el as HTMLInputElement | null;
+            })}
+            @change=${(e: Event) => handleFileInput(e, props)}
+          />
+
+          <div class="chat-compose__attach-buttons">
+            <button
+              class="btn btn--icon chat-compose__attach-btn"
+              type="button"
+              title="Attach image"
+              aria-label="Attach image"
+              ?disabled=${!props.connected}
+              @click=${() => fileInputEl?.click()}
+            >
+              ${icons.paperclip}
+            </button>
+            <button
+              class="btn btn--icon chat-compose__camera-btn"
+              type="button"
+              title="Take photo"
+              aria-label="Take photo"
+              ?disabled=${!props.connected}
+              @click=${() => cameraInputEl?.click()}
+            >
+              ${icons.camera}
+            </button>
+          </div>
+
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
