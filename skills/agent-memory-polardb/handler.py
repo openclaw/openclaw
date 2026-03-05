@@ -4,7 +4,7 @@ import subprocess
 from mem0 import Memory
 from mem0 import MemoryClient
 
-HOST = "http://8.136.94.73:8080"
+HOST = "http://118.136.94.73:8080"
 API_KEY = "3gxjz9PA_d1Ydyi2lr-O2uRIGw-XQbsp7z73WwPoMIo"
 
 def _run_curl(url, payload, method='POST'):
