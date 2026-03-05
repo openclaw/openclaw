@@ -219,23 +219,27 @@ const TasklistRefSchema = Type.Object({
   section_guid: Type.Optional(Type.String({ description: "Section GUID in tasklist" })),
 });
 
-const TaskUpdateFieldSchema = Type.Union(
-  TASK_UPDATE_FIELD_VALUES.map((field) => Type.Literal(field)),
-);
+const TaskUpdateFieldSchema = Type.Unsafe<(typeof TASK_UPDATE_FIELD_VALUES)[number]>({
+  type: "string",
+  enum: TASK_UPDATE_FIELD_VALUES,
+});
 
-const TasklistMemberRoleSchema = Type.Union(
-  [Type.Literal("owner"), Type.Literal("editor"), Type.Literal("viewer")],
-  { description: "Member role (owner/editor/viewer)" },
-);
+const TasklistMemberRoleSchema = Type.Unsafe<"owner" | "editor" | "viewer">({
+  type: "string",
+  enum: ["owner", "editor", "viewer"],
+  description: "Member role (owner/editor/viewer)",
+});
 
-const TasklistUpdateFieldSchema = Type.Union(
-  TASKLIST_UPDATE_FIELD_VALUES.map((field) => Type.Literal(field)),
-);
+const TasklistUpdateFieldSchema = Type.Unsafe<(typeof TASKLIST_UPDATE_FIELD_VALUES)[number]>({
+  type: "string",
+  enum: TASKLIST_UPDATE_FIELD_VALUES,
+});
 
-const TasklistOriginOwnerRoleSchema = Type.Union(
-  [Type.Literal("editor"), Type.Literal("viewer"), Type.Literal("none")],
-  { description: "Role for original owner after owner transfer" },
-);
+const TasklistOriginOwnerRoleSchema = Type.Unsafe<"editor" | "viewer" | "none">({
+  type: "string",
+  enum: ["editor", "viewer", "none"],
+  description: "Role for original owner after owner transfer",
+});
 
 const TasklistMemberSchema = Type.Object({
   id: Type.String({ description: "Member ID (with type controlled by user_id_type)" }),
@@ -524,7 +528,11 @@ export const ListTaskCommentsSchema = Type.Object({
   ),
   page_token: Type.Optional(Type.String({ description: "Pagination token" })),
   direction: Type.Optional(
-    Type.Union([Type.Literal("asc"), Type.Literal("desc")], { description: "Sort direction" }),
+    Type.Unsafe<"asc" | "desc">({
+      type: "string",
+      enum: ["asc", "desc"],
+      description: "Sort direction",
+    }),
   ),
   user_id_type: Type.Optional(Type.String({ description: "User ID type for returned creators" })),
 });
