@@ -270,14 +270,18 @@ export function createSessionActions(context: SessionActionContext) {
       updateHeader();
     }
     const resolved = result.resolved;
-    const entry =
-      resolved && (resolved.modelProvider || resolved.model)
-        ? {
-            ...result.entry,
-            modelProvider: resolved.modelProvider ?? result.entry.modelProvider,
-            model: resolved.model ?? result.entry.model,
-          }
-        : result.entry;
+    const hasResolvedModel =
+      resolved && (resolved.modelProvider !== undefined || resolved.model !== undefined);
+    const entry = hasResolvedModel
+      ? {
+          ...result.entry,
+          modelProvider:
+            resolved.modelProvider !== undefined
+              ? resolved.modelProvider
+              : result.entry.modelProvider,
+          model: resolved.model !== undefined ? resolved.model : result.entry.model,
+        }
+      : result.entry;
     applySessionInfo({ entry, force: true });
   };
 
