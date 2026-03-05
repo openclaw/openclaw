@@ -295,7 +295,7 @@ async function processMessageWithPipeline(params: {
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: message.thread?.name,
+        thread: isGroup ? message.thread?.name : undefined,
       });
       typingMessageName = result?.messageName;
     } catch (err) {
@@ -335,14 +335,13 @@ async function processMessageWithPipeline(params: {
             `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
           );
         },
-        onCleanup: async () => {
-          if (typingMessageName) {
-            try {
-              await deleteGoogleChatMessage({ account, messageName: typingMessageName });
-            } catch (err) {
+        onCleanup: () => {
+          const nameToDelete = typingMessageName;
+          typingMessageName = undefined;
+          if (nameToDelete) {
+            void deleteGoogleChatMessage({ account, messageName: nameToDelete }).catch((err) => {
               runtime.error?.(`Failed deleting typing message on cleanup: ${String(err)}`);
-            }
-            typingMessageName = undefined;
+            });
           }
         },
       },
@@ -497,6 +496,11 @@ async function deliverGoogleChatReply(params: {
         // "invalid thread resource name" (400). Sending unthreaded is better
         // than silently losing the message.
         try {
+          if (i === 0 && typingMessageName) {
+            await deleteGoogleChatMessage({ account, messageName: typingMessageName }).catch(
+              () => {},
+            );
+          }
           await new Promise((r) => setTimeout(r, 1000));
           await sendGoogleChatMessage({
             account,
