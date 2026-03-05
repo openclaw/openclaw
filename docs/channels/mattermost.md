@@ -112,7 +112,12 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 - `user:<id>` for a DM
 - `@username` for a DM (resolved via the Mattermost API)
 
-Bare IDs are treated as channels.
+Bare values are treated as channel targets:
+
+- If the value looks like a channel id, OpenClaw uses it directly.
+- Otherwise, OpenClaw resolves it as a channel name across teams visible to the bot.
+
+When in doubt, prefer `channel:<id>` for unambiguous routing.
 
 ## Reactions (message tool)
 

@@ -4,7 +4,9 @@ import {
   createMattermostClient,
   createMattermostDirectChannel,
   createMattermostPost,
+  fetchMattermostChannelByTeamAndName,
   fetchMattermostMe,
+  fetchMattermostTeams,
   fetchMattermostUserByUsername,
   normalizeMattermostBaseUrl,
   uploadMattermostFile,
@@ -30,6 +32,8 @@ type MattermostTarget =
 
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
+const teamsCache = new Map<string, string[]>();
+const channelByNameCache = new Map<string, string>();
 
 const getCore = () => getMattermostRuntime();
 
@@ -45,6 +49,22 @@ function normalizeMessage(text: string, mediaUrl?: string): string {
 
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
+}
+
+function looksLikeMattermostChannelId(value: string): boolean {
+  return /^[a-z0-9]{26}$/i.test(value.trim());
+}
+
+function isMattermostNotFoundError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const message = err.message.toLowerCase();
+  return message.includes(" 404 ") || message.includes('status_code":404');
+}
+
+function channelNameCacheKey(baseUrl: string, token: string, channelName: string): string {
+  return `${cacheKey(baseUrl, token)}::${channelName.toLowerCase()}`;
 }
 
 function parseMattermostTarget(raw: string): MattermostTarget {
@@ -113,13 +133,91 @@ async function resolveUserIdByUsername(params: {
   return user.id;
 }
 
+async function resolveTeamIds(params: { baseUrl: string; token: string }): Promise<string[]> {
+  const key = cacheKey(params.baseUrl, params.token);
+  const cached = teamsCache.get(key);
+  if (cached && cached.length > 0) {
+    return cached;
+  }
+  const client = createMattermostClient({
+    baseUrl: params.baseUrl,
+    botToken: params.token,
+  });
+  const teams = await fetchMattermostTeams(client);
+  const teamIds = teams.map((team) => team.id?.trim()).filter((id): id is string => Boolean(id));
+  if (teamIds.length > 0) {
+    teamsCache.set(key, teamIds);
+  }
+  return teamIds;
+}
+
+async function resolveChannelIdByName(params: {
+  baseUrl: string;
+  token: string;
+  channelName: string;
+}): Promise<string> {
+  const channelName = params.channelName.trim();
+  const cached = channelByNameCache.get(
+    channelNameCacheKey(params.baseUrl, params.token, channelName),
+  );
+  if (cached) {
+    return cached;
+  }
+
+  const teamIds = await resolveTeamIds({
+    baseUrl: params.baseUrl,
+    token: params.token,
+  });
+  if (teamIds.length === 0) {
+    throw new Error("Mattermost channel lookup failed: bot is not a member of any teams.");
+  }
+
+  const client = createMattermostClient({
+    baseUrl: params.baseUrl,
+    botToken: params.token,
+  });
+
+  for (const teamId of teamIds) {
+    try {
+      const channel = await fetchMattermostChannelByTeamAndName(client, {
+        teamId,
+        channelName,
+      });
+      if (channel.id) {
+        channelByNameCache.set(
+          channelNameCacheKey(params.baseUrl, params.token, channelName),
+          channel.id,
+        );
+        return channel.id;
+      }
+    } catch (err) {
+      if (isMattermostNotFoundError(err)) {
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw new Error(
+    `Mattermost channel "${channelName}" was not found for this bot account. Use channel:<id> for explicit routing.`,
+  );
+}
+
 async function resolveTargetChannelId(params: {
   target: MattermostTarget;
   baseUrl: string;
   token: string;
 }): Promise<string> {
   if (params.target.kind === "channel") {
-    return params.target.id;
+    const rawTarget = params.target.id.trim();
+    if (looksLikeMattermostChannelId(rawTarget)) {
+      return rawTarget;
+    }
+    return await resolveChannelIdByName({
+      baseUrl: params.baseUrl,
+      token: params.token,
+      channelName: rawTarget,
+    });
   }
   const userId = params.target.id
     ? params.target.id

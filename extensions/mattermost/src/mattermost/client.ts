@@ -21,6 +21,12 @@ export type MattermostChannel = {
   team_id?: string | null;
 };
 
+export type MattermostTeam = {
+  id: string;
+  name?: string | null;
+  display_name?: string | null;
+};
+
 export type MattermostPost = {
   id: string;
   user_id?: string | null;
@@ -136,6 +142,27 @@ export async function fetchMattermostChannel(
   channelId: string,
 ): Promise<MattermostChannel> {
   return await client.request<MattermostChannel>(`/channels/${channelId}`);
+}
+
+export async function fetchMattermostTeams(client: MattermostClient): Promise<MattermostTeam[]> {
+  return await client.request<MattermostTeam[]>("/users/me/teams");
+}
+
+export async function fetchMattermostChannelByTeamAndName(
+  client: MattermostClient,
+  params: { teamId: string; channelName: string },
+): Promise<MattermostChannel> {
+  const teamId = params.teamId.trim();
+  const channelName = params.channelName.trim();
+  if (!teamId) {
+    throw new Error("Mattermost team id is required");
+  }
+  if (!channelName) {
+    throw new Error("Mattermost channel name is required");
+  }
+  return await client.request<MattermostChannel>(
+    `/teams/${encodeURIComponent(teamId)}/channels/name/${encodeURIComponent(channelName)}`,
+  );
 }
 
 export async function sendMattermostTyping(
