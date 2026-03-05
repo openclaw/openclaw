@@ -173,22 +173,25 @@ function reconcileOrphanedRun(params: {
     params.entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
     changed = true;
   }
-  if (params.entry.cleanupHandled !== true) {
-    params.entry.cleanupHandled = true;
-    changed = true;
-  }
-  if (typeof params.entry.cleanupCompletedAt !== "number") {
-    params.entry.cleanupCompletedAt = now;
-    changed = true;
-  }
-  const removed = subagentRuns.delete(params.runId);
   resumedRuns.delete(params.runId);
-  if (!removed && !changed) {
+  if (!changed) {
     return false;
   }
   defaultRuntime.log(
-    `[warn] Subagent orphan run pruned source=${params.source} run=${params.runId} child=${params.entry.childSessionKey} reason=${params.reason}`,
+    `[warn] Subagent orphan run detected source=${params.source} run=${params.runId} child=${params.entry.childSessionKey} reason=${params.reason}`,
   );
+  // Trigger the normal completion+announce flow so the requester session receives
+  // a failure notification. completeSubagentRun handles idempotency (via cleanupHandled)
+  // and will delete the entry from subagentRuns after the announce completes.
+  void completeSubagentRun({
+    runId: params.runId,
+    endedAt: params.entry.endedAt,
+    outcome: orphanOutcome,
+    reason: SUBAGENT_ENDED_REASON_ERROR,
+    sendFarewell: true,
+    accountId: params.entry.requesterOrigin?.accountId,
+    triggerCleanup: true,
+  });
   return true;
 }
 
