@@ -59,6 +59,10 @@ export function evaluateChannelHealth(
     typeof snapshot.lastStartAt === "number" && Number.isFinite(snapshot.lastStartAt)
       ? snapshot.lastStartAt
       : null;
+  const lastEventAt =
+    typeof snapshot.lastEventAt === "number" && Number.isFinite(snapshot.lastEventAt)
+      ? snapshot.lastEventAt
+      : null;
   const lastRunActivityAt =
     typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
       ? snapshot.lastRunActivityAt
@@ -92,12 +96,15 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
-    const upSince = snapshot.lastStartAt ?? 0;
+  const eventStateInitializedForLifecycle =
+    lastEventAt != null && (lastStartAt == null || lastEventAt >= lastStartAt);
+  // Avoid false stale-socket loops when channels do not publish event timestamps
+  // (or when a restart inherits an old lastEventAt from a prior lifecycle).
+  if (eventStateInitializedForLifecycle || lastStartAt == null) {
+    const upSince = lastStartAt ?? 0;
     const upDuration = policy.now - upSince;
     if (upDuration > policy.staleEventThresholdMs) {
-      const lastEvent = snapshot.lastEventAt ?? 0;
-      const eventAge = policy.now - lastEvent;
+      const eventAge = lastEventAt == null ? 0 : policy.now - lastEventAt;
       if (eventAge > policy.staleEventThresholdMs) {
         return { healthy: false, reason: "stale-socket" };
       }

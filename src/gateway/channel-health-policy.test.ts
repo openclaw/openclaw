@@ -98,7 +98,7 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
   });
 
-  it("flags stale sockets when no events arrive beyond threshold", () => {
+  it("does not mark stale-socket when no lifecycle event timestamp is available", () => {
     const evaluation = evaluateChannelHealth(
       {
         running: true,
@@ -114,7 +114,47 @@ describe("evaluateChannelHealth", () => {
         staleEventThresholdMs: 30_000,
       },
     );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("flags stale sockets only after lifecycle-local events go stale", () => {
+    const now = 200_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 120_000,
+        lastEventAt: now - 80_000,
+      },
+      {
+        now,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+
+  it("ignores stale lastEventAt inherited from a previous lifecycle", () => {
+    const now = 200_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 120_000,
+        lastEventAt: now - 180_000,
+      },
+      {
+        now,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 });
 
