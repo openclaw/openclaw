@@ -3026,12 +3026,25 @@ body.ai-open .layout {
   border-radius: var(--r-sm);
   padding: 8px 10px;
   transition: all 0.15s;
-  cursor: default;
+  cursor: grab;
+}
+.kanban-card:active {
+  cursor: grabbing;
 }
 .kanban-card:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   border-color: var(--border-hi);
+}
+.kanban-card--ghost {
+  opacity: 0.4;
+  border: 1px dashed var(--accent);
+  background: rgba(99, 102, 241, 0.08);
+}
+.kanban-card--drag {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  transform: rotate(1.5deg);
+  z-index: 100;
 }
 .kc-top {
   display: flex;
