@@ -46,6 +46,7 @@ function findLCS(str1: string, str2: string, minLen: number): { substring: strin
   const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
   let maxLen = 0;
   let endIdx1 = 0;
+  let endIdx2 = 0;
   
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
@@ -54,6 +55,7 @@ function findLCS(str1: string, str2: string, minLen: number): { substring: strin
         if (dp[i][j] > maxLen) {
           maxLen = dp[i][j];
           endIdx1 = i;
+          endIdx2 = j;
         }
       }
     }
@@ -66,7 +68,7 @@ function findLCS(str1: string, str2: string, minLen: number): { substring: strin
   return {
     substring: str1.slice(endIdx1 - maxLen, endIdx1),
     start1: endIdx1 - maxLen,
-    start2: endIdx1 - maxLen, // approximate
+    start2: endIdx2 - maxLen,
   };
 }
 
@@ -154,14 +156,13 @@ export function findRepeatedSubstrings(
             continue;
           }
           
-          const hash = subHash(window);
-          const existing = substringCounts.get(hash);
-          
+          const existing = substringCounts.get(window);
+
           if (existing) {
             existing.occurrences++;
             existing.totalSavings += savings;
           } else {
-            substringCounts.set(hash, { occurrences: 2, totalSavings: savings });
+            substringCounts.set(window, { occurrences: 2, totalSavings: savings });
           }
         }
       }
@@ -190,37 +191,97 @@ export function applyLCSDedup(
   if (config.mode === "off" || messages.length < 2) {
     return { messages, refTable: {}, totalSavings: 0 };
   }
-  
-  // Extract raw content
-  const rawContents = messages.map(m => typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
-  
-  // Find repeated substrings
+
+  const rawContents = messages.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)));
   const repeatedSubs = findRepeatedSubstrings(rawContents, config);
-  
+
   if (repeatedSubs.size === 0) {
     return { messages, refTable: {}, totalSavings: 0 };
   }
-  
-  // Sort by savings (highest first)
-  const sortedSubs = [...repeatedSubs.entries()].toSorted((a, b) => b[1].totalSavings - a[1].totalSavings);
-  
-  // Build ref table - need to store actual content for each hash
+
+  const sortedSubs = [...repeatedSubs.entries()].toSorted((a, b) => {
+    const bySavings = b[1].totalSavings - a[1].totalSavings;
+    if (bySavings !== 0) {
+      return bySavings;
+    }
+    return b[0].length - a[0].length;
+  });
+
   const refTable: Record<string, string> = {};
-  const hashToContent = new Map<string, string>();
-  
-  // For now, we need a way to get the actual content from the hash
-  // This is a limitation - we'd need to store content alongside hash
-  // For now, fall back to simpler approach
-  
-  // Simplified: just return that we found savings, actual implementation
-  // would need more infrastructure to track substring->content mapping
+  const modifiedContents = [...rawContents];
+  const usedRefIds = new Set<string>();
   let totalSavings = 0;
-  for (const [, data] of sortedSubs) {
-    totalSavings += data.totalSavings;
+
+  const nextRefId = (substring: string): { key: string; tag: string } => {
+    const base = subHash(substring).toUpperCase();
+    let candidate = base;
+    let counter = 2;
+    while (usedRefIds.has(candidate)) {
+      candidate = `${base}_${counter}`;
+      counter++;
+    }
+    usedRefIds.add(candidate);
+    return {
+      key: `REF_${candidate}`,
+      tag: `<¯REF_${candidate}¯>`,
+    };
+  };
+
+  for (const [substring] of sortedSubs) {
+    if (!substring || substring.length < config.minSubstringSize) {
+      continue;
+    }
+
+    const { key, tag } = nextRefId(substring);
+    if (substring.length <= tag.length) {
+      continue;
+    }
+
+    let seenFirst = false;
+    let replacements = 0;
+
+    for (let msgIdx = 0; msgIdx < modifiedContents.length; msgIdx++) {
+      let content = modifiedContents[msgIdx] ?? "";
+      if (!content.includes(substring)) {
+        continue;
+      }
+
+      let searchFrom = 0;
+      while (searchFrom < content.length) {
+        const idx = content.indexOf(substring, searchFrom);
+        if (idx === -1) {
+          break;
+        }
+
+        if (!seenFirst) {
+          seenFirst = true;
+          searchFrom = idx + substring.length;
+          continue;
+        }
+
+        content = content.slice(0, idx) + tag + content.slice(idx + substring.length);
+        totalSavings += substring.length - tag.length;
+        replacements++;
+        searchFrom = idx + tag.length;
+      }
+
+      modifiedContents[msgIdx] = content;
+    }
+
+    if (replacements > 0) {
+      refTable[key] = substring;
+    }
   }
-  
+
+  if (totalSavings <= 0) {
+    return { messages, refTable: {}, totalSavings: 0 };
+  }
+
   return {
-    messages,
+    messages: messages.map((msg, idx) => ({
+      ...msg,
+      content: modifiedContents[idx] ?? msg.content,
+    })),
     refTable,
     totalSavings,
   };

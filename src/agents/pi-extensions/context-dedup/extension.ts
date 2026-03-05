@@ -845,7 +845,9 @@ export default function contextDedupExtension(api: ExtensionAPI): void {
     const cleanedTable = cleanOrphanedRefs(lineageMessages, runtime.refTable, runtime.settings);
 
     // Run deduplication on normalized messages
-    const result = deduplicateMessages(lineageMessages, runtime.settings);
+    const result = deduplicateMessages(lineageMessages, runtime.settings, {
+      protectedMessageIndexes: lineage.protectedSourceMessageIndexes,
+    });
     const resolvedMessages = rewriteReadLineageSourcePointers(result.messages);
 
     // Merge ref tables (new refs from this turn + cleaned old refs)
@@ -860,7 +862,7 @@ export default function contextDedupExtension(api: ExtensionAPI): void {
         role: "system" as const,
         content: `${explanation}${refTableText}`,
       };
-      candidateMessages = [refMessage, ...result.messages];
+      candidateMessages = [refMessage, ...resolvedMessages];
     }
 
     const candidateChars = contextChars(candidateMessages);
@@ -874,22 +876,24 @@ export default function contextDedupExtension(api: ExtensionAPI): void {
       refTable: useCandidate ? mergedTable : cleanedTable,
     });
 
-    console.log(
-      "[DEDUP DEBUG] Context:",
-      baseMessages.length,
-      "messages,",
-      baseChars,
-      "chars ->",
-      candidateChars,
-      "chars,",
-      useCandidate ? "dedup applied" : "dedup skipped (no net savings)",
-      "refTable:",
-      Object.keys(useCandidate ? mergedTable : cleanedTable).length,
-      "readLineage:",
-      `full=${lineage.stats.fullyOmittedChunks}`,
-      `trimmed=${lineage.stats.partiallyTrimmedChunks}`,
-      `savedChars=${lineage.stats.omittedChars}`,
-    );
+    if (runtime.settings.debugDump) {
+      console.log(
+        "[DEDUP DEBUG] Context:",
+        baseMessages.length,
+        "messages,",
+        baseChars,
+        "chars ->",
+        candidateChars,
+        "chars,",
+        useCandidate ? "dedup applied" : "dedup skipped (no net savings)",
+        "refTable:",
+        Object.keys(useCandidate ? mergedTable : cleanedTable).length,
+        "readLineage:",
+        `full=${lineage.stats.fullyOmittedChunks}`,
+        `trimmed=${lineage.stats.partiallyTrimmedChunks}`,
+        `savedChars=${lineage.stats.omittedChars}`,
+      );
+    }
 
     if (runtime.settings.debugDump) {
       dumpContextToFile(finalMessages, "after");
