@@ -82,7 +82,7 @@ When opening a PR, use the [PR template](.github/pull_request_template.md) and e
 
 - [ ] **Summary** — Problem, why it matters, what changed
 - [ ] **Change Type** — Bug fix / Feature / Refactor / Docs / Security / Chore
-- [ ] **Scope** — Gateway / Skills / Auth / Memory / Integrations / API / UI / CI
+- [ ] **Scope** — Gateway / Skills / Auth / Memory / Integrations / API / UI / CI / Config / Schema
 - [ ] **Linked Issue** — Closes # or Related #
 - [ ] **User-visible Changes** — What users will see (or `None`)
 - [ ] **Security Impact** — All questions answered
