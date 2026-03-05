@@ -243,7 +243,7 @@ function isAcceptedMime(mime: string): boolean {
 
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
-  if (!items || !props.onAttachmentsChange) {
+  if (!items || !props.onAttachmentsChange || !props.connected) {
     return;
   }
 
@@ -270,7 +270,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
 function handleFileInput(e: Event, props: ChatProps) {
   const input = e.target as HTMLInputElement;
   const fileList = input.files;
-  if (!fileList || !props.onAttachmentsChange) {
+  if (!fileList || !props.onAttachmentsChange || !props.connected) {
     return;
   }
   // Runtime-filter even though the input has an accept attribute,
