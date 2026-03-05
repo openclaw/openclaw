@@ -31,8 +31,8 @@ function warnInvalidAllowFromEntries(entries: string[]) {
       [
         "Invalid allowFrom entry:",
         JSON.stringify(entry),
-        "- allowFrom/groupAllowFrom authorization requires numeric Telegram sender IDs only.",
-        'If you had "@username" entries, re-run onboarding (it resolves @username to IDs) or replace them manually.',
+        "- allowFrom/groupAllowFrom authorization requires numeric Telegram sender IDs only (not group/chat IDs like -100...).",
+        'Use channels.telegram.groups (or channels.telegram.accounts.<id>.groups) to allowlist group chats. If you had "@username" entries, re-run onboarding (it resolves @username to IDs) or replace them manually.',
       ].join(" "),
     );
   }
