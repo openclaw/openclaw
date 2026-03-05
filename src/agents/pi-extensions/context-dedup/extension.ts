@@ -817,6 +817,45 @@ function extractMessageBlockText(message: any, blockIndex: number): string | und
   return extractBlockText(content[blockIndex]);
 }
 
+function findSyntheticPointerTextInMessage(message: any): string | undefined {
+  const content = message?.content;
+
+  if (typeof content === "string") {
+    return isSyntheticPointerOrLineageNote(content) ? content : undefined;
+  }
+
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+
+  for (const block of content) {
+    const text = extractBlockText(block);
+    if (typeof text === "string" && isSyntheticPointerOrLineageNote(text)) {
+      return text;
+    }
+  }
+
+  return undefined;
+}
+
+function clampBlockIndexForMessage(message: any, desiredBlockIndex: number): number {
+  const content = message?.content;
+
+  if (typeof content === "string") {
+    return 0;
+  }
+
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+
+  if (desiredBlockIndex < 0 || desiredBlockIndex >= content.length) {
+    return 0;
+  }
+
+  return desiredBlockIndex;
+}
+
 function resolveRootSourceMessageIndex(messages: any[], startIndex: number): number {
   let current = startIndex;
   const visited = new Set<number>();
@@ -824,11 +863,8 @@ function resolveRootSourceMessageIndex(messages: any[], startIndex: number): num
   while (!visited.has(current) && current >= 0 && current < messages.length) {
     visited.add(current);
 
-    const text = extractText(messages[current]?.content);
+    const text = findSyntheticPointerTextInMessage(messages[current]);
     if (typeof text !== "string" || text.length === 0) {
-      return current;
-    }
-    if (!isSyntheticPointerOrLineageNote(text)) {
       return current;
     }
 
@@ -889,7 +925,10 @@ function resolveRootDedupPointerTarget(params: {
         break;
       }
       currentMessageIndex = dedupTarget.messageIndex;
-      currentBlockIndex = dedupTarget.blockIndex;
+      currentBlockIndex = clampBlockIndexForMessage(
+        params.messages[currentMessageIndex],
+        dedupTarget.blockIndex,
+      );
       currentToolHint = dedupTarget.toolHint || currentToolHint;
       continue;
     }
@@ -900,6 +939,10 @@ function resolveRootDedupPointerTarget(params: {
         break;
       }
       currentMessageIndex = lineageTarget;
+      currentBlockIndex = clampBlockIndexForMessage(
+        params.messages[currentMessageIndex],
+        currentBlockIndex,
+      );
       continue;
     }
 
