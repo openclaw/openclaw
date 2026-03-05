@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => {
       ],
     }),
     printModelTable,
-    resolveForwardCompatModel: vi.fn().mockReturnValue({
+    resolveModelWithRegistry: vi.fn().mockReturnValue({
       provider: "openai-codex",
       id: "gpt-5.4",
       name: "GPT-5.4",
@@ -65,11 +65,11 @@ vi.mock("./list.table.js", () => ({
   printModelTable: mocks.printModelTable,
 }));
 
-vi.mock("../../agents/model-forward-compat.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/model-forward-compat.js")>();
+vi.mock("../../agents/pi-embedded-runner/model.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/pi-embedded-runner/model.js")>();
   return {
     ...actual,
-    resolveForwardCompatModel: mocks.resolveForwardCompatModel,
+    resolveModelWithRegistry: mocks.resolveModelWithRegistry,
   };
 });
 
@@ -92,5 +92,40 @@ describe("modelsListCommand forward-compat", () => {
     expect(codex).toBeTruthy();
     expect(codex?.missing).toBe(false);
     expect(codex?.tags).not.toContain("missing");
+  });
+
+  it("keeps configured local openai gpt-5.4 entries visible in --local output", async () => {
+    mocks.resolveConfiguredEntries.mockReturnValueOnce({
+      entries: [
+        {
+          key: "openai/gpt-5.4",
+          ref: { provider: "openai", model: "gpt-5.4" },
+          tags: new Set(["configured"]),
+          aliases: [],
+        },
+      ],
+    });
+    mocks.resolveModelWithRegistry.mockReturnValueOnce({
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      baseUrl: "http://localhost:4000/v1",
+      input: ["text", "image"],
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    await modelsListCommand({ json: true, local: true }, runtime as never);
+
+    expect(mocks.printModelTable).toHaveBeenCalled();
+    const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{ key: string }>;
+    expect(rows).toEqual([
+      expect.objectContaining({
+        key: "openai/gpt-5.4",
+      }),
+    ]);
   });
 });
