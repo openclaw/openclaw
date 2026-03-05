@@ -185,22 +185,28 @@ export async function runGatewayLoop(params: {
 
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
     // SIGTERM/SIGINT still exit after a graceful shutdown.
+    let firstStart = true;
     // eslint-disable-next-line no-constant-condition
     while (true) {
       onIteration();
-      try {
+      if (firstStart) {
+        // Let first-start errors propagate to the caller so run.ts can
+        // surface GatewayLockError diagnostics (port-usage hints, etc.).
         server = await params.start();
-      } catch (err) {
-        // Exit gracefully instead of crashing on startup failures (e.g.
-        // invalid config after a restart). An unhandled crash causes the OS
-        // to respawn a new process which on macOS loses TCC permissions
-        // (Full Disk Access) granted to the original process.
-        gatewayLog.error(`gateway failed to start: ${String(err)}`);
-        // Also emit via runtime.error so the message is visible even when
-        // subsystem logs are filtered (e.g. --claude-cli-logs mode).
-        params.runtime.error(`Gateway failed to start: ${String(err)}`);
-        exitProcess(1);
-        return;
+        firstStart = false;
+      } else {
+        try {
+          server = await params.start();
+        } catch (err) {
+          // Exit gracefully instead of crashing on restart failures (e.g.
+          // invalid config after a SIGUSR1 restart). An unhandled crash
+          // causes the OS to respawn a new process which on macOS loses
+          // TCC permissions (Full Disk Access) granted to the original process.
+          gatewayLog.error(`gateway failed to start: ${String(err)}`);
+          params.runtime.error(`Gateway failed to start: ${String(err)}`);
+          exitProcess(1);
+          return;
+        }
       }
       await new Promise<void>((resolve) => {
         restartResolver = resolve;

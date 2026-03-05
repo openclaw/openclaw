@@ -381,6 +381,32 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("propagates first-start errors to the caller for GatewayLockError diagnostics", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async () => {
+      const startError = new Error("EADDRINUSE");
+      const start = vi.fn().mockRejectedValueOnce(startError);
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      const { runGatewayLoop } = await import("./run-loop.js");
+      await expect(
+        runGatewayLoop({
+          start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        }),
+      ).rejects.toThrow("EADDRINUSE");
+
+      // The error should NOT be caught internally — runtime.exit should not be called.
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+    });
+  });
+
   it("exits when lock reacquire fails during in-process restart fallback", async () => {
     vi.clearAllMocks();
 
