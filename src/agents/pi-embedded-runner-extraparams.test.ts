@@ -1073,6 +1073,60 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(false);
   });
 
+  it("defaults tool_choice to auto when OpenAI Responses payload has tools but no tool_choice", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api-gpt",
+      applyModelId: "gpt-5.3-codex",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api-gpt",
+        id: "gpt-5.3-codex",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        tools: [{ type: "function", name: "exec" }],
+        tool_choice: null,
+      },
+    });
+    expect(payload.tool_choice).toBe("auto");
+  });
+
+  it("does not force tool_choice when OpenAI Responses payload has no tools", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api-gpt",
+      applyModelId: "gpt-5.3-codex",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api-gpt",
+        id: "gpt-5.3-codex",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        tools: [],
+        tool_choice: null,
+      },
+    });
+    expect(payload.tool_choice).toBeNull();
+  });
+
+  it("preserves explicit OpenAI Responses tool_choice values", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api-gpt",
+      applyModelId: "gpt-5.3-codex",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api-gpt",
+        id: "gpt-5.3-codex",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        tools: [{ type: "function", name: "exec" }],
+        tool_choice: "required",
+      },
+    });
+    expect(payload.tool_choice).toBe("required");
+  });
+
   it("does not force store for models that declare supportsStore=false", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "azure-openai-responses",

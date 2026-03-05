@@ -283,7 +283,10 @@ function createOpenAIResponsesContextManagementWrapper(
   return (model, context, options) => {
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
-    if (!forceStore && !useServerCompaction) {
+    const normalizeToolChoice = OPENAI_RESPONSES_APIS.has(
+      typeof model.api === "string" ? model.api : "",
+    );
+    if (!forceStore && !useServerCompaction && !normalizeToolChoice) {
       return underlying(model, context, options);
     }
 
@@ -306,6 +309,16 @@ function createOpenAIResponsesContextManagementWrapper(
                 compact_threshold: compactThreshold,
               },
             ];
+          }
+          // Ensure custom OpenAI Responses providers keep an effective tool choice
+          // when tools are present on the HTTP stream path.
+          if (
+            normalizeToolChoice &&
+            Array.isArray(payloadObj.tools) &&
+            payloadObj.tools.length > 0 &&
+            payloadObj.tool_choice == null
+          ) {
+            payloadObj.tool_choice = "auto";
           }
         }
         originalOnPayload?.(payload);
