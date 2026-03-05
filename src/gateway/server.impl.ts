@@ -21,6 +21,8 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { migrateSessionStoreToDirectory } from "../config/sessions/store.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -294,6 +296,13 @@ export async function startGatewayServer(
     } catch (err) {
       log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
     }
+  }
+
+  // Auto-migrate session store from monolithic JSON to directory-per-session layout.
+  // One-time, runs under the global write lock, backs up the original file.
+  if (!minimalTestGateway) {
+    const mainStorePath = resolveStorePath(configSnapshot.config.session?.store);
+    await migrateSessionStoreToDirectory(mainStorePath);
   }
 
   let secretsDegraded = false;
