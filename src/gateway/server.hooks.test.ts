@@ -42,6 +42,18 @@ async function postHook(
   });
 }
 
+async function waitForSessionEvent(sessionKey: string, timeoutMs = 2000): Promise<string[]> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const events = peekSystemEvents(sessionKey);
+    if (events.length > 0) {
+      return events;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timeout waiting for system event in ${sessionKey}`);
+}
+
 function setMainAndHooksAgents(): void {
   testState.agentsConfig = {
     list: [{ id: "main", default: true }, { id: "hooks" }],
@@ -243,6 +255,34 @@ describe("gateway server hooks", () => {
 
       const mappedBadPrefix = await postHook(port, "/hooks/mapped-bad", { subject: "hello" });
       expect(mappedBadPrefix.status).toBe(400);
+    });
+  });
+
+  test("posts hook summaries to the requested session key instead of main", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["agent:"],
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      const targetSessionKey = "agent:main:whatsapp:dm:+15550001111";
+      mockIsolatedRunOkOnce();
+
+      const resAgent = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Email",
+        sessionKey: targetSessionKey,
+      });
+      expect(resAgent.status).toBe(200);
+
+      const targetEvents = await waitForSessionEvent(targetSessionKey);
+      expect(targetEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
+      expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+
+      drainSystemEvents(targetSessionKey);
     });
   });
 
