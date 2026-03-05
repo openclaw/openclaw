@@ -1,7 +1,25 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "tsdown";
+
+const packageJsonPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "package.json");
+
+function readPackageVersion(): string | undefined {
+  try {
+    const raw = fs.readFileSync(packageJsonPath, "utf8");
+    const parsed = JSON.parse(raw) as { version?: string };
+    return parsed.version?.trim();
+  } catch {
+    return undefined;
+  }
+}
+
+const bundledVersion = process.env.OPENCLAW_BUNDLED_VERSION || readPackageVersion() || "0.0.0";
 
 const env = {
   NODE_ENV: "production",
+  OPENCLAW_BUNDLED_VERSION: bundledVersion,
 };
 
 const pluginSdkEntrypoints = [
