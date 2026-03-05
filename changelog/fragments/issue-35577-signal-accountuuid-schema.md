@@ -1,0 +1,1 @@
+- Config/Signal: strict config validation now accepts `channels.signal.accountUuid` (including account-level inheritance paths), matching existing Signal loop-protection runtime support. Fixes #35577 and #35601. Thanks @ingyukoh.
