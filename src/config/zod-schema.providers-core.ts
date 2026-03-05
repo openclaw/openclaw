@@ -804,6 +804,7 @@ export const SlackAccountSchema = z
     streamMode: z.enum(["replace", "status_final", "append"]).optional(),
     mediaMaxMb: z.number().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
+    reactionTrigger: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
     replyToMode: ReplyToModeSchema.optional(),
     replyToModeByChatType: SlackReplyToModeByChatTypeSchema.optional(),

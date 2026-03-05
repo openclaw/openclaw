@@ -7,12 +7,17 @@ import {
 
 const reactionQueueMock = vi.fn();
 const reactionAllowMock = vi.fn();
+const requestHeartbeatNowMock = vi.fn();
 
 vi.mock("../../../infra/system-events.js", () => {
   return {
     enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),
   };
 });
+
+vi.mock("../../../infra/heartbeat-wake.js", () => ({
+  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+}));
 
 vi.mock("../../../pairing/pairing-store.js", () => {
   return {
@@ -173,6 +178,71 @@ describe("registerSlackReactionEvents", () => {
       channelId: "D123",
       channelType: "im",
       senderId: "U777",
+    });
+  });
+
+  describe("reactionTrigger", () => {
+    function buildReactionEventWithItemUser(overrides?: { user?: string; item_user?: string }) {
+      return {
+        type: "reaction_added",
+        user: overrides?.user ?? "U123",
+        reaction: "thumbsup",
+        item_user: overrides?.item_user ?? "UBOT",
+        item: { type: "message", channel: "C123", ts: "1234567890.000100" },
+        event_ts: "1234567890.100200",
+      };
+    }
+
+    it("calls requestHeartbeatNow when reactionTrigger is 'all'", async () => {
+      reactionQueueMock.mockReset();
+      reactionAllowMock.mockReset().mockResolvedValue([]);
+      requestHeartbeatNowMock.mockReset();
+      const harness = createSlackSystemEventTestHarness({ reactionTrigger: "all" });
+      registerSlackReactionEvents({ ctx: harness.ctx });
+      const handler = harness.getHandler("reaction_added");
+      await handler!({ event: buildReactionEventWithItemUser(), body: {} });
+      expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "reaction" }),
+      );
+    });
+
+    it("calls requestHeartbeatNow for 'own' when item_user matches bot", async () => {
+      reactionQueueMock.mockReset();
+      reactionAllowMock.mockReset().mockResolvedValue([]);
+      requestHeartbeatNowMock.mockReset();
+      const harness = createSlackSystemEventTestHarness({
+        reactionTrigger: "own",
+        botUserId: "UBOT",
+      });
+      registerSlackReactionEvents({ ctx: harness.ctx });
+      const handler = harness.getHandler("reaction_added");
+      await handler!({ event: buildReactionEventWithItemUser({ item_user: "UBOT" }), body: {} });
+      expect(requestHeartbeatNowMock).toHaveBeenCalled();
+    });
+
+    it("does NOT call requestHeartbeatNow for 'own' when item_user differs", async () => {
+      reactionQueueMock.mockReset();
+      reactionAllowMock.mockReset().mockResolvedValue([]);
+      requestHeartbeatNowMock.mockReset();
+      const harness = createSlackSystemEventTestHarness({
+        reactionTrigger: "own",
+        botUserId: "UBOT",
+      });
+      registerSlackReactionEvents({ ctx: harness.ctx });
+      const handler = harness.getHandler("reaction_added");
+      await handler!({ event: buildReactionEventWithItemUser({ item_user: "UOTHER" }), body: {} });
+      expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    });
+
+    it("does NOT call requestHeartbeatNow when reactionTrigger is 'off'", async () => {
+      reactionQueueMock.mockReset();
+      reactionAllowMock.mockReset().mockResolvedValue([]);
+      requestHeartbeatNowMock.mockReset();
+      const harness = createSlackSystemEventTestHarness({ reactionTrigger: "off" });
+      registerSlackReactionEvents({ ctx: harness.ctx });
+      const handler = harness.getHandler("reaction_added");
+      await handler!({ event: buildReactionEventWithItemUser(), body: {} });
+      expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
     });
   });
 });

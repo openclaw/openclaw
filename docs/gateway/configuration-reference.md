@@ -385,6 +385,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       historyLimit: 50,
       allowBots: false,
       reactionNotifications: "own",
+      reactionTrigger: "off", // off | own | all | allowlist
       reactionAllowlist: ["U123"],
       replyToMode: "off", // off | first | all
       thread: {
@@ -417,6 +418,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
 - `configWrites: false` blocks Slack-initiated config writes.
+- `reactionTrigger`: when enabled, wakes the agent session immediately on emoji reactions instead of waiting for the next message or heartbeat. Values: `off` (default), `own` (reactions on bot messages only), `all` (any reaction), `allowlist` (from `reactionAllowlist`). Note: on Slack Free workspaces, reaction events may not be delivered by the Slack API.
 - Optional `channels.slack.defaultAccount` overrides default account selection when it matches a configured account id.
 - `channels.slack.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
 - Use `user:<id>` (DM) or `channel:<id>` for delivery targets.
