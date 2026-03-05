@@ -3,12 +3,25 @@ export async function readResponseWithLimit(
   maxBytes: number,
   opts?: {
     onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
+    onSuppressedError?: (params: {
+      phase: "cancel_after_overflow" | "release_lock";
+      error: unknown;
+      res: Response;
+    }) => void;
   },
 ): Promise<Buffer> {
   const onOverflow =
     opts?.onOverflow ??
     ((params: { size: number; maxBytes: number }) =>
       new Error(`Content too large: ${params.size} bytes (limit: ${params.maxBytes} bytes)`));
+  const reportSuppressedError = (
+    phase: "cancel_after_overflow" | "release_lock",
+    error: unknown,
+  ) => {
+    try {
+      opts?.onSuppressedError?.({ phase, error, res });
+    } catch {}
+  };
 
   const body = res.body;
   if (!body || typeof body.getReader !== "function") {
@@ -33,7 +46,9 @@ export async function readResponseWithLimit(
         if (total > maxBytes) {
           try {
             await reader.cancel();
-          } catch {}
+          } catch (error) {
+            reportSuppressedError("cancel_after_overflow", error);
+          }
           throw onOverflow({ size: total, maxBytes, res });
         }
         chunks.push(value);
@@ -42,7 +57,9 @@ export async function readResponseWithLimit(
   } finally {
     try {
       reader.releaseLock();
-    } catch {}
+    } catch (error) {
+      reportSuppressedError("release_lock", error);
+    }
   }
 
   return Buffer.concat(
