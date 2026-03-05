@@ -6,13 +6,24 @@ const INCLUDE_RESOLUTION_FAILED_PREFIX = "Include resolution failed:";
 const READ_FAILED_PREFIX = "read failed:";
 const MISSING_ENV_VAR_PREFIX = "Missing env var ";
 
+const INCLUDE_ERROR_PREFIXES = [
+  INCLUDE_RESOLUTION_FAILED_PREFIX,
+  "Failed to read include file:",
+  "Failed to parse include file:",
+  "Include path escapes config directory:",
+  "Include path resolves outside config directory",
+  "Include file failed security checks",
+  "Maximum include depth",
+  "Circular include",
+];
+
 function isMessageNonRecoverable(message: string): boolean {
   const trimmed = message.trim();
   return (
     trimmed.startsWith(ENV_SUBSTITUTION_FAILED_PREFIX) ||
     trimmed.startsWith(MISSING_ENV_VAR_PREFIX) ||
-    trimmed.startsWith(INCLUDE_RESOLUTION_FAILED_PREFIX) ||
-    trimmed.startsWith(READ_FAILED_PREFIX)
+    trimmed.startsWith(READ_FAILED_PREFIX) ||
+    INCLUDE_ERROR_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
   );
 }
 

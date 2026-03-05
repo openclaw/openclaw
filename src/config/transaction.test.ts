@@ -359,7 +359,7 @@ describe("config transactions", () => {
     expect(writeSpy).toHaveLength(0);
   });
 
-  it("treats rollback as successful when pre-transaction hash is unavailable but file is restored", async () => {
+  it("reports rollback failure when pre-transaction config existed but raw was unreadable", async () => {
     const configPath = "/tmp/openclaw-transaction-rollback-null-hash.json";
     const snapshots = [
       makeSnapshot({
@@ -374,12 +374,6 @@ describe("config transactions", () => {
         raw: '{\n  "gateway": { "mode": "local" }\n}\n',
         valid: true,
         config: { gateway: { mode: "local" } },
-      }),
-      makeSnapshot({
-        path: configPath,
-        exists: true,
-        raw: null,
-        valid: false,
       }),
     ];
     let readIndex = 0;
@@ -403,8 +397,9 @@ describe("config transactions", () => {
     );
 
     expect(result.ok).toBe(false);
-    expect(result.stage).toBe("verify");
-    expect(result.rolledBack).toBe(true);
+    expect(result.stage).toBe("rollback");
+    expect(result.rolledBack).toBe(false);
+    expect(result.error).toContain("unreadable");
   });
 
   it("detects rollback failure when pre-transaction config was absent but file remains", async () => {

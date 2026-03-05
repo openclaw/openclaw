@@ -1,16 +1,3 @@
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  createConfigIO,
-  getRuntimeConfigSnapshot,
-  loadConfig,
-  parseConfigJson5,
-  readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite,
-  resolveConfigSnapshotHash,
-  setRuntimeConfigSnapshot,
-} from "./io.js";
-
 export {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -22,7 +9,7 @@ export {
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
   setRuntimeConfigSnapshot,
-};
+} from "./io.js";
 export { migrateLegacyConfig } from "./legacy-migrate.js";
 export * from "./paths.js";
 export * from "./runtime-overrides.js";
