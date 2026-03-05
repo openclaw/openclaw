@@ -130,6 +130,7 @@ describe("subagent registry persistence", () => {
     childSessionKey: string;
     task: string;
     cleanup: "keep" | "delete";
+    expectsCompletionMessage?: boolean;
   }) => {
     const now = Date.now();
     return {
@@ -142,6 +143,7 @@ describe("subagent registry persistence", () => {
           requesterDisplayKey: "main",
           task: params.task,
           cleanup: params.cleanup,
+          expectsCompletionMessage: params.expectsCompletionMessage,
           createdAt: now - 2,
           startedAt: now - 1,
           endedAt: now,
@@ -388,6 +390,36 @@ describe("subagent registry persistence", () => {
     };
     expect(after.runs?.["run-orphan-restore"]).toBeUndefined();
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+  });
+
+  it("reconciles orphaned completion-message runs by dispatching failure cleanup", async () => {
+    const runId = "run-orphan-restore-completion";
+    const persisted = createPersistedEndedRun({
+      runId,
+      childSessionKey: "agent:main:subagent:ghost-restore-completion",
+      task: "orphan restore completion",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+    const registryPath = await writePersistedRegistry(persisted, {
+      seedChildSessions: false,
+    });
+
+    await restartRegistryAndFlush();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const first = (announceSpy.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
+      | { outcome?: { status?: string; error?: string } }
+      | undefined;
+    expect(first?.outcome?.status).toBe("error");
+    expect(first?.outcome?.error).toContain("orphaned subagent run");
+
+    const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs?: Record<string, { cleanupCompletedAt?: number; outcome?: { status?: string } }>;
+    };
+    expect(after.runs?.[runId]?.cleanupCompletedAt).toBeDefined();
+    expect(after.runs?.[runId]?.outcome?.status).toBe("error");
+    expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
   });
 
   it("resume guard prunes orphan runs before announce retry", async () => {

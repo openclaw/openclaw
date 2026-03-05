@@ -173,6 +173,19 @@ function reconcileOrphanedRun(params: {
     params.entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
     changed = true;
   }
+  const shouldSendCompletionFailure =
+    params.entry.expectsCompletionMessage === true &&
+    typeof params.entry.cleanupCompletedAt !== "number";
+  if (shouldSendCompletionFailure) {
+    if (params.entry.cleanupHandled === true) {
+      params.entry.cleanupHandled = false;
+      changed = true;
+    }
+    defaultRuntime.log(
+      `[warn] Subagent orphan run detected source=${params.source} run=${params.runId} child=${params.entry.childSessionKey} reason=${params.reason}; marking failed for cleanup dispatch`,
+    );
+    return true;
+  }
   if (params.entry.cleanupHandled !== true) {
     params.entry.cleanupHandled = true;
     changed = true;
@@ -430,17 +443,18 @@ function resumeSubagentRun(runId: string) {
   }
   const orphanReason = resolveSubagentRunOrphanReason({ entry });
   if (orphanReason) {
-    if (
-      reconcileOrphanedRun({
-        runId,
-        entry,
-        reason: orphanReason,
-        source: "resume",
-      })
-    ) {
+    const didReconcile = reconcileOrphanedRun({
+      runId,
+      entry,
+      reason: orphanReason,
+      source: "resume",
+    });
+    if (didReconcile) {
       persistSubagentRuns();
     }
-    return;
+    if (!subagentRuns.has(runId)) {
+      return;
+    }
   }
   if (entry.cleanupCompletedAt) {
     return;
