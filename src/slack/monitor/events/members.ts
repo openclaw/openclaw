@@ -8,8 +8,9 @@ import { authorizeAndResolveSlackSystemEventContext } from "./system-event-conte
 export function registerSlackMemberEvents(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
+  trackChannelEvent?: (isChannel: boolean) => void;
 }) {
-  const { ctx, trackEvent } = params;
+  const { ctx, trackEvent, trackChannelEvent } = params;
 
   const handleMemberChannelEvent = async (params: {
     verb: "joined" | "left";
@@ -25,6 +26,9 @@ export function registerSlackMemberEvents(params: {
       const channelId = payload.channel;
       const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
       const channelType = payload.channel_type ?? channelInfo?.type;
+      // Track channel events (not DM) for degraded state detection
+      const isChannel = channelType !== "im" && channelType !== "mpim";
+      trackChannelEvent?.(isChannel);
       const ingressContext = await authorizeAndResolveSlackSystemEventContext({
         ctx,
         senderId: payload.user,
