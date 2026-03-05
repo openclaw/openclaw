@@ -11,6 +11,7 @@ export function registerUpdateCommand(program: Command) {
     .option("--web-port <port>", "Web runtime port override")
     .option("--non-interactive", "Fail instead of prompting for major-gate approval", false)
     .option("--yes", "Approve mandatory major-gate OpenClaw update", false)
+    .option("--no-open", "Do not open the browser automatically")
     .option("--json", "Output summary as JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -19,6 +20,7 @@ export function registerUpdateCommand(program: Command) {
           webPort: opts.webPort as string | undefined,
           nonInteractive: Boolean(opts.nonInteractive),
           yes: Boolean(opts.yes),
+          noOpen: Boolean(opts.open === false),
           json: Boolean(opts.json),
         });
       });

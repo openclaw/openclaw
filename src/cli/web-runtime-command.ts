@@ -36,6 +36,7 @@ export type UpdateWebRuntimeOptions = {
   webPort?: string | number;
   nonInteractive?: boolean;
   yes?: boolean;
+  noOpen?: boolean;
   json?: boolean;
 };
 
@@ -48,6 +49,7 @@ export type StopWebRuntimeOptions = {
 export type StartWebRuntimeOptions = {
   profile?: string;
   webPort?: string | number;
+  noOpen?: boolean;
   json?: boolean;
 };
 
@@ -108,6 +110,51 @@ function firstNonEmptyLine(...values: Array<string | undefined>): string | undef
     }
   }
   return undefined;
+}
+
+async function openUrl(url: string): Promise<boolean> {
+  const argv =
+    process.platform === "darwin"
+      ? ["open", url]
+      : process.platform === "win32"
+        ? ["cmd", "/c", "start", "", url]
+        : ["xdg-open", url];
+  const [cmd, ...args] = argv;
+  if (!cmd) return false;
+  return new Promise<boolean>((resolve) => {
+    const child = spawn(cmd, args, { stdio: "ignore" });
+    const timer = setTimeout(() => {
+      child.kill();
+      resolve(false);
+    }, 5_000);
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      resolve(code === 0);
+    });
+    child.once("error", () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  });
+}
+
+async function promptAndOpenWebUi(params: {
+  webPort: number;
+  json?: boolean;
+  noOpen?: boolean;
+  runtime: RuntimeEnv;
+}): Promise<void> {
+  if (params.noOpen || params.json || !process.stdin.isTTY) return;
+  const webUrl = `http://localhost:${params.webPort}`;
+  const wantOpen = await confirm({
+    message: stylePromptMessage(`Open ${webUrl} in your browser?`),
+    initialValue: true,
+  });
+  if (isCancel(wantOpen) || !wantOpen) return;
+  const opened = await openUrl(webUrl);
+  if (!opened) {
+    params.runtime.log(theme.muted("Browser open failed; copy/paste the URL above."));
+  }
 }
 
 async function runOpenClawUpdateWithProgress(openclawCommand: string): Promise<void> {
@@ -415,6 +462,13 @@ export async function updateWebRuntimeCommand(
     throw new Error(`Web runtime update failed: ${summary.reason}`);
   }
 
+  await promptAndOpenWebUi({
+    webPort: selectedPort,
+    json: opts.json,
+    noOpen: opts.noOpen,
+    runtime,
+  });
+
   if (opts.json) {
     runtime.log(JSON.stringify(summary, null, 2));
   }
@@ -562,6 +616,14 @@ export async function startWebRuntimeCommand(
   if (!summary.started) {
     throw new Error(`Web runtime failed readiness probe: ${summary.reason}`);
   }
+
+  await promptAndOpenWebUi({
+    webPort: selectedPort,
+    json: opts.json,
+    noOpen: opts.noOpen,
+    runtime,
+  });
+
   return summary;
 }
 

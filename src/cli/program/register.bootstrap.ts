@@ -17,7 +17,7 @@ export function registerBootstrapCommand(program: Command) {
     .option("--update-now", "Run OpenClaw update before onboarding", false)
     .option("--gateway-port <port>", "Gateway port override for first-run onboarding")
     .option("--web-port <port>", "Preferred web UI port (default: 3100)")
-    .option("--no-open", "Do not open the browser automatically", false)
+    .option("--no-open", "Do not open the browser automatically")
     .option("--json", "Output summary as JSON", false)
     .addHelpText(
       "after",
