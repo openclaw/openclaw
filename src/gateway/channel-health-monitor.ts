@@ -14,6 +14,7 @@ const DEFAULT_MONITOR_STARTUP_GRACE_MS = 60_000;
 const DEFAULT_COOLDOWN_CYCLES = 2;
 const DEFAULT_MAX_RESTARTS_PER_HOUR = 10;
 const ONE_HOUR_MS = 60 * 60_000;
+const DEFAULT_IMESSAGE_STALE_EVENT_THRESHOLD_MS = 6 * ONE_HOUR_MS;
 
 /**
  * How long a connected channel can go without receiving any event before
@@ -74,6 +75,16 @@ function resolveTimingPolicy(
   };
 }
 
+function resolveChannelStaleEventThresholdMs(
+  channelId: string,
+  defaultThresholdMs: number,
+): number {
+  if (channelId === "imessage") {
+    return Math.max(defaultThresholdMs, DEFAULT_IMESSAGE_STALE_EVENT_THRESHOLD_MS);
+  }
+  return defaultThresholdMs;
+}
+
 export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): ChannelHealthMonitor {
   const {
     channelManager,
@@ -124,7 +135,10 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           }
           const healthPolicy: ChannelHealthPolicy = {
             now,
-            staleEventThresholdMs: timing.staleEventThresholdMs,
+            staleEventThresholdMs: resolveChannelStaleEventThresholdMs(
+              channelId,
+              timing.staleEventThresholdMs,
+            ),
             channelConnectGraceMs: timing.channelConnectGraceMs,
           };
           const health = evaluateChannelHealth(status, healthPolicy);

@@ -106,6 +106,20 @@ function createSlackSnapshotManager(
   );
 }
 
+function createIMessageSnapshotManager(
+  account: Partial<ChannelAccountSnapshot>,
+  overrides?: Partial<ChannelManager>,
+): ChannelManager {
+  return createSnapshotManager(
+    {
+      imessage: {
+        default: account,
+      },
+    },
+    overrides,
+  );
+}
+
 async function expectRestartedChannel(
   manager: ChannelManager,
   channel: ChannelId,
@@ -514,6 +528,30 @@ describe("channel-health-monitor", () => {
       expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
       expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
       monitor.stop();
+    });
+
+    it("uses a longer default stale threshold for iMessage idle periods", async () => {
+      const thirtyMinutes = 30 * 60_000;
+      const now = Date.now();
+      const manager = createIMessageSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - thirtyMinutes - 60_000,
+          lastEventAt: now - thirtyMinutes - 30_000,
+        }),
+      );
+      await expectNoRestart(manager);
+    });
+
+    it("still restarts iMessage channels after very long event silence", async () => {
+      const sevenHours = 7 * 60 * 60_000;
+      const now = Date.now();
+      const manager = createIMessageSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - sevenHours - 60_000,
+          lastEventAt: now - sevenHours - 30_000,
+        }),
+      );
+      await expectRestartedChannel(manager, "imessage");
     });
   });
 });

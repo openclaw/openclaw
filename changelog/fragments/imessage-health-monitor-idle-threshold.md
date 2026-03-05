@@ -1,0 +1,1 @@
+- gateway health monitor: increase iMessage stale-event default threshold to 6 hours (channel-aware) to prevent false-positive restarts during normal idle periods.
