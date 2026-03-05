@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { CHANNEL_IDS } from "../channels/registry.js";
 import { VERSION } from "../version.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
@@ -322,7 +323,12 @@ function buildMergedSchemaCacheKey(params: {
       configUiHints: channel.configUiHints ?? null,
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
-  return JSON.stringify({ plugins, channels });
+
+  // Use SHA256 hash instead of full JSON string to avoid RangeError
+  // with large plugin/channel schemas
+  const hash = createHash("sha256");
+  hash.update(JSON.stringify({ plugins, channels }));
+  return hash.digest("hex");
 }
 
 function setMergedSchemaCache(key: string, value: ConfigSchemaResponse): void {
