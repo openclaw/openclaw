@@ -451,7 +451,7 @@ function renderAgentOverview(params: {
             <span>Primary model${isDefault ? " (default)" : ""}</span>
             <select
               .value=${effectivePrimary ?? ""}
-              ?disabled=${!configForm || configLoading || configSaving}
+              ?disabled=${configLoading || configSaving}
               @change=${(e: Event) =>
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
             >
@@ -471,7 +471,7 @@ function renderAgentOverview(params: {
             <span>Fallbacks (comma-separated)</span>
             <input
               .value=${fallbackText}
-              ?disabled=${!configForm || configLoading || configSaving}
+              ?disabled=${configLoading || configSaving}
               placeholder="provider/model, provider/model"
               @input=${(e: Event) =>
                 onModelFallbacksChange(
@@ -487,7 +487,7 @@ function renderAgentOverview(params: {
           </button>
           <button
             class="btn btn--sm primary"
-            ?disabled=${configLoading || configSaving || !configDirty}
+            ?disabled=${configSaving || !configDirty}
             @click=${onConfigSave}
           >
             ${configSaving ? "Saving…" : "Save"}
