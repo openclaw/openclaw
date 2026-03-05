@@ -12,38 +12,49 @@ import {
   type AddTaskToTasklistParams,
   type AddTasklistMembersParams,
   type CreateSubtaskParams,
+  type CreateTaskCommentParams,
   type CreateTaskParams,
   type CreateTasklistParams,
   type DeleteTaskAttachmentParams,
+  type DeleteTaskCommentParams,
   type DeleteTaskParams,
   type DeleteTasklistParams,
   type GetTaskAttachmentParams,
+  type GetTaskCommentParams,
   type GetTaskParams,
   type GetTasklistParams,
   type ListTaskAttachmentsParams,
+  type ListTaskCommentsParams,
   type ListTasklistsParams,
   type RemoveTaskFromTasklistParams,
   type RemoveTasklistMembersParams,
+  type TaskCommentPatchComment,
   type TasklistPatchTasklist,
   type TaskUpdateTask,
+  type UpdateTaskCommentParams,
   type UpdateTasklistParams,
   type UpdateTaskParams,
   type UploadTaskAttachmentParams,
   AddTaskToTasklistSchema,
   AddTasklistMembersSchema,
   CreateSubtaskSchema,
+  CreateTaskCommentSchema,
   CreateTaskSchema,
   CreateTasklistSchema,
   DeleteTaskAttachmentSchema,
+  DeleteTaskCommentSchema,
   DeleteTaskSchema,
   DeleteTasklistSchema,
   GetTaskAttachmentSchema,
+  GetTaskCommentSchema,
   GetTaskSchema,
   GetTasklistSchema,
   ListTaskAttachmentsSchema,
+  ListTaskCommentsSchema,
   ListTasklistsSchema,
   RemoveTaskFromTasklistSchema,
   RemoveTasklistMembersSchema,
+  UpdateTaskCommentSchema,
   UpdateTaskSchema,
   UpdateTasklistSchema,
   UploadTaskAttachmentSchema,
@@ -150,6 +161,20 @@ function formatAttachment(attachment: Record<string, unknown> | undefined) {
   };
 }
 
+function formatComment(comment: Record<string, unknown> | undefined) {
+  if (!comment) return undefined;
+  return {
+    id: comment.id,
+    content: comment.content,
+    creator: comment.creator,
+    reply_to_comment_id: comment.reply_to_comment_id,
+    created_at: comment.created_at,
+    updated_at: comment.updated_at,
+    resource_type: comment.resource_type,
+    resource_id: comment.resource_id,
+  };
+}
+
 // ============ Attachment Upload Helpers ============
 
 function sanitizeUploadFilename(input: string) {
@@ -176,15 +201,13 @@ async function ensureUploadableLocalFile(filePath: string, maxBytes: number) {
 
 async function saveBufferToTempFile(buffer: Buffer, fileName: string) {
   const safeName = sanitizeUploadFilename(fileName);
-  const tempPath = path.join(
-    os.tmpdir(),
-    `feishu-task-attachment-${Date.now()}-${Math.random().toString(16).slice(2)}-${safeName}`,
-  );
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "feishu-task-"));
+  const tempPath = path.join(dir, safeName);
   await fs.promises.writeFile(tempPath, buffer);
   return {
     tempPath,
     cleanup: async () => {
-      await fs.promises.unlink(tempPath).catch(() => undefined);
+      await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     },
   };
 }
@@ -519,6 +542,86 @@ async function uploadTaskAttachment(
   }
 }
 
+async function createTaskComment(client: Lark.Client, params: CreateTaskCommentParams) {
+  const res = await client.task.v2.comment.create({
+    data: omitUndefined({
+      resource_type: "task" as const,
+      resource_id: params.task_guid,
+      content: params.content,
+      reply_to_comment_id: params.reply_to_comment_id,
+    }),
+    params: omitUndefined({ user_id_type: params.user_id_type }),
+  });
+  if (res.code !== 0) throw new Error(res.msg);
+  return {
+    comment: formatComment((res.data?.comment ?? undefined) as Record<string, unknown> | undefined),
+  };
+}
+
+async function listTaskComments(client: Lark.Client, params: ListTaskCommentsParams) {
+  const res = await client.task.v2.comment.list({
+    params: omitUndefined({
+      resource_type: "task" as const,
+      resource_id: params.task_guid,
+      page_size: params.page_size,
+      page_token: params.page_token,
+      direction: params.direction,
+      user_id_type: params.user_id_type,
+    }),
+  });
+  if (res.code !== 0) throw new Error(res.msg);
+  const items = (res.data?.items ?? []) as Record<string, unknown>[];
+  return {
+    items: items.map((item) => formatComment(item)),
+    page_token: res.data?.page_token,
+    has_more: res.data?.has_more,
+  };
+}
+
+async function getTaskComment(client: Lark.Client, params: GetTaskCommentParams) {
+  const res = await client.task.v2.comment.get({
+    path: { comment_id: params.comment_id },
+    params: omitUndefined({ user_id_type: params.user_id_type }),
+  });
+  if (res.code !== 0) throw new Error(res.msg);
+  return {
+    comment: formatComment((res.data?.comment ?? undefined) as Record<string, unknown> | undefined),
+  };
+}
+
+async function updateTaskComment(client: Lark.Client, params: UpdateTaskCommentParams) {
+  const comment = omitUndefined(
+    params.comment as Record<string, unknown>,
+  ) as TaskCommentPatchComment;
+  const updateFields = params.update_fields?.length
+    ? params.update_fields
+    : Object.keys(comment).filter((k) => k === "content");
+
+  if (Object.keys(comment).length === 0) {
+    throw new Error("comment update payload is empty");
+  }
+  if (updateFields.length === 0) {
+    throw new Error("no valid update_fields provided or inferred from comment payload");
+  }
+
+  const res = await client.task.v2.comment.patch({
+    path: { comment_id: params.comment_id },
+    data: { comment, update_fields: updateFields },
+    params: omitUndefined({ user_id_type: params.user_id_type }),
+  });
+  if (res.code !== 0) throw new Error(res.msg);
+  return {
+    comment: formatComment((res.data?.comment ?? undefined) as Record<string, unknown> | undefined),
+    update_fields: updateFields,
+  };
+}
+
+async function deleteTaskComment(client: Lark.Client, commentId: string) {
+  const res = await client.task.v2.comment.delete({ path: { comment_id: commentId } });
+  if (res.code !== 0) throw new Error(res.msg);
+  return { success: true, comment_id: commentId };
+}
+
 // ============ Registration ============
 
 export function registerFeishuTaskTools(api: OpenClawPluginApi) {
@@ -728,5 +831,47 @@ export function registerFeishuTaskTools(api: OpenClawPluginApi) {
     { name: "feishu_task_attachment_upload" },
   );
 
-  api.logger.debug?.("feishu_task: Registered task, tasklist, subtask, and attachment tools");
+  registerTaskTool<CreateTaskCommentParams>({
+    name: "feishu_task_comment_create",
+    label: "Feishu Task Comment Create",
+    description: "Add a comment to a Feishu task (task v2)",
+    parameters: CreateTaskCommentSchema,
+    run: (client, params) => createTaskComment(client, params),
+  });
+
+  registerTaskTool<ListTaskCommentsParams>({
+    name: "feishu_task_comment_list",
+    label: "Feishu Task Comment List",
+    description: "List comments on a Feishu task (task v2)",
+    parameters: ListTaskCommentsSchema,
+    run: (client, params) => listTaskComments(client, params),
+  });
+
+  registerTaskTool<GetTaskCommentParams>({
+    name: "feishu_task_comment_get",
+    label: "Feishu Task Comment Get",
+    description: "Get a specific comment on a Feishu task by comment_id (task v2)",
+    parameters: GetTaskCommentSchema,
+    run: (client, params) => getTaskComment(client, params),
+  });
+
+  registerTaskTool<UpdateTaskCommentParams>({
+    name: "feishu_task_comment_update",
+    label: "Feishu Task Comment Update",
+    description: "Update a comment on a Feishu task by comment_id (task v2 patch)",
+    parameters: UpdateTaskCommentSchema,
+    run: (client, params) => updateTaskComment(client, params),
+  });
+
+  registerTaskTool<DeleteTaskCommentParams>({
+    name: "feishu_task_comment_delete",
+    label: "Feishu Task Comment Delete",
+    description: "Delete a comment on a Feishu task by comment_id (task v2)",
+    parameters: DeleteTaskCommentSchema,
+    run: (client, { comment_id }) => deleteTaskComment(client, comment_id),
+  });
+
+  api.logger.debug?.(
+    "feishu_task: Registered task, tasklist, subtask, attachment, and comment tools",
+  );
 }

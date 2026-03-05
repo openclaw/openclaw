@@ -26,6 +26,11 @@ Tools:
 - `feishu_tasklist_delete`
 - `feishu_tasklist_add_members`
 - `feishu_tasklist_remove_members`
+- `feishu_task_comment_create`
+- `feishu_task_comment_list`
+- `feishu_task_comment_get`
+- `feishu_task_comment_update`
+- `feishu_task_comment_delete`
 
 ## Notes
 
@@ -180,5 +185,66 @@ Tasklists support three roles: owner (read/edit/manage), editor (read/edit), vie
   "tasklist_guid": "cc371766-6584-cf50-a222-c22cd9055004",
   "members": [{ "id": "ou_xxx", "type": "user", "role": "viewer" }],
   "user_id_type": "open_id"
+}
+```
+
+## Task Comments
+
+### Create Comment
+
+```json
+{
+  "task_guid": "e297ddff-06ca-4166-b917-4ce57cd3a7a0",
+  "content": "Looks good, please update the due date.",
+  "user_id_type": "open_id"
+}
+```
+
+### Reply to Comment
+
+```json
+{
+  "task_guid": "e297ddff-06ca-4166-b917-4ce57cd3a7a0",
+  "content": "Done, updated.",
+  "reply_to_comment_id": "7351932297202737xxx",
+  "user_id_type": "open_id"
+}
+```
+
+### List Comments
+
+```json
+{
+  "task_guid": "e297ddff-06ca-4166-b917-4ce57cd3a7a0",
+  "page_size": 50,
+  "direction": "asc",
+  "user_id_type": "open_id"
+}
+```
+
+### Get Comment
+
+```json
+{
+  "comment_id": "7351932297202737xxx",
+  "user_id_type": "open_id"
+}
+```
+
+### Update Comment
+
+```json
+{
+  "comment_id": "7351932297202737xxx",
+  "comment": { "content": "Updated comment text." },
+  "user_id_type": "open_id"
+}
+```
+
+### Delete Comment
+
+```json
+{
+  "comment_id": "7351932297202737xxx"
 }
 ```

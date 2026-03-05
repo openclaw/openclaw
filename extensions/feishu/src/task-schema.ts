@@ -42,6 +42,21 @@ type TasklistAddMembersPayload = NonNullable<
 type TasklistRemoveMembersPayload = NonNullable<
   Parameters<Lark.Client["task"]["v2"]["tasklist"]["removeMembers"]>[0]
 >;
+type TaskCommentCreatePayload = NonNullable<
+  Parameters<Lark.Client["task"]["v2"]["comment"]["create"]>[0]
+>;
+type TaskCommentGetPayload = NonNullable<
+  Parameters<Lark.Client["task"]["v2"]["comment"]["get"]>[0]
+>;
+type TaskCommentListPayload = NonNullable<
+  Parameters<Lark.Client["task"]["v2"]["comment"]["list"]>[0]
+>;
+type TaskCommentPatchPayload = NonNullable<
+  Parameters<Lark.Client["task"]["v2"]["comment"]["patch"]>[0]
+>;
+type TaskCommentDeletePayload = NonNullable<
+  Parameters<Lark.Client["task"]["v2"]["comment"]["delete"]>[0]
+>;
 
 export type TaskCreateData = TaskCreatePayload["data"];
 export type TaskUpdateData = TaskUpdatePayload["data"];
@@ -50,6 +65,8 @@ export type TasklistCreateData = TasklistCreatePayload["data"];
 export type TasklistPatchData = TasklistPatchPayload["data"];
 export type TasklistPatchTasklist = NonNullable<TasklistPatchData["tasklist"]>;
 export type TasklistMember = NonNullable<NonNullable<TasklistCreateData["members"]>[number]>;
+export type TaskCommentPatchData = TaskCommentPatchPayload["data"];
+export type TaskCommentPatchComment = TaskCommentPatchData["comment"];
 
 export const TASK_UPDATE_FIELD_VALUES = [
   "summary",
@@ -452,4 +469,88 @@ export const GetTaskAttachmentSchema = Type.Object({
 
 export const DeleteTaskAttachmentSchema = Type.Object({
   attachment_guid: Type.String({ description: "Attachment GUID to delete" }),
+});
+
+// ============ Comment Types ============
+
+export type CreateTaskCommentParams = {
+  task_guid: string;
+  content: TaskCommentCreatePayload["data"]["content"];
+  reply_to_comment_id?: TaskCommentCreatePayload["data"]["reply_to_comment_id"];
+  user_id_type?: NonNullable<TaskCommentCreatePayload["params"]>["user_id_type"];
+};
+
+export type ListTaskCommentsParams = {
+  task_guid: string;
+  page_size?: NonNullable<TaskCommentListPayload["params"]>["page_size"];
+  page_token?: NonNullable<TaskCommentListPayload["params"]>["page_token"];
+  direction?: NonNullable<TaskCommentListPayload["params"]>["direction"];
+  user_id_type?: NonNullable<TaskCommentListPayload["params"]>["user_id_type"];
+};
+
+export type GetTaskCommentParams = {
+  comment_id: TaskCommentGetPayload["path"]["comment_id"];
+  user_id_type?: NonNullable<TaskCommentGetPayload["params"]>["user_id_type"];
+};
+
+export type UpdateTaskCommentParams = {
+  comment_id: TaskCommentPatchPayload["path"]["comment_id"];
+  comment: TaskCommentPatchComment;
+  update_fields?: TaskCommentPatchData["update_fields"];
+  user_id_type?: NonNullable<TaskCommentPatchPayload["params"]>["user_id_type"];
+};
+
+export type DeleteTaskCommentParams = {
+  comment_id: TaskCommentDeletePayload["path"]["comment_id"];
+};
+
+// ============ Comment Schemas ============
+
+export const CreateTaskCommentSchema = Type.Object({
+  task_guid: Type.String({ description: "Task GUID to comment on" }),
+  content: Type.String({ description: "Comment content" }),
+  reply_to_comment_id: Type.Optional(
+    Type.String({ description: "Reply to a specific comment ID" }),
+  ),
+  user_id_type: Type.Optional(
+    Type.String({ description: "User ID type when comment involves user-related fields" }),
+  ),
+});
+
+export const ListTaskCommentsSchema = Type.Object({
+  task_guid: Type.String({ description: "Task GUID to list comments for" }),
+  page_size: Type.Optional(
+    Type.Number({ description: "Page size (1-100)", minimum: 1, maximum: 100 }),
+  ),
+  page_token: Type.Optional(Type.String({ description: "Pagination token" })),
+  direction: Type.Optional(
+    Type.Union([Type.Literal("asc"), Type.Literal("desc")], { description: "Sort direction" }),
+  ),
+  user_id_type: Type.Optional(Type.String({ description: "User ID type for returned creators" })),
+});
+
+export const GetTaskCommentSchema = Type.Object({
+  comment_id: Type.String({ description: "Comment ID to retrieve" }),
+  user_id_type: Type.Optional(Type.String({ description: "User ID type for returned creators" })),
+});
+
+const TaskCommentUpdateContentSchema = Type.Object(
+  { content: Type.Optional(Type.String({ description: "Updated comment content" })) },
+  { minProperties: 1 },
+);
+
+export const UpdateTaskCommentSchema = Type.Object({
+  comment_id: Type.String({ description: "Comment ID to update" }),
+  comment: TaskCommentUpdateContentSchema,
+  update_fields: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Fields to update. If omitted, infers from keys in comment (content)",
+      minItems: 1,
+    }),
+  ),
+  user_id_type: Type.Optional(Type.String({ description: "User ID type for returned creators" })),
+});
+
+export const DeleteTaskCommentSchema = Type.Object({
+  comment_id: Type.String({ description: "Comment ID to delete" }),
 });
