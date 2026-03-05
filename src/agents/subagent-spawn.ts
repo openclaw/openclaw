@@ -146,7 +146,7 @@ async function cleanupProvisionalSession(
         emitLifecycleHooks: options?.emitLifecycleHooks === true,
         deleteTranscript: options?.deleteTranscript === true,
       },
-      timeoutMs: 10_000,
+      timeoutMs: SUBAGENT_SPAWN_GATEWAY_TIMEOUT_MS,
     });
   } catch {
     // Best-effort cleanup only.
@@ -671,7 +671,7 @@ export async function spawnSubagentDirect(
       await callGateway({
         method: "sessions.delete",
         params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
-        timeoutMs: 10_000,
+        timeoutMs: gatewayTimeoutMs,
       });
     } catch {
       // Best-effort cleanup only.
