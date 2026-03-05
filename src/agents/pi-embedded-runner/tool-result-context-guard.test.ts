@@ -238,6 +238,32 @@ describe("installToolResultContextGuard", () => {
     expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
 
+  it("handles malformed content blocks with missing text property without crashing", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const contextForNextCall = [
+      makeUser("u".repeat(2_000)),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call_malformed",
+        toolName: "some_plugin",
+        content: [{ type: "text" }],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+      makeToolResult("call_normal", "y".repeat(1_000)),
+    ];
+
+    await expect(
+      agent.transformContext?.(contextForNextCall, new AbortController().signal),
+    ).resolves.not.toThrow();
+  });
+
   it("drops oversized read-tool details payloads when compacting tool results", async () => {
     const agent = makeGuardableAgent();
 
