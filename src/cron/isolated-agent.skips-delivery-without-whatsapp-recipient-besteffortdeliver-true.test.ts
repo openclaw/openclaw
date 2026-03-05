@@ -393,7 +393,7 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("returns ok when announce delivery reports false and best-effort is disabled", async () => {
+  it("falls back to direct delivery when announce reports false and best-effort is disabled", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
@@ -412,13 +412,12 @@ describe("runCronIsolatedAgentTurn", () => {
         },
       });
 
-      // Announce delivery failure should not mark a successful agent execution
-      // as error. The execution succeeded; only delivery failed.
+      // When announce delivery fails, the direct-delivery fallback fires
+      // so the message still reaches the target channel.
       expect(res.status).toBe("ok");
-      expect(res.delivered).toBe(false);
+      expect(res.delivered).toBe(true);
       expect(res.deliveryAttempted).toBe(true);
-      expect(res.error).toBe("cron announce delivery failed");
-      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -431,7 +430,7 @@ describe("runCronIsolatedAgentTurn", () => {
     expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
   });
 
-  it("returns ok when announce flow throws and best-effort is disabled", async () => {
+  it("falls back to direct delivery when announce flow throws and best-effort is disabled", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
@@ -452,13 +451,12 @@ describe("runCronIsolatedAgentTurn", () => {
         },
       });
 
-      // Even when announce throws (e.g. "pairing required"), the agent
-      // execution succeeded so the job status should be ok.
+      // When announce throws (e.g. "pairing required"), the direct-delivery
+      // fallback fires so the message still reaches the target channel.
       expect(res.status).toBe("ok");
-      expect(res.delivered).toBe(false);
+      expect(res.delivered).toBe(true);
       expect(res.deliveryAttempted).toBe(true);
-      expect(res.error).toContain("pairing required");
-      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
     });
   });
 
