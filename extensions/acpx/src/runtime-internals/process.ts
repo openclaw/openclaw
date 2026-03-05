@@ -136,12 +136,17 @@ export function spawnWithResolvedCommand(
     options,
   );
 
+  // Use detached on Unix so the child becomes a process group leader.
+  // This allows killChildProcessTree() to terminate all descendants
+  // when the session is closed or evicted, preventing zombie accumulation.
+  const detached = process.platform !== "win32";
   return spawn(resolved.command, resolved.args, {
     cwd: params.cwd,
     env: { ...process.env, OPENCLAW_SHELL: "acp" },
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
     windowsHide: resolved.windowsHide,
+    detached,
   });
 }
 
@@ -262,6 +267,73 @@ export function resolveSpawnFailure(
     return null;
   }
   return directoryExists(cwd) ? "missing-command" : "missing-cwd";
+}
+
+const KILL_TREE_GRACE_MS = 3000;
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Kill a child process and all its descendants.
+ * Requires the child to have been spawned with `detached: true` (Unix)
+ * so it is a process group leader.
+ */
+export function killChildProcessTree(pid: number): void {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return;
+  }
+
+  if (process.platform === "win32") {
+    // taskkill /T kills the entire process tree on Windows.
+    try {
+      spawn("taskkill", ["/T", "/PID", String(pid)], { stdio: "ignore", detached: true });
+    } catch {
+      // ignore
+    }
+    setTimeout(() => {
+      if (!isProcessAlive(pid)) {
+        return;
+      }
+      try {
+        spawn("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore", detached: true });
+      } catch {
+        // ignore
+      }
+    }, KILL_TREE_GRACE_MS).unref();
+    return;
+  }
+
+  // Unix: send SIGTERM to process group, then SIGKILL after grace period.
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      return;
+    }
+  }
+
+  setTimeout(() => {
+    if (isProcessAlive(pid)) {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }, KILL_TREE_GRACE_MS).unref();
 }
 
 function directoryExists(cwd: string): boolean {

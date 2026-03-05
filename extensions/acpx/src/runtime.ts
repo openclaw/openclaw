@@ -20,6 +20,7 @@ import {
   toAcpxErrorEvent,
 } from "./runtime-internals/events.js";
 import {
+  killChildProcessTree,
   resolveSpawnFailure,
   type SpawnCommandCache,
   type SpawnCommandOptions,
@@ -100,6 +101,8 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly spawnCommandCache: SpawnCommandCache = {};
   private readonly spawnCommandOptions: SpawnCommandOptions;
   private readonly loggedSpawnResolutions = new Set<string>();
+  /** PIDs of active prompt child processes, used for cleanup on close. */
+  private readonly activeChildPids = new Set<number>();
 
   constructor(
     private readonly config: ResolvedAcpxPluginConfig,
@@ -277,6 +280,9 @@ export class AcpxRuntime implements AcpRuntime {
       },
       this.spawnCommandOptions,
     );
+    if (child.pid) {
+      this.activeChildPids.add(child.pid);
+    }
     child.stdin.on("error", () => {
       // Ignore EPIPE when the child exits before stdin flush completes.
     });
@@ -345,6 +351,12 @@ export class AcpxRuntime implements AcpRuntime {
       lines.close();
       if (input.signal) {
         input.signal.removeEventListener("abort", onAbort);
+      }
+      // Kill the process tree to prevent orphaned grandchildren (e.g.
+      // claude-agent-acp, metabase-mcp) from accumulating as zombies.
+      if (child.pid) {
+        this.activeChildPids.delete(child.pid);
+        killChildProcessTree(child.pid);
       }
     }
   }
@@ -538,6 +550,12 @@ export class AcpxRuntime implements AcpRuntime {
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
     });
+    // Force-kill any remaining child process trees that survived the
+    // graceful close to prevent zombie process accumulation.
+    for (const pid of this.activeChildPids) {
+      killChildProcessTree(pid);
+    }
+    this.activeChildPids.clear();
   }
 
   private resolveHandleState(handle: AcpRuntimeHandle): AcpxHandleState {
