@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { hasBinary } from "../agents/skills.js";
+import type { GmailCliMode } from "../config/config.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizeServePath } from "./gmail.js";
@@ -165,13 +166,36 @@ async function runGcloudCommand(
   });
 }
 
-export async function ensureDependency(bin: string, brewArgs: string[]) {
+export async function ensureDependency(
+  bin: string,
+  installArgs: string[],
+  installMethod: "brew" | "npm" = "brew",
+) {
   if (bin === "gcloud" && ensureGcloudOnPath()) {
     return;
   }
   if (hasBinary(bin)) {
     return;
   }
+
+  if (installMethod === "npm") {
+    const npmBin = hasBinary("npm") ? "npm" : undefined;
+    if (!npmBin) {
+      throw new Error(`${bin} not installed; run 'npm i -g ${installArgs.join(" ")}' and retry`);
+    }
+    const result = await runCommandWithTimeout(["npm", "install", "-g", ...installArgs], {
+      timeoutMs: 600_000,
+    });
+    if (result.code !== 0) {
+      throw new Error(`npm install failed for ${bin}: ${result.stderr || result.stdout}`);
+    }
+    if (!hasBinary(bin)) {
+      throw new Error(`${bin} still not available after npm install`);
+    }
+    return;
+  }
+
+  // brew (default)
   if (process.platform !== "darwin") {
     throw new Error(`${bin} not installed; install it and retry`);
   }
@@ -179,7 +203,7 @@ export async function ensureDependency(bin: string, brewArgs: string[]) {
     throw new Error("Homebrew not installed (install brew and retry)");
   }
   const brewEnv = bin === "gcloud" ? await gcloudEnv() : undefined;
-  const result = await runCommandWithTimeout(["brew", "install", ...brewArgs], {
+  const result = await runCommandWithTimeout(["brew", "install", ...installArgs], {
     timeoutMs: 600_000,
     env: brewEnv,
   });
@@ -352,6 +376,68 @@ export async function resolveProjectIdFromGogCredentials(): Promise<string | nul
     }
   }
   return null;
+}
+
+export function gwsCredentialsPaths(): string[] {
+  const paths: string[] = [];
+  const xdg = process.env.XDG_CONFIG_HOME;
+  if (xdg) {
+    paths.push(path.join(xdg, "gws", "client_secret.json"));
+  }
+  paths.push(resolveUserPath("~/.config/gws/client_secret.json"));
+  if (process.platform === "darwin") {
+    paths.push(resolveUserPath("~/Library/Application Support/gws/client_secret.json"));
+  }
+  return paths;
+}
+
+export async function resolveProjectIdFromGwsCredentials(): Promise<string | null> {
+  const candidates = gwsCredentialsPaths();
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) {
+      continue;
+    }
+    try {
+      const raw = fs.readFileSync(candidate, "utf-8");
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const clientId = extractGogClientId(parsed);
+      const projectNumber = extractProjectNumber(clientId);
+      if (!projectNumber) {
+        continue;
+      }
+      const res = await runGcloudCommand(
+        [
+          "projects",
+          "list",
+          "--filter",
+          `projectNumber=${projectNumber}`,
+          "--format",
+          "value(projectId)",
+        ],
+        30_000,
+      );
+      if (res.code !== 0) {
+        continue;
+      }
+      const projectId = res.stdout.trim().split(/\s+/)[0];
+      if (projectId) {
+        return projectId;
+      }
+    } catch {
+      // keep scanning
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve GCP project ID from either gog or gws credentials.
+ */
+export async function resolveProjectIdFromCredentials(cli: GmailCliMode): Promise<string | null> {
+  if (cli === "gws") {
+    return resolveProjectIdFromGwsCredentials();
+  }
+  return resolveProjectIdFromGogCredentials();
 }
 
 function gogCredentialsPaths(): string[] {

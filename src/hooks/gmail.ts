@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import {
   type OpenClawConfig,
   DEFAULT_GATEWAY_PORT,
+  type GmailCliMode,
   type HooksGmailTailscaleMode,
   resolveGatewayPort,
 } from "../config/config.js";
@@ -17,6 +18,8 @@ export const DEFAULT_GMAIL_RENEW_MINUTES = 12 * 60;
 export const DEFAULT_HOOKS_PATH = "/hooks";
 
 export type GmailHookOverrides = {
+  cli?: GmailCliMode;
+  project?: string;
   account?: string;
   label?: string;
   topic?: string;
@@ -36,6 +39,8 @@ export type GmailHookOverrides = {
 };
 
 export type GmailHookRuntimeConfig = {
+  cli: GmailCliMode;
+  project?: string;
   account: string;
   label: string;
   topic: string;
@@ -103,6 +108,9 @@ export function resolveGmailHookRuntimeConfig(
 ): { ok: true; value: GmailHookRuntimeConfig } | { ok: false; error: string } {
   const hooks = cfg.hooks;
   const gmail = hooks?.gmail;
+  const cli: GmailCliMode = overrides.cli ?? gmail?.cli ?? "gog";
+  const project = overrides.project ?? gmail?.project;
+
   const hookToken = overrides.hookToken ?? hooks?.token ?? "";
   if (!hookToken) {
     return { ok: false, error: "hooks.token missing (needed for gmail hook)" };
@@ -114,14 +122,16 @@ export function resolveGmailHookRuntimeConfig(
   }
 
   const topic = overrides.topic ?? gmail?.topic ?? "";
-  if (!topic) {
+  // gog requires topic upfront; gws can create its own
+  if (!topic && cli === "gog") {
     return { ok: false, error: "gmail topic required" };
   }
 
   const subscription = overrides.subscription ?? gmail?.subscription ?? DEFAULT_GMAIL_SUBSCRIPTION;
 
   const pushToken = overrides.pushToken ?? gmail?.pushToken ?? "";
-  if (!pushToken) {
+  // pushToken is only required for gog (push-based); gws uses pull-based Pub/Sub
+  if (!pushToken && cli === "gog") {
     return { ok: false, error: "gmail push token required" };
   }
 
@@ -181,6 +191,8 @@ export function resolveGmailHookRuntimeConfig(
   return {
     ok: true,
     value: {
+      cli,
+      project,
       account,
       label: overrides.label ?? gmail?.label ?? DEFAULT_GMAIL_LABEL,
       topic,
@@ -246,6 +258,25 @@ export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
   }
   if (cfg.maxBytes > 0) {
     args.push("--max-bytes", String(cfg.maxBytes));
+  }
+  return args;
+}
+
+export function buildGwsWatchArgs(
+  cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "project" | "subscription">,
+): string[] {
+  const args = ["gmail", "+watch"];
+  if (cfg.project) {
+    args.push("--project", cfg.project);
+  }
+  if (cfg.account) {
+    args.push("--account", cfg.account);
+  }
+  if (cfg.label && cfg.label !== DEFAULT_GMAIL_LABEL) {
+    args.push("--label", cfg.label);
+  }
+  if (cfg.subscription && cfg.subscription !== DEFAULT_GMAIL_SUBSCRIPTION) {
+    args.push("--subscription", cfg.subscription);
   }
   return args;
 }

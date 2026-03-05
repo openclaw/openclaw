@@ -1,5 +1,5 @@
 ---
-summary: "Gmail Pub/Sub push wired into OpenClaw webhooks via gogcli"
+summary: "Gmail Pub/Sub hooks wired into OpenClaw webhooks via gog or gws"
 read_when:
   - Wiring Gmail inbox triggers to OpenClaw
   - Setting up Pub/Sub push for agent wake
@@ -8,9 +8,16 @@ title: "Gmail PubSub"
 
 # Gmail Pub/Sub -> OpenClaw
 
-Goal: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> OpenClaw webhook.
+Two CLI backends are supported:
 
-## Prereqs
+| Mode              | CLI   | Model                               | Install                         | Tailscale  |
+| ----------------- | ----- | ----------------------------------- | ------------------------------- | ---------- |
+| **gog** (default) | `gog` | Push (Pub/Sub push -> HTTP server)  | `brew install gogcli` (macOS)   | Required   |
+| **gws**           | `gws` | Pull (polls Pub/Sub, NDJSON stdout) | `npm i -g @googleworkspace/cli` | Not needed |
+
+Set the backend via `hooks.gmail.cli` in config or `--cli` on the command line.
+
+## Prereqs (gog mode, default)
 
 - `gcloud` installed and logged in ([install guide](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - `gog` (gogcli) installed and authorized for the Gmail account ([gogcli.sh](https://gogcli.sh/)).
@@ -18,6 +25,13 @@ Goal: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> OpenClaw webhook
 - `tailscale` logged in ([tailscale.com](https://tailscale.com/)). Supported setup uses Tailscale Funnel for the public HTTPS endpoint.
   Other tunnel services can work, but are DIY/unsupported and require manual wiring.
   Right now, Tailscale is what we support.
+
+## Prereqs (gws mode)
+
+- `gcloud` installed and logged in.
+- `gws` installed and authorized: `npm i -g @googleworkspace/cli && gws auth login`.
+- OpenClaw hooks enabled (see [Webhooks](/automation/webhook)).
+- No Tailscale needed (gws uses pull-based Pub/Sub).
 
 Example hook config (enable Gmail preset mapping):
 
@@ -92,6 +106,8 @@ under `~/.openclaw/hooks/transforms` (see [Webhooks](/automation/webhook)).
 
 ## Wizard (recommended)
 
+### gog mode (default)
+
 Use the OpenClaw helper to wire everything together (installs deps on macOS via brew):
 
 ```bash
@@ -118,21 +134,64 @@ Want a custom endpoint? Use `--push-endpoint <url>` or `--tailscale off`.
 Platform note: on macOS the wizard installs `gcloud`, `gogcli`, and `tailscale`
 via Homebrew; on Linux install them manually first.
 
-Gateway auto-start (recommended):
+### gws mode
+
+```bash
+openclaw webhooks gmail setup \
+  --cli gws \
+  --account openclaw@gmail.com \
+  --project my-gcp-project
+```
+
+What this does:
+
+- Installs `gws` via npm if missing.
+- Creates the Pub/Sub topic and IAM binding (via gcloud).
+- Skips Tailscale and push subscription setup (gws polls Pub/Sub directly).
+- Writes `hooks.gmail.cli: "gws"` and `hooks.gmail.project` to config.
+
+Config example:
+
+```json5
+{
+  hooks: {
+    enabled: true,
+    token: "OPENCLAW_HOOK_TOKEN",
+    presets: ["gmail"],
+    gmail: {
+      cli: "gws",
+      project: "my-gcp-project",
+      account: "openclaw@gmail.com",
+    },
+  },
+}
+```
+
+### Gateway auto-start (recommended)
 
 - When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts
-  `gog gmail watch serve` on boot and auto-renews the watch.
+  the appropriate watcher on boot.
+- For gog: starts `gog gmail watch serve` and auto-renews the watch.
+- For gws: starts `gws gmail +watch` (pull-based, no renewal needed).
 - Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out (useful if you run the daemon yourself).
 - Do not run the manual daemon at the same time, or you will hit
-  `listen tcp 127.0.0.1:8788: bind: address already in use`.
+  `listen tcp 127.0.0.1:8788: bind: address already in use` (gog mode only).
 
-Manual daemon (starts `gog gmail watch serve` + auto-renew):
+### Manual daemon
+
+gog mode (starts `gog gmail watch serve` + auto-renew):
 
 ```bash
 openclaw webhooks gmail run
 ```
 
-## One-time setup
+gws mode (starts `gws gmail +watch`, pull-based):
+
+```bash
+openclaw webhooks gmail run --cli gws
+```
+
+## One-time setup (gog mode, manual)
 
 1. Select the GCP project **that owns the OAuth client** used by `gog`.
 
