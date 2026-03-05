@@ -24,6 +24,7 @@ export type StatusReactionEmojis = {
   error?: string; // Default: "❌"
   stallSoft?: string; // Default: "⏳"
   stallHard?: string; // Default: "⚠️"
+  compacting?: string; // Default: "✍"
 };
 
 export type StatusReactionTiming = {
@@ -38,6 +39,7 @@ export type StatusReactionController = {
   setQueued: () => Promise<void> | void;
   setThinking: () => Promise<void> | void;
   setTool: (toolName?: string) => Promise<void> | void;
+  setCompacting: () => Promise<void> | void;
   setDone: () => Promise<void>;
   setError: () => Promise<void>;
   clear: () => Promise<void>;
@@ -58,6 +60,7 @@ export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
   error: "😱",
   stallSoft: "🥱",
   stallHard: "😨",
+  compacting: "✍",
 };
 
 export const DEFAULT_TIMING: Required<StatusReactionTiming> = {
@@ -162,6 +165,7 @@ export function createStatusReactionController(params: {
     emojis.error,
     emojis.stallSoft,
     emojis.stallHard,
+    emojis.compacting,
   ]);
 
   /**
@@ -306,6 +310,10 @@ export function createStatusReactionController(params: {
     scheduleEmoji(emoji);
   }
 
+  function setCompacting(): void {
+    scheduleEmoji(emojis.compacting);
+  }
+
   function finishWithEmoji(emoji: string): Promise<void> {
     if (!enabled) {
       return Promise.resolve();
@@ -375,6 +383,7 @@ export function createStatusReactionController(params: {
     setQueued,
     setThinking,
     setTool,
+    setCompacting,
     setDone,
     setError,
     clear,
