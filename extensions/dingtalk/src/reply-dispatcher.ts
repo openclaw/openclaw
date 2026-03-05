@@ -52,10 +52,10 @@ export function createDingtalkReplyDispatcher(params: {
     })();
   };
 
-  const queueStreamingUpdate = (text: string) => {
+  const queueStreamingUpdate = (text: string, accumulate = false) => {
     if (!text || text === lastPartial) return;
     lastPartial = text;
-    streamText = text;
+    streamText = accumulate ? streamText + text : text;
     partialUpdateQueue = partialUpdateQueue.then(async () => {
       if (streamingStartPromise) await streamingStartPromise;
       if (cardBizId) {
@@ -101,7 +101,7 @@ export function createDingtalkReplyDispatcher(params: {
         // 流式输出中的 block/final 处理 / Handle block/final in streaming
         if (streamingEnabled && info?.kind === "block") {
           startStreaming();
-          queueStreamingUpdate(text);
+          queueStreamingUpdate(text, true);
           return;
         }
 
