@@ -6,6 +6,10 @@ import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
+import {
+  __testing as sessionBindingTesting,
+  registerSessionBindingAdapter,
+} from "../../infra/outbound/session-binding-service.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
@@ -554,6 +558,92 @@ describe("initSessionState RawBody", () => {
     expect(result.resetTriggered).toBe(true);
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("does not suppress /new when active conversation binding points to a non-ACP session", async () => {
+    const root = await makeCaseDir("openclaw-rawbody-acp-nonacp-binding-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
+    const existingSessionId = "session-existing";
+    const now = Date.now();
+    const channelId = "1478836151241412759";
+    const nonAcpFocusSessionKey = "agent:main:discord:channel:focus-target";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: now,
+        systemSent: true,
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath },
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "channel", id: channelId },
+          },
+          acp: { mode: "persistent" },
+        },
+      ],
+      channels: {
+        discord: {
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      capabilities: { bindSupported: false, unbindSupported: false, placements: ["current"] },
+      listBySession: () => [],
+      resolveByConversation: (ref) => {
+        if (ref.conversationId !== channelId) {
+          return null;
+        }
+        return {
+          bindingId: "focus-binding",
+          targetSessionKey: nonAcpFocusSessionKey,
+          targetKind: "session",
+          conversation: {
+            channel: "discord",
+            accountId: "default",
+            conversationId: channelId,
+          },
+          status: "active",
+          boundAt: now,
+        };
+      },
+    });
+    try {
+      const result = await initSessionState({
+        ctx: {
+          RawBody: "/new",
+          CommandBody: "/new",
+          Provider: "discord",
+          Surface: "discord",
+          SenderId: "12345",
+          From: "discord:12345",
+          To: channelId,
+          SessionKey: sessionKey,
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered).toBe(true);
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+    } finally {
+      sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    }
   });
 
   it("uses the default per-agent sessions store when config store is unset", async () => {

@@ -187,10 +187,11 @@ function resolveBoundAcpSessionForReset(params: {
     conversationId: bindingContext.conversationId,
     parentConversationId: bindingContext.parentConversationId,
   });
-  const serviceSessionKey =
-    serviceBinding?.targetKind === "session" ? serviceBinding.targetSessionKey.trim() : "";
-  if (serviceSessionKey && isAcpSessionKey(serviceSessionKey)) {
-    return serviceSessionKey;
+  if (serviceBinding?.targetKind === "session") {
+    const serviceSessionKey = serviceBinding.targetSessionKey.trim();
+    if (serviceSessionKey) {
+      return isAcpSessionKey(serviceSessionKey) ? serviceSessionKey : undefined;
+    }
   }
 
   const configuredBinding = resolveConfiguredAcpBindingRecord({

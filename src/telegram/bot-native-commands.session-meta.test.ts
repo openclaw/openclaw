@@ -320,7 +320,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
   });
 
-  it("allows /new in ACP-bound Telegram topics without sender allowlist entries", async () => {
+  it("keeps /new blocked in ACP-bound Telegram topics when sender is unauthorized", async () => {
     const boundSessionKey = "agent:codex:acp:binding:telegram:default:feedface";
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue({
       spec: {
@@ -359,18 +359,11 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
     await handler(buildStatusTopicCommandContext());
 
-    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    const dispatchCall = (
-      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
-        [{ ctx?: { CommandAuthorized?: boolean; CommandBody?: string } }]
-      >
-    )[0]?.[0];
-    expect(dispatchCall?.ctx?.CommandBody).toBe("/new");
-    expect(dispatchCall?.ctx?.CommandAuthorized).toBe(true);
-    expect(sendMessage).not.toHaveBeenCalledWith(
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
       -1001234567890,
       "You are not authorized to use this command.",
-      expect.anything(),
+      expect.objectContaining({ message_thread_id: 42 }),
     );
   });
 

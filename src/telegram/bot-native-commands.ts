@@ -43,11 +43,7 @@ import {
   matchPluginCommand,
 } from "../plugins/commands.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import {
-  isAcpSessionKey,
-  resolveAgentIdFromSessionKey,
-  resolveThreadSessionKeys,
-} from "../routing/session-key.js";
+import { resolveAgentIdFromSessionKey, resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
@@ -569,12 +565,8 @@ export const registerTelegramNativeCommands = ({
           });
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           if (isSessionResetCommand && !commandAuthorized) {
-            if (isAcpSessionKey(route.sessionKey)) {
-              commandAuthorized = true;
-            } else {
-              await sendCommandUnauthorizedReply({ chatId, threadSpec });
-              return;
-            }
+            await sendCommandUnauthorizedReply({ chatId, threadSpec });
+            return;
           }
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,

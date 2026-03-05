@@ -28,14 +28,18 @@ function normalizeBindingChannel(value: string | undefined): ConfiguredAcpBindin
 }
 
 function matchesAccountId(match: string | undefined, actual: string): boolean {
+  return resolveAccountMatchPriority(match, actual) > 0;
+}
+
+function resolveAccountMatchPriority(match: string | undefined, actual: string): 0 | 1 | 2 {
   const trimmed = (match ?? "").trim();
   if (!trimmed) {
-    return actual === DEFAULT_ACCOUNT_ID;
+    return actual === DEFAULT_ACCOUNT_ID ? 2 : 0;
   }
   if (trimmed === "*") {
-    return true;
+    return 1;
   }
-  return normalizeAccountId(trimmed) === actual;
+  return normalizeAccountId(trimmed) === actual ? 2 : 0;
 }
 
 function resolveBindingConversationId(binding: AgentAcpBinding): string | null {
@@ -195,23 +199,46 @@ export function resolveConfiguredAcpBindingRecord(params: {
     const resolveDiscordBindingForConversation = (
       targetConversationId: string,
     ): ResolvedConfiguredAcpBinding | null => {
+      let wildcardMatch: AgentAcpBinding | null = null;
       for (const binding of bindings) {
         if (normalizeBindingChannel(binding.match.channel) !== "discord") {
           continue;
         }
-        if (!matchesAccountId(binding.match.accountId, accountId)) {
+        const accountMatchPriority = resolveAccountMatchPriority(
+          binding.match.accountId,
+          accountId,
+        );
+        if (accountMatchPriority === 0) {
           continue;
         }
         const bindingConversationId = resolveBindingConversationId(binding);
         if (!bindingConversationId || bindingConversationId !== targetConversationId) {
           continue;
         }
+        if (accountMatchPriority === 2) {
+          const spec = toConfiguredBindingSpec({
+            cfg: params.cfg,
+            channel: "discord",
+            accountId,
+            conversationId: targetConversationId,
+            binding,
+          });
+          return {
+            spec,
+            record: toConfiguredAcpBindingRecord(spec),
+          };
+        }
+        if (!wildcardMatch) {
+          wildcardMatch = binding;
+        }
+      }
+      if (wildcardMatch) {
         const spec = toConfiguredBindingSpec({
           cfg: params.cfg,
           channel: "discord",
           accountId,
           conversationId: targetConversationId,
-          binding,
+          binding: wildcardMatch,
         });
         return {
           spec,
@@ -242,11 +269,13 @@ export function resolveConfiguredAcpBindingRecord(params: {
     if (!parsed || !parsed.chatId.startsWith("-")) {
       return null;
     }
+    let wildcardMatch: AgentAcpBinding | null = null;
     for (const binding of listAcpBindings(params.cfg)) {
       if (normalizeBindingChannel(binding.match.channel) !== "telegram") {
         continue;
       }
-      if (!matchesAccountId(binding.match.accountId, accountId)) {
+      const accountMatchPriority = resolveAccountMatchPriority(binding.match.accountId, accountId);
+      if (accountMatchPriority === 0) {
         continue;
       }
       const targetConversationId = resolveBindingConversationId(binding);
@@ -262,13 +291,32 @@ export function resolveConfiguredAcpBindingRecord(params: {
       if (targetParsed.canonicalConversationId !== parsed.canonicalConversationId) {
         continue;
       }
+      if (accountMatchPriority === 2) {
+        const spec = toConfiguredBindingSpec({
+          cfg: params.cfg,
+          channel: "telegram",
+          accountId,
+          conversationId: parsed.canonicalConversationId,
+          parentConversationId: parsed.chatId,
+          binding,
+        });
+        return {
+          spec,
+          record: toConfiguredAcpBindingRecord(spec),
+        };
+      }
+      if (!wildcardMatch) {
+        wildcardMatch = binding;
+      }
+    }
+    if (wildcardMatch) {
       const spec = toConfiguredBindingSpec({
         cfg: params.cfg,
         channel: "telegram",
         accountId,
         conversationId: parsed.canonicalConversationId,
         parentConversationId: parsed.chatId,
-        binding,
+        binding: wildcardMatch,
       });
       return {
         spec,

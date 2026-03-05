@@ -147,6 +147,41 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     expect(resolved?.spec.agentId).toBe("claude");
   });
 
+  it("prefers exact account binding over wildcard for the same discord conversation", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "*",
+            peer: { kind: "channel", id: "1478836151241412759" },
+          },
+        },
+        {
+          type: "acp",
+          agentId: "claude",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "channel", id: "1478836151241412759" },
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1478836151241412759",
+    });
+
+    expect(resolved?.spec.agentId).toBe("claude");
+  });
+
   it("returns null when no top-level ACP binding matches the conversation", () => {
     const cfg = {
       ...baseCfg,
