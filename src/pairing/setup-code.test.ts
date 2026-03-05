@@ -235,6 +235,38 @@ describe("pairing setup code", () => {
     expect(resolved.payload.password).toBe("password-from-env");
   });
 
+  it("does not treat env-template token as plaintext in inferred mode", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.local",
+          auth: {
+            token: "${MISSING_GW_TOKEN}",
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+      {
+        env: {
+          OPENCLAW_GATEWAY_PASSWORD: "password-from-env",
+        },
+      },
+    );
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      throw new Error("expected setup resolution to succeed");
+    }
+    expect(resolved.authLabel).toBe("password");
+    expect(resolved.payload.token).toBeUndefined();
+    expect(resolved.payload.password).toBe("password-from-env");
+  });
+
   it("requires explicit auth mode when token and password are both configured", async () => {
     await expect(
       resolvePairingSetupFromConfig(

@@ -202,6 +202,28 @@ describe("runDaemonInstall", () => {
     ).toBe(true);
   });
 
+  it("does not treat env-template gateway.auth.token as plaintext during install", async () => {
+    loadConfigMock.mockReturnValue({
+      gateway: { auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" } },
+    });
+    resolveSecretInputRefMock.mockReturnValue({
+      ref: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+    });
+    resolveSecretRefValuesMock.mockResolvedValue(
+      new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-from-secretref"]]),
+    );
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed).toEqual([]);
+    expect(resolveSecretRefValuesMock).toHaveBeenCalledTimes(1);
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: undefined,
+      }),
+    );
+  });
+
   it("auto-mints and persists token when no source exists", async () => {
     randomTokenMock.mockReturnValue("minted-token");
     readConfigFileSnapshotMock.mockResolvedValue({

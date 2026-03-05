@@ -30,15 +30,17 @@ async function resolveDashboardToken(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ token?: string; unresolvedRefReason?: string }> {
-  const configToken =
-    typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined;
-  if (configToken) {
-    return { token: configToken };
-  }
   const { ref } = resolveSecretInputRef({
     value: cfg.gateway?.auth?.token,
     defaults: cfg.secrets?.defaults,
   });
+  const configToken =
+    ref || typeof cfg.gateway?.auth?.token !== "string"
+      ? undefined
+      : cfg.gateway.auth.token.trim() || undefined;
+  if (configToken) {
+    return { token: configToken };
+  }
   if (!ref) {
     return { token: readGatewayTokenEnv(env) };
   }

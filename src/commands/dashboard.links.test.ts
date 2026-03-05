@@ -140,4 +140,21 @@ describe("dashboardCommand", () => {
       expect.stringContaining("Token auto-auth unavailable"),
     );
   });
+
+  it("resolves env-template gateway.auth.token before building dashboard URL", async () => {
+    mockSnapshot("${CUSTOM_GATEWAY_TOKEN}");
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+    resolveSecretRefValuesMock.mockResolvedValue(
+      new Map([["env:default:CUSTOM_GATEWAY_TOKEN", "resolved-secret-token"]]),
+    );
+
+    await dashboardCommand(runtime);
+
+    expect(copyToClipboardMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:18789/#token=resolved-secret-token",
+    );
+    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=resolved-secret-token");
+  });
 });

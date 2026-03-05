@@ -218,6 +218,51 @@ describe("gateway-status command", () => {
     expect(unresolvedWarning?.targetIds).toContain("localLoopback");
   });
 
+  it("resolves env-template gateway.auth.token before probing targets", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    await withEnvAsync(
+      {
+        CUSTOM_GATEWAY_TOKEN: "resolved-gateway-token",
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        CLAWDBOT_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        loadConfig.mockReturnValueOnce({
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: "${CUSTOM_GATEWAY_TOKEN}",
+            },
+          },
+        } as unknown as ReturnType<typeof loadConfig>);
+
+        await runGatewayStatus(runtime, { timeout: "1000", json: true });
+      },
+    );
+
+    expect(runtimeErrors).toHaveLength(0);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          token: "resolved-gateway-token",
+        }),
+      }),
+    );
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings?: Array<{ code?: string }>;
+    };
+    const unresolvedWarning = parsed.warnings?.find(
+      (warning) => warning.code === "auth_secretref_unresolved",
+    );
+    expect(unresolvedWarning).toBeUndefined();
+  });
+
   it("emits stable SecretRef auth configuration booleans in --json output", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     const previousProbeImpl = probeGateway.getMockImplementation();

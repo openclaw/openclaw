@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { loadConfig } from "../config/config.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 
 const RELAY_TOKEN_CONTEXT = "openclaw-extension-relay-v1";
@@ -10,6 +11,18 @@ class SecretRefUnavailableError extends Error {
   readonly isSecretRefUnavailable = true;
 }
 
+function resolveEnvBackedSecretRef(ref: SecretRef): string | undefined {
+  if (ref.source !== "env") {
+    return undefined;
+  }
+  const value = process.env[ref.id];
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function resolveGatewayAuthToken(): string | null {
   const envToken =
     process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
@@ -18,18 +31,22 @@ function resolveGatewayAuthToken(): string | null {
   }
   try {
     const cfg = loadConfig();
-    const configToken = normalizeSecretInputString(cfg.gateway?.auth?.token);
-    if (configToken) {
-      return configToken;
-    }
     const tokenRef = resolveSecretInputRef({
       value: cfg.gateway?.auth?.token,
       defaults: cfg.secrets?.defaults,
     }).ref;
     if (tokenRef) {
+      const envRefToken = resolveEnvBackedSecretRef(tokenRef);
+      if (envRefToken) {
+        return envRefToken;
+      }
       throw new SecretRefUnavailableError(
         "extension relay requires a resolved gateway token, but gateway.auth.token is configured as SecretRef and unavailable. Set OPENCLAW_GATEWAY_TOKEN or resolve your secret provider.",
       );
+    }
+    const configToken = normalizeSecretInputString(cfg.gateway?.auth?.token);
+    if (configToken) {
+      return configToken;
     }
   } catch (err) {
     if (err instanceof SecretRefUnavailableError) {

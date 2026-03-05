@@ -99,6 +99,37 @@ describe("resolveGatewayConnection", () => {
     expect(result.token).toBe("config-token");
   });
 
+  it("resolves env-template config auth token from referenced env var", () => {
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      gateway: {
+        mode: "local",
+        auth: { token: "${CUSTOM_GATEWAY_TOKEN}" },
+      },
+    });
+
+    withEnv({ CUSTOM_GATEWAY_TOKEN: "custom-token" }, () => {
+      const result = resolveGatewayConnection({});
+      expect(result.token).toBe("custom-token");
+    });
+  });
+
+  it("does not treat unresolved env-template config auth token as plaintext", () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: { token: "${MISSING_GATEWAY_TOKEN}" },
+      },
+    });
+
+    const result = resolveGatewayConnection({});
+    expect(result.token).toBeUndefined();
+  });
+
   it("prefers OPENCLAW_GATEWAY_PASSWORD over remote password fallback", () => {
     loadConfig.mockReturnValue({
       gateway: {

@@ -44,6 +44,28 @@ describe("resolveGatewayAuthTokenForService", () => {
     expect(resolved).toEqual({ token: "resolved-token" });
   });
 
+  it("resolves env-template gateway.auth.token via SecretRef resolution", async () => {
+    const resolved = await resolveGatewayAuthTokenForService(
+      {
+        gateway: {
+          auth: {
+            token: "${CUSTOM_GATEWAY_TOKEN}",
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        CUSTOM_GATEWAY_TOKEN: "resolved-token",
+      } as NodeJS.ProcessEnv,
+    );
+
+    expect(resolved).toEqual({ token: "resolved-token" });
+  });
+
   it("falls back to OPENCLAW_GATEWAY_TOKEN when SecretRef is unresolved", async () => {
     const resolved = await resolveGatewayAuthTokenForService(
       {

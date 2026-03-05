@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { loadConfig } from "../config/config.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import {
   buildGatewayConnectionDetails,
   ensureExplicitGatewayAuth,
@@ -238,7 +239,33 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
   const config = loadConfig();
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
-  const authToken = config.gateway?.auth?.token;
+  const defaults = config.secrets?.defaults;
+
+  const resolveConfigSecretInputString = (value: unknown): string | undefined => {
+    const { ref } = resolveSecretInputRef({
+      value,
+      defaults,
+    });
+    if (ref) {
+      if (ref.source !== "env") {
+        return undefined;
+      }
+      const refValue = process.env[ref.id];
+      if (typeof refValue !== "string") {
+        return undefined;
+      }
+      const trimmedRef = refValue.trim();
+      return trimmedRef.length > 0 ? trimmedRef : undefined;
+    }
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  };
+  const authToken = resolveConfigSecretInputString(config.gateway?.auth?.token);
+  const remoteToken = resolveConfigSecretInputString(remote?.token);
+  const remotePassword = resolveConfigSecretInputString(remote?.password);
 
   const urlOverride =
     typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
@@ -258,23 +285,13 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
     explicitAuth.token ||
     (!urlOverride
       ? isRemoteMode
-        ? typeof remote?.token === "string" && remote.token.trim().length > 0
-          ? remote.token.trim()
-          : undefined
-        : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-          (typeof authToken === "string" && authToken.trim().length > 0
-            ? authToken.trim()
-            : undefined)
+        ? remoteToken
+        : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || authToken
       : undefined);
 
   const password =
     explicitAuth.password ||
-    (!urlOverride
-      ? process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-        (typeof remote?.password === "string" && remote.password.trim().length > 0
-          ? remote.password.trim()
-          : undefined)
-      : undefined);
+    (!urlOverride ? process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || remotePassword : undefined);
 
   return { url, token, password };
 }

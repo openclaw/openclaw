@@ -13,15 +13,17 @@ export async function resolveGatewayAuthTokenForService(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): Promise<{ token?: string; unavailableReason?: string }> {
-  const configToken =
-    typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined;
-  if (configToken) {
-    return { token: configToken };
-  }
   const { ref } = resolveSecretInputRef({
     value: cfg.gateway?.auth?.token,
     defaults: cfg.secrets?.defaults,
   });
+  const configToken =
+    ref || typeof cfg.gateway?.auth?.token !== "string"
+      ? undefined
+      : cfg.gateway.auth.token.trim() || undefined;
+  if (configToken) {
+    return { token: configToken };
+  }
   if (ref) {
     try {
       const resolved = await resolveSecretRefValues([ref], {

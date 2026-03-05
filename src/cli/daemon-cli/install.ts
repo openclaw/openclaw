@@ -90,6 +90,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     value: cfg.gateway?.auth?.token,
     defaults: cfg.secrets?.defaults,
   }).ref;
+  const configToken =
+    tokenRef || typeof cfg.gateway?.auth?.token !== "string"
+      ? undefined
+      : cfg.gateway.auth.token.trim() || undefined;
 
   const resolveConfiguredTokenRef = async (): Promise<string | undefined> => {
     if (!tokenRef) {
@@ -108,7 +112,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   let token: string | undefined =
     opts.token?.trim() ||
-    (typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined) ||
+    configToken ||
     (tokenRef
       ? undefined
       : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim());

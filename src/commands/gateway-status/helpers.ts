@@ -152,34 +152,34 @@ async function resolveConfiguredSecretInputValue(
   value: unknown,
   path: string,
 ): Promise<{ value?: string; unresolvedRefReason?: string }> {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return { value: trimmed.length > 0 ? trimmed : undefined };
-  }
   const { ref } = resolveSecretInputRef({
     value,
     defaults: cfg.secrets?.defaults,
   });
-  if (!ref) {
-    return {};
-  }
-  try {
-    const resolved = await resolveSecretRefValues([ref], {
-      config: cfg,
-      env: process.env,
-    });
-    const resolvedValue = resolved.get(secretRefKey(ref));
-    if (typeof resolvedValue !== "string") {
-      return { unresolvedRefReason: `${path} SecretRef resolved to a non-string value.` };
+  if (ref) {
+    try {
+      const resolved = await resolveSecretRefValues([ref], {
+        config: cfg,
+        env: process.env,
+      });
+      const resolvedValue = resolved.get(secretRefKey(ref));
+      if (typeof resolvedValue !== "string") {
+        return { unresolvedRefReason: `${path} SecretRef resolved to a non-string value.` };
+      }
+      const trimmed = resolvedValue.trim();
+      if (trimmed.length === 0) {
+        return { unresolvedRefReason: `${path} SecretRef resolved to an empty value.` };
+      }
+      return { value: trimmed };
+    } catch (err) {
+      return { unresolvedRefReason: `${path} SecretRef is unresolved (${String(err)}).` };
     }
-    const trimmed = resolvedValue.trim();
-    if (trimmed.length === 0) {
-      return { unresolvedRefReason: `${path} SecretRef resolved to an empty value.` };
-    }
-    return { value: trimmed };
-  } catch (err) {
-    return { unresolvedRefReason: `${path} SecretRef is unresolved (${String(err)}).` };
   }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return { value: trimmed.length > 0 ? trimmed : undefined };
+  }
+  return {};
 }
 
 export async function resolveAuthForTarget(

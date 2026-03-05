@@ -156,14 +156,23 @@ function pickTailnetIPv4(
 
 function resolveAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): ResolveAuthResult {
   const mode = cfg.gateway?.auth?.mode;
+  const defaults = cfg.secrets?.defaults;
+  const tokenRef = resolveSecretInputRef({
+    value: cfg.gateway?.auth?.token,
+    defaults,
+  }).ref;
+  const passwordRef = resolveSecretInputRef({
+    value: cfg.gateway?.auth?.password,
+    defaults,
+  }).ref;
   const token =
     env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
     env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
-    normalizeSecretInputString(cfg.gateway?.auth?.token);
+    (tokenRef ? undefined : normalizeSecretInputString(cfg.gateway?.auth?.token));
   const password =
     env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
     env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
-    normalizeSecretInputString(cfg.gateway?.auth?.password);
+    (passwordRef ? undefined : normalizeSecretInputString(cfg.gateway?.auth?.password));
 
   if (mode === "password") {
     if (!password) {
@@ -280,7 +289,7 @@ async function resolveGatewayPasswordSecretRef(
   if (mode !== "password") {
     const hasTokenCandidate =
       Boolean(env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim()) ||
-      Boolean(normalizeSecretInputString(cfg.gateway?.auth?.token));
+      hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults);
     if (hasTokenCandidate) {
       return cfg;
     }
