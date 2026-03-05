@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAbortError, isTransientNetworkError } from "./unhandled-rejections.js";
+import { isAbortError, isTransientNetworkError, isTransientUncaughtError } from "./unhandled-rejections.js";
 
 describe("isAbortError", () => {
   it("returns true for error with name AbortError", () => {
@@ -155,5 +155,61 @@ describe("isTransientNetworkError", () => {
   it("returns false for AggregateError with only non-network errors", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
+  });
+});
+
+describe("isTransientUncaughtError", () => {
+  it("returns true for TLS setSession TypeError from undici", () => {
+    const error = new TypeError("Cannot read properties of null (reading 'setSession')");
+    error.stack = [
+      "TypeError: Cannot read properties of null (reading 'setSession')",
+      "    at TLSSocket.setSession (node:_tls_wrap:1132:16)",
+      "    at Object.connect (node:_tls_wrap:1826:13)",
+      "    at Client.connect (openclaw/node_modules/undici/lib/core/connect.js:70:20)",
+    ].join("\n");
+    expect(isTransientUncaughtError(error)).toBe(true);
+  });
+
+  it("returns true for transient network errors (delegates to isTransientNetworkError)", () => {
+    const error = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+    expect(isTransientUncaughtError(error)).toBe(true);
+  });
+
+  it("returns true for AbortError (delegates to isAbortError)", () => {
+    const error = new Error("This operation was aborted");
+    error.name = "AbortError";
+    expect(isTransientUncaughtError(error)).toBe(true);
+  });
+
+  it("returns false for TypeError with undici stack but non-TLS message", () => {
+    const error = new TypeError("some internal error");
+    error.stack = "TypeError: some internal error\n    at undici/lib/dispatcher/client.js:285:31";
+    expect(isTransientUncaughtError(error)).toBe(false);
+  });
+
+  it("returns true for destroy TypeError with TLS stack context", () => {
+    const error = new TypeError("Cannot read properties of null (reading 'destroy')");
+    error.stack = [
+      "TypeError: Cannot read properties of null (reading 'destroy')",
+      "    at TLSSocket._tls_wrap (node:_tls_wrap:980:14)",
+      "    at Client.connect (openclaw/node_modules/undici/lib/core/connect.js:70:20)",
+    ].join("\n");
+    expect(isTransientUncaughtError(error)).toBe(true);
+  });
+
+  it("returns false for unrelated TypeError", () => {
+    const error = new TypeError("Cannot read properties of undefined");
+    expect(isTransientUncaughtError(error)).toBe(false);
+  });
+
+  it("returns false for regular Error", () => {
+    expect(isTransientUncaughtError(new Error("Something went wrong"))).toBe(false);
+  });
+
+  it("returns false for non-error values", () => {
+    expect(isTransientUncaughtError(null)).toBe(false);
+    expect(isTransientUncaughtError(undefined)).toBe(false);
+    expect(isTransientUncaughtError("string error")).toBe(false);
+    expect(isTransientUncaughtError(42)).toBe(false);
   });
 });

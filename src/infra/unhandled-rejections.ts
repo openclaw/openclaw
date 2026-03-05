@@ -180,6 +180,49 @@ export function isTransientNetworkError(err: unknown): boolean {
   return false;
 }
 
+const TRANSIENT_UNCAUGHT_STACK_PATTERNS = [
+  /\bsetSession\b/,
+  /\bundici\b/,
+  /\b_tls_wrap\b/,
+  /\bTLSSocket\b/,
+];
+
+const TRANSIENT_TLS_MESSAGE_PATTERNS = [
+  /cannot read properties of null \(reading 'setSession'\)/i,
+  /cannot read properties of null \(reading 'alpnProtocol'\)/i,
+  /cannot read properties of null \(reading 'destroy'\)/i,
+];
+
+const TRANSIENT_UNCAUGHT_MESSAGE_PATTERNS = [
+  /socket was disconnected before the connection was established/i,
+];
+
+export function isTransientUncaughtError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  if (isTransientNetworkError(err)) {
+    return true;
+  }
+  if (isAbortError(err)) {
+    return true;
+  }
+  const message = "message" in err && typeof err.message === "string" ? err.message : "";
+  const stack = "stack" in err && typeof err.stack === "string" ? err.stack : "";
+  if (
+    err instanceof TypeError &&
+    stack &&
+    TRANSIENT_UNCAUGHT_STACK_PATTERNS.some((re) => re.test(stack)) &&
+    TRANSIENT_TLS_MESSAGE_PATTERNS.some((re) => re.test(message))
+  ) {
+    return true;
+  }
+  if (message && TRANSIENT_UNCAUGHT_MESSAGE_PATTERNS.some((re) => re.test(message))) {
+    return true;
+  }
+  return false;
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {

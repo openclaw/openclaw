@@ -28,7 +28,7 @@ import {
   PortInUseError,
 } from "./infra/ports.js";
 import { assertSupportedRuntime } from "./infra/runtime-guard.js";
-import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
+import { installUnhandledRejectionHandler, isTransientUncaughtError } from "./infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "./logging.js";
 import { runCommandWithTimeout, runExec } from "./process/exec.js";
 import { assertWebChannel, normalizeE164, toWhatsappJid } from "./utils.js";
@@ -82,6 +82,10 @@ if (isMain) {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
+    if (isTransientUncaughtError(error)) {
+      console.warn("[openclaw] Suppressed transient uncaught exception:", formatUncaughtError(error));
+      return;
+    }
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
     process.exit(1);
   });
