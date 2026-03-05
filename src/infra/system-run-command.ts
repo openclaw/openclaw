@@ -1,3 +1,4 @@
+import { splitShellArgs } from "../utils/shell-argv.js";
 import {
   extractShellWrapperCommand,
   hasEnvManipulationBeforeShellWrapper,
@@ -54,6 +55,28 @@ export function formatExecCommand(argv: string[]): string {
 
 export function extractShellCommandFromArgv(argv: string[]): string | null {
   return extractShellWrapperCommand(argv).command;
+}
+
+function normalizeRawCommandForShellWrapperComparison(params: {
+  raw: string | null;
+  shellCommand: string | null;
+}): string | null {
+  if (!params.raw) {
+    return null;
+  }
+  if (!params.shellCommand) {
+    return params.raw;
+  }
+  const rawArgv = splitShellArgs(params.raw);
+  if (!rawArgv || rawArgv.length === 0) {
+    return params.raw;
+  }
+  const rawWrapper = extractShellWrapperCommand(rawArgv);
+  if (!rawWrapper.isWrapper || !rawWrapper.command) {
+    return params.raw;
+  }
+  const rawShellCommand = rawWrapper.command.trim();
+  return rawShellCommand === params.shellCommand.trim() ? rawShellCommand : params.raw;
 }
 
 const POSIX_OR_POWERSHELL_INLINE_WRAPPER_NAMES = new Set([
@@ -116,8 +139,15 @@ export function validateSystemRunCommandConsistency(params: {
     shellCommand !== null && !mustBindDisplayToFullArgv
       ? shellCommand.trim()
       : formatExecCommand(params.argv);
+  const compareRawCommand =
+    shellCommand !== null && !mustBindDisplayToFullArgv
+      ? normalizeRawCommandForShellWrapperComparison({
+          raw,
+          shellCommand: shellCommand.trim(),
+        })
+      : raw;
 
-  if (raw && raw !== inferred) {
+  if (compareRawCommand && compareRawCommand !== inferred) {
     return {
       ok: false,
       message: "INVALID_REQUEST: rawCommand does not match command",

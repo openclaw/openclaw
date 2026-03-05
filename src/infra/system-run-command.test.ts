@@ -107,6 +107,32 @@ describe("system run command helpers", () => {
     expect(res.ok).toBe(true);
   });
 
+  test("validateSystemRunCommandConsistency accepts shell wrapper rawCommand as full invocation when payload matches", () => {
+    const res = validateSystemRunCommandConsistency({
+      argv: ["/bin/sh", "-lc", "echo hello"],
+      rawCommand: '/bin/sh -lc "echo hello"',
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.shellCommand).toBe('/bin/sh -lc "echo hello"');
+    expect(res.cmdText).toBe('/bin/sh -lc "echo hello"');
+  });
+
+  test("validateSystemRunCommandConsistency accepts powershell rawCommand as wrapper invocation when inline command matches", () => {
+    const res = validateSystemRunCommandConsistency({
+      argv: ["powershell", "-Command", "echo hello"],
+      rawCommand: 'powershell -Command "echo hello"',
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.shellCommand).toBe('powershell -Command "echo hello"');
+    expect(res.cmdText).toBe('powershell -Command "echo hello"');
+  });
+
   test("validateSystemRunCommandConsistency rejects shell-only rawCommand for positional-argv carrier wrappers", () => {
     expectRawCommandMismatch({
       argv: ["/bin/sh", "-lc", '$0 "$1"', "/usr/bin/touch", "/tmp/marker"],
