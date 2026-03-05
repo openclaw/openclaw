@@ -411,6 +411,42 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
+  it("absorbs multiple gateway errors after abort without crashing (ws emitErrorAndClose pattern)", async () => {
+    // ws emits "error" then "close" for code-1006 abnormal closures; Carbon's
+    // handleReconnectionAttempt fires a second emitter.emit("error") inside the
+    // close handler.  A single .once absorber is consumed by the first event,
+    // leaving the second unhandled → uncaught exception (#36055).
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const emitter = new EventEmitter();
+    const gateway = {
+      isConnected: false,
+      options: { reconnect: { maxAttempts: 3 } },
+      disconnect: vi.fn(),
+      connect: vi.fn(),
+      emitter,
+    };
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    const abortController = new AbortController();
+    const { lifecycleParams } = createLifecycleHarness({ gateway });
+    lifecycleParams.abortSignal = abortController.signal;
+
+    // Resolve immediately when the lifecycle calls waitForDiscordGatewayStop
+    waitForDiscordGatewayStopMock.mockResolvedValueOnce(undefined);
+
+    // Abort before the lifecycle starts so onAbort fires synchronously
+    abortController.abort();
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+    // After lifecycle completes, the persistent absorber must still be registered.
+    // Emitting two consecutive errors simulates ws emitErrorAndClose followed by
+    // Carbon's handleReconnectionAttempt — both must be absorbed without throwing.
+    expect(() => {
+      emitter.emit("error", new Error("ws error (would exhaust a .once absorber)"));
+      emitter.emit("error", new Error("Max reconnect attempts (0) reached after code 1006"));
+    }).not.toThrow();
+  });
+
   it("does not push connected: true when abortSignal is already aborted", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const emitter = new EventEmitter();

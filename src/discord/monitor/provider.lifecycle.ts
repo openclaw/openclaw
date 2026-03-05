@@ -88,6 +88,15 @@ export async function runDiscordGatewayLifecycle(params: {
     },
   });
 
+  // Persistent no-op for post-abort gateway errors. ws emits both an "error"
+  // then a "close" event via emitErrorAndClose (code 1006); Carbon's
+  // handleReconnectionAttempt fires a second error inside the close handler.
+  // A single `.once` absorber is consumed by the first error, leaving the
+  // second unhandled → uncaught exception (#36055). Using a named function
+  // lets us register it once and leave it on the emitter; it is GC'd with
+  // the gateway plugin when the lifecycle ends.
+  const noopAbortError = () => {};
+
   const onAbort = () => {
     lifecycleStopping = true;
     reconnectStallWatchdog.disarm();
@@ -96,7 +105,8 @@ export async function runDiscordGatewayLifecycle(params: {
     if (!gateway) {
       return;
     }
-    gatewayEmitter?.once("error", () => {});
+    // Persistent absorber instead of `.once` — see noopAbortError comment above.
+    gatewayEmitter?.on("error", noopAbortError);
     gateway.options.reconnect = { maxAttempts: 0 };
     gateway.disconnect();
   };
