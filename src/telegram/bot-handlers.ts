@@ -74,6 +74,9 @@ import {
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
+const APPROVE_CALLBACK_DATA_RE =
+  /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+(allow-once|allow-always|deny)\b/i;
+
 function isMediaSizeLimitError(err: unknown): boolean {
   const errMsg = String(err);
   return errMsg.includes("exceeds") && errMsg.includes("MB limit");
@@ -1147,6 +1150,25 @@ export const registerTelegramHandlers = ({
       });
       if (!senderAuthorization.allowed) {
         return;
+      }
+
+      if (APPROVE_CALLBACK_DATA_RE.test(data)) {
+        const messageText = callbackMessage.text ?? callbackMessage.caption;
+        if (typeof messageText === "string" && messageText.trim().length > 0) {
+          try {
+            await editCallbackMessage(messageText, {
+              reply_markup: { inline_keyboard: [] },
+            });
+          } catch (editErr) {
+            const errStr = String(editErr);
+            if (
+              !errStr.includes("message is not modified") &&
+              !errStr.includes("there is no text in the message to edit")
+            ) {
+              logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
+            }
+          }
+        }
       }
 
       const paginationMatch = data.match(/^commands_page_(\d+|noop)(?::(.+))?$/);

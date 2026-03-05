@@ -27,6 +27,9 @@ const sessionMocks = vi.hoisted(() => ({
 const replyMocks = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => undefined),
 }));
+const deliveryMocks = vi.hoisted(() => ({
+  deliverReplies: vi.fn(async () => ({ delivered: true })),
+}));
 const sessionBindingMocks = vi.hoisted(() => ({
   resolveByConversation: vi.fn<
     (ref: unknown) => { bindingId: string; targetSessionKey: string } | null
@@ -78,7 +81,7 @@ vi.mock("../plugins/commands.js", () => ({
   executePluginCommand: vi.fn(async () => ({ text: "ok" })),
 }));
 vi.mock("./bot/delivery.js", () => ({
-  deliverReplies: vi.fn(async () => ({ delivered: true })),
+  deliverReplies: deliveryMocks.deliverReplies,
 }));
 
 function createDeferred<T>() {
@@ -266,6 +269,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockClear().mockResolvedValue(undefined);
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
+    deliveryMocks.deliverReplies.mockClear().mockResolvedValue({ delivered: true });
   });
 
   it("calls recordSessionMetaFromInbound after a native slash command", async () => {
@@ -301,6 +305,41 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await runPromise;
 
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("injects canonical approval buttons for native command replies", async () => {
+    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+      async ({
+        dispatcherOptions,
+      }: {
+        dispatcherOptions: { deliver: (payload: unknown) => unknown };
+      }) => {
+        await dispatcherOptions.deliver({
+          text: "Mode: foreground\nRun: /approve 7f423fdc allow-once (or allow-always / deny).",
+        });
+      },
+    );
+
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+    await handler(buildStatusCommandContext());
+
+    const deliveredPayload = (
+      deliveryMocks.deliverReplies.mock.calls[0]?.[0] as {
+        replies?: Array<Record<string, unknown>>;
+      }
+    )?.replies?.[0];
+    expect(deliveredPayload).toBeTruthy();
+    expect(deliveredPayload?.["channelData"]).toEqual({
+      telegram: {
+        buttons: [
+          [
+            { text: "Allow Once", callback_data: "/approve 7f423fdc allow-once" },
+            { text: "Allow Always", callback_data: "/approve 7f423fdc allow-always" },
+          ],
+          [{ text: "Deny", callback_data: "/approve 7f423fdc deny" }],
+        ],
+      },
+    });
   });
 
   it("routes Telegram native commands through configured ACP topic bindings", async () => {
