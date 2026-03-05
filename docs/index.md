@@ -189,4 +189,7 @@ Example:
   <Card title="About and credits" href="/reference/credits" icon="info">
     Project origins, contributors, and license.
   </Card>
+  <Card title="Contribute" href="https://github.com/openclaw/openclaw/blob/main/CONTRIBUTING.md" icon="github">
+    Contribution guidelines and how to get involved.
+  </Card>
 </Columns>
