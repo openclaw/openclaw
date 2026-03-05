@@ -171,7 +171,7 @@ describe("parsePolicies", () => {
     );
   });
 
-  it("parses exact subagent deny list", () => {
+  it("parses exact subagent deny-always list", () => {
     expect(policies.subagentDenyAlways.toSorted()).toEqual(
       [
         "agents_list",
@@ -180,17 +180,16 @@ describe("parsePolicies", () => {
         "memory_get",
         "memory_search",
         "session_status",
-        "sessions_history",
-        "sessions_list",
         "sessions_send",
-        "sessions_spawn",
         "whatsapp_login",
       ].toSorted(),
     );
   });
 
-  it("has empty leaf deny list (main has no depth tiers)", () => {
-    expect(policies.subagentDenyLeaf).toEqual([]);
+  it("parses exact subagent deny-leaf list", () => {
+    expect(policies.subagentDenyLeaf.toSorted()).toEqual(
+      ["sessions_list", "sessions_history", "sessions_spawn"].toSorted(),
+    );
   });
 });
 

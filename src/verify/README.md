@@ -11,7 +11,7 @@ The `src/verify/` module reads the following TypeScript source files using the T
 | `src/agents/tool-catalog.ts`         | `CORE_TOOL_DEFINITIONS` (25 tools, section groups, profiles, openclaw group), `CORE_TOOL_SECTION_ORDER` |
 | `src/agents/tool-policy-shared.ts`   | `TOOL_NAME_ALIASES` (e.g. `bash` -> `exec`, `apply-patch` -> `apply_patch`)                             |
 | `src/agents/tool-policy.ts`          | `OWNER_ONLY_TOOL_NAME_FALLBACKS` (tools restricted to owner sender)                                     |
-| `src/agents/pi-tools.policy.ts`      | `DEFAULT_SUBAGENT_TOOL_DENY`                                                                            |
+| `src/agents/pi-tools.policy.ts`      | `SUBAGENT_TOOL_DENY_ALWAYS`, `SUBAGENT_TOOL_DENY_LEAF`                                                  |
 | `src/agents/tool-policy-pipeline.ts` | `buildDefaultToolPolicyPipelineSteps` (7-step filtering pipeline)                                       |
 
 From this parsed data, it generates 6 SMT-LIB2 model files:
@@ -201,11 +201,7 @@ The alias map matters because policy inputs go through `normalizeToolName` befor
 // ✅ src/agents/tool-policy.ts + src/agents/pi-tools.policy.ts
 const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set(["whatsapp_login", "cron", "gateway"]);
 
-const DEFAULT_SUBAGENT_TOOL_DENY = [
-  "sessions_list",
-  "sessions_history",
-  "sessions_send",
-  "sessions_spawn",
+const SUBAGENT_TOOL_DENY_ALWAYS = [
   "gateway",
   "agents_list",
   "whatsapp_login",
@@ -213,23 +209,30 @@ const DEFAULT_SUBAGENT_TOOL_DENY = [
   "cron",
   "memory_search",
   "memory_get",
+  "sessions_send",
 ];
+
+const SUBAGENT_TOOL_DENY_LEAF = ["sessions_list", "sessions_history", "sessions_spawn"];
 ```
 
 ```ts
 // ❌ Counter example: parsePolicies would catch these regressions
 const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set(["cron"]); // missing gateway + whatsapp_login
 
-const DEFAULT_SUBAGENT_TOOL_DENY = [
+const SUBAGENT_TOOL_DENY_ALWAYS = [
   "gateway",
   "agents_list",
-  // "sessions_send", "sessions_spawn" removed
+  // "sessions_send" removed
+];
+
+const SUBAGENT_TOOL_DENY_LEAF = [
+  // "sessions_spawn" removed
 ];
 ```
 
-The owners-only and subagent tests assert that `gateway`, `cron`, and `whatsapp_login` stay in `OWNER_ONLY_TOOL_NAME_FALLBACKS`, and that `gateway`, `session_status`, `sessions_send`, `sessions_spawn`, and `sessions_list` remain in `DEFAULT_SUBAGENT_TOOL_DENY`. The broken snippet would fail every assertion.
+The owners-only and subagent tests assert that `gateway`, `cron`, and `whatsapp_login` stay in `OWNER_ONLY_TOOL_NAME_FALLBACKS`, that `gateway`, `session_status`, and `sessions_send` remain in `SUBAGENT_TOOL_DENY_ALWAYS`, and that `sessions_spawn` remains in `SUBAGENT_TOOL_DENY_LEAF`. The broken snippet would fail every assertion.
 
-These tests guard two security boundaries: owner-only tools and subagent containment. If `gateway` accidentally dropped out of the owner-only fallbacks, non-owners could invoke it. If `sessions_spawn` dropped from the subagent deny list, subagents could recursively spawn more agents. The tests catch accidental removals from these lists so the SMT model stays in sync with the runtime.
+These tests guard two security boundaries: owner-only tools and subagent containment. If `gateway` accidentally dropped out of the owner-only fallbacks, non-owners could invoke it. If `sessions_spawn` dropped from the leaf deny list, leaf subagents could recursively spawn more agents. The tests catch accidental removals from these lists so the SMT model stays in sync with the runtime.
 
 ### Pipeline step stripping guarantees
 

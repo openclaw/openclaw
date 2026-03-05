@@ -21,13 +21,15 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(`; ============================================================================`);
   w(`; Models resolveSubagentToolPolicy from pi-tools.policy.ts.`);
   w(`;`);
-  w(`; The runtime uses a single flat deny list (DEFAULT_SUBAGENT_TOOL_DENY)`);
-  w(`; applied to all subagents regardless of depth. The model retains a`);
-  w(`; two-tier structure (deny_always + deny_leaf_extra) for forward`);
-  w(`; compatibility; currently deny_leaf_extra is empty so both tiers`);
-  w(`; produce the same deny set.`);
+  w(`; Deny list structure:`);
+  w(`;   SUBAGENT_TOOL_DENY_ALWAYS — denied at all depths`);
+  w(`;   SUBAGENT_TOOL_DENY_LEAF   — additionally denied at leaf depth`);
   w(`;`);
-  w(`; Deny-first: deny always wins over allow (matches makeToolPolicyMatcher).`);
+  w(`; Override semantics (two levels):`);
+  w(`;   1. resolveSubagentToolPolicy builds explicitAllow = union(allow, alsoAllow)`);
+  w(`;      and removes matching tools from the base deny list.`);
+  w(`;   2. makeToolPolicyMatcher is deny-first on the pruned deny list.`);
+  w(`;   Combined effect: explicitAllow CAN override default deny entries.`);
   w(`;`);
   w(`; Faithful to: pi-tools.policy.ts (resolveSubagentToolPolicy)`);
   w(`; ============================================================================`);
@@ -97,33 +99,33 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(`    (subagent_deny_always t)))`);
   w(``);
 
-  // 4. Allow list (optional additional filter)
+  // 4. explicitAllow override
   w(`; --------------------------------------------------------------------------`);
-  w(`; 4. Optional Allow List`);
+  w(`; 4. explicitAllow Override`);
   w(`; --------------------------------------------------------------------------`);
-  w(`; The config can specify tools.subagents.tools.allow.`);
-  w(`; If an allow list is present, only listed tools may pass.`);
-  w(`; Deny always takes precedence over allow (deny-first semantics).`);
+  w(`; resolveSubagentToolPolicy builds explicitAllow = union(allow, alsoAllow)`);
+  w(`; and removes matching tools from the base deny list before passing it to`);
+  w(`; makeToolPolicyMatcher. This means explicitAllow CAN override default`);
+  w(`; deny entries.`);
   w(``);
-  w(`(declare-const has_allowlist Bool)         ; whether an allow list is configured`);
-  w(`(declare-fun on_allowlist (Tool) Bool)     ; tool is in the configured allow list`);
+  w(`(declare-fun explicit_allow (Tool) Bool) ; union of allow + alsoAllow from config`);
   w(``);
 
-  // 5. Effective gate (deny-first)
+  // 5. Effective deny (after explicitAllow pruning)
   w(`; --------------------------------------------------------------------------`);
-  w(`; 5. Subagent Gate (deny-first)`);
+  w(`; 5. Effective Subagent Deny`);
   w(`; --------------------------------------------------------------------------`);
-  w(`; Runtime semantics (makeToolPolicyMatcher in pi-tools.policy.ts):`);
-  w(`;   1. If tool is in deny list → BLOCKED (unconditional)`);
-  w(`;   2. If no allow list → PASS`);
-  w(`;   3. If tool is in allow list → PASS`);
-  w(`;   4. Otherwise → BLOCKED`);
-  w(`; Deny can never be overridden by allow.`);
+  w(`; A tool is effectively denied iff it's in the base deny AND NOT in`);
+  w(`; explicit_allow. This models the deny list pruning in`);
+  w(`; resolveSubagentToolPolicy (baseDeny.filter(t => !explicitAllow.has(t))).`);
   w(``);
+  w(`(define-fun subagent_effective_deny ((t Tool)) Bool`);
+  w(`  (and (subagent_base_deny t)`);
+  w(`       (not (explicit_allow t))))`);
+  w(``);
+  w(`; A tool passes the subagent gate iff it's NOT effectively denied`);
   w(`(define-fun passes_subagent_gate ((t Tool)) Bool`);
-  w(`  (and (not (subagent_base_deny t))`);
-  w(`       (or (not has_allowlist)`);
-  w(`           (on_allowlist t))))`);
+  w(`  (not (subagent_effective_deny t)))`);
   w(``);
 
   // 6. Full policy
@@ -136,49 +138,41 @@ export function emitSubagentSmt2(data: ParsedAll): string {
 
   // Smoke tests
   w(`; --------------------------------------------------------------------------`);
-  w(`; Smoke test 1: gateway is always denied`);
+  w(`; Smoke test 1: gateway denied at orchestrator depth (no override)`);
   w(`; --------------------------------------------------------------------------`);
   w(`(push 1)`);
   w(`(assert (= depth 1))`);
   w(`(assert (= max_spawn_depth 2))`);
+  w(`(assert (not (explicit_allow gateway_)))`);
   w(`(assert (passes_subagent_gate gateway_))`);
-  w(`(check-sat) ; Expected: unsat (gateway in deny list — unconditional)`);
+  w(`(check-sat) ; Expected: unsat (gateway in deny_always, not overridden)`);
   w(`(pop 1)`);
   w(``);
-  w(`; Smoke test 2: sessions_spawn denied at orchestrator depth`);
+  w(`; Smoke test 2: sessions_spawn allowed at orchestrator depth (leaf-only deny)`);
   w(`(push 1)`);
   w(`(assert (= depth 1))`);
   w(`(assert (= max_spawn_depth 2))`);
-  w(`(assert (passes_subagent_gate sessions_spawn_))`);
-  w(`(check-sat) ; Expected: unsat (sessions_spawn in deny list)`);
+  w(`(assert (not (explicit_allow sessions_spawn_)))`);
+  w(`(assert (not (passes_subagent_gate sessions_spawn_)))`);
+  w(`(check-sat) ; Expected: unsat (sessions_spawn only in leaf deny, depth 1 is not leaf)`);
   w(`(pop 1)`);
   w(``);
   w(`; Smoke test 3: sessions_spawn denied at leaf depth`);
   w(`(push 1)`);
   w(`(assert (= depth 2))`);
   w(`(assert (= max_spawn_depth 2))`);
+  w(`(assert (not (explicit_allow sessions_spawn_)))`);
   w(`(assert (passes_subagent_gate sessions_spawn_))`);
-  w(`(check-sat) ; Expected: unsat (sessions_spawn in deny list)`);
+  w(`(check-sat) ; Expected: unsat (sessions_spawn in leaf deny, depth 2 is leaf)`);
   w(`(pop 1)`);
   w(``);
-  w(`; Smoke test 4: deny wins even when tool is on allow list`);
+  w(`; Smoke test 4: explicit_allow overrides a deny`);
   w(`(push 1)`);
   w(`(assert (= depth 1))`);
   w(`(assert (= max_spawn_depth 2))`);
-  w(`(assert has_allowlist)`);
-  w(`(assert (on_allowlist memory_search_))`);
-  w(`(assert (passes_subagent_gate memory_search_))`);
-  w(`(check-sat) ; Expected: unsat (memory_search denied, allow cannot override deny)`);
-  w(`(pop 1)`);
-  w(``);
-  w(`; Smoke test 5: non-denied tool passes when on allow list`);
-  w(`(push 1)`);
-  w(`(assert (= depth 1))`);
-  w(`(assert (= max_spawn_depth 2))`);
-  w(`(assert has_allowlist)`);
-  w(`(assert (on_allowlist read_))`);
-  w(`(assert (not (passes_subagent_gate read_)))`);
-  w(`(check-sat) ; Expected: unsat (read not denied and on allowlist, must pass)`);
+  w(`(assert (explicit_allow memory_search_))`);
+  w(`(assert (not (passes_subagent_gate memory_search_)))`);
+  w(`(check-sat) ; Expected: unsat (memory_search denied but overridden by explicit_allow)`);
   w(`(pop 1)`);
   w(``);
   w(`(echo "subagent.smt2 loaded successfully")`);

@@ -52,11 +52,11 @@ assert(
 assert(policies.ownerOnlyFallbacks.includes("gateway"), "gateway is owner-only");
 assert(policies.ownerOnlyFallbacks.includes("cron"), "cron is owner-only");
 assert(policies.ownerOnlyFallbacks.includes("whatsapp_login"), "whatsapp_login is owner-only");
-assert(policies.subagentDenyAlways.length === 11, "11 subagent deny tools");
-assert(policies.subagentDenyAlways.includes("gateway"), "gateway in deny list");
-assert(policies.subagentDenyAlways.includes("sessions_spawn"), "sessions_spawn in deny list");
-assert(policies.subagentDenyAlways.includes("memory_get"), "memory_get in deny list");
-assert(policies.subagentDenyLeaf.length === 0, "no leaf-only deny tools (flat list)");
+assert(policies.subagentDenyAlways.length === 8, "8 subagent deny-always tools");
+assert(policies.subagentDenyAlways.includes("gateway"), "gateway in deny-always list");
+assert(policies.subagentDenyAlways.includes("memory_get"), "memory_get in deny-always list");
+assert(policies.subagentDenyLeaf.length === 3, "3 subagent deny-leaf tools");
+assert(policies.subagentDenyLeaf.includes("sessions_spawn"), "sessions_spawn in deny-leaf list");
 
 console.log("\nparsePipeline:");
 const pipeline = parsePipeline(path.join(srcDir, "src"));
