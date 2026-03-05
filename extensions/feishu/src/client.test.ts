@@ -181,6 +181,34 @@ describe("createFeishuClient HTTP timeout", () => {
       expect.objectContaining({ timeout: FEISHU_HTTP_TIMEOUT_MS }),
     );
   });
+
+  it("recreates cached client when configured timeout changes", async () => {
+    createFeishuClient({
+      appId: "app_6",
+      appSecret: "secret_6",
+      accountId: "timeout-cache-change",
+      config: { httpTimeoutMs: 30_000 },
+    });
+    createFeishuClient({
+      appId: "app_6",
+      appSecret: "secret_6",
+      accountId: "timeout-cache-change",
+      config: { httpTimeoutMs: 45_000 },
+    });
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBe(2);
+
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
+    };
+    await lastCall.httpInstance.get("https://example.com/api");
+
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ timeout: 45_000 }),
+    );
+  });
 });
 
 describe("createFeishuWSClient proxy handling", () => {

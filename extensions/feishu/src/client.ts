@@ -20,7 +20,7 @@ const clientCache = new Map<
   string,
   {
     client: Lark.Client;
-    config: { appId: string; appSecret: string; domain?: FeishuDomain };
+    config: { appId: string; appSecret: string; domain?: FeishuDomain; httpTimeoutMs: number };
   }
 >();
 
@@ -87,6 +87,7 @@ function resolveConfiguredHttpTimeoutMs(creds: FeishuClientCredentials): number 
  */
 export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client {
   const { accountId = "default", appId, appSecret, domain } = creds;
+  const defaultHttpTimeoutMs = resolveConfiguredHttpTimeoutMs(creds);
 
   if (!appId || !appSecret) {
     throw new Error(`Feishu credentials not configured for account "${accountId}"`);
@@ -98,13 +99,13 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     cached &&
     cached.config.appId === appId &&
     cached.config.appSecret === appSecret &&
-    cached.config.domain === domain
+    cached.config.domain === domain &&
+    cached.config.httpTimeoutMs === defaultHttpTimeoutMs
   ) {
     return cached.client;
   }
 
   // Create new client with timeout-aware HTTP instance
-  const defaultHttpTimeoutMs = resolveConfiguredHttpTimeoutMs(creds);
   const client = new Lark.Client({
     appId,
     appSecret,
@@ -116,7 +117,7 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
   // Cache it
   clientCache.set(accountId, {
     client,
-    config: { appId, appSecret, domain },
+    config: { appId, appSecret, domain, httpTimeoutMs: defaultHttpTimeoutMs },
   });
 
   return client;
