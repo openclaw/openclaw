@@ -3,8 +3,8 @@ import type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   PluginLogger,
-} from "openclaw/plugin-sdk";
-import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/acpx";
+import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "openclaw/plugin-sdk/acpx";
 import { resolveAcpxPluginConfig, type ResolvedAcpxPluginConfig } from "./config.js";
 import { ensureAcpx } from "./ensure.js";
 import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";

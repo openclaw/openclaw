@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/nextcloud-talk";
 
 let runtime: PluginRuntime | null = null;
 
