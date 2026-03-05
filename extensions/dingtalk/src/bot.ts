@@ -455,7 +455,8 @@ async function resolveDingtalkMedia(params: {
   );
 
   const core = getDingtalkRuntime();
-  const mediaMaxBytes = 30 * 1024 * 1024;
+  const mediaMaxMb = account.config?.mediaMaxMb ?? 30;
+  const mediaMaxBytes = mediaMaxMb * 1024 * 1024;
   const savedMedia: Array<{ path: string; contentType?: string | null }> = [];
 
   for (const code of codes) {
