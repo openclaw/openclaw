@@ -205,18 +205,15 @@ export function handleMessageUpdate(
     const mediaUrls = parsedDelta?.mediaUrls;
     const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
     const hasAudio = Boolean(parsedDelta?.audioAsVoice);
-    let previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+    const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
 
     // If this is the first chunk after a cross-turn boundary, prepend the separator.
-    // We need to add it to both cleanedText (for this emission) AND to
-    // previousCleaned (as a baseline for future diff calculations). This ensures:
-    // 1. The separator is included in the emitted text
-    // 2. Future chunks can diff correctly against the baseline that includes the separator
+    // We need to add it to cleanedText so both data.text and data.delta include it.
+    // IMPORTANT: Don't modify previousCleaned here - we need the actual delta content
+    // including the separator, not an empty baseline.
     if (needsCrossTurnSeparator && !previousCleaned && cleanedText) {
       cleanedText = "\n\n" + cleanedText;
-      // Set the baseline to include the separator so future diffs work correctly
-      previousCleaned = "\n\n";
-      // Mark that we've consumed the separator (only clear it after we emit)
+      // Mark that we've consumed the separator
       ctx.state.pendingCrossTurnSeparator = false;
     }
 
