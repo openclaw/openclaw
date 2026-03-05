@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
 import { loadConfig } from "../config/config.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import {
   approveChannelPairingCode,
@@ -46,6 +47,9 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
 
 async function notifyApproved(channel: PairingChannel, id: string) {
   const cfg = loadConfig();
+  if (!guardWrite("pairing", { channel, to: id }, getProtectedDestinationMap(cfg))) {
+    return;
+  }
   await notifyPairingApproved({ channelId: channel, id, cfg });
 }
 

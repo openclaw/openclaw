@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
+import { getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
+import { loadConfig } from "./config.js";
 import { postMultipartFormData } from "./multipart.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
@@ -65,6 +67,15 @@ export async function markBlueBubblesChatRead(
   chatGuid: string,
   opts: BlueBubblesChatOpts = {},
 ): Promise<void> {
+  if (
+    !guardWrite(
+      "read-receipt",
+      { channel: "bluebubbles", to: chatGuid, accountId: opts.accountId },
+      getProtectedDestinationMap(opts.cfg ?? loadConfig()),
+    )
+  ) {
+    return;
+  }
   const trimmed = chatGuid.trim();
   if (!trimmed) {
     return;
@@ -90,6 +101,15 @@ export async function sendBlueBubblesTyping(
   typing: boolean,
   opts: BlueBubblesChatOpts = {},
 ): Promise<void> {
+  if (
+    !guardWrite(
+      "typing",
+      { channel: "bluebubbles", to: chatGuid, accountId: opts.accountId },
+      getProtectedDestinationMap(opts.cfg ?? loadConfig()),
+    )
+  ) {
+    return;
+  }
   const trimmed = chatGuid.trim();
   if (!trimmed) {
     return;

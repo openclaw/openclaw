@@ -10,6 +10,7 @@ import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
+import { getProtectedDestinationMap, guardWrite } from "../../../infra/outbound/write-policy.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
@@ -293,6 +294,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     ...prefixOptions,
+    cfg,
+    destination: {
+      channel: "slack",
+      to: prepared.replyTarget,
+      ...(account.accountId ? { accountId: account.accountId } : {}),
+    },
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
     deliver: async (payload) => {
@@ -318,6 +325,19 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       if (canFinalizeViaPreviewEdit) {
         draftStream?.stop();
         try {
+          if (
+            !guardWrite(
+              "typing",
+              {
+                channel: "slack",
+                to: draftChannelId,
+                accountId: account.accountId,
+              },
+              getProtectedDestinationMap(cfg),
+            )
+          ) {
+            return;
+          }
           await ctx.app.client.chat.update({
             token: ctx.botToken,
             channel: draftChannelId,
@@ -335,6 +355,19 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           const statusChannelId = draftStream?.channelId();
           const statusMessageId = draftStream?.messageId();
           if (statusChannelId && statusMessageId) {
+            if (
+              !guardWrite(
+                "typing",
+                {
+                  channel: "slack",
+                  to: statusChannelId,
+                  accountId: account.accountId,
+                },
+                getProtectedDestinationMap(cfg),
+              )
+            ) {
+              return;
+            }
             await ctx.app.client.chat.update({
               token: ctx.botToken,
               channel: statusChannelId,

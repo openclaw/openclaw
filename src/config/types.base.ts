@@ -68,6 +68,33 @@ export type SessionSendPolicyConfig = {
   rules?: SessionSendPolicyRule[];
 };
 
+export type SessionRelayRoutingMode = "read-write" | "read-only";
+
+export type SessionRelayRoutingTarget = {
+  channel: string;
+  to: string;
+  accountId?: string;
+};
+
+export type SessionRelayRoutingMatch = {
+  channel?: string;
+  accountId?: string;
+  chatId?: string;
+  sender?: string;
+};
+
+export type SessionRelayRoutingRule = {
+  mode: SessionRelayRoutingMode;
+  relayTo?: string;
+  match?: SessionRelayRoutingMatch;
+};
+
+export type SessionRelayRoutingConfig = {
+  defaultMode?: SessionRelayRoutingMode;
+  targets?: Record<string, SessionRelayRoutingTarget>;
+  rules?: SessionRelayRoutingRule[];
+};
+
 export type SessionResetMode = "daily" | "idle";
 export type SessionResetConfig = {
   mode?: SessionResetMode;
@@ -125,6 +152,7 @@ export type SessionConfig = {
   parentForkMaxTokens?: number;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
+  relayRouting?: SessionRelayRoutingConfig;
   agentToAgent?: {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;

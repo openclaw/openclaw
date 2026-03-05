@@ -4,6 +4,8 @@ import {
   createNormalizedOutboundDeliverer,
   createReplyPrefixOptions,
   formatTextWithAttachmentLinks,
+  getProtectedDestinationMap,
+  guardWrite,
   logInboundDrop,
   isDangerousNameMatchingEnabled,
   readStoreAllowFromForDmPolicy,
@@ -55,6 +57,7 @@ function resolveIrcEffectiveAllowlists(params: {
 }
 
 async function deliverIrcReply(params: {
+  cfg?: OpenClawConfig;
   payload: OutboundReplyPayload;
   target: string;
   accountId: string;
@@ -66,6 +69,16 @@ async function deliverIrcReply(params: {
     resolveOutboundMediaUrls(params.payload),
   );
   if (!combined) {
+    return;
+  }
+  if (
+    params.cfg &&
+    !guardWrite(
+      "pairing",
+      { channel: "irc", to: params.target, accountId: params.accountId },
+      getProtectedDestinationMap(params.cfg),
+    )
+  ) {
     return;
   }
 
@@ -221,6 +234,7 @@ export async function handleIrcInbound(params: {
                 code,
               });
               await deliverIrcReply({
+                cfg: config as OpenClawConfig,
                 payload: { text: reply },
                 target: message.senderNick,
                 accountId: account.accountId,
@@ -349,6 +363,7 @@ export async function handleIrcInbound(params: {
   });
   const deliverReply = createNormalizedOutboundDeliverer(async (payload) => {
     await deliverIrcReply({
+      cfg: config as OpenClawConfig,
       payload,
       target: peerId,
       accountId: account.accountId,

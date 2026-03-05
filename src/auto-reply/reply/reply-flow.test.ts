@@ -1236,11 +1236,18 @@ describe("followup queue drain restart after idle window", () => {
 });
 
 const emptyCfg = {} as OpenClawConfig;
+const defaultDispatcherOptions = {
+  cfg: emptyCfg,
+  destination: {
+    channel: "slack",
+    to: "channel:C123",
+  },
+} as const;
 
 describe("createReplyDispatcher", () => {
   it("drops empty payloads and exact silent tokens without media", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
-    const dispatcher = createReplyDispatcher({ deliver });
+    const dispatcher = createReplyDispatcher({ ...defaultDispatcherOptions, deliver });
 
     expect(dispatcher.sendFinalReply({})).toBe(false);
     expect(dispatcher.sendFinalReply({ text: " " })).toBe(false);
@@ -1258,6 +1265,7 @@ describe("createReplyDispatcher", () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const onHeartbeatStrip = vi.fn();
     const dispatcher = createReplyDispatcher({
+      ...defaultDispatcherOptions,
       deliver,
       responsePrefix: "PFX",
       onHeartbeatStrip,
@@ -1275,6 +1283,7 @@ describe("createReplyDispatcher", () => {
   it("avoids double-prefixing and keeps media when heartbeat is the only text", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({
+      ...defaultDispatcherOptions,
       deliver,
       responsePrefix: "PFX",
     });
@@ -1314,7 +1323,7 @@ describe("createReplyDispatcher", () => {
         await Promise.resolve();
       }
     });
-    const dispatcher = createReplyDispatcher({ deliver });
+    const dispatcher = createReplyDispatcher({ ...defaultDispatcherOptions, deliver });
 
     dispatcher.sendToolResult({ text: "tool" });
     dispatcher.sendBlockReply({ text: "block" });
@@ -1328,7 +1337,7 @@ describe("createReplyDispatcher", () => {
     const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = async () =>
       await Promise.resolve();
     const onIdle = vi.fn();
-    const dispatcher = createReplyDispatcher({ deliver, onIdle });
+    const dispatcher = createReplyDispatcher({ ...defaultDispatcherOptions, deliver, onIdle });
 
     dispatcher.sendToolResult({ text: "one" });
     dispatcher.sendFinalReply({ text: "two" });
@@ -1344,6 +1353,7 @@ describe("createReplyDispatcher", () => {
     const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({
+      ...defaultDispatcherOptions,
       deliver,
       humanDelay: { mode: "natural" },
     });
@@ -1371,6 +1381,7 @@ describe("createReplyDispatcher", () => {
     vi.useFakeTimers();
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({
+      ...defaultDispatcherOptions,
       deliver,
       humanDelay: { mode: "custom", minMs: 1200, maxMs: 400 },
     });

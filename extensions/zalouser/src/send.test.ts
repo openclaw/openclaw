@@ -139,16 +139,24 @@ describe("zalouser send helpers", () => {
       ts: "123",
     };
 
-    await sendDeliveredZalouser({ profile: "p6", isGroup: true, message, isSeen: false });
-    await sendSeenZalouser({ profile: "p6", isGroup: true, message });
+    await sendDeliveredZalouser({
+      threadId: "thread-6",
+      profile: "p6",
+      isGroup: true,
+      message,
+      isSeen: false,
+    });
+    await sendSeenZalouser({ threadId: "thread-6", profile: "p6", isGroup: true, message });
 
     expect(mockSendDelivered).toHaveBeenCalledWith({
+      threadId: "thread-6",
       profile: "p6",
       isGroup: true,
       message,
       isSeen: false,
     });
     expect(mockSendSeen).toHaveBeenCalledWith({
+      threadId: "thread-6",
       profile: "p6",
       isGroup: true,
       message,

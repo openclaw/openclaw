@@ -42,6 +42,7 @@ vi.mock("../channels/plugins/index.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn().mockReturnValue({}),
+  STATE_DIR: "/tmp/openclaw-test",
 }));
 
 describe("pairing cli", () => {

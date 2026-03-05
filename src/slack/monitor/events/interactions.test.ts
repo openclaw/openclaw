@@ -122,6 +122,7 @@ function createContext(overrides?: {
     );
   const ctx = {
     app,
+    cfg: {},
     runtime: { log: runtimeLog },
     dmEnabled: overrides?.dmEnabled ?? true,
     dmPolicy: overrides?.dmPolicy ?? ("open" as const),

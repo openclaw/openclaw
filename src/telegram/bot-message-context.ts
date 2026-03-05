@@ -38,6 +38,7 @@ import type {
 } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import {
   buildAgentSessionKey,
   pickFirstExistingAgentId,
@@ -330,6 +331,15 @@ export const buildTelegramMessageContext = async ({
   }
 
   const sendTyping = async () => {
+    if (
+      !guardWrite(
+        "typing",
+        { channel: "telegram", to: String(chatId), accountId: account.accountId },
+        getProtectedDestinationMap(cfg),
+      )
+    ) {
+      return;
+    }
     await withTelegramApiErrorLogging({
       operation: "sendChatAction",
       fn: () =>
@@ -342,6 +352,15 @@ export const buildTelegramMessageContext = async ({
   };
 
   const sendRecordVoice = async () => {
+    if (
+      !guardWrite(
+        "typing",
+        { channel: "telegram", to: String(chatId), accountId: account.accountId },
+        getProtectedDestinationMap(cfg),
+      )
+    ) {
+      return;
+    }
     try {
       await withTelegramApiErrorLogging({
         operation: "sendChatAction",
@@ -604,6 +623,15 @@ export const buildTelegramMessageContext = async ({
           adapter: {
             setReaction: async (emoji: string) => {
               if (reactionApi) {
+                if (
+                  !guardWrite(
+                    "status-reaction",
+                    { channel: "telegram", to: String(chatId), accountId: account.accountId },
+                    getProtectedDestinationMap(cfg),
+                  )
+                ) {
+                  return;
+                }
                 if (!allowedStatusReactionEmojisPromise) {
                   allowedStatusReactionEmojisPromise = resolveTelegramAllowedEmojiReactions({
                     chat: msg.chat,
@@ -652,7 +680,18 @@ export const buildTelegramMessageContext = async ({
     : shouldAckReaction() && msg.message_id && reactionApi
       ? withTelegramApiErrorLogging({
           operation: "setMessageReaction",
-          fn: () => reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReaction }]),
+          fn: () => {
+            if (
+              !guardWrite(
+                "status-reaction",
+                { channel: "telegram", to: String(chatId), accountId: account.accountId },
+                getProtectedDestinationMap(cfg),
+              )
+            ) {
+              return Promise.resolve();
+            }
+            return reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReaction }]);
+          },
         }).then(
           () => true,
           (err) => {

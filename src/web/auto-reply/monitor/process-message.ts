@@ -387,6 +387,12 @@ export async function processMessage(params: {
     replyResolver: params.replyResolver,
     dispatcherOptions: {
       ...prefixOptions,
+      cfg: params.cfg,
+      destination: {
+        channel: "whatsapp",
+        to: conversationId,
+        ...(params.route.accountId ? { accountId: params.route.accountId } : {}),
+      },
       responsePrefix,
       onHeartbeatStrip: () => {
         if (!didLogHeartbeatStrip) {

@@ -61,3 +61,5 @@ export type { OutboundReplyPayload } from "./reply-payload.js";
 export { resolveOutboundMediaUrls, sendMediaWithLeadingCaption } from "./reply-payload.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
+// Write-policy enforcement exports for extensions using guardWrite.
+export { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";

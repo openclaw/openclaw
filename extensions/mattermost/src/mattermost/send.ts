@@ -1,4 +1,9 @@
-import { loadOutboundMediaFromUrl, type OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
+import {
+  getProtectedDestinationMap,
+  guardWrite,
+  loadOutboundMediaFromUrl,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/mattermost";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -152,6 +157,15 @@ export async function sendMessageMattermost(
     cfg,
     accountId: opts.accountId,
   });
+  if (
+    !guardWrite(
+      "pairing",
+      { channel: "mattermost", to, accountId: account.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return { messageId: "suppressed", channelId: to };
+  }
   const token = opts.botToken?.trim() || account.botToken?.trim();
   if (!token) {
     throw new Error(

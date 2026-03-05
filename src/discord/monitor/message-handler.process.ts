@@ -26,6 +26,7 @@ import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-st
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { getProtectedDestinationMap, guardWrite } from "../../infra/outbound/write-policy.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
@@ -466,6 +467,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ? createDiscordDraftStream({
         rest: client.rest,
         channelId: deliverChannelId,
+        cfg,
+        accountId,
         maxChars: draftMaxChars,
         replyToMessageId: draftReplyToMessageId,
         minInitialChars: 30,
@@ -596,6 +599,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
       ...prefixOptions,
+      cfg,
+      destination: {
+        channel: "discord",
+        to: deliverTarget,
+        ...(accountId ? { accountId } : {}),
+      },
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       typingCallbacks,
       deliver: async (payload: ReplyPayload, info) => {
@@ -628,6 +637,15 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               return;
             }
             try {
+              if (
+                !guardWrite(
+                  "draft-preview",
+                  { channel: "discord", to: deliverChannelId, accountId },
+                  getProtectedDestinationMap(cfg),
+                )
+              ) {
+                return;
+              }
               await editMessageDiscord(
                 deliverChannelId,
                 previewMessageId,
@@ -658,6 +676,15 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               !payload.isError
             ) {
               try {
+                if (
+                  !guardWrite(
+                    "draft-preview",
+                    { channel: "discord", to: deliverChannelId, accountId },
+                    getProtectedDestinationMap(cfg),
+                  )
+                ) {
+                  return;
+                }
                 await editMessageDiscord(
                   deliverChannelId,
                   messageIdAfterStop,

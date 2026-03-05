@@ -23,6 +23,14 @@ function createDeferred<T = void>() {
   return { promise, resolve, reject };
 }
 
+const dispatcherTestOptions = {
+  cfg: {},
+  destination: {
+    channel: "slack",
+    to: "channel:C123",
+  },
+} as const;
+
 describe("gateway restart deferral", () => {
   let replyErrors: string[] = [];
 
@@ -45,6 +53,7 @@ describe("gateway restart deferral", () => {
 
     // Hold delivery open so restart checks run while reply is in-flight.
     const dispatcher = createReplyDispatcher({
+      ...dispatcherTestOptions,
       deliver: async (payload) => {
         if (!rpcConnected) {
           const error = "Error: imsg rpc not running";
@@ -94,6 +103,7 @@ describe("gateway restart deferral", () => {
     const allowDelivery = createDeferred();
 
     const dispatcher = createReplyDispatcher({
+      ...dispatcherTestOptions,
       deliver: async () => {
         await allowDelivery.promise;
       },
@@ -118,6 +128,7 @@ describe("gateway restart deferral", () => {
   it("defers restart until reply dispatcher completes", async () => {
     const deliveredReplies: string[] = [];
     const dispatcher = createReplyDispatcher({
+      ...dispatcherTestOptions,
       deliver: async (payload) => {
         await Promise.resolve();
         deliveredReplies.push(payload.text ?? "");
@@ -145,6 +156,7 @@ describe("gateway restart deferral", () => {
   it("clears dispatcher reservation when no replies were sent", async () => {
     let deliverCalled = false;
     const dispatcher = createReplyDispatcher({
+      ...dispatcherTestOptions,
       deliver: async () => {
         deliverCalled = true;
       },

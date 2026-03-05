@@ -1,5 +1,6 @@
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
 import { getChildLogger } from "../logging/logger.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
@@ -117,7 +118,17 @@ export async function sendReactionWhatsApp(
   },
 ): Promise<void> {
   const correlationId = generateSecureUuid();
-  const { listener: active } = requireActiveWebListener(options.accountId);
+  const cfg = loadConfig();
+  const { listener: active, accountId } = requireActiveWebListener(options.accountId);
+  if (
+    !guardWrite(
+      "ack-reaction",
+      { channel: "whatsapp", to: chatJid, accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return;
+  }
   const redactedChatJid = redactIdentifier(chatJid);
   const logger = getChildLogger({
     module: "web-outbound",

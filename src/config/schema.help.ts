@@ -1046,6 +1046,34 @@ export const FIELD_HELP: Record<string, string> = {
     "Matches a normalized session-key prefix after internal key normalization steps in policy consumers. Use this for general prefix controls, and prefer rawKeyPrefix when exact full-key matching is required.",
   "session.sendPolicy.rules[].match.rawKeyPrefix":
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
+  "session.relayRouting":
+    "Defines outbound relay routing policy for read-only channel protections. Configure targets once, then reference them from ordered rules so protected destinations are redirected consistently without changing runtime delivery code paths.",
+  "session.relayRouting.defaultMode":
+    'Fallback relay mode when no rule match applies: "read-write" allows normal writes, and "read-only" requires relay routing for protected destinations. Keep "read-write" unless you intentionally want deny-by-default write protections.',
+  "session.relayRouting.targets":
+    "Named relay destinations referenced by rules through relayTo keys. Keep target keys stable and descriptive so policy errors are easy to debug when adding or rotating protected destinations.",
+  "session.relayRouting.targets.*.channel":
+    "Channel/provider id for the relay destination (for example discord, telegram, slack). Use a valid configured channel id and keep naming consistent with other routing and binding rules.",
+  "session.relayRouting.targets.*.to":
+    "Destination identifier on the relay channel (channel ID, user ID, room ID, or provider-specific chat target). Use concrete routable IDs and avoid ambiguous aliases when fail-closed behavior matters.",
+  "session.relayRouting.targets.*.accountId":
+    "Optional account override for multi-account channel setups when the relay destination must pin to a specific account. Omit this to use the channel default account resolution behavior.",
+  "session.relayRouting.rules":
+    'Ordered relay-routing rules evaluated before defaultMode, for example `{ mode: "read-only", relayTo: "ops", match: { channel: "discord" } }`. Put specific rules first so broad fallbacks do not hide narrow protections.',
+  "session.relayRouting.rules[].mode":
+    'Rule behavior mode: "read-write" allows outbound writes, while "read-only" enforces relay behavior and requires relayTo. Use explicit read-only rules only where outbound writes must be intercepted.',
+  "session.relayRouting.rules[].relayTo":
+    "Target key reference into session.relayRouting.targets used when mode is read-only. Keep relayTo values aligned with existing target keys so validation can prevent silent policy gaps.",
+  "session.relayRouting.rules[].match":
+    "Optional inbound match constraints for scoping when a relay rule applies, including channel, account, sender, and chat selectors. Use narrow match filters to avoid accidental over-application across unrelated chats.",
+  "session.relayRouting.rules[].match.channel":
+    "Restricts relay rule matching to a specific inbound channel/provider id. Use this when the same relay target key exists but policy intent differs across channels.",
+  "session.relayRouting.rules[].match.accountId":
+    "Optional account selector for multi-account channel setups when relay protection should only apply to a specific account. Omit this to match the channel default account behavior.",
+  "session.relayRouting.rules[].match.chatId":
+    "Inbound chat identifier match used to scope relay behavior within a channel (for example room/thread IDs). Use stable provider ids for precise targeting and easier policy debugging.",
+  "session.relayRouting.rules[].match.sender":
+    "Inbound sender identifier match used for sender-scoped relay protections. Keep sender ids explicit and verified so policy does not over-match unrelated users.",
   "session.agentToAgent":
     "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
   "session.agentToAgent.maxPingPongTurns":

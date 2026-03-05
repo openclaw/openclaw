@@ -1,6 +1,8 @@
 import type { RequestClient } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { createFinalizableDraftLifecycle } from "../channels/draft-stream-controls.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 
 /** Discord messages cap at 2000 characters. */
 const DISCORD_STREAM_MAX_CHARS = 2000;
@@ -19,6 +21,8 @@ export type DiscordDraftStream = {
 export function createDiscordDraftStream(params: {
   rest: RequestClient;
   channelId: string;
+  cfg?: OpenClawConfig;
+  accountId?: string;
   maxChars?: number;
   replyToMessageId?: string | (() => string | undefined);
   throttleMs?: number;
@@ -27,6 +31,7 @@ export function createDiscordDraftStream(params: {
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): DiscordDraftStream {
+  const cfg = params.cfg ?? loadConfig();
   const maxChars = Math.min(params.maxChars ?? DISCORD_STREAM_MAX_CHARS, DISCORD_STREAM_MAX_CHARS);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
@@ -59,6 +64,15 @@ export function createDiscordDraftStream(params: {
     }
     if (trimmed === lastSentText) {
       return true;
+    }
+    if (
+      !guardWrite(
+        "draft-preview",
+        { channel: "discord", to: channelId, accountId: params.accountId },
+        getProtectedDestinationMap(cfg),
+      )
+    ) {
+      return false;
     }
 
     // Debounce first preview send for better push notification quality.
@@ -111,6 +125,15 @@ export function createDiscordDraftStream(params: {
   };
   const isValidStreamMessageId = (value: unknown): value is string => typeof value === "string";
   const deleteStreamMessage = async (messageId: string) => {
+    if (
+      !guardWrite(
+        "draft-preview",
+        { channel: "discord", to: channelId, accountId: params.accountId },
+        getProtectedDestinationMap(cfg),
+      )
+    ) {
+      return;
+    }
     await rest.delete(Routes.channelMessage(channelId, messageId));
   };
 

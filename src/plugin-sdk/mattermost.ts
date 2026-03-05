@@ -83,3 +83,5 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
+// Write-policy enforcement exports for extensions using guardWrite.
+export { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";

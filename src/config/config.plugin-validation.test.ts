@@ -255,6 +255,95 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("rejects relay targets that resolve to another protected source", async () => {
+    const res = validateInSuite({
+      session: {
+        relayRouting: {
+          targets: {
+            ops: { channel: "discord", to: "C-ops" },
+            source: { channel: "discord", to: "C-source" },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "ops",
+              match: { channel: "discord", chatId: "C-source" },
+            },
+            {
+              mode: "read-only",
+              relayTo: "source",
+              match: { channel: "discord", chatId: "C-ops" },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path === "session.relayRouting.rules.0.relayTo" &&
+            issue.message.includes("redirect loop"),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects unknown relay target channels after plugin bootstrap", async () => {
+    const res = validateInSuite({
+      session: {
+        relayRouting: {
+          targets: {
+            ops: { channel: "not-a-channel", to: "x" },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues).toContainEqual({
+        path: "session.relayRouting.targets.ops.channel",
+        message: "unknown relay target channel: not-a-channel",
+      });
+    }
+  });
+
+  it("accepts relay target channels provided by loaded plugins", async () => {
+    const res = validateInSuite({
+      plugins: { enabled: false, load: { paths: [bluebubblesPluginDir] } },
+      session: {
+        relayRouting: {
+          targets: {
+            mobile: { channel: "bluebubbles", to: "chat-guid" },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid relay destination syntax when channel format is known", async () => {
+    const res = validateInSuite({
+      session: {
+        relayRouting: {
+          targets: {
+            ops: { channel: "signal", to: "not-a-phone" },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues).toContainEqual({
+        path: "session.relayRouting.targets.ops.to",
+        message:
+          'relay target destination "not-a-phone" must be E.164 (for example +15551234567) for signal',
+      });
+    }
+  });
+
   it("rejects unknown heartbeat targets", async () => {
     const res = validateInSuite({
       agents: {

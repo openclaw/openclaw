@@ -1,4 +1,5 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
+import { getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention.js";
@@ -279,6 +280,11 @@ export async function sendMessageFeishu(
   params: SendFeishuMessageParams,
 ): Promise<FeishuSendResult> {
   const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
+  if (
+    !guardWrite("pairing", { channel: "feishu", to, accountId }, getProtectedDestinationMap(cfg))
+  ) {
+    return { messageId: "suppressed", chatId: to };
+  }
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
     cfg,

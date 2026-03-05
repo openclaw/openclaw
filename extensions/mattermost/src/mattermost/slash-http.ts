@@ -10,6 +10,8 @@ import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "openclaw/plugin-s
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
+  getProtectedDestinationMap,
+  guardWrite,
   isDangerousNameMatchingEnabled,
   logTypingFailure,
   resolveControlCommandGate,
@@ -72,7 +74,22 @@ function sendJsonResponse(
   res: ServerResponse,
   status: number,
   body: MattermostSlashCommandResponse,
+  guard?: { cfg: OpenClawConfig; channelId: string; accountId: string },
 ) {
+  if (
+    guard &&
+    !guardWrite(
+      "ephemeral-response",
+      {
+        channel: "mattermost",
+        to: guard.channelId,
+        accountId: guard.accountId,
+      },
+      getProtectedDestinationMap(guard.cfg),
+    )
+  ) {
+    return;
+  }
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
@@ -398,10 +415,15 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     // Validate token — fail closed: reject when no tokens are registered
     // (e.g. registration failed or startup was partial)
     if (commandTokens.size === 0 || !commandTokens.has(payload.token)) {
-      sendJsonResponse(res, 401, {
-        response_type: "ephemeral",
-        text: "Unauthorized: invalid command token.",
-      });
+      sendJsonResponse(
+        res,
+        401,
+        {
+          response_type: "ephemeral",
+          text: "Unauthorized: invalid command token.",
+        },
+        { cfg, channelId: payload.channel_id, accountId: account.accountId },
+      );
       return;
     }
 
@@ -433,6 +455,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         res,
         200,
         auth.denyResponse ?? { response_type: "ephemeral", text: "Unauthorized." },
+        { cfg, channelId, accountId: account.accountId },
       );
       return;
     }
@@ -440,10 +463,15 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     log?.(`mattermost: slash command /${trigger} from ${senderName} in ${channelId}`);
 
     // Acknowledge immediately — we'll send the actual reply asynchronously
-    sendJsonResponse(res, 200, {
-      response_type: "ephemeral",
-      text: "Processing...",
-    });
+    sendJsonResponse(
+      res,
+      200,
+      {
+        response_type: "ephemeral",
+        text: "Processing...",
+      },
+      { cfg, channelId, accountId: account.accountId },
+    );
 
     // Now handle the command asynchronously (post reply as a message)
     try {

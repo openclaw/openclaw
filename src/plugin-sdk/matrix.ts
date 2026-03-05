@@ -94,3 +94,5 @@ export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { runPluginCommandWithTimeout } from "./run-command.js";
 export { createLoggerBackedRuntime } from "./runtime.js";
 export { buildProbeChannelStatusSummary } from "./status-helpers.js";
+// Write-policy enforcement exports for extensions using guardWrite.
+export { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";

@@ -2,8 +2,10 @@ import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/bailey
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
 import { createInboundDebouncer } from "../../auto-reply/inbound-debounce.js";
 import { formatLocationText } from "../../channels/location.js";
+import { loadConfig } from "../../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
+import { getProtectedDestinationMap, guardWrite } from "../../infra/outbound/write-policy.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -237,8 +239,17 @@ export async function monitorWebInbox(options: {
   };
 
   const maybeMarkInboundAsRead = async (inbound: NormalizedInboundMessage) => {
-    const { id, remoteJid, participantJid, access } = inbound;
+    const { id, remoteJid, participantJid, access, from } = inbound;
     if (id && !access.isSelfChat && options.sendReadReceipts !== false) {
+      if (
+        !guardWrite(
+          "read-receipt",
+          { channel: "whatsapp", to: from, accountId: options.accountId },
+          getProtectedDestinationMap(loadConfig()),
+        )
+      ) {
+        return;
+      }
       try {
         await sock.readMessages([{ remoteJid, id, participant: participantJid, fromMe: false }]);
         if (shouldLogVerbose()) {
@@ -321,6 +332,15 @@ export async function monitorWebInbox(options: {
   ) => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
+      if (
+        !guardWrite(
+          "typing",
+          { channel: "whatsapp", to: inbound.from, accountId: inbound.access.resolvedAccountId },
+          getProtectedDestinationMap(loadConfig()),
+        )
+      ) {
+        return;
+      }
       try {
         await sock.sendPresenceUpdate("composing", chatJid);
       } catch (err) {
@@ -328,9 +348,27 @@ export async function monitorWebInbox(options: {
       }
     };
     const reply = async (text: string) => {
+      if (
+        !guardWrite(
+          "access-control",
+          { channel: "whatsapp", to: inbound.from, accountId: inbound.access.resolvedAccountId },
+          getProtectedDestinationMap(loadConfig()),
+        )
+      ) {
+        return;
+      }
       await sock.sendMessage(chatJid, { text });
     };
     const sendMedia = async (payload: AnyMessageContent) => {
+      if (
+        !guardWrite(
+          "access-control",
+          { channel: "whatsapp", to: inbound.from, accountId: inbound.access.resolvedAccountId },
+          getProtectedDestinationMap(loadConfig()),
+        )
+      ) {
+        return;
+      }
       await sock.sendMessage(chatJid, payload);
     };
     const timestamp = inbound.messageTimestampMs;

@@ -33,7 +33,7 @@ export type MessageCliJsonEnvelope = {
   action: ChannelMessageActionName;
   channel: ChannelId;
   dryRun: boolean;
-  handledBy: "plugin" | "core" | "dry-run";
+  handledBy: "plugin" | "core" | "dry-run" | "policy";
   payload: unknown;
 };
 
@@ -262,6 +262,14 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
 
   if (result.handledBy === "dry-run") {
     return [muted(`[dry-run] would run ${result.action} via ${result.channel}`)];
+  }
+
+  if (result.kind === "policy") {
+    const target = typeof result.payload.to === "string" ? ` to ${result.payload.to}` : "";
+    if (result.payload.status === "suppressed") {
+      return [muted(`Suppressed ${result.action}${target} by outbound policy.`)];
+    }
+    return [`Denied ${result.action}${target}: ${result.payload.reason ?? "outbound policy"}`];
   }
 
   if (result.kind === "broadcast") {

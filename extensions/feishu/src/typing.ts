@@ -1,4 +1,9 @@
-import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
+import {
+  getProtectedDestinationMap,
+  guardWrite,
+  type ClawdbotConfig,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -102,11 +107,21 @@ export function getBackoffCodeFromResponse(response: unknown): number | undefine
  */
 export async function addTypingIndicator(params: {
   cfg: ClawdbotConfig;
+  chatId: string;
   messageId: string;
   accountId?: string;
   runtime?: RuntimeEnv;
 }): Promise<TypingIndicatorState> {
-  const { cfg, messageId, accountId, runtime } = params;
+  const { cfg, chatId, messageId, accountId, runtime } = params;
+  if (
+    !guardWrite(
+      "typing",
+      { channel: "feishu", to: chatId, accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return { messageId, reactionId: null };
+  }
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     return { messageId, reactionId: null };

@@ -344,6 +344,19 @@ export {
 } from "../infra/device-pairing.js";
 export { createDedupeCache } from "../infra/dedupe.js";
 export type { DedupeCache } from "../infra/dedupe.js";
+export {
+  buildProtectedDestinationMap,
+  decideWrite,
+  getProtectedDestinationMap,
+  guardWrite,
+  resetProtectedDestinationMapCacheForTests,
+  SUPPRESSED_ACTIONS,
+} from "../infra/outbound/write-policy.js";
+export type {
+  ProtectedDestinationMap,
+  RelayTarget,
+  WriteDecision,
+} from "../infra/outbound/write-policy.js";
 export { createPersistentDedupe } from "./persistent-dedupe.js";
 export type {
   PersistentDedupe,

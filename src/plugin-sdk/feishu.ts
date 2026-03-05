@@ -69,3 +69,5 @@ export {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "./webhook-memory-guards.js";
 export { applyBasicWebhookRequestGuards } from "./webhook-request-guards.js";
+// Write-policy enforcement exports for extensions using guardWrite.
+export { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";

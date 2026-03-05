@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { getProtectedDestinationMap, guardWrite } from "../../infra/outbound/write-policy.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   type ChannelId,
@@ -56,6 +57,15 @@ export async function notifyPairingApproved(params: {
   /** Extension channels can pass their adapter directly to bypass registry lookup. */
   pairingAdapter?: ChannelPairingAdapter;
 }): Promise<void> {
+  if (
+    !guardWrite(
+      "pairing",
+      { channel: params.channelId, to: params.id },
+      getProtectedDestinationMap(params.cfg),
+    )
+  ) {
+    return;
+  }
   // Extensions may provide adapter directly to bypass ESM module isolation
   const adapter = params.pairingAdapter ?? requirePairingAdapter(params.channelId);
   if (!adapter.notifyApproval) {

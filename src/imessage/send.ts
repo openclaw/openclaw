@@ -1,5 +1,6 @@
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { kindFromMime } from "../media/mime.js";
 import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
@@ -105,6 +106,15 @@ export async function sendMessageIMessage(
       cfg,
       accountId: opts.accountId,
     });
+  if (
+    !guardWrite(
+      "pairing",
+      { channel: "imessage", to, accountId: account.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return { messageId: "suppressed" };
+  }
   const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
   const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);

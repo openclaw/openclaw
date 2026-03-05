@@ -48,6 +48,7 @@ import { executePollAction, executeSendAction } from "./outbound-send-service.js
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
+import { decideWrite, getProtectedDestinationMap, SUPPRESSED_ACTIONS } from "./write-policy.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -148,12 +149,46 @@ export type MessageActionRunResult =
       payload: unknown;
       toolResult?: AgentToolResult<unknown>;
       dryRun: boolean;
+    }
+  | {
+      kind: "policy";
+      channel: ChannelId;
+      action: ChannelMessageActionName;
+      handledBy: "policy";
+      payload: {
+        status: "suppressed" | "denied";
+        reason?: string;
+        to?: string;
+      };
+      dryRun: boolean;
     };
 
 export function getToolResult(
   result: MessageActionRunResult,
 ): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
+}
+
+function buildPolicyResult(params: {
+  status: "suppressed" | "denied";
+  action: ChannelMessageActionName;
+  channel: ChannelId;
+  to?: string;
+  reason?: string;
+  dryRun: boolean;
+}): MessageActionRunResult {
+  return {
+    kind: "policy",
+    action: params.action,
+    channel: params.channel,
+    handledBy: "policy",
+    payload: {
+      status: params.status,
+      ...(params.reason ? { reason: params.reason } : {}),
+      ...(params.to ? { to: params.to } : {}),
+    },
+    dryRun: params.dryRun,
+  };
 }
 
 function applyCrossContextMessageDecoration({
@@ -350,6 +385,15 @@ async function handleBroadcastAction(
             target: resolved.target.to,
           },
         });
+        if (sendResult.kind === "policy" && sendResult.payload.status === "denied") {
+          results.push({
+            channel: targetChannel,
+            to: resolved.target.to,
+            ok: false,
+            error: sendResult.payload.reason ?? "denied by outbound policy",
+          });
+          continue;
+        }
         results.push({
           channel: targetChannel,
           to: resolved.target.to,
@@ -716,7 +760,7 @@ export async function runMessageAction(
     toolContext: input.toolContext,
   });
 
-  const channel = await resolveChannel(cfg, params, input.toolContext);
+  let channel = await resolveChannel(cfg, params, input.toolContext);
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
     const byAgent = buildChannelAccountBindings(cfg).get(channel);
@@ -750,13 +794,70 @@ export async function runMessageAction(
     mediaPolicy,
   });
 
-  const resolvedTarget = await resolveActionTarget({
+  let resolvedTarget = await resolveActionTarget({
     cfg,
     channel,
     action,
     args: params,
     accountId,
   });
+
+  const policyToCandidates = [
+    typeof params.to === "string" ? params.to.trim() : "",
+    typeof params.channelId === "string" ? params.channelId.trim() : "",
+    typeof input.toolContext?.currentChannelId === "string"
+      ? input.toolContext.currentChannelId.trim()
+      : "",
+  ];
+  const policyTo = policyToCandidates.find((candidate) => candidate.length > 0) ?? "";
+  if (policyTo) {
+    const writeDecision = decideWrite(
+      action,
+      {
+        channel,
+        to: policyTo,
+        accountId: accountId ?? undefined,
+      },
+      getProtectedDestinationMap(cfg),
+    );
+    if (writeDecision.kind === "redirect") {
+      channel = writeDecision.target.channel as ChannelId;
+      params.channel = channel;
+      params.to = writeDecision.target.to;
+      accountId = writeDecision.target.accountId;
+      if (accountId) {
+        params.accountId = accountId;
+      } else {
+        delete params.accountId;
+      }
+      resolvedTarget = undefined;
+    } else if (writeDecision.kind === "suppress") {
+      return buildPolicyResult({
+        status: "suppressed",
+        action,
+        channel,
+        to: policyTo,
+        dryRun,
+      });
+    } else if (writeDecision.kind === "deny") {
+      return buildPolicyResult({
+        status: "denied",
+        action,
+        channel,
+        to: policyTo,
+        reason: writeDecision.reason,
+        dryRun,
+      });
+    }
+  } else if (SUPPRESSED_ACTIONS.has(action.trim().toLowerCase())) {
+    return buildPolicyResult({
+      status: "denied",
+      action,
+      channel,
+      reason: "Denied write with unresolved destination for mutating action.",
+      dryRun,
+    });
+  }
 
   enforceCrossContextPolicy({
     channel,

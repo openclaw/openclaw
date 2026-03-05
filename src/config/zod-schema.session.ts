@@ -23,6 +23,121 @@ const SessionResetConfigSchema = z
 
 export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 
+const SessionRelayRoutingModeSchema = z.enum(["read-write", "read-only"]);
+
+const SessionRelayRoutingTargetSchema = z
+  .object({
+    channel: z.string().min(1),
+    to: z.string().min(1),
+    accountId: z.string().optional(),
+  })
+  .strict();
+
+export const SessionRelayRoutingMatchSchema = z
+  .object({
+    channel: z.string().min(1).optional(),
+    accountId: z.string().optional(),
+    chatId: z.string().min(1).optional(),
+    sender: z.string().min(1).optional(),
+  })
+  .strict();
+
+const SessionRelayRoutingRuleSchema = z
+  .object({
+    mode: SessionRelayRoutingModeSchema,
+    relayTo: z.string().min(1).optional(),
+    match: SessionRelayRoutingMatchSchema.optional(),
+  })
+  .strict();
+
+export const SessionRelayRoutingSchema = z
+  .object({
+    defaultMode: SessionRelayRoutingModeSchema.optional(),
+    targets: z.record(z.string(), SessionRelayRoutingTargetSchema).optional(),
+    rules: z.array(SessionRelayRoutingRuleSchema).optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    const targets = val.targets ?? {};
+
+    const normalizeChannel = (value: string | undefined): string =>
+      value?.trim().toLowerCase() ?? "";
+    const normalizeAccountId = (value: string | undefined): string =>
+      value?.trim().toLowerCase() || "default";
+
+    for (const [targetKey, target] of Object.entries(targets)) {
+      if (!target.channel.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["targets", targetKey, "channel"],
+          message: "relay target channel must not be empty",
+        });
+      }
+      if (!target.to.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["targets", targetKey, "to"],
+          message: "relay target destination must not be empty",
+        });
+      }
+    }
+
+    for (const [index, rule] of (val.rules ?? []).entries()) {
+      if (rule.mode !== "read-only") {
+        continue;
+      }
+      const relayTo = rule.relayTo?.trim();
+      if (!relayTo) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rules", index, "relayTo"],
+          message: 'relayTo is required when mode is "read-only"',
+        });
+        continue;
+      }
+      if (!Object.hasOwn(targets, relayTo)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rules", index, "relayTo"],
+          message: `relayTo "${relayTo}" must reference an existing targets key`,
+        });
+        continue;
+      }
+
+      const target = targets[relayTo];
+      const sourceChannel = normalizeChannel(rule.match?.channel);
+      const sourceChatId = rule.match?.chatId?.trim() ?? "";
+      if (!sourceChannel || !sourceChatId) {
+        continue;
+      }
+      const targetChannel = normalizeChannel(target.channel);
+      const targetTo = target.to.trim();
+      if (!targetChannel || !targetTo) {
+        continue;
+      }
+      const sourceAccountId = normalizeAccountId(rule.match?.accountId);
+      const targetAccountId = normalizeAccountId(target.accountId);
+      // NOTE: This comparison uses raw strings — if one side is a configured
+      // alias and the other is the canonical ID for the same destination, the
+      // self-reference is not detected at validation time. The runtime policy
+      // engine resolves both sides canonically so this is not a security gap,
+      // but operators using aliases should expand them manually in config.
+      if (
+        sourceChannel === targetChannel &&
+        sourceChatId === targetTo &&
+        sourceAccountId === targetAccountId
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rules", index, "relayTo"],
+          message:
+            `relay target "${relayTo}" cannot be the same as protected source ` +
+            `${sourceChannel}:${sourceChatId} (account: ${sourceAccountId})`,
+        });
+      }
+    }
+  });
+
 export const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
@@ -55,6 +170,7 @@ export const SessionSchema = z
     parentForkMaxTokens: z.number().int().nonnegative().optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
+    relayRouting: SessionRelayRoutingSchema.optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),

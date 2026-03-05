@@ -18,6 +18,7 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -196,6 +197,8 @@ export const dispatchTelegramMessage = async ({
       ? createTelegramDraftStream({
           api: bot.api,
           chatId,
+          cfg,
+          accountId: route.accountId,
           maxChars: draftMaxChars,
           thread: threadSpec,
           previewTransport: useMessagePreviewTransportForDmReasoning ? "message" : "auto",
@@ -468,6 +471,15 @@ export const dispatchTelegramMessage = async ({
       await lane.stream?.stop();
     },
     editPreview: async ({ messageId, text, previewButtons }) => {
+      if (
+        !guardWrite(
+          "draft-preview",
+          { channel: "telegram", to: String(chatId), accountId: route.accountId },
+          getProtectedDestinationMap(cfg),
+        )
+      ) {
+        return;
+      }
       await editMessageTelegram(chatId, messageId, text, {
         api: bot.api,
         cfg,
@@ -477,6 +489,15 @@ export const dispatchTelegramMessage = async ({
       });
     },
     deletePreviewMessage: async (messageId) => {
+      if (
+        !guardWrite(
+          "draft-preview",
+          { channel: "telegram", to: String(chatId), accountId: route.accountId },
+          getProtectedDestinationMap(cfg),
+        )
+      ) {
+        return;
+      }
       await bot.api.deleteMessage(chatId, messageId);
     },
     log: logVerbose,
@@ -509,6 +530,12 @@ export const dispatchTelegramMessage = async ({
       cfg,
       dispatcherOptions: {
         ...prefixOptions,
+        cfg,
+        destination: {
+          channel: "telegram",
+          to: String(chatId),
+          ...(route.accountId ? { accountId: route.accountId } : {}),
+        },
         typingCallbacks,
         deliver: async (payload, info) => {
           if (info.kind === "final") {
@@ -722,6 +749,15 @@ export const dispatchTelegramMessage = async ({
       if (archivedPreview.deleteIfUnused === false) {
         continue;
       }
+      if (
+        !guardWrite(
+          "draft-preview",
+          { channel: "telegram", to: String(chatId), accountId: route.accountId },
+          getProtectedDestinationMap(cfg),
+        )
+      ) {
+        continue;
+      }
       try {
         await bot.api.deleteMessage(chatId, archivedPreview.messageId);
       } catch (err) {
@@ -731,6 +767,15 @@ export const dispatchTelegramMessage = async ({
       }
     }
     for (const messageId of archivedReasoningPreviewIds) {
+      if (
+        !guardWrite(
+          "draft-preview",
+          { channel: "telegram", to: String(chatId), accountId: route.accountId },
+          getProtectedDestinationMap(cfg),
+        )
+      ) {
+        continue;
+      }
       try {
         await bot.api.deleteMessage(chatId, messageId);
       } catch (err) {

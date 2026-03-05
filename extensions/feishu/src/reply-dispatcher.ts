@@ -102,6 +102,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       typingState = await addTypingIndicator({
         cfg,
+        chatId,
         messageId: replyToMessageId,
         accountId,
         runtime: params.runtime,

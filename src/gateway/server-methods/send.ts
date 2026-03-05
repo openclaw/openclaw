@@ -12,6 +12,7 @@ import {
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
+import { decideWrite, getProtectedDestinationMap } from "../../infra/outbound/write-policy.js";
 import { normalizePollInput } from "../../polls.js";
 import {
   ErrorCodes,
@@ -243,11 +244,32 @@ export const sendHandlers: GatewayRequestHandlers = {
           agentId: effectiveAgentId,
           sessionKey: providedSessionKey ?? derivedRoute?.sessionKey,
         });
+        // Check write policy before delivery — suppress/deny should return a
+        // clean noOp response, not fall through to deliverOutboundPayloads which
+        // would return [] and trigger a misleading UNAVAILABLE error.
+        let deliveryChannel = outboundChannel;
+        let deliveryTo = resolved.to;
+        let deliveryAccountId = accountId;
+        const writeDecision = decideWrite(
+          "deliver",
+          { channel: deliveryChannel, to: deliveryTo, accountId: deliveryAccountId },
+          getProtectedDestinationMap(cfg),
+        );
+        if (writeDecision.kind === "redirect") {
+          deliveryChannel = writeDecision.target.channel;
+          deliveryTo = writeDecision.target.to;
+          deliveryAccountId = writeDecision.target.accountId;
+        } else if (writeDecision.kind === "suppress" || writeDecision.kind === "deny") {
+          const payload: Record<string, unknown> = { runId: idem, channel, noOp: true };
+          context.dedupe.set(dedupeKey, { ts: Date.now(), ok: true, payload });
+          return { ok: true, payload, meta: { channel } };
+        }
+
         const results = await deliverOutboundPayloads({
           cfg,
-          channel: outboundChannel,
-          to: resolved.to,
-          accountId,
+          channel: deliveryChannel,
+          to: deliveryTo,
+          accountId: deliveryAccountId,
           payloads: [{ text: message, mediaUrl, mediaUrls }],
           session: outboundSession,
           gifPlayback: request.gifPlayback,
@@ -400,16 +422,6 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
     try {
-      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-      const outbound = plugin?.outbound;
-      if (!outbound?.sendPoll) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`),
-        );
-        return;
-      }
       const resolved = resolveOutboundTarget({
         channel: channel,
         to,
@@ -421,14 +433,54 @@ export const sendHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)));
         return;
       }
+      let deliveryChannel = channel;
+      let deliveryTo = resolved.to;
+      let deliveryAccountId = accountId;
+      const writeDecision = decideWrite(
+        "poll",
+        {
+          channel: deliveryChannel,
+          to: deliveryTo,
+          accountId: deliveryAccountId,
+        },
+        getProtectedDestinationMap(cfg),
+      );
+      if (writeDecision.kind === "redirect") {
+        deliveryChannel = writeDecision.target.channel;
+        deliveryTo = writeDecision.target.to;
+        deliveryAccountId = writeDecision.target.accountId;
+      } else if (writeDecision.kind === "suppress" || writeDecision.kind === "deny") {
+        const payload: Record<string, unknown> = {
+          runId: idem,
+          channel,
+          noOp: true,
+        };
+        context.dedupe.set(`poll:${idem}`, {
+          ts: Date.now(),
+          ok: true,
+          payload,
+        });
+        respond(true, payload, undefined, { channel });
+        return;
+      }
+      const plugin = resolveOutboundChannelPlugin({ channel: deliveryChannel, cfg });
+      const outbound = plugin?.outbound;
+      if (!outbound?.sendPoll) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${deliveryChannel}`),
+        );
+        return;
+      }
       const normalized = outbound.pollMaxOptions
         ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
         : normalizePollInput(poll);
       const result = await outbound.sendPoll({
         cfg,
-        to: resolved.to,
+        to: deliveryTo,
         poll: normalized,
-        accountId,
+        accountId: deliveryAccountId,
         threadId,
         silent: request.silent,
         isAnonymous: request.isAnonymous,
@@ -436,7 +488,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       const payload: Record<string, unknown> = {
         runId: idem,
         messageId: result.messageId,
-        channel,
+        channel: deliveryChannel,
       };
       if (result.toJid) {
         payload.toJid = result.toJid;
@@ -455,7 +507,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         ok: true,
         payload,
       });
-      respond(true, payload, undefined, { channel });
+      respond(true, payload, undefined, { channel: deliveryChannel });
     } catch (err) {
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       context.dedupe.set(`poll:${idem}`, {

@@ -149,6 +149,20 @@ const TARGET_KEYS = [
   "session.sendPolicy.rules[].match.chatType",
   "session.sendPolicy.rules[].match.keyPrefix",
   "session.sendPolicy.rules[].match.rawKeyPrefix",
+  "session.relayRouting",
+  "session.relayRouting.defaultMode",
+  "session.relayRouting.targets",
+  "session.relayRouting.targets.*.channel",
+  "session.relayRouting.targets.*.to",
+  "session.relayRouting.targets.*.accountId",
+  "session.relayRouting.rules",
+  "session.relayRouting.rules[].mode",
+  "session.relayRouting.rules[].relayTo",
+  "session.relayRouting.rules[].match",
+  "session.relayRouting.rules[].match.channel",
+  "session.relayRouting.rules[].match.accountId",
+  "session.relayRouting.rules[].match.chatId",
+  "session.relayRouting.rules[].match.sender",
   "session.agentToAgent",
   "session.agentToAgent.maxPingPongTurns",
   "session.threadBindings",
@@ -661,6 +675,21 @@ describe("config help copy quality", () => {
 
     const rawKeyPrefix = FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"];
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
+  });
+
+  it("documents relay-routing mode and target-key semantics", () => {
+    const defaultMode = FIELD_HELP["session.relayRouting.defaultMode"];
+    expect(defaultMode.includes('"read-write"')).toBe(true);
+    expect(defaultMode.includes('"read-only"')).toBe(true);
+
+    const relayTo = FIELD_HELP["session.relayRouting.rules[].relayTo"];
+    expect(/targets/i.test(relayTo)).toBe(true);
+
+    const chatId = FIELD_HELP["session.relayRouting.rules[].match.chatId"];
+    expect(/chat|id/i.test(chatId)).toBe(true);
+
+    const accountId = FIELD_HELP["session.relayRouting.rules[].match.accountId"];
+    expect(/account/i.test(accountId)).toBe(true);
   });
 
   it("documents session maintenance duration/size examples and deprecations", () => {
