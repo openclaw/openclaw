@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { renderSelect } from "../components/select.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "../usage-helpers.ts";
 import {
   buildAggregatesFromSessions,
@@ -591,15 +592,15 @@ export function renderUsage(props: UsageProps) {
             title="End Date"
             @change=${(e: Event) => props.onEndDateChange((e.target as HTMLInputElement).value)}
           />
-          <select
-            title="Time zone"
-            .value=${props.timeZone}
-            @change=${(e: Event) =>
-              props.onTimeZoneChange((e.target as HTMLSelectElement).value as "local" | "utc")}
-          >
-            <option value="local">Local</option>
-            <option value="utc">UTC</option>
-          </select>
+          ${renderSelect({
+            value: props.timeZone,
+            options: [
+              { value: "local", label: "Local" },
+              { value: "utc", label: "UTC" },
+            ],
+            onChange: (value) => props.onTimeZoneChange(value as "local" | "utc"),
+            title: "Time zone",
+          })}
           <div class="chart-toggle">
             <button
               class="toggle-btn ${isTokenMode ? "active" : ""}"

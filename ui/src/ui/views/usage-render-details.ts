@@ -1,5 +1,6 @@
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
+import { renderMultiSelect } from "../components/select.ts";
 import { parseToolSummary } from "../usage-helpers.ts";
 import { charsToTokens, formatCost, formatTokens } from "./usage-metrics.ts";
 import { renderInsightList } from "./usage-render-overview.ts";
@@ -976,36 +977,21 @@ function renderSessionLogsCompact(
         </button>
       </div>
       <div class="usage-filters-inline" style="margin: 10px 12px;">
-        <select
-          multiple
-          size="4"
-          @change=${(event: Event) =>
-            onFilterRolesChange(
-              Array.from((event.target as HTMLSelectElement).selectedOptions).map(
-                (option) => option.value as SessionLogRole,
-              ),
-            )}
-        >
-          <option value="user" ?selected=${roleSelected.has("user")}>User</option>
-          <option value="assistant" ?selected=${roleSelected.has("assistant")}>Assistant</option>
-          <option value="tool" ?selected=${roleSelected.has("tool")}>Tool</option>
-          <option value="toolResult" ?selected=${roleSelected.has("toolResult")}>Tool result</option>
-        </select>
-        <select
-          multiple
-          size="4"
-          @change=${(event: Event) =>
-            onFilterToolsChange(
-              Array.from((event.target as HTMLSelectElement).selectedOptions).map(
-                (option) => option.value,
-              ),
-            )}
-        >
-          ${toolOptions.map(
-            (tool) =>
-              html`<option value=${tool} ?selected=${toolSelected.has(tool)}>${tool}</option>`,
-          )}
-        </select>
+        ${renderMultiSelect({
+          options: [
+            { value: "user", label: "User" },
+            { value: "assistant", label: "Assistant" },
+            { value: "tool", label: "Tool" },
+            { value: "toolResult", label: "Tool result" },
+          ],
+          selected: roleSelected,
+          onChange: (values) => onFilterRolesChange(values as SessionLogRole[]),
+        })}
+        ${renderMultiSelect({
+          options: toolOptions.map((tool) => ({ value: tool, label: tool })),
+          selected: toolSelected,
+          onChange: onFilterToolsChange,
+        })}
         <label class="usage-filters-inline" style="gap: 6px;">
           <input
             type="checkbox"

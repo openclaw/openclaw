@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { renderSelect } from "../components/select.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
@@ -262,54 +263,40 @@ function renderRow(
       <div>${updated}</div>
       <div>${formatSessionTokens(row)}</div>
       <div>
-        <select
-          ?disabled=${disabled}
-          @change=${(e: Event) => {
-            const value = (e.target as HTMLSelectElement).value;
+        ${renderSelect({
+          value: thinking,
+          options: thinkLevels.map((level) => ({
+            value: level,
+            label: level || "inherit",
+          })),
+          onChange: (value) =>
             onPatch(row.key, {
               thinkingLevel: resolveThinkLevelPatchValue(value, isBinaryThinking),
-            });
-          }}
-        >
-          ${thinkLevels.map(
-            (level) =>
-              html`<option value=${level} ?selected=${thinking === level}>
-                ${level || "inherit"}
-              </option>`,
-          )}
-        </select>
+            }),
+          disabled,
+        })}
       </div>
       <div>
-        <select
-          ?disabled=${disabled}
-          @change=${(e: Event) => {
-            const value = (e.target as HTMLSelectElement).value;
-            onPatch(row.key, { verboseLevel: value || null });
-          }}
-        >
-          ${verboseLevels.map(
-            (level) =>
-              html`<option value=${level.value} ?selected=${verbose === level.value}>
-                ${level.label}
-              </option>`,
-          )}
-        </select>
+        ${renderSelect({
+          value: verbose,
+          options: verboseLevels.map((level) => ({
+            value: level.value,
+            label: level.label,
+          })),
+          onChange: (value) => onPatch(row.key, { verboseLevel: value || null }),
+          disabled,
+        })}
       </div>
       <div>
-        <select
-          ?disabled=${disabled}
-          @change=${(e: Event) => {
-            const value = (e.target as HTMLSelectElement).value;
-            onPatch(row.key, { reasoningLevel: value || null });
-          }}
-        >
-          ${reasoningLevels.map(
-            (level) =>
-              html`<option value=${level} ?selected=${reasoning === level}>
-                ${level || "inherit"}
-              </option>`,
-          )}
-        </select>
+        ${renderSelect({
+          value: reasoning,
+          options: reasoningLevels.map((level) => ({
+            value: level,
+            label: level || "inherit",
+          })),
+          onChange: (value) => onPatch(row.key, { reasoningLevel: value || null }),
+          disabled,
+        })}
       </div>
       <div>
         <button class="btn danger" ?disabled=${disabled} @click=${() => onDelete(row.key)}>

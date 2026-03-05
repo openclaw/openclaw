@@ -1,4 +1,3 @@
-import { html } from "lit";
 import {
   listCoreToolSections,
   PROFILE_OPTIONS as TOOL_PROFILE_OPTIONS,
@@ -8,6 +7,7 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
+import type { SelectOption } from "../components/select.ts";
 import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
 
 export const TOOL_SECTIONS = listCoreToolSections();
@@ -400,18 +400,16 @@ function resolveConfiguredModels(
 export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
-) {
+): SelectOption[] {
   const options = resolveConfiguredModels(configForm);
   const hasCurrent = current ? options.some((option) => option.value === current) : false;
   if (current && !hasCurrent) {
     options.unshift({ value: current, label: `Current (${current})` });
   }
   if (options.length === 0) {
-    return html`
-      <option value="" disabled>No configured models</option>
-    `;
+    return [{ value: "", label: "No configured models", disabled: true }];
   }
-  return options.map((option) => html`<option value=${option.value}>${option.label}</option>`);
+  return options.map((option) => ({ value: option.value, label: option.label }));
 }
 
 type CompiledPattern =
