@@ -2,7 +2,8 @@
   "name": "Agent Memory Management (by PolarDB)",
   "id": "agent-memory-polardb",
   "version": "1.0.0",
-  "description_for_model": "Long-term memory tool. Use it to store (save_fact), retrieve (search_memories), or clear (delete_all_memories) user-specific facts and preferences across sessions.",  "icon": "易",
+  "description_for_model": "Long-term memory tool. Use it to store (save_fact), retrieve (search_memories), or clear (delete_all_memories) user-specific facts and preferences across sessions.",
+  "icon": "易",
   "description_for_human": "Manages long-term memories via PolarDB.",
   "auth": {
     "type": "token",
@@ -16,7 +17,7 @@
       {
         "name": "save_fact",
         "description": "Save a user preference or fact.",
-        "parameters": {,
+        "parameters": {
           "type": "object",
           "properties": {
             "user_id": { "type": "string", "description": "Unique user identifier" },
@@ -49,5 +50,5 @@
         }
       }
     ]
-  },
-}  
+  }
+}
