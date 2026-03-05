@@ -10,7 +10,7 @@ import { repairToolUseResultPairing, stripToolResultDetails } from "./session-tr
 
 const log = createSubsystemLogger("compaction");
 
-export const BASE_CHUNK_RATIO = 0.499; // Based on MiniMax M2.1/M2.5 token analysis (char/token ≈ 2.0)
+export const BASE_CHUNK_RATIO = 0.4;
 export const MIN_CHUNK_RATIO = 0.15;
 export const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
