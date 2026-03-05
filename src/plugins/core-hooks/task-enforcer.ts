@@ -10,15 +10,15 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { loadConfig } from "../../config/config.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../registry.js";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
 } from "../types.js";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { loadConfig } from "../../config/config.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("task-enforcer");
 
@@ -65,12 +65,25 @@ export function invalidateActiveTaskCache(agentId?: string): void {
   }
 }
 
+/**
+ * Tools that are allowed WITHOUT task_start().
+ * Everything NOT in this set requires an active task.
+ * Keep this list limited to: task management, read-only, and reporting tools.
+ */
 const EXEMPT_TOOLS = new Set([
+  // Task management tools (must be usable to create/manage tasks)
   "task_update",
   "task_list",
   "task_status",
   "task_cancel",
   "task_approve",
+  "task_block",
+  "task_resume",
+  "task_backlog_add",
+  "task_pick_backlog",
+  "task_verify",
+  "task_step_update",
+  // Read-only / research tools
   "read",
   "glob",
   "grep",
@@ -79,21 +92,24 @@ const EXEMPT_TOOLS = new Set([
   "lsp_goto_definition",
   "lsp_find_references",
   "todoread",
+  "web_search",
+  "web_fetch",
+  // Session read-only tools
   "session_read",
   "session_search",
   "session_list",
   "session_info",
-  "message",
   "sessions_list",
   "sessions_history",
-  "sessions_send",
-  "sessions_spawn",
   "session_status",
-  "web_search",
-  "web_fetch",
+  // A2A communication (tracked separately via event bus)
+  "sessions_send",
+  // Notification / messaging (non-work)
+  "message",
+  // Harness reporting (status updates, not work)
+  "harness_report_step",
+  "harness_report_check",
 ]);
-
-const ENFORCED_TOOLS = new Set(["write", "edit", "bash", "exec"]);
 
 function getSessionKey(ctx: PluginHookToolContext): string | null {
   if (!ctx.agentId) {
@@ -152,9 +168,7 @@ async function hasActiveTaskFiles(
 
         // Session-scoped check: only match files created by this session
         if (sessionKey) {
-          const sessionMatch = content.match(
-            /\*\*Created By Session:\*\*\s*(.+)/,
-          );
+          const sessionMatch = content.match(/\*\*Created By Session:\*\*\s*(.+)/);
           if (sessionMatch && sessionMatch[1].trim() === sessionKey) {
             if (cacheKey) {
               setCachedActiveTaskResult(cacheKey, true);
@@ -189,10 +203,7 @@ const STALE_TASK_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
  * Clean up stale task files that have been in_progress/pending for longer than
  * the threshold. Marks them as "abandoned" to prevent enforcement bypass.
  */
-export async function cleanupStaleTasks(
-  workspaceDir: string,
-  agentId?: string,
-): Promise<number> {
+export async function cleanupStaleTasks(workspaceDir: string, agentId?: string): Promise<number> {
   const tasksDir = path.join(workspaceDir, "tasks");
   let cleaned = 0;
   try {
@@ -274,12 +285,7 @@ export async function taskEnforcerHandler(
     return;
   }
 
-  const shouldEnforce = ENFORCED_TOOLS.has(toolName);
-
-  if (!shouldEnforce) {
-    return;
-  }
-
+  // All tools not in EXEMPT_TOOLS require an active task.
   const sessionKey = getSessionKey(ctx);
   if (!sessionKey) {
     return;
