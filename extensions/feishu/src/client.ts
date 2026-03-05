@@ -1,8 +1,9 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
+import axios from "axios";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import type { FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
-function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
+function getProxyAgent(): HttpsProxyAgent<string> | undefined {
   const proxyUrl =
     process.env.https_proxy ||
     process.env.HTTPS_PROXY ||
@@ -10,6 +11,20 @@ function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
     process.env.HTTP_PROXY;
   if (!proxyUrl) return undefined;
   return new HttpsProxyAgent(proxyUrl);
+}
+
+/**
+ * Create an axios instance with proxy support.
+ * Returns undefined when no proxy is configured, allowing Lark SDK to use its default.
+ * Respects standard proxy environment variables (HTTPS_PROXY, HTTP_PROXY, etc.).
+ */
+function createHttpInstance(): ReturnType<typeof axios.create> | undefined {
+  const agent = getProxyAgent();
+  if (!agent) return undefined; // Return undefined when no proxy is configured
+  return axios.create({
+    httpsAgent: agent,
+    httpAgent: agent,
+  });
 }
 
 // Multi-account client cache
@@ -64,12 +79,14 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     return cached.client;
   }
 
-  // Create new client
+  // Create new client with proxy support
+  const httpInstance = createHttpInstance();
   const client = new Lark.Client({
     appId,
     appSecret,
     appType: Lark.AppType.SelfBuild,
     domain: resolveDomain(domain),
+    ...(httpInstance ? { httpInstance } : {}),
   });
 
   // Cache it
@@ -92,7 +109,7 @@ export function createFeishuWSClient(account: ResolvedFeishuAccount): Lark.WSCli
     throw new Error(`Feishu credentials not configured for account "${accountId}"`);
   }
 
-  const agent = getWsProxyAgent();
+  const agent = getProxyAgent();
   return new Lark.WSClient({
     appId,
     appSecret,
