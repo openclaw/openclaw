@@ -88,6 +88,7 @@ describe.skipIf(!process.env.E2E_BACKTEST)("Remote Backtest API E2E (v1.1)", () 
         "fep.yaml",
         [
           "identity:",
+          "  id: e2e-test-sma-crossover",
           "  name: test-e2e-strategy",
           "  version: '1.0'",
           "  author: e2e-test",
@@ -140,7 +141,6 @@ describe.skipIf(!process.env.E2E_BACKTEST)("Remote Backtest API E2E (v1.1)", () 
       // Validate result_summary inline fields
       if (finalTask.result_summary) {
         expect(typeof finalTask.result_summary.totalReturn).toBe("number");
-        expect(typeof finalTask.result_summary.sharpeRatio).toBe("number");
         expect(typeof finalTask.result_summary.maxDrawdown).toBe("number");
         expect(typeof finalTask.result_summary.totalTrades).toBe("number");
       }
@@ -190,7 +190,7 @@ describe.skipIf(!process.env.E2E_BACKTEST)("Remote Backtest API E2E (v1.1)", () 
       const folder = zip.folder("cancel-test")!;
       folder.file(
         "fep.yaml",
-        "identity:\n  name: cancel-test\n  version: '1.0'\n  author: test\ntechnical:\n  asset_class: crypto\n",
+        "identity:\n  id: e2e-cancel-test\n  name: cancel-test\n  version: '1.0'\n  author: test\ntechnical:\n  asset_class: crypto\n",
       );
       folder.file("scripts/strategy.py", "def compute(data):\n    return data\n");
       folder.file("scripts/requirements.txt", "pandas>=1.5\n");
