@@ -63,6 +63,11 @@ public struct OpenClawSystemWhichParams: Codable, Sendable, Equatable {
     public init(bins: [String]) {
         self.bins = bins
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.bins = try container.decodeIfPresent([String].self, forKey: .bins) ?? []
+    }
 }
 
 public struct OpenClawSystemNotifyParams: Codable, Sendable, Equatable {

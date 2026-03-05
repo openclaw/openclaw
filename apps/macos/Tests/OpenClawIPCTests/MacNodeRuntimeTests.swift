@@ -30,6 +30,14 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test func handleInvokeRejectsMissingSystemWhichBinsWithValidationError() async {
+        let runtime = MacNodeRuntime()
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(id: "req-2c", command: OpenClawSystemCommand.which.rawValue, paramsJSON: "{}"))
+        #expect(response.ok == false)
+        #expect(response.error?.message.contains("INVALID_REQUEST: bins required") == true)
+    }
+
     @Test func handleInvokeRejectsEmptyNotification() async throws {
         let runtime = MacNodeRuntime()
         let params = OpenClawSystemNotifyParams(title: "", body: "")

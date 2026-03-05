@@ -36,6 +36,7 @@ installConnectedControlUiServerSuite((started) => {
 
 const connectNodeClient = async (params: {
   port: number;
+  caps?: string[];
   commands: string[];
   platform?: string;
   deviceFamily?: string;
@@ -60,6 +61,7 @@ const connectNodeClient = async (params: {
     mode: GATEWAY_CLIENT_MODES.NODE,
     instanceId: params.instanceId,
     scopes: [],
+    caps: params.caps,
     commands: params.commands,
     deviceIdentity: params.deviceIdentity,
     onEvent: params.onEvent,
@@ -441,6 +443,55 @@ describe("gateway node command allowlist", () => {
       } finally {
         client?.stop();
       }
+    }
+  });
+
+  test("drops screen capability when screen.record is filtered out", async () => {
+    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+    const deviceIdentityPath = path.join(
+      os.tmpdir(),
+      `openclaw-screen-cap-filter-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+    );
+    const deviceIdentity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+    const displayName = "node-screen-cap-filter";
+
+    let client: GatewayClient | undefined;
+    try {
+      client = await connectNodeClientWithPairing({
+        port,
+        caps: ["canvas", "screen"],
+        commands: ["canvas.snapshot", "screen.record", "system.run", "system.which"],
+        platform: "macOS 26.2.0",
+        deviceFamily: "Mac",
+        instanceId: displayName,
+        displayName,
+        deviceIdentity,
+      });
+
+      await expect
+        .poll(async () => {
+          const listRes = await rpcReq<{
+            nodes?: Array<{
+              displayName?: string;
+              connected?: boolean;
+              caps?: string[];
+              commands?: string[];
+            }>;
+          }>(ws, "node.list", {});
+          const node = (listRes.payload?.nodes ?? []).find(
+            (entry) => entry.connected && entry.displayName === displayName,
+          );
+          return {
+            caps: node?.caps?.toSorted() ?? [],
+            commands: node?.commands?.toSorted() ?? [],
+          };
+        }, FAST_WAIT_OPTS)
+        .toEqual({
+          caps: ["canvas"],
+          commands: ["canvas.snapshot", "system.run", "system.which"],
+        });
+    } finally {
+      client?.stop();
     }
   });
 });

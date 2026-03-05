@@ -162,6 +162,20 @@ function shouldSkipBackendSelfPairing(params: {
   );
 }
 
+function filterNodeCapsByAllowedCommands(params: {
+  caps: string[] | null | undefined;
+  allowedCommands: string[];
+}): string[] {
+  const caps = Array.isArray(params.caps)
+    ? params.caps.map((cap) => cap.trim()).filter(Boolean)
+    : [];
+  if (caps.length === 0) {
+    return [];
+  }
+  const allowed = new Set(params.allowedCommands);
+  return caps.filter((cap) => cap !== "screen" || allowed.has("screen.record"));
+}
+
 function resolveDeviceSignaturePayloadVersion(params: {
   device: {
     id: string;
@@ -971,6 +985,10 @@ export function attachGatewayWsMessageHandler(params: {
             .map((cmd) => cmd.trim())
             .filter((cmd) => cmd.length > 0 && allowlist.has(cmd));
           connectParams.commands = filtered;
+          connectParams.caps = filterNodeCapsByAllowedCommands({
+            caps: connectParams.caps,
+            allowedCommands: filtered,
+          });
         }
 
         const shouldTrackPresence = !isGatewayCliClient(connectParams.client);
