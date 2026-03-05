@@ -412,10 +412,35 @@ describe("convertMessagesToInputItems", () => {
     expect(JSON.parse(fc.arguments)).toEqual({ cmd: "ls" });
   });
 
+  it("strips pipe-delimited suffix from assistant tool call ids", () => {
+    const msg = assistantMsg([], [{ id: "call_1|fc_abc123", name: "exec", args: { cmd: "ls" } }]);
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "function_call",
+      call_id: "call_1",
+      name: "exec",
+    });
+  });
+
   it("converts a tool result message", () => {
     const items = convertMessagesToInputItems([toolResultMsg("call_1", "file.txt")] as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_1",
+      output: "file.txt",
+    });
+  });
+
+  it("strips pipe-delimited suffix from tool result ids", () => {
+    const items = convertMessagesToInputItems([
+      toolResultMsg("call_1|fc_abc123", "file.txt"),
+    ] as Parameters<typeof convertMessagesToInputItems>[0]);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       type: "function_call_output",

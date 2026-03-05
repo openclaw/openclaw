@@ -109,6 +109,23 @@ function toNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+/**
+ * OpenAI/Codex function-call pairings can be persisted as "call_*|fc_*".
+ * The API `call_id` field only accepts identifier-safe values, so always use
+ * the canonical call_* portion when replaying transcript history.
+ */
+function extractCallId(value: unknown): string | null {
+  const id = toNonEmptyString(value);
+  if (!id) {
+    return null;
+  }
+  const separator = id.indexOf("|");
+  if (separator <= 0) {
+    return id;
+  }
+  return id.slice(0, separator);
+}
+
 /** Convert pi-ai content (string | ContentPart[]) to plain text. */
 function contentToText(content: unknown): string {
   if (typeof content === "string") {
@@ -219,7 +236,7 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
               });
               textParts.length = 0;
             }
-            const callId = toNonEmptyString(block.id);
+            const callId = extractCallId(block.id);
             const toolName = toNonEmptyString(block.name);
             if (!callId || !toolName) {
               continue;
@@ -263,7 +280,7 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
         content: unknown;
         isError: boolean;
       };
-      const callId = toNonEmptyString(tr.toolCallId) ?? toNonEmptyString(tr.toolUseId);
+      const callId = extractCallId(tr.toolCallId) ?? extractCallId(tr.toolUseId);
       if (!callId) {
         continue;
       }
