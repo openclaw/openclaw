@@ -6,6 +6,7 @@ import {
   isIpInCidr,
   isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
+  normalizeIpAddress,
 } from "../shared/net/ip.js";
 
 /**
