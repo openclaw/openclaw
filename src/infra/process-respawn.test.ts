@@ -68,6 +68,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
   });
 
   it("returns supervised when launchd/systemd hints are present", () => {
+    clearSupervisorHints();
     process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
