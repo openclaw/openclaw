@@ -1,7 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId, resolveModelRefFromString } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
+import { resolveHomeDir } from "../utils.js";
 
 export type ScheduleRule = {
   /** Time range in "HH:MM-HH:MM" format (e.g. "00:00-08:00"). Supports overnight wrap (e.g. "23:00-06:00"). */
@@ -62,6 +65,51 @@ function recordDecision(groupKey: string, record: DecisionRecord) {
   history.push(record);
   if (history.length > MAX_DECISION_HISTORY) {
     history.splice(0, history.length - MAX_DECISION_HISTORY);
+  }
+  writeDecisionLog(groupKey, record);
+}
+
+// ---------------------------------------------------------------------------
+// Structured decision log — JSONL files per group under ~/.openclaw/logs/contextual-activation/
+// ---------------------------------------------------------------------------
+
+let logBaseDir: string | undefined;
+
+function resolveLogDir(groupKey: string): string | undefined {
+  if (logBaseDir === undefined) {
+    const home = resolveHomeDir();
+    logBaseDir = home ? path.join(home, "logs", "contextual-activation") : "";
+  }
+  if (!logBaseDir) {
+    return undefined;
+  }
+  // Sanitize groupKey for filesystem (replace colons, slashes)
+  const safeKey = groupKey.replace(/[:/\\]/g, "_");
+  return path.join(logBaseDir, safeKey);
+}
+
+function writeDecisionLog(groupKey: string, record: DecisionRecord) {
+  try {
+    const dir = resolveLogDir(groupKey);
+    if (!dir) {
+      return;
+    }
+    fs.mkdirSync(dir, { recursive: true });
+
+    const date = new Date(record.timestamp).toISOString().slice(0, 10);
+    const logFile = path.join(dir, `${date}.jsonl`);
+
+    const entry = {
+      t: new Date(record.timestamp).toISOString(),
+      mode: record.mode,
+      decision: record.decision,
+      reason: record.reason,
+      model: record.model,
+      ms: record.durationMs,
+    };
+    fs.appendFileSync(logFile, JSON.stringify(entry) + "\n");
+  } catch {
+    // Best-effort logging, don't break the decision flow
   }
 }
 
