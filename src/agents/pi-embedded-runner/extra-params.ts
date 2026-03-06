@@ -17,6 +17,8 @@ const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 const PARALLEL_TOOL_CALLS_APIS = new Set(["openai-completions", "openai-responses"]);
 
+// Use key presence (not nullish checks) so explicit higher-scope null values
+// still override lower defaults and flow into validation/warning logic.
 function resolveParallelToolCallsAliasRaw(params: Record<string, unknown> | undefined): {
   found: boolean;
   value: unknown;
