@@ -35,7 +35,7 @@ export type PluginConfigUiHint = {
   placeholder?: string;
 };
 
-export type PluginKind = "memory" | "context-engine";
+export type PluginKind = "memory";
 
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
@@ -285,11 +285,6 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
-  /** Register a context engine implementation (exclusive slot — only one active at a time). */
-  registerContextEngine: (
-    id: string,
-    factory: import("../context-engine/registry.js").ContextEngineFactory,
-  ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
@@ -336,56 +331,9 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
-  | "gateway_stop";
-
-export const PLUGIN_HOOK_NAMES = [
-  "before_model_resolve",
-  "before_prompt_build",
-  "before_agent_start",
-  "llm_input",
-  "llm_output",
-  "agent_end",
-  "before_compaction",
-  "after_compaction",
-  "before_reset",
-  "message_received",
-  "message_sending",
-  "message_sent",
-  "before_tool_call",
-  "after_tool_call",
-  "tool_result_persist",
-  "before_message_write",
-  "session_start",
-  "session_end",
-  "subagent_spawning",
-  "subagent_delivery_target",
-  "subagent_spawned",
-  "subagent_ended",
-  "gateway_start",
-  "gateway_stop",
-] as const satisfies readonly PluginHookName[];
-
-type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
-type AssertAllPluginHookNamesListed = MissingPluginHookNames extends never ? true : never;
-const assertAllPluginHookNamesListed: AssertAllPluginHookNamesListed = true;
-void assertAllPluginHookNamesListed;
-
-const pluginHookNameSet = new Set<PluginHookName>(PLUGIN_HOOK_NAMES);
-
-export const isPluginHookName = (hookName: unknown): hookName is PluginHookName =>
-  typeof hookName === "string" && pluginHookNameSet.has(hookName as PluginHookName);
-
-export const PROMPT_INJECTION_HOOK_NAMES = [
-  "before_prompt_build",
-  "before_agent_start",
-] as const satisfies readonly PluginHookName[];
-
-export type PromptInjectionHookName = (typeof PROMPT_INJECTION_HOOK_NAMES)[number];
-
-const promptInjectionHookNameSet = new Set<PluginHookName>(PROMPT_INJECTION_HOOK_NAMES);
-
-export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
-  promptInjectionHookNameSet.has(hookName);
+  | "gateway_stop"
+  | "before_llm_call"
+  | "before_response_emit";
 
 // Agent context shared across agent hooks
 export type PluginHookAgentContext = {
@@ -423,33 +371,7 @@ export type PluginHookBeforePromptBuildEvent = {
 export type PluginHookBeforePromptBuildResult = {
   systemPrompt?: string;
   prependContext?: string;
-  /**
-   * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).
-   * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
-   */
-  prependSystemContext?: string;
-  /**
-   * Appended to the agent system prompt so providers can cache it (e.g. prompt caching).
-   * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
-   */
-  appendSystemContext?: string;
 };
-
-export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
-  "systemPrompt",
-  "prependContext",
-  "prependSystemContext",
-  "appendSystemContext",
-] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];
-
-type MissingPluginPromptMutationResultFields = Exclude<
-  keyof PluginHookBeforePromptBuildResult,
-  (typeof PLUGIN_PROMPT_MUTATION_RESULT_FIELDS)[number]
->;
-type AssertAllPluginPromptMutationResultFieldsListed =
-  MissingPluginPromptMutationResultFields extends never ? true : never;
-const assertAllPluginPromptMutationResultFieldsListed: AssertAllPluginPromptMutationResultFieldsListed = true;
-void assertAllPluginPromptMutationResultFieldsListed;
 
 // before_agent_start hook (legacy compatibility: combines both phases)
 export type PluginHookBeforeAgentStartEvent = {
@@ -460,26 +382,6 @@ export type PluginHookBeforeAgentStartEvent = {
 
 export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
   PluginHookBeforeModelResolveResult;
-
-export type PluginHookBeforeAgentStartOverrideResult = Omit<
-  PluginHookBeforeAgentStartResult,
-  keyof PluginHookBeforePromptBuildResult
->;
-
-export const stripPromptMutationFieldsFromLegacyHookResult = (
-  result: PluginHookBeforeAgentStartResult | void,
-): PluginHookBeforeAgentStartOverrideResult | void => {
-  if (!result || typeof result !== "object") {
-    return result;
-  }
-  const remaining: Partial<PluginHookBeforeAgentStartResult> = { ...result };
-  for (const field of PLUGIN_PROMPT_MUTATION_RESULT_FIELDS) {
-    delete remaining[field];
-  }
-  return Object.keys(remaining).length > 0
-    ? (remaining as PluginHookBeforeAgentStartOverrideResult)
-    : undefined;
-};
 
 // llm_input hook
 export type PluginHookLlmInputEvent = {
@@ -777,6 +679,55 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// ============================================================================
+// LLM Call & Response Emit Hooks
+// ============================================================================
+
+// before_llm_call hook (modifying — sequential)
+export type PluginHookBeforeLlmCallEvent = {
+  messages: AgentMessage[];
+  systemPrompt: string;
+  model: string;
+  iteration: number;
+  tools: Array<{ name: string; description?: string }>;
+  tokenEstimate?: number;
+};
+
+export type PluginHookBeforeLlmCallResult = {
+  messages?: AgentMessage[];
+  systemPrompt?: string;
+  tools?: Array<{ name: string }>;
+  block?: boolean;
+  blockReason?: string;
+};
+
+// before_response_emit hook (modifying — sequential)
+export type PluginHookBeforeResponseEmitEvent = {
+  /** Text content of the last assistant message. */
+  content: string;
+  /**
+   * Text content of ALL assistant messages from the current run, in chronological
+   * order. Enables full multi-turn PII redaction across tool-loop iterations.
+   * Each entry corresponds to one assistant turn's accumulated text.
+   */
+  allContent: string[];
+  channel?: string;
+  messageCount: number;
+};
+
+export type PluginHookBeforeResponseEmitResult = {
+  /** Modified content for the last assistant message (single-message modification). */
+  content?: string;
+  /**
+   * Modified content for ALL assistant messages. When returned, replaces the
+   * entire assistantTexts array and rewrites all assistant messages in session
+   * history. Takes precedence over `content` when both are provided.
+   */
+  allContent?: string[];
+  block?: boolean;
+  blockReason?: string;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -875,6 +826,17 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  before_llm_call: (
+    event: PluginHookBeforeLlmCallEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeLlmCallResult | void> | PluginHookBeforeLlmCallResult | void;
+  before_response_emit: (
+    event: PluginHookBeforeResponseEmitEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHookBeforeResponseEmitResult | void>
+    | PluginHookBeforeResponseEmitResult
+    | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

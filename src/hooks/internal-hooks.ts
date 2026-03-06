@@ -190,7 +190,7 @@ export interface InternalHookEvent {
   action: string;
   /** The session key this event relates to */
   sessionKey: string;
-  /** Additional context specific to the event */
+  /** Additional context specific to the event. */
   context: Record<string, unknown>;
   /** Timestamp when the event occurred */
   timestamp: Date;
