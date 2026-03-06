@@ -29,6 +29,10 @@ export type SlackStreamSession = {
   threadTs: string;
   /** True once stop() has been called. */
   stopped: boolean;
+  /** Timestamp of the stream message posted by Slack (set after first append). */
+  messageTs?: string;
+  /** The WebClient used to start this stream (needed for cleanup). */
+  client: WebClient;
 };
 
 export type StartSlackStreamParams = {
@@ -95,12 +99,16 @@ export async function startSlackStream(
     channel,
     threadTs,
     stopped: false,
+    client,
   };
 
   // If initial text is provided, send it as the first append which will
   // trigger the ChatStreamer to call chat.startStream under the hood.
   if (text) {
-    await streamer.append({ markdown_text: normalizeSlackOutboundText(text) });
+    const res = await streamer.append({ markdown_text: normalizeSlackOutboundText(text) });
+    if (res && "ts" in res && typeof res.ts === "string") {
+      session.messageTs = res.ts;
+    }
     logVerbose(`slack-stream: appended initial text (${text.length} chars)`);
   }
 
@@ -148,9 +156,41 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
     }`,
   );
 
-  await session.streamer.stop(
+  const res = await session.streamer.stop(
     text ? { markdown_text: normalizeSlackOutboundText(text) } : undefined,
   );
+  if (!session.messageTs && res?.ts) {
+    session.messageTs = res.ts;
+  }
 
   logVerbose("slack-stream: stream stopped");
+}
+
+/**
+ * Abandon a Slack stream by stopping it and deleting the message it posted.
+ *
+ * Use this when the final reply was suppressed (e.g. NO_REPLY) but streaming
+ * already pushed partial text to the channel. Stops the stream first so the
+ * message becomes a regular message, then deletes it.
+ */
+export async function abandonSlackStream(session: SlackStreamSession): Promise<void> {
+  // Always attempt to stop, even if a prior stop attempt failed after setting
+  // session.stopped = true. Reset the flag so stopSlackStream retries the
+  // Slack API call and can capture messageTs if it was missed.
+  session.stopped = false;
+  try {
+    await stopSlackStream({ session });
+  } catch {
+    // Best-effort; if stop fails we still try to delete.
+  }
+
+  const ts = session.messageTs;
+  if (!ts) {
+    logVerbose("slack-stream: abandon — no messageTs, nothing to delete");
+    return;
+  }
+
+  logVerbose(`slack-stream: abandoning stream message ${ts} in ${session.channel}`);
+  await session.client.chat.delete({ channel: session.channel, ts });
+  logVerbose("slack-stream: stream message deleted");
 }

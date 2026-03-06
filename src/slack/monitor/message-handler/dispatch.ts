@@ -468,7 +468,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+  const anyReplyDelivered =
+    queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0 || (counts.tool ?? 0) > 0;
 
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,

@@ -60,30 +60,29 @@ export function isSilentReplyPrefixText(
   if (!trimmed) {
     return false;
   }
-  // Guard against suppressing natural-language "No..." text while still
-  // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
-  if (trimmed !== trimmed.toUpperCase()) {
-    return false;
-  }
   const normalized = trimmed.toUpperCase();
-  if (!normalized) {
-    return false;
-  }
-  if (normalized.length < 2) {
-    return false;
-  }
+  // Only allow letters and underscores — reject anything that contains
+  // spaces, punctuation, or digits (i.e. natural language, not a token).
   if (/[^A-Z_]/.test(normalized)) {
     return false;
   }
-  const tokenUpper = token.toUpperCase();
-  if (!tokenUpper.startsWith(normalized)) {
+  const upperToken = token.toUpperCase();
+  if (!upperToken.startsWith(normalized)) {
     return false;
   }
-  if (normalized.includes("_")) {
+  // When the text already contains an underscore it's unambiguously token-like
+  // (natural language doesn't use underscores), so any casing is fine.
+  if (trimmed.includes("_")) {
     return true;
   }
-  // Keep underscore guard for generic tokens to avoid suppressing unrelated
-  // uppercase words (e.g. HEART/HE with HEARTBEAT_OK). Only allow bare "NO"
-  // because NO_REPLY streaming can transiently emit that fragment.
-  return tokenUpper === SILENT_REPLY_TOKEN && normalized === "NO";
+  // Without an underscore the text could be a natural language word (e.g. "No",
+  // "Not"). Require all-uppercase to distinguish the sentinel prefix "NO" from
+  // the English word "No", and require at least the first word of the token to
+  // reject single-letter prefixes like "N".
+  if (/[^A-Z]/.test(trimmed)) {
+    return false;
+  }
+  const firstWordEnd = upperToken.indexOf("_");
+  const minLen = firstWordEnd > 0 ? firstWordEnd : upperToken.length;
+  return normalized.length >= minLen;
 }

@@ -82,8 +82,29 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("  HEARTBEAT_", "HEARTBEAT_OK")).toBe(true);
   });
 
-  it("rejects ambiguous natural-language prefixes", () => {
+  it("matches first-word prefix to catch streaming leaks", () => {
+    // "NO" is the first word of "NO_REPLY" — must be caught before it
+    // leaks into Slack/Telegram streams as a visible message.
+    expect(isSilentReplyPrefixText("NO")).toBe(true);
+    expect(isSilentReplyPrefixText("HEARTBEAT", "HEARTBEAT_OK")).toBe(true);
+  });
+
+  it("matches any-case token prefixes that contain an underscore", () => {
+    // Once an underscore is present the text is unambiguously token-like,
+    // so any casing should be caught.
+    expect(isSilentReplyPrefixText("no_reply")).toBe(true);
+    expect(isSilentReplyPrefixText("no_re")).toBe(true);
+    expect(isSilentReplyPrefixText("No_Re")).toBe(true);
+    expect(isSilentReplyPrefixText("No_Reply")).toBe(true);
+    expect(isSilentReplyPrefixText("heartbeat_", "HEARTBEAT_OK")).toBe(true);
+    expect(isSilentReplyPrefixText("heartbeat_ok", "HEARTBEAT_OK")).toBe(true);
+  });
+
+  it("rejects ambiguous natural-language prefixes without underscore", () => {
+    // Without an underscore, only all-uppercase is accepted (to distinguish
+    // "NO" the sentinel from "No" the English word).
     expect(isSilentReplyPrefixText("N")).toBe(false);
+    expect(isSilentReplyPrefixText("n")).toBe(false);
     expect(isSilentReplyPrefixText("No")).toBe(false);
     expect(isSilentReplyPrefixText("no")).toBe(false);
     expect(isSilentReplyPrefixText("Hello")).toBe(false);
