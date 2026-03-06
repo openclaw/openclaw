@@ -297,7 +297,18 @@ export function resolveCtrlCAction(params: {
   };
 }
 
+export function assertTty(): void {
+  if (!process.stdout.isTTY || !process.stdin.isTTY) {
+    process.stderr.write(
+      "TUI requires an interactive terminal; stdout/stdin must be a TTY.\n" +
+        "Tip: use `openclaw chat` or start the gateway with --deliver mode instead.\n",
+    );
+    process.exit(1);
+  }
+}
+
 export async function runTui(opts: TuiOptions) {
+  assertTty();
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;

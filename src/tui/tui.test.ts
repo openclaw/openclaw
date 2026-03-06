@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
+  assertTty,
   createBackspaceDeduper,
   isIgnorableTuiStopError,
   resolveCtrlCAction,
@@ -214,5 +215,58 @@ describe("TUI shutdown safety", () => {
         throw new Error("boom");
       });
     }).toThrow("boom");
+  });
+});
+
+describe("assertTty", () => {
+  it("is exported as a function", () => {
+    expect(typeof assertTty).toBe("function");
+  });
+
+  it("calls process.exit(1) and writes to stderr when stdout is not a TTY", () => {
+    const mockExit = vi.spyOn(process, "exit").mockImplementation((() => {}) as () => never);
+    const mockStderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const origStdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    const origStdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    try {
+      assertTty();
+      // assertions before restore so spy call history is intact
+      expect(mockExit).toHaveBeenCalledWith(1);
+      expect(mockStderr).toHaveBeenCalledWith(
+        expect.stringContaining("TUI requires an interactive terminal"),
+      );
+    } finally {
+      if (origStdoutTTY) {
+        Object.defineProperty(process.stdout, "isTTY", origStdoutTTY);
+      }
+      if (origStdinTTY) {
+        Object.defineProperty(process.stdin, "isTTY", origStdinTTY);
+      }
+      mockExit.mockRestore();
+      mockStderr.mockRestore();
+    }
+  });
+
+  it("does not call process.exit when both stdout and stdin are TTYs", () => {
+    const mockExit = vi.spyOn(process, "exit").mockImplementation((() => {}) as () => never);
+    const origStdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    const origStdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    try {
+      assertTty();
+      // assertion before restore so spy call history is intact
+      expect(mockExit).not.toHaveBeenCalled();
+    } finally {
+      if (origStdoutTTY) {
+        Object.defineProperty(process.stdout, "isTTY", origStdoutTTY);
+      }
+      if (origStdinTTY) {
+        Object.defineProperty(process.stdin, "isTTY", origStdinTTY);
+      }
+      mockExit.mockRestore();
+    }
   });
 });
