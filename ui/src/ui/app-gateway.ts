@@ -277,7 +277,9 @@ function handleTerminalChatEvent(
 }
 
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {
-  if (payload?.sessionKey) {
+  const isCurrentSessionEvent =
+    Boolean(payload?.sessionKey) && payload?.sessionKey === host.sessionKey;
+  if (isCurrentSessionEvent && payload?.sessionKey) {
     setLastActiveSessionKey(
       host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
       payload.sessionKey,
