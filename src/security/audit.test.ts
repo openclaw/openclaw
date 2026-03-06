@@ -1338,7 +1338,10 @@ describe("security audit", () => {
       },
     };
     const res = await audit(cfg);
-    expect(hasFinding(res, "discovery.mdns_full_mode"), "should not fire when gateway.mdns.enabled=false").toBe(false);
+    expect(
+      hasFinding(res, "discovery.mdns_full_mode"),
+      "should not fire when gateway.mdns.enabled=false",
+    ).toBe(false);
   });
 
   it("scores mDNS full mode risk by gateway bind mode", async () => {
