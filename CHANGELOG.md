@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Models/openai-completions streaming compatibility: force `compat.supportsUsageInStreaming=false` for non-native OpenAI-compatible endpoints during model normalization, preventing usage-only stream chunks from triggering `choices[0]` parser crashes in provider streams. (#8714) Thanks @nonanon1.
+- Tools/xAI native web-search collision guard: drop OpenClaw `web_search` from tool registration when routing to xAI/Grok model providers (including OpenRouter `x-ai/*`) to avoid duplicate tool-name request failures against provider-native `web_search`. (#14749) Thanks @realsamrat.
 - TUI/token copy-safety rendering: treat long credential-like mixed alphanumeric tokens (including quoted forms) as copy-sensitive in render sanitization so formatter hard-wrap guards no longer inject visible spaces into auth-style values before display. (#26710) Thanks @jasonthane.
 - WhatsApp/self-chat response prefix fallback: stop forcing `"[openclaw]"` as the implicit outbound response prefix when no identity name or response prefix is configured, so blank/default prefix settings no longer inject branding text unexpectedly in self-chat flows. (#27962) Thanks @ecanmor.
 - Memory/QMD search result decoding: accept `qmd search` hits that only include `file` URIs (for example `qmd://collection/path.md`) without `docid`, resolve them through managed collection roots, and keep multi-collection results keyed by file fallback so valid QMD hits no longer collapse to empty `memory_search` output. (#28181) Thanks @0x76696265.
