@@ -17,6 +17,7 @@ import type {
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
+  PluginHookPromptAction,
   PluginHookBeforePromptBuildResult,
   PluginHookBeforeCompactionEvent,
   PluginHookLlmInputEvent,
@@ -147,6 +148,25 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     right: PluginHookBeforePromptBuildResult["systemPrompt"],
   ): string | undefined => joinPresentTextSegments([left, right]);
 
+  const normalizePromptBuildActionsForMerge = (
+    result: PluginHookBeforePromptBuildResult | undefined,
+  ): PluginHookPromptAction[] | undefined => {
+    if (!result) {
+      return undefined;
+    }
+
+    const actions = Array.isArray(result.actions) ? result.actions : [];
+    if (actions.length > 0) {
+      return actions;
+    }
+
+    if (typeof result.prependContext === "string" && result.prependContext.trim()) {
+      return [{ kind: "prependContext", text: result.prependContext }];
+    }
+
+    return undefined;
+  };
+
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
     next: PluginHookBeforeModelResolveResult,
@@ -160,7 +180,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
   ): PluginHookBeforePromptBuildResult => ({
-    actions: mergePromptActionLists(acc?.actions, next.actions),
+    actions: mergePromptActionLists(
+      normalizePromptBuildActionsForMerge(acc),
+      normalizePromptBuildActionsForMerge(next),
+    ),
     systemPrompt: mergeOptionalPromptText(acc?.systemPrompt, next.systemPrompt),
     prependContext: mergeOptionalPromptText(acc?.prependContext, next.prependContext),
     prependSystemContext: mergeOptionalPromptText(

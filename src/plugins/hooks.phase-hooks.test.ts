@@ -141,6 +141,33 @@ describe("phase hooks merger", () => {
     ]);
   });
 
+  it("before_prompt_build preserves legacy prependContext across mixed hook styles", async () => {
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "high",
+      () => ({
+        actions: [{ kind: "appendSystemPrompt", text: "system A" }],
+      }),
+      10,
+    );
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "low",
+      () => ({ prependContext: "context B" }),
+      1,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.actions).toEqual([
+      { kind: "appendSystemPrompt", text: "system A" },
+      { kind: "prependContext", text: "context B" },
+    ]);
+  });
+
   it("before_prompt_build ignores malformed non-array actions during merge", async () => {
     addTypedHook(
       registry,
