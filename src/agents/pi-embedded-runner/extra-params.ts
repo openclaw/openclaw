@@ -773,6 +773,36 @@ function createKimiCodingAnthropicToolSchemaWrapper(baseStreamFn: StreamFn | und
 }
 
 /**
+ * Pass through the user's explicit `effort` parameter to the Anthropic
+ * `output_config.effort` field.  Without this, the SDK derives effort from
+ * the mapped thinking level ("medium" for adaptive) and silently ignores
+ * the user's value because it never reaches the API payload.
+ */
+function createEffortOverrideWrapper(baseStreamFn: StreamFn | undefined, effort: string): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (
+          payload &&
+          typeof payload === "object" &&
+          typeof model.api === "string" &&
+          model.api.includes("anthropic")
+        ) {
+          const payloadObj = payload as Record<string, unknown>;
+          const outputConfig = (payloadObj.output_config ?? {}) as Record<string, unknown>;
+          outputConfig.effort = effort;
+          payloadObj.output_config = outputConfig;
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+/**
  * Create a streamFn wrapper that adds OpenRouter app attribution headers
  * and injects reasoning.effort based on the configured thinking level.
  */
@@ -1067,6 +1097,15 @@ export function applyExtraParamsToAgent(
       log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
     }
+  }
+
+  // Pass through user-configured effort to Anthropic output_config.effort.
+  // Without this, the SDK derives effort from the mapped thinking level and
+  // the user's explicit params.effort value is silently dropped.
+  const explicitEffort = merged?.effort;
+  if (typeof explicitEffort === "string" && explicitEffort.trim()) {
+    log.debug(`applying explicit effort override: ${explicitEffort} for ${provider}/${modelId}`);
+    agent.streamFn = createEffortOverrideWrapper(agent.streamFn, explicitEffort.trim());
   }
 
   // Guard Google payloads against invalid negative thinking budgets emitted by
