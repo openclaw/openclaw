@@ -57,6 +57,10 @@ export type MuxReceiverOptions = {
 const API_CALL_TIMEOUT_MS = 30_000;
 const MAX_BACKOFF_MS = 30_000;
 const INITIAL_BACKOFF_MS = 1_000;
+/** Client-side WebSocket ping interval to keep the connection alive through
+ *  load balancers / proxies that drop idle connections (e.g. GKE Gateway
+ *  default 30 s idle timeout). Must be well under the LB timeout. */
+const CLIENT_PING_INTERVAL_MS = 15_000;
 
 export class MuxReceiver {
   private app: BoltApp | null = null;
@@ -64,6 +68,7 @@ export class MuxReceiver {
   private stopped = false;
   private backoffMs = INITIAL_BACKOFF_MS;
   private pending = new Map<string, PendingApiCall>();
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
   private resolvedToken: string | null = null;
 
   private readonly mux: SlackMuxConfig;
@@ -87,6 +92,7 @@ export class MuxReceiver {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.stopClientPing();
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer);
       pending.reject(new Error("MuxReceiver stopped"));
@@ -151,6 +157,7 @@ export class MuxReceiver {
       ws.on("open", () => {
         everOpened = true;
         this.backoffMs = INITIAL_BACKOFF_MS;
+        this.startClientPing(ws);
         this.runtime?.log?.("slack mux connected");
         resolve();
       });
@@ -162,6 +169,7 @@ export class MuxReceiver {
       ws.on("close", (code, reason) => {
         const reasonStr = typeof reason === "string" ? reason : String(reason ?? "");
         this.runtime?.log?.(`slack mux disconnected: code=${code} reason=${reasonStr}`);
+        this.stopClientPing();
         this.ws = null;
         // Fail any in-flight API calls immediately rather than letting them
         // hang for up to API_CALL_TIMEOUT_MS during a disconnect.
@@ -212,6 +220,27 @@ export class MuxReceiver {
           this.scheduleReconnect();
         });
     }, delay);
+  }
+
+  /** Send periodic WebSocket pings to keep the connection alive through
+   *  load balancers that drop idle connections. */
+  private startClientPing(ws: WebSocket): void {
+    this.stopClientPing();
+    this.pingTimer = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      }
+    }, CLIENT_PING_INTERVAL_MS);
+    if (this.pingTimer.unref) {
+      this.pingTimer.unref();
+    }
+  }
+
+  private stopClientPing(): void {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
   }
 
   private handleMessage(raw: unknown): void {
