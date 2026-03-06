@@ -132,12 +132,6 @@ export async function processGatewayAllowlist(
     }) ||
     requiresHeredocApproval ||
     obfuscation.detected;
-  const hasCommandChain = /&&|\|\||;|\r|\n/.test(params.command);
-  if (requiresAsk && hasCommandChain) {
-    throw new Error(
-      "exec approval requires a single command segment. Split chained commands so each elevated step is approved separately.",
-    );
-  }
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires explicit approval in allowlist mode.",

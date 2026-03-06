@@ -239,6 +239,11 @@ export function buildApprovalPendingMessage(params: {
   host: "gateway" | "node";
   nodeId?: string;
 }) {
+  let fence = "```";
+  while (params.command.includes(fence)) {
+    fence += "`";
+  }
+  const commandBlock = `${fence}sh\n${params.command}\n${fence}`;
   const lines: string[] = [];
   const warningText = params.warningText?.trim();
   if (warningText) {
@@ -251,7 +256,7 @@ export function buildApprovalPendingMessage(params: {
   }
   lines.push(`CWD: ${params.cwd}`);
   lines.push("Command:");
-  lines.push(params.command);
+  lines.push(commandBlock);
   lines.push("Mode: foreground (interactive approvals available).");
   lines.push("Background mode requires pre-approved policy (allow-always or ask=off).");
   lines.push(`Reply with: /approve ${params.approvalSlug} allow-once|allow-always|deny`);

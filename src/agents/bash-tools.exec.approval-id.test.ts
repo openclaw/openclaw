@@ -115,7 +115,7 @@ describe("exec approvals", () => {
     expect(pendingText).toContain("Host: node");
     expect(pendingText).toContain("Node: node-1");
     expect(pendingText).toContain(`CWD: ${process.cwd()}`);
-    expect(pendingText).toContain("Command:\nls -la");
+    expect(pendingText).toContain("Command:\n```sh\nls -la\n```");
     expect(pendingText).toContain("Mode: foreground (interactive approvals available).");
     expect(pendingText).toContain("Background mode requires pre-approved policy");
     const approvalId = details.approvalId;
@@ -307,7 +307,7 @@ describe("exec approvals", () => {
     expect(pendingText).toContain(`full ${details.approvalId}`);
     expect(pendingText).toContain("Host: gateway");
     expect(pendingText).toContain(`CWD: ${process.cwd()}`);
-    expect(pendingText).toContain("Command:\necho ok");
+    expect(pendingText).toContain("Command:\n```sh\necho ok\n```");
     await approvalSeen;
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
@@ -363,10 +363,16 @@ describe("exec approvals", () => {
     expect(waitIds).toEqual(requestIds);
   });
 
-  it("rejects chained gateway commands when approval would be required", async () => {
+  it("shows full chained gateway commands in approval-pending message", async () => {
     const calls: string[] = [];
-    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "deny" };
+      }
       return { ok: true };
     });
 
@@ -377,16 +383,19 @@ describe("exec approvals", () => {
       approvalRunningNoticeMs: 0,
     });
 
-    await expect(
-      tool.execute("call-chain-gateway", {
-        command: "npm view diver --json && brew outdated",
-      }),
-    ).rejects.toThrow("exec approval requires a single command segment");
+    const result = await tool.execute("call-chain-gateway", {
+      command: "npm view diver --json | jq .name && brew outdated",
+    });
 
-    expect(calls).not.toContain("exec.approval.request");
+    expect(result.details.status).toBe("approval-pending");
+    const pendingText = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(pendingText).toContain(
+      "Command:\n```sh\nnpm view diver --json | jq .name && brew outdated\n```",
+    );
+    expect(calls).toContain("exec.approval.request");
   });
 
-  it("rejects chained node commands when approval would be required", async () => {
+  it("shows full chained node commands in approval-pending message", async () => {
     const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
@@ -406,13 +415,16 @@ describe("exec approvals", () => {
       approvalRunningNoticeMs: 0,
     });
 
-    await expect(
-      tool.execute("call-chain-node", {
-        command: "npm view diver --json && brew outdated",
-      }),
-    ).rejects.toThrow("exec approval requires a single command segment");
+    const result = await tool.execute("call-chain-node", {
+      command: "npm view diver --json | jq .name && brew outdated",
+    });
 
-    expect(calls).not.toContain("exec.approval.request");
+    expect(result.details.status).toBe("approval-pending");
+    const pendingText = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(pendingText).toContain(
+      "Command:\n```sh\nnpm view diver --json | jq .name && brew outdated\n```",
+    );
+    expect(calls).toContain("exec.approval.request");
   });
 
   it("waits for approval registration before returning approval-pending", async () => {

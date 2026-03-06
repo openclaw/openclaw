@@ -182,12 +182,6 @@ export async function executeNodeHostCommand(
       analysisOk,
       allowlistSatisfied,
     }) || obfuscation.detected;
-  const hasCommandChain = /&&|\|\||;|\r|\n/.test(params.command);
-  if (requiresAsk && hasCommandChain) {
-    throw new Error(
-      "exec approval requires a single command segment. Split chained commands so each elevated step is approved separately.",
-    );
-  }
   const invokeTimeoutMs = Math.max(
     10_000,
     (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) * 1000 +
