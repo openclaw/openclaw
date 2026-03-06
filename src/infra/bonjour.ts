@@ -56,10 +56,23 @@ function safeServiceName(name: string) {
   const decoder = new TextDecoder("utf-8", { fatal: false });
   let truncated = decoder.decode(encoded.slice(0, MAX_LABEL_BYTES));
   
-  // Remove any trailing partial character (replacement character �)
-  truncated = truncated.replace(/\uFFFD$/, "");
+  // Remove trailing replacement character only if it was introduced by truncation
+  // (not if it's a valid U+FFFD in the original string)
+  if (truncated.endsWith("\uFFFD") && !baseName.slice(0, truncated.length).endsWith("\uFFFD")) {
+    truncated = truncated.slice(0, -1);
+  }
   
-  return truncated || "OpenClaw";
+  const result = truncated || "OpenClaw";
+  
+  // Log warning if truncation occurred
+  if (result !== baseName) {
+    logWarn(
+      `Bonjour service name truncated from ${encoded.length} bytes to ${MAX_LABEL_BYTES} bytes. ` +
+      `Original: "${baseName}", Truncated: "${result}"`
+    );
+  }
+  
+  return result;
 }
 
 function prettifyInstanceName(name: string) {
