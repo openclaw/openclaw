@@ -334,6 +334,27 @@ describe("web_search provider auto-detection for openrouter", () => {
     );
   });
 
+  it("auto-detects openrouter when config apiKey is set", () => {
+    withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        OPENROUTER_API_KEY: undefined,
+        PERPLEXITY_API_KEY: undefined,
+        XAI_API_KEY: undefined,
+      },
+      () => {
+        expect(
+          resolveSearchProvider({
+            openrouter: { apiKey: "sk-or-config" },
+          } as Record<string, unknown>),
+        ).toBe("openrouter");
+      },
+    );
+  });
+
   it("returns openrouter when provider is explicitly set", () => {
     expect(resolveSearchProvider({ provider: "openrouter" } as Record<string, unknown>)).toBe(
       "openrouter",
@@ -344,5 +365,39 @@ describe("web_search provider auto-detection for openrouter", () => {
     withEnv({ BRAVE_API_KEY: "bsa-key", OPENROUTER_API_KEY: "sk-or-key" }, () => {
       expect(resolveSearchProvider(undefined)).toBe("brave");
     });
+  });
+
+  it("auto-detects openrouter when PERPLEXITY_API_KEY has sk-or- prefix (legacy config)", () => {
+    withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        OPENROUTER_API_KEY: undefined,
+        PERPLEXITY_API_KEY: "sk-or-v1-abc123",
+        XAI_API_KEY: undefined,
+      },
+      () => {
+        expect(resolveSearchProvider(undefined)).toBe("openrouter");
+      },
+    );
+  });
+
+  it("keeps perplexity provider when PERPLEXITY_API_KEY has native perplexity format", () => {
+    withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        OPENROUTER_API_KEY: undefined,
+        PERPLEXITY_API_KEY: "pplx-abc123",
+        XAI_API_KEY: undefined,
+      },
+      () => {
+        expect(resolveSearchProvider(undefined)).toBe("perplexity");
+      },
+    );
   });
 });

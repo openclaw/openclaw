@@ -453,6 +453,17 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       ? search.provider.trim().toLowerCase()
       : "";
   if (raw === "perplexity") {
+    // If the configured key looks like an OpenRouter key, route there instead.
+    const perplexityConfig = resolvePerplexityConfig(search);
+    const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
+    if (perplexityKey?.startsWith("sk-or-")) {
+      console.warn(
+        "[openclaw] web_search: PERPLEXITY_API_KEY looks like an OpenRouter key (sk-or-*). " +
+          'Routing to "openrouter" provider. ' +
+          'Set tools.web.search.provider to "openrouter" explicitly to suppress this warning.',
+      );
+      return "openrouter";
+    }
     return "perplexity";
   }
   if (raw === "grok") {
@@ -499,14 +510,17 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     // 4. OpenRouter
     const openRouterConfig = resolveOpenRouterConfig(search);
     if (resolveOpenRouterApiKey(openRouterConfig)) {
+      // If no explicit openrouter block was configured, the key came from the perplexity
+      // sk-or-* fallback — warn so users know to migrate their config.
+      if (!("openrouter" in Object(search)) && openRouterConfig.apiKey?.startsWith("sk-or-")) {
+        console.warn(
+          "[openclaw] web_search: PERPLEXITY_API_KEY looks like an OpenRouter key (sk-or-*). " +
+            'Routing to "openrouter" provider. ' +
+            'Set tools.web.search.provider to "openrouter" explicitly to suppress this warning.',
+        );
+      }
       logVerbose(
         'web_search: no provider configured, auto-detected "openrouter" from available API keys',
-      );
-      // Warn users to set provider explicitly — auto-detection from OPENROUTER_API_KEY is
-      // a compatibility shim for pre-230fea1 configs that routed Perplexity via OpenRouter.
-      console.warn(
-        '[openclaw] web_search: auto-detected provider "openrouter" from OPENROUTER_API_KEY. ' +
-          'Set tools.web.search.provider to "openrouter" explicitly to suppress this warning.',
       );
       return "openrouter";
     }
@@ -657,14 +671,20 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
 }
 
 function resolveOpenRouterConfig(search?: WebSearchConfig): OpenRouterConfig {
-  if (!search || typeof search !== "object") {
-    return {};
+  if (search && typeof search === "object") {
+    const openrouter = "openrouter" in search ? search.openrouter : undefined;
+    if (openrouter && typeof openrouter === "object") {
+      return openrouter as OpenRouterConfig;
+    }
   }
-  const openrouter = "openrouter" in search ? search.openrouter : undefined;
-  if (!openrouter || typeof openrouter !== "object") {
-    return {};
+  // Fall back to the perplexity key if it looks like an OpenRouter key (sk-or-* prefix).
+  // This supports legacy configs that routed Perplexity models via OpenRouter.
+  const perplexityConfig = resolvePerplexityConfig(search);
+  const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
+  if (perplexityKey?.startsWith("sk-or-")) {
+    return { apiKey: perplexityKey };
   }
-  return openrouter as OpenRouterConfig;
+  return {};
 }
 
 function resolveOpenRouterApiKey(openrouter?: OpenRouterConfig): string | undefined {
