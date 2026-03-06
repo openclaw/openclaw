@@ -112,6 +112,7 @@ type TavilySearchResult = {
   title?: string;
   url?: string;
   content?: string;
+  score?: number;
 };
 
 type TavilySearchResponse = {
@@ -629,6 +630,7 @@ async function runTavilySearch(params: {
       url,
       description: content ? wrapWebContent(content, "web_search") : "",
       siteName: resolveSiteName(url) || undefined,
+      score: typeof entry.score === "number" ? entry.score : undefined,
     };
   });
 }
@@ -908,4 +910,7 @@ export const __testing = {
   resolveGrokApiKey,
   resolveGrokModel,
   runGrokSearch,
+  resolveTavilyApiKey,
+  resolveTavilySearchDepth,
+  runTavilySearch,
 } as const;
