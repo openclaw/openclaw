@@ -1,5 +1,7 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/llm-task";
@@ -10,6 +12,64 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/llm-task";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/llm-task";
 
 type RunEmbeddedPiAgentFn = (params: Record<string, unknown>) => Promise<unknown>;
+let openClawRootCache: string | null = null;
+
+function findPackageRoot(startDir: string, name: string): string | null {
+  let dir = startDir;
+  for (;;) {
+    const pkgPath = path.join(dir, "package.json");
+    try {
+      if (fsSync.existsSync(pkgPath)) {
+        const raw = fsSync.readFileSync(pkgPath, "utf8");
+        const pkg = JSON.parse(raw) as { name?: string };
+        if (pkg.name === name) {
+          return dir;
+        }
+      }
+    } catch {
+      // ignore parse/read errors and keep walking
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      return null;
+    }
+    dir = parent;
+  }
+}
+
+function resolveOpenClawRoot(): string {
+  if (openClawRootCache) {
+    return openClawRootCache;
+  }
+  const override = process.env.OPENCLAW_ROOT?.trim();
+  if (override) {
+    openClawRootCache = override;
+    return override;
+  }
+
+  const candidates = new Set<string>();
+  if (process.argv[1]) {
+    candidates.add(path.dirname(process.argv[1]));
+  }
+  candidates.add(process.cwd());
+  try {
+    const urlPath = fileURLToPath(import.meta.url);
+    candidates.add(path.dirname(urlPath));
+  } catch {
+    // ignore
+  }
+
+  for (const start of candidates) {
+    const found = findPackageRoot(start, "openclaw");
+    if (found) {
+      openClawRootCache = found;
+      return found;
+    }
+  }
+  const fallback = process.cwd();
+  openClawRootCache = fallback;
+  return fallback;
+}
 
 async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   // Source checkout (tests/dev)
@@ -26,7 +86,10 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
 
   // Bundled install (built)
   // NOTE: there is no src/ tree in a packaged install. Prefer a stable internal entrypoint.
-  const mod = await import("../../../dist/extensionAPI.js");
+  const distExtensionApi = pathToFileURL(
+    path.join(resolveOpenClawRoot(), "dist", "extensionAPI.js"),
+  ).href;
+  const mod = (await import(distExtensionApi)) as { runEmbeddedPiAgent?: unknown };
   // oxlint-disable-next-line typescript/no-explicit-any
   const fn = (mod as any).runEmbeddedPiAgent;
   if (typeof fn !== "function") {
