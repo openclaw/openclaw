@@ -22,7 +22,8 @@ export function buildDeliveryFromLegacyPayload(
 ): Record<string, unknown> {
   const deliver = payload.deliver;
   const mode = deliver === false ? "none" : "announce";
-  const channelRaw = typeof payload.channel === "string" ? payload.channel.trim().toLowerCase() : "";
+  const channelRaw =
+    typeof payload.channel === "string" ? payload.channel.trim().toLowerCase() : "";
   const providerRaw =
     typeof payload.provider === "string" ? payload.provider.trim().toLowerCase() : "";
   const resolvedChannel = channelRaw || providerRaw;
