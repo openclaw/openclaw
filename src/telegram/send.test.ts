@@ -171,6 +171,15 @@ describe("buildInlineKeyboard", () => {
 });
 
 describe("sendMessageTelegram", () => {
+  it("suppresses NO_REPLY token before Telegram API call", async () => {
+    botApi.sendMessage.mockClear();
+
+    const res = await sendMessageTelegram("123", "  NO_REPLY  ", { token: "tok" });
+
+    expect(res).toEqual({ messageId: "suppressed", chatId: "123" });
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("applies timeoutSeconds config precedence", async () => {
     const cases = [
       {
