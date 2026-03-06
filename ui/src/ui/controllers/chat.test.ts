@@ -542,7 +542,9 @@ describe("loadChatHistory", () => {
       timestamp: 200,
     };
     const request = vi.fn().mockResolvedValue({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "Working..." }], timestamp: 250 }],
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "Working..." }], timestamp: 250 },
+      ],
       thinkingLevel: "low",
     });
     const state = createState({
@@ -563,12 +565,16 @@ describe("loadChatHistory", () => {
 
   it("does not preserve optimistic user messages once no run is active", async () => {
     const request = vi.fn().mockResolvedValue({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "Working..." }], timestamp: 250 }],
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "Working..." }], timestamp: 250 },
+      ],
     });
     const state = createState({
       client: { request } as unknown as ChatState["client"],
       connected: true,
-      chatMessages: [{ role: "user", content: [{ type: "text", text: "Run a tool for me" }], timestamp: 200 }],
+      chatMessages: [
+        { role: "user", content: [{ type: "text", text: "Run a tool for me" }], timestamp: 200 },
+      ],
       chatRunId: null,
       chatStreamStartedAt: null,
     });
