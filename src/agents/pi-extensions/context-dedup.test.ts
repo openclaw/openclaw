@@ -352,6 +352,102 @@ describe("context-dedup", () => {
     expect(hunkCount).toBeLessThanOrEqual(3);
   });
 
+  it("does not overcount trailing newline in read lineage line ranges", () => {
+    const lines = Array.from({ length: 10 }, (_, idx) => `line ${idx + 1} :: ${"n".repeat(48)}`);
+    const chunk = `${lines.join("\n")}\n`;
+
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_nl_1",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/newline-range.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_nl_1",
+        content: chunk,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_nl_2",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/newline-range.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_nl_2",
+        content: chunk,
+      },
+    ];
+
+    const result = applyReadLineageCompaction(messages as any[]);
+    const repeatedChunkNote = String(result.messages[3].content);
+
+    expect(repeatedChunkNote).toContain("[Same file chunk already shown earlier]");
+    expect(repeatedChunkNote).toContain("Lines: 1-10");
+    expect(repeatedChunkNote).not.toContain("Lines: 1-11");
+  });
+
+  it("does not let trailing newline push 7-line chunks across full-omit threshold", () => {
+    const lines = Array.from({ length: 7 }, (_, idx) => `line ${idx + 1} :: ${"q".repeat(80)}`);
+    const chunk = `${lines.join("\n")}\n`;
+
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_nl_gate_1",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/newline-gate.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_nl_gate_1",
+        content: chunk,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_nl_gate_2",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/newline-gate.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_nl_gate_2",
+        content: chunk,
+      },
+    ];
+
+    const result = applyReadLineageCompaction(messages as any[]);
+
+    expect(String(result.messages[3].content)).toBe(chunk);
+    expect(result.stats.fullyOmittedChunks).toBe(0);
+  });
+
   it("supports toolUse/functionCall read blocks and toolUseId-linked results", () => {
     const baseLines = Array.from(
       { length: 30 },

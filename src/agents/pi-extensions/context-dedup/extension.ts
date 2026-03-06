@@ -252,8 +252,21 @@ function setBlockText(block: unknown, nextText: string): unknown {
   return block;
 }
 
+function splitReadLines(text: string): string[] {
+  if (text.length === 0) {
+    return [""];
+  }
+
+  const lines = text.split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+
+  return lines;
+}
+
 function countLines(text: string): number {
-  return text.length === 0 ? 1 : text.split("\n").length;
+  return splitReadLines(text).length;
 }
 
 function formatRange(start: number, end: number): string {
@@ -464,7 +477,7 @@ function collapseReadChunkAgainstSeen(params: {
   partialTrim: boolean;
   sourceMessageIndex?: number;
 } {
-  const lines = params.text.split("\n");
+  const lines = splitReadLines(params.text);
   const start = Math.max(1, Math.floor(params.startLine));
   const end = start + lines.length - 1;
 
