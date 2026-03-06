@@ -109,9 +109,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const appToken = resolveSlackAppToken(opts.appToken ?? account.appToken);
 
   if (slackMode === "mux") {
-    if (!account.config.mux?.url) {
+    const muxUrl = account.config.mux?.url ?? cfg.channels?.slack?.mux?.url;
+    if (!muxUrl) {
       throw new Error(
-        `Slack mux URL missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.mux.url).`,
+        `Slack mux URL missing for account "${account.accountId}" (set channels.slack.mux.url or channels.slack.accounts.${account.accountId}.mux.url).`,
       );
     }
   } else if (!botToken || (slackMode !== "http" && !appToken)) {
@@ -226,23 +227,33 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let teamId = "";
   let apiAppId = "";
   const expectedApiAppIdFromAppToken = parseApiAppIdFromAppToken(appToken);
-  try {
-    // In mux mode the API call is proxied through the mux WebSocket; no local token needed.
-    const auth =
-      slackMode === "mux"
-        ? await app.client.auth.test()
-        : await app.client.auth.test({ token: botToken });
-    botUserId = auth.user_id ?? "";
-    teamId = auth.team_id ?? "";
-    apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
-  } catch {
-    // auth test failing is non-fatal; message handler falls back to regex mentions.
-  }
 
-  if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
-    runtime.error?.(
-      `slack token mismatch: bot token api_app_id=${apiAppId} but app token looks like api_app_id=${expectedApiAppIdFromAppToken}`,
-    );
+  /** Run auth.test and populate botUserId/teamId/apiAppId.  For mux mode this
+   *  must be called *after* `app.start()` so the mux WebSocket is connected. */
+  const runAuthTest = async () => {
+    try {
+      const auth =
+        slackMode === "mux"
+          ? await app.client.auth.test()
+          : await app.client.auth.test({ token: botToken });
+      botUserId = auth.user_id ?? "";
+      teamId = auth.team_id ?? "";
+      apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
+    } catch {
+      // auth test failing is non-fatal; message handler falls back to regex mentions.
+    }
+
+    if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
+      runtime.error?.(
+        `slack token mismatch: bot token api_app_id=${apiAppId} but app token looks like api_app_id=${expectedApiAppIdFromAppToken}`,
+      );
+    }
+  };
+
+  // In mux mode, auth.test is proxied through the mux WebSocket which isn't
+  // connected until app.start() — defer it.  For other modes, run it now.
+  if (slackMode !== "mux") {
+    await runAuthTest();
   }
 
   const ctx = createSlackMonitorContext({
@@ -411,6 +422,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     if (slackMode === "mux") {
       await app.start();
       runtime.log?.("slack mux mode connected");
+      // Now that the mux WebSocket is connected, run auth.test and update context.
+      await runAuthTest();
+      ctx.botUserId = botUserId;
+      ctx.teamId = teamId;
+      ctx.apiAppId = apiAppId;
     } else if (slackMode === "socket") {
       let reconnectAttempts = 0;
       while (!opts.abortSignal?.aborted) {
