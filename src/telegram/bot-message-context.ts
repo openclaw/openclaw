@@ -42,6 +42,7 @@ import type {
 } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import {
   buildAgentSessionKey,
   pickFirstExistingAgentId,
@@ -51,6 +52,7 @@ import {
 import {
   DEFAULT_ACCOUNT_ID,
   buildAgentMainSessionKey,
+  resolveAgentIdFromSessionKey,
   resolveThreadSessionKeys,
 } from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
@@ -257,9 +259,37 @@ export const buildTelegramMessageContext = async ({
     conversationId: peerId,
     parentConversationId: isGroup ? String(chatId) : undefined,
   });
-  const configuredBinding = configuredRoute.configuredBinding;
-  const configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
+  let configuredBinding = configuredRoute.configuredBinding;
+  let configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
   route = configuredRoute.route;
+  const threadBindingConversationId =
+    replyThreadId != null
+      ? `${chatId}:topic:${replyThreadId}`
+      : !isGroup
+        ? String(chatId)
+        : undefined;
+  if (threadBindingConversationId) {
+    const threadBinding = getSessionBindingService().resolveByConversation({
+      channel: "telegram",
+      accountId: account.accountId,
+      conversationId: threadBindingConversationId,
+    });
+    const boundSessionKey = threadBinding?.targetSessionKey?.trim();
+    if (threadBinding && boundSessionKey) {
+      route = {
+        ...route,
+        sessionKey: boundSessionKey,
+        agentId: resolveAgentIdFromSessionKey(boundSessionKey),
+        matchedBy: "binding.channel",
+      };
+      configuredBinding = null;
+      configuredBindingSessionKey = "";
+      getSessionBindingService().touch(threadBinding.bindingId);
+      logVerbose(
+        `telegram: routed via bound conversation ${threadBindingConversationId} -> ${boundSessionKey}`,
+      );
+    }
+  }
   const requiresExplicitAccountBinding = (candidate: ResolvedAgentRoute): boolean =>
     candidate.accountId !== DEFAULT_ACCOUNT_ID && candidate.matchedBy === "default";
   // Fail closed for named Telegram accounts when route resolution falls back to
