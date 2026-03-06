@@ -336,6 +336,7 @@ export async function handleDiscordGuildAction(
         integer: true,
       });
       const availableTags = parseAvailableTags(params.availableTags);
+      const appliedTags = readStringArrayParam(params, "appliedTags");
       const channel = accountId
         ? await editChannelDiscord(
             {
@@ -350,6 +351,7 @@ export async function handleDiscordGuildAction(
               locked,
               autoArchiveDuration: autoArchiveDuration ?? undefined,
               availableTags,
+              appliedTags: appliedTags ?? undefined,
             },
             { accountId },
           )
@@ -365,6 +367,7 @@ export async function handleDiscordGuildAction(
             locked,
             autoArchiveDuration: autoArchiveDuration ?? undefined,
             availableTags,
+            appliedTags: appliedTags ?? undefined,
           });
       return jsonResult({ ok: true, channel });
     }
