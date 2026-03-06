@@ -21,8 +21,10 @@ services:
     # group_add:
     #   - "${DOCKER_GID:-999}"
     ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      # Tailnet-only posture: bind published ports to localhost, then use Tailscale Serve on the HOST
+      # (prevents LAN exposure even though the container listens on 0.0.0.0)
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "127.0.0.1:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
     command:

@@ -121,3 +121,5 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+
+docker-compose.override.yml
