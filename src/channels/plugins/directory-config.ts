@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.js";
-import { resolveDiscordAccount } from "../../discord/accounts.js";
-import { resolveSlackAccount } from "../../slack/accounts.js";
-import { resolveTelegramAccount } from "../../telegram/accounts.js";
+import { inspectDiscordAccount } from "../../discord/account-inspect.js";
+import { inspectSlackAccount } from "../../slack/account-inspect.js";
+import { inspectTelegramAccount } from "../../telegram/account-inspect.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import { normalizeSlackMessagingTarget } from "./normalize/slack.js";
@@ -75,7 +75,7 @@ function toDirectoryEntries(kind: "user" | "group", ids: string[]): ChannelDirec
 export async function listSlackDirectoryPeersFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = inspectSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const ids = new Set<string>();
 
   addAllowFromAndDmsIds(ids, account.config.allowFrom ?? account.dm?.allowFrom, account.config.dms);
@@ -98,7 +98,7 @@ export async function listSlackDirectoryPeersFromConfig(
 export async function listSlackDirectoryGroupsFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = inspectSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const ids = Object.keys(account.config.channels ?? {})
     .map((raw) => raw.trim())
     .filter(Boolean)
@@ -110,7 +110,7 @@ export async function listSlackDirectoryGroupsFromConfig(
 export async function listDiscordDirectoryPeersFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = inspectDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
   const ids = new Set<string>();
 
   addAllowFromAndDmsIds(
@@ -139,7 +139,7 @@ export async function listDiscordDirectoryPeersFromConfig(
 export async function listDiscordDirectoryGroupsFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = inspectDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
   const ids = new Set<string>();
   for (const guild of Object.values(account.config.guilds ?? {})) {
     addTrimmedEntries(ids, Object.keys(guild.channels ?? {}));
@@ -159,7 +159,7 @@ export async function listDiscordDirectoryGroupsFromConfig(
 export async function listTelegramDirectoryPeersFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = inspectTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
   const raw = [
     ...(account.config.allowFrom ?? []).map((entry) => String(entry)),
     ...Object.keys(account.config.dms ?? {}),
@@ -190,7 +190,7 @@ export async function listTelegramDirectoryPeersFromConfig(
 export async function listTelegramDirectoryGroupsFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = inspectTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
   const ids = Object.keys(account.config.groups ?? {})
     .map((id) => id.trim())
     .filter((id) => Boolean(id) && id !== "*");

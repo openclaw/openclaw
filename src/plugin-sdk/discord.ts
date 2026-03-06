@@ -1,6 +1,7 @@
 export type { ChannelMessageActionAdapter } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { OpenClawConfig } from "../config/config.js";
+export type { InspectedDiscordAccount } from "../discord/account-inspect.js";
 export type { ResolvedDiscordAccount } from "../discord/accounts.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
@@ -28,6 +29,11 @@ export {
   resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
 } from "../discord/accounts.js";
+export { inspectDiscordAccount } from "../discord/account-inspect.js";
+export {
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromCredentialStatuses,
+} from "../channels/account-snapshot-fields.js";
 export {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,

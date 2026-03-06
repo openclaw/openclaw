@@ -553,6 +553,8 @@ export {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "../discord/accounts.js";
+export { inspectDiscordAccount } from "../discord/account-inspect.js";
+export type { InspectedDiscordAccount } from "../discord/account-inspect.js";
 export { collectDiscordAuditChannelIds } from "../discord/audit.js";
 export { discordOnboardingAdapter } from "../channels/plugins/onboarding/discord.js";
 export {
@@ -591,6 +593,8 @@ export {
   resolveSlackReplyToMode,
   type ResolvedSlackAccount,
 } from "../slack/accounts.js";
+export { inspectSlackAccount } from "../slack/account-inspect.js";
+export type { InspectedSlackAccount } from "../slack/account-inspect.js";
 export { extractSlackToolSend, listSlackMessageActions } from "../slack/message-actions.js";
 export { slackOnboardingAdapter } from "../channels/plugins/onboarding/slack.js";
 export {
@@ -606,6 +610,8 @@ export {
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
 } from "../telegram/accounts.js";
+export { inspectTelegramAccount } from "../telegram/account-inspect.js";
+export type { InspectedTelegramAccount } from "../telegram/account-inspect.js";
 export { telegramOnboardingAdapter } from "../channels/plugins/onboarding/telegram.js";
 export {
   looksLikeTelegramTargetId,

@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiscordGuildChannelConfig, DiscordGuildEntry } from "../config/types.js";
 import { isRecord } from "../utils.js";
-import { resolveDiscordAccount } from "./accounts.js";
+import { inspectDiscordAccount } from "./account-inspect.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
 
 export type DiscordChannelPermissionsAuditEntry = {
@@ -74,7 +74,7 @@ export function collectDiscordAuditChannelIds(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) {
-  const account = resolveDiscordAccount({
+  const account = inspectDiscordAccount({
     cfg: params.cfg,
     accountId: params.accountId,
   });

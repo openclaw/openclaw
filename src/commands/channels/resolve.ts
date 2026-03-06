@@ -75,6 +75,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     config: loadedRaw,
     commandName: "channels resolve",
     targetIds: getChannelsCommandSecretTargetIds(),
+    mode: "operational_readonly",
   });
   for (const entry of diagnostics) {
     runtime.log(`[secrets] ${entry}`);
