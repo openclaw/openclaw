@@ -603,8 +603,8 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyLitellmConfig(nextConfig, {
-      baseUrl: opts.litellmBaseUrl?.trim() || "http://localhost:4000",
-      modelId: opts.litellmModel?.trim() || "gpt-4",
+      baseUrl: opts.litellmBaseUrl?.trim() || undefined,
+      modelId: opts.litellmModel?.trim() || undefined,
     });
   }
 

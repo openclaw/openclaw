@@ -1156,7 +1156,12 @@ export async function resolveImplicitProviders(params: {
     if (!baseUrl) {
       continue;
     }
-    const apiKey = resolveEnvApiKeyVarName("litellm") ?? cred.key?.trim() ?? "";
+    const keyRef = coerceSecretRef(cred.keyRef);
+    const apiKey =
+      resolveEnvApiKeyVarName("litellm") ??
+      cred.key?.trim() ??
+      (keyRef?.source === "env" && keyRef.id.trim() ? keyRef.id.trim() : "") ??
+      "";
     if (!apiKey) {
       continue;
     }

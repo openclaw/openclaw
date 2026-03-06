@@ -53,6 +53,10 @@ export function applyLitellmProviderConfig(
   if (modelId !== LITELLM_DEFAULT_MODEL_ID) {
     defaultModel.id = modelId;
     defaultModel.name = modelId;
+    // Non-default models: use conservative capabilities since we don't
+    // know the actual backend model's features
+    defaultModel.reasoning = false;
+    defaultModel.input = ["text"];
   }
 
   const existingProvider = cfg.models?.providers?.litellm as { baseUrl?: unknown } | undefined;
