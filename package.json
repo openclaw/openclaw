@@ -92,6 +92,10 @@
       "types": "./dist/plugin-sdk/copilot-proxy.d.ts",
       "default": "./dist/plugin-sdk/copilot-proxy.js"
     },
+    "./plugin-sdk/crust-proxy": {
+      "types": "./dist/plugin-sdk/crust-proxy.d.ts",
+      "default": "./dist/plugin-sdk/crust-proxy.js"
+    },
     "./plugin-sdk/device-pair": {
       "types": "./dist/plugin-sdk/device-pair.d.ts",
       "default": "./dist/plugin-sdk/device-pair.js"

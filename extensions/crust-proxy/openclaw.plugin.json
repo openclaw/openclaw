@@ -1,0 +1,9 @@
+{
+  "id": "crust-proxy",
+  "providers": ["crust-openai", "crust-anthropic"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
