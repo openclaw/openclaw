@@ -281,21 +281,32 @@ export function buildGroupLabel(msg: Message, chatId: number | string, messageTh
 }
 
 export function hasBotMention(msg: Message, botUsername: string) {
+  const normalizedUsername = `@${botUsername.toLowerCase()}`;
+  const entities = msg.entities ?? msg.caption_entities;
+
+  // When the message has an entities field (even an empty one), use entity-first
+  // detection: only a mention-type entity whose sliced text equals @botUsername
+  // counts as a genuine @-mention. This avoids false positives from email
+  // addresses, URLs, and forwarded message text that contain @botname as a
+  // substring but without a real mention entity.
+  if (entities != null) {
+    const fullText = msg.text ?? msg.caption ?? "";
+    for (const ent of entities) {
+      if (ent.type !== "mention") {
+        continue;
+      }
+      const slice = fullText.slice(ent.offset, ent.offset + ent.length).toLowerCase();
+      if (slice === normalizedUsername) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Fall back to text substring check only when no entities field is present
+  // at all — very old clients or certain edge cases may omit the field entirely.
   const text = (msg.text ?? msg.caption ?? "").toLowerCase();
-  if (text.includes(`@${botUsername}`)) {
-    return true;
-  }
-  const entities = msg.entities ?? msg.caption_entities ?? [];
-  for (const ent of entities) {
-    if (ent.type !== "mention") {
-      continue;
-    }
-    const slice = (msg.text ?? msg.caption ?? "").slice(ent.offset, ent.offset + ent.length);
-    if (slice.toLowerCase() === `@${botUsername}`) {
-      return true;
-    }
-  }
-  return false;
+  return text.includes(normalizedUsername);
 }
 
 type TelegramTextLinkEntity = {

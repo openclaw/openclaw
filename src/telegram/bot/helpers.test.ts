@@ -1,9 +1,11 @@
+import type { Message } from "@grammyjs/types";
 import { describe, expect, it } from "vitest";
 import {
   buildTelegramThreadParams,
   buildTypingThreadParams,
   describeReplyTarget,
   expandTextLinks,
+  hasBotMention,
   normalizeForwardedContext,
   resolveTelegramDirectPeerId,
   resolveTelegramForumThreadId,
@@ -393,5 +395,55 @@ describe("expandTextLinks", () => {
     const text = " Hello world";
     const entities = [{ type: "text_link", offset: 1, length: 5, url: "https://example.com" }];
     expect(expandTextLinks(text, entities)).toBe(" [Hello](https://example.com) world");
+  });
+});
+
+describe("hasBotMention", () => {
+  // Helper to build a minimal Message fixture with entities present.
+  const msgWithEntities = (
+    text: string,
+    entities: { type: string; offset: number; length: number }[],
+  ) => ({ text, entities }) as unknown as Message;
+
+  it("returns true for a genuine @-mention entity", () => {
+    // "@mybot" at offset 0, length 6
+    const msg = msgWithEntities("@mybot hello", [{ type: "mention", offset: 0, length: 6 }]);
+    expect(hasBotMention(msg, "mybot")).toBe(true);
+  });
+
+  it("returns false for email containing @botname but no mention entity (false-positive guard)", () => {
+    // The text contains @mybot as part of an email address, but the entity
+    // is type "email", not "mention". Entity-first detection must reject this.
+    const msg = msgWithEntities("contact user@mybot.com for help", [
+      { type: "email", offset: 8, length: 15 },
+    ]);
+    expect(hasBotMention(msg, "mybot")).toBe(false);
+  });
+
+  it("returns false when @botname appears in forwarded text but has no mention entity", () => {
+    // Forwarded message body contains @mybot as plain text, no entities.
+    // Entity array is present but empty — should NOT fall back to text.includes().
+    const msg = msgWithEntities("Forwarded: @mybot please help", []);
+    expect(hasBotMention(msg, "mybot")).toBe(false);
+  });
+
+  it("returns true for a mention entity in caption (photo/video messages)", () => {
+    const msg = {
+      caption: "@mybot look at this",
+      caption_entities: [{ type: "mention", offset: 0, length: 6 }],
+    } as unknown as Message;
+    expect(hasBotMention(msg, "mybot")).toBe(true);
+  });
+
+  it("falls back to text.includes() when entities field is absent entirely", () => {
+    // No entities field at all (old client / edge case) — substring match is the
+    // only signal available.
+    const msg = { text: "hey @mybot are you there" } as unknown as Message;
+    expect(hasBotMention(msg, "mybot")).toBe(true);
+  });
+
+  it("is case-insensitive for both entity slice and botUsername", () => {
+    const msg = msgWithEntities("@MyBot hello", [{ type: "mention", offset: 0, length: 6 }]);
+    expect(hasBotMention(msg, "MYBOT")).toBe(true);
   });
 });
