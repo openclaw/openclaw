@@ -65,7 +65,8 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 **Local mode (default)** walks you through these steps:
 
 1. **Model/Auth** — choose any supported provider/auth flow (API key, OAuth, or setup-token), including Custom Provider
-   (OpenAI-compatible, Anthropic-compatible, or Unknown auto-detect). Pick a default model.
+   (OpenAI-compatible, Anthropic-compatible, or Unknown auto-detect), or **Local Server Provider** for fully custom
+   non-standard endpoints (e.g. uvicorn/FastAPI servers). Pick a default model.
    Security note: if this agent will run tools or process webhook/hooks content, prefer the strongest latest-generation model available and keep tool policy strict. Weaker/older tiers are easier to prompt-inject.
    For non-interactive runs, `--secret-input-mode ref` stores env-backed refs in auth profiles instead of plaintext API key values.
    In non-interactive `ref` mode, the provider env var must be set; passing inline key flags without that env var fails fast.

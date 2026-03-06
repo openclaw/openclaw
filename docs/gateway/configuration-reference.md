@@ -1981,7 +1981,7 @@ OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `model
       "custom-proxy": {
         baseUrl: "http://localhost:4000/v1",
         apiKey: "LITELLM_KEY",
-        api: "openai-completions", // openai-completions | openai-responses | anthropic-messages | google-generative-ai
+        api: "openai-completions", // openai-completions | openai-responses | anthropic-messages | google-generative-ai | local-server
         models: [
           {
             id: "llama-3.1-8b",
@@ -2011,7 +2011,10 @@ OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `model
 
 - `models.mode`: provider catalog behavior (`merge` or `replace`).
 - `models.providers`: custom provider map keyed by provider id.
-- `models.providers.*.api`: request adapter (`openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, etc).
+- `models.providers.*.api`: request adapter (`openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, `local-server`, etc).
+- `models.providers.*.localServer`: required when `api` is `local-server`. Contains:
+  - `template`: JSON request body with placeholders (`{{prompt}}`, `{{model}}`, `{{max_tokens}}`, `{{messages}}`, `{{system}}`).
+  - `responsePath`: dot-path to extract generated text from the JSON response (e.g. `response`, `result.text`).
 - `models.providers.*.apiKey`: provider credential (prefer SecretRef/env substitution).
 - `models.providers.*.auth`: auth strategy (`api-key`, `token`, `oauth`, `aws-sdk`).
 - `models.providers.*.injectNumCtxForOpenAICompat`: for Ollama + `openai-completions`, inject `options.num_ctx` into requests (default: `true`).

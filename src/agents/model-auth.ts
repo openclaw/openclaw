@@ -72,28 +72,38 @@ function resolveSyntheticLocalProviderAuth(params: {
   provider: string;
 }): ResolvedProviderAuth | null {
   const normalizedProvider = normalizeProviderId(params.provider);
-  if (normalizedProvider !== "ollama") {
-    return null;
+
+  if (normalizedProvider === "ollama") {
+    const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+    if (!providerConfig) {
+      return null;
+    }
+    const hasApiConfig =
+      Boolean(providerConfig.api?.trim()) ||
+      Boolean(providerConfig.baseUrl?.trim()) ||
+      (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
+    if (!hasApiConfig) {
+      return null;
+    }
+    return {
+      apiKey: "ollama-local",
+      source: "models.providers.ollama (synthetic local key)",
+      mode: "api-key",
+    };
   }
 
+  // Any provider configured with api=local-server needs no real API key.
+  // Return a synthetic no-op key so the auth check passes.
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
-  if (!providerConfig) {
-    return null;
+  if (providerConfig?.api === "local-server") {
+    return {
+      apiKey: "local-server-no-auth",
+      source: `models.providers.${params.provider} (local-server, no auth required)`,
+      mode: "api-key",
+    };
   }
 
-  const hasApiConfig =
-    Boolean(providerConfig.api?.trim()) ||
-    Boolean(providerConfig.baseUrl?.trim()) ||
-    (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
-  if (!hasApiConfig) {
-    return null;
-  }
-
-  return {
-    apiKey: "ollama-local",
-    source: "models.providers.ollama (synthetic local key)",
-    mode: "api-key",
-  };
+  return null;
 }
 
 function resolveEnvSourceLabel(params: {

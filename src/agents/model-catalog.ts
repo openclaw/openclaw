@@ -115,7 +115,9 @@ function readConfiguredOptInProviderModels(config: OpenClawConfig): ModelCatalog
   const out: ModelCatalogEntry[] = [];
   for (const [providerRaw, providerValue] of Object.entries(providers)) {
     const provider = providerRaw.toLowerCase().trim();
-    if (!NON_PI_NATIVE_MODEL_PROVIDERS.has(provider)) {
+    const providerApi = (providerValue as { api?: unknown }).api;
+    const isLocalServer = providerApi === "local-server";
+    if (!NON_PI_NATIVE_MODEL_PROVIDERS.has(provider) && !isLocalServer) {
       continue;
     }
     if (!providerValue || typeof providerValue !== "object") {
