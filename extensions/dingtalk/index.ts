@@ -12,6 +12,7 @@ export {
   sendMessageDingtalk,
 } from "./src/send.js";
 export { uploadMedia, downloadMessageFile, sendImageMessage } from "./src/media.js";
+export { createAICard, streamAICard, finishAICard } from "./src/card.js";
 export { probeDingtalk } from "./src/probe.js";
 export { dingtalkPlugin } from "./src/channel.js";
 

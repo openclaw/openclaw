@@ -98,7 +98,19 @@ In **应用功能** > **机器人**:
 2. Set the robot name
 3. **Select Stream mode** (消息接收模式选择 Stream 模式)
 
-### 5. Publish the app
+### 5. Grant permissions
+
+In **权限管理**, grant the following permissions based on the features you need:
+
+| Permission | Required for | Description |
+| --- | --- | --- |
+| `qyapi_robot_sendmsg` | **Always** | Send messages as a robot (proactive messaging) |
+| `Card.Instance.Write` | AI Card streaming | Create interactive card instances |
+| `Card.Streaming.Write` | AI Card streaming | Stream content to interactive cards |
+
+After granting permissions, you must **publish/re-publish the app** for the changes to take effect.
+
+### 6. Publish the app
 
 1. In **版本管理与发布**, create a new version
 2. Set the visible range (which users/departments can access the bot)
@@ -359,21 +371,27 @@ DingTalk has different media support between DM and group chats:
 - `textChunkLimit`: outbound text chunk size (default: 2000 chars)
 - `mediaMaxMb`: media upload/download limit (default: 20MB)
 
-### Streaming
+### Streaming (AI Card)
 
-DingTalk supports streaming replies via interactive cards. When enabled, the bot sends a card and updates it incrementally as it generates text (typewriter effect).
+DingTalk supports streaming replies via [AI interactive cards](https://open.dingtalk.com/document/isvapp/streaming-interactive-card). When enabled, the bot creates a card and updates it incrementally as the AI generates text (typewriter effect).
+
+**Prerequisites:** The DingTalk app must have `Card.Instance.Write` and `Card.Streaming.Write` permissions enabled. See [Grant permissions](#5-grant-permissions).
 
 ```json5
 {
   channels: {
     dingtalk: {
-      streaming: true, // enable streaming card output (default true)
+      streaming: {
+        enabled: true,
+      },
     },
   },
 }
 ```
 
-Set `streaming: false` to wait for the full reply before sending.
+If card creation fails at runtime (e.g., permissions not granted), the bot automatically falls back to plain text messages.
+
+Set `streaming.enabled: false` (default) to always send the full reply as a single text/Markdown message.
 
 ### Multi-agent routing
 
@@ -444,7 +462,7 @@ Key options:
 | `channels.dingtalk.groups.<conversationId>.enabled`        | Enable/disable group                    | `true`     |
 | `channels.dingtalk.textChunkLimit`                         | Message chunk size                      | `2000`     |
 | `channels.dingtalk.mediaMaxMb`                             | Media size limit                        | `20`       |
-| `channels.dingtalk.streaming`                              | Enable streaming card output            | `true`     |
+| `channels.dingtalk.streaming.enabled`                      | Enable AI Card streaming output         | `false`    |
 | `channels.dingtalk.resolveSenderNames`                     | Resolve sender display names            | `true`     |
 
 ---
@@ -456,6 +474,36 @@ Key options:
 | `"pairing"`   | **Default.** Unknown users get a pairing code; must be approved |
 | `"allowlist"` | Only users in `allowFrom` can chat                              |
 | `"open"`      | Allow all users (requires `"*"` in allowFrom)                   |
+
+---
+
+## Proactive messaging
+
+OpenClaw supports sending messages proactively to DingTalk users or groups — without waiting for a user to send a message first. This uses the DingTalk robot messaging API (`/v1.0/robot/oToMessages/batchSend` for DMs, `/v1.0/robot/groupMessages/send` for groups).
+
+**Prerequisite:** The DingTalk app must have the `qyapi_robot_sendmsg` permission.
+
+### CLI
+
+```bash
+# Send to a user (by staffId)
+openclaw message send --channel dingtalk --to "staffId123" --text "Hello!"
+
+# Send to a group (by conversationId)
+openclaw message send --channel dingtalk --to "cidXXXXXX" --text "Hello group!"
+```
+
+### API
+
+Use the outbound API with `channel: "dingtalk"`:
+
+- **`sendText`**: Send text or Markdown to a target (auto-detects format)
+- **`sendMedia`**: Send an image (via URL) or file link
+
+Target format:
+
+- **User DM**: use the `staffId` as the target
+- **Group**: use the `conversationId` (e.g., `cidXXXXXX`) as the target
 
 ---
 

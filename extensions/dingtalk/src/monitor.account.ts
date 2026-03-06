@@ -26,10 +26,15 @@ export async function monitorSingleAccount(params: {
     account,
     abortSignal,
     log,
-    onMessage: (downstream: DWClientDownStream) => {
+    onMessage: (downstream: DWClientDownStream, ack) => {
+      const streamMessageId = downstream.headers?.messageId;
+
+      // Immediately acknowledge the callback to prevent DingTalk from re-delivering (~60s timeout)
+      if (streamMessageId) ack(streamMessageId);
+
       try {
         const msg = JSON.parse(downstream.data) as DingtalkRobotMessage;
-        const rawMessageId = msg.msgId ?? downstream.headers?.messageId;
+        const rawMessageId = msg.msgId ?? streamMessageId;
         const messageId = rawMessageId ? `${account.accountId}:${rawMessageId}` : undefined;
 
         if (messageId && dedupeCache.check(messageId)) {
@@ -37,7 +42,6 @@ export async function monitorSingleAccount(params: {
           return;
         }
 
-        // 异步处理消息 / Process message asynchronously
         handleDingtalkMessage({
           cfg,
           account,
