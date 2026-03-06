@@ -181,6 +181,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   });
 
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
+  const typingReaction = ctx.typingReaction;
   const typingCallbacks = createTypingCallbacks({
     start: async () => {
       didSetStatus = true;
@@ -189,6 +190,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         threadTs: statusThreadTs,
         status: "is typing...",
       });
+      if (typingReaction && message.ts) {
+        await reactSlackMessage(message.channel, message.ts, typingReaction, {
+          token: ctx.botToken,
+          client: ctx.app.client,
+        }).catch(() => {});
+      }
     },
     stop: async () => {
       if (!didSetStatus) {
@@ -200,6 +207,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         threadTs: statusThreadTs,
         status: "",
       });
+      if (typingReaction && message.ts) {
+        await removeSlackReaction(message.channel, message.ts, typingReaction, {
+          token: ctx.botToken,
+          client: ctx.app.client,
+        }).catch(() => {});
+      }
     },
     onStartError: (err) => {
       logTypingFailure({

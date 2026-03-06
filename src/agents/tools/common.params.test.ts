@@ -48,6 +48,16 @@ describe("readNumberParam", () => {
     expect(readNumberParam(params, "messageId")).toBe(42);
   });
 
+  it("keeps partial parse behavior by default", () => {
+    const params = { messageId: "42abc" };
+    expect(readNumberParam(params, "messageId")).toBe(42);
+  });
+
+  it("rejects partial numeric strings when strict is enabled", () => {
+    const params = { messageId: "42abc" };
+    expect(readNumberParam(params, "messageId", { strict: true })).toBeUndefined();
+  });
+
   it("truncates when integer is true", () => {
     const params = { messageId: "42.9" };
     expect(readNumberParam(params, "messageId", { integer: true })).toBe(42);
