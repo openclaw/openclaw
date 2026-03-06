@@ -8,11 +8,11 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
+  waitUntilAbort,
   type ChannelPlugin,
   type OpenClawConfig,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/nextcloud-talk";
-import { waitForAbortSignal } from "../../../src/infra/abort-signal.js";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
@@ -336,7 +336,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
       });
 
       // Keep webhook channels pending for the account lifecycle.
-      await waitForAbortSignal(ctx.abortSignal);
+      await waitUntilAbort(ctx.abortSignal);
       stop();
     },
     logoutAccount: async ({ accountId, cfg }) => {
