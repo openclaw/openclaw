@@ -28,6 +28,8 @@ export type ContextualActivationConfig = {
   baseRate?: number;
   /** Time-based baseRate overrides. First matching rule wins. */
   schedule?: ScheduleRule[];
+  /** IANA timezone for schedule rules (e.g. "Asia/Singapore", "America/New_York"). Defaults to system local time. */
+  timezone?: string;
   /** Fallback timeout (seconds) after which engaged mode auto-expires if no new messages arrive. Default: 300. */
   engagedTimeout?: number;
 };
@@ -484,7 +486,28 @@ function resolveScheduledBaseRate(config: ContextualActivationConfig): number {
   }
 
   const now = new Date();
-  const nowMin = now.getHours() * 60 + now.getMinutes();
+  let hours: number;
+  let minutes: number;
+  if (config.timezone) {
+    try {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: config.timezone,
+        hour: "numeric",
+        minute: "numeric",
+        hour12: false,
+      }).formatToParts(now);
+      hours = Number(parts.find((p) => p.type === "hour")?.value ?? now.getHours());
+      minutes = Number(parts.find((p) => p.type === "minute")?.value ?? now.getMinutes());
+    } catch {
+      // Invalid timezone — fall back to local
+      hours = now.getHours();
+      minutes = now.getMinutes();
+    }
+  } else {
+    hours = now.getHours();
+    minutes = now.getMinutes();
+  }
+  const nowMin = hours * 60 + minutes;
 
   for (const rule of rules) {
     const parts = rule.time.split("-");
