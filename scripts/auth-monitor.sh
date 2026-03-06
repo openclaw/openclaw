@@ -34,7 +34,10 @@ send_notification() {
 
     _log "$message"
 
-    (( (NOW - LAST_NOTIFIED) < MIN_INTERVAL )) && { echo "Skipping notification (sent recently)"; return; }
+    if [ $(( NOW - LAST_NOTIFIED )) -lt "$MIN_INTERVAL" ]; then
+        echo "Skipping notification (sent recently)"
+        return
+    fi
 
     if [ -n "$NOTIFY_PHONE" ]; then
         if "$SCRIPT_DIR/claude-auth-status.sh" simple 2>/dev/null | grep -q "OK\|EXPIRING"; then
