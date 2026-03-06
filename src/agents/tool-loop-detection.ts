@@ -34,6 +34,7 @@ const DEFAULT_LOOP_DETECTION_CONFIG = {
   warningThreshold: WARNING_THRESHOLD,
   criticalThreshold: CRITICAL_THRESHOLD,
   globalCircuitBreakerThreshold: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+  maxSteps: 0,
   detectors: {
     genericRepeat: true,
     knownPollNoProgress: true,
@@ -47,6 +48,8 @@ type ResolvedLoopDetectionConfig = {
   warningThreshold: number;
   criticalThreshold: number;
   globalCircuitBreakerThreshold: number;
+  /** Hard cap on total tool calls per run. 0 = disabled. */
+  maxSteps: number;
   detectors: {
     genericRepeat: boolean;
     knownPollNoProgress: boolean;
@@ -74,6 +77,11 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
     config?.globalCircuitBreakerThreshold,
     DEFAULT_LOOP_DETECTION_CONFIG.globalCircuitBreakerThreshold,
   );
+  // maxSteps: 0 or undefined means disabled; any positive integer enables the hard cap.
+  const maxSteps =
+    typeof config?.maxSteps === "number" && Number.isInteger(config.maxSteps) && config.maxSteps > 0
+      ? config.maxSteps
+      : DEFAULT_LOOP_DETECTION_CONFIG.maxSteps;
 
   if (criticalThreshold <= warningThreshold) {
     criticalThreshold = warningThreshold + 1;
@@ -88,6 +96,7 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
     warningThreshold,
     criticalThreshold,
     globalCircuitBreakerThreshold,
+    maxSteps,
     detectors: {
       genericRepeat:
         config?.detectors?.genericRepeat ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.genericRepeat,
@@ -368,14 +377,34 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
 /**
  * Detect if an agent is stuck in a repetitive tool call loop.
  * Checks if the same tool+params combination has been called excessively.
+ * Also enforces the maxSteps hard cap (recursion_limit) when configured. (#37022)
  */
 export function detectToolCallLoop(
   state: SessionState,
   toolName: string,
   params: unknown,
   config?: ToolLoopDetectionConfig,
+  runId?: string,
 ): LoopDetectionResult {
   const resolvedConfig = resolveLoopDetectionConfig(config);
+  // maxSteps is enforced independently of `enabled` so it works even when
+  // pattern-based loop detection is disabled.
+  if (resolvedConfig.maxSteps > 0 && runId) {
+    const stepCount = state.runToolCallCounts?.get(runId) ?? 0;
+    if (stepCount >= resolvedConfig.maxSteps) {
+      log.error(
+        `maxSteps limit reached: runId=${runId} stepCount=${stepCount} maxSteps=${resolvedConfig.maxSteps}`,
+      );
+      return {
+        stuck: true,
+        level: "critical",
+        detector: "global_circuit_breaker",
+        count: stepCount,
+        message: `CRITICAL: Agent has exceeded the configured maxSteps limit of ${resolvedConfig.maxSteps} tool calls. Execution blocked to prevent infinite loops (recursion_limit). Use tools.loopDetection.maxSteps to adjust this limit.`,
+        warningKey: `maxsteps:${runId}`,
+      };
+    }
+  }
   if (!resolvedConfig.enabled) {
     return { stuck: false };
   }
@@ -496,7 +525,7 @@ export function detectToolCallLoop(
 
 /**
  * Record a tool call in the session's history for loop detection.
- * Maintains sliding window of last N calls.
+ * Maintains sliding window of last N calls and increments per-run step counter. (#37022)
  */
 export function recordToolCall(
   state: SessionState,
@@ -504,6 +533,7 @@ export function recordToolCall(
   params: unknown,
   toolCallId?: string,
   config?: ToolLoopDetectionConfig,
+  runId?: string,
 ): void {
   const resolvedConfig = resolveLoopDetectionConfig(config);
   if (!state.toolCallHistory) {
@@ -519,6 +549,21 @@ export function recordToolCall(
 
   if (state.toolCallHistory.length > resolvedConfig.historySize) {
     state.toolCallHistory.shift();
+  }
+
+  // Increment per-run step counter used by maxSteps enforcement.
+  if (runId) {
+    if (!state.runToolCallCounts) {
+      state.runToolCallCounts = new Map();
+    }
+    state.runToolCallCounts.set(runId, (state.runToolCallCounts.get(runId) ?? 0) + 1);
+    // Prune stale run entries to avoid unbounded growth (keep last 64 runs).
+    if (state.runToolCallCounts.size > 64) {
+      const oldestKey = state.runToolCallCounts.keys().next().value;
+      if (oldestKey) {
+        state.runToolCallCounts.delete(oldestKey);
+      }
+    }
   }
 }
 

@@ -591,4 +591,89 @@ describe("tool-loop-detection", () => {
       expect(stats.mostFrequent?.count).toBe(7);
     });
   });
+
+  describe("maxSteps (recursion_limit)", () => {
+    it("does not block when maxSteps is not configured", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = { enabled: false };
+      const runId = "run-abc";
+      // Record many tool calls without setting maxSteps
+      for (let i = 0; i < 50; i += 1) {
+        recordToolCall(state, "read", { path: `/file-${i}.txt` }, `tc-${i}`, config, runId);
+      }
+      const result = detectToolCallLoop(state, "read", { path: "/file-50.txt" }, config, runId);
+      expect(result.stuck).toBe(false);
+    });
+
+    it("blocks when maxSteps limit is reached", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = { enabled: false, maxSteps: 3 };
+      const runId = "run-limit";
+      // Record exactly maxSteps calls
+      for (let i = 0; i < 3; i += 1) {
+        recordToolCall(state, "read", { path: `/file-${i}.txt` }, `tc-${i}`, config, runId);
+      }
+      // The 4th call should be blocked
+      const result = detectToolCallLoop(state, "read", { path: "/file-3.txt" }, config, runId);
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.level).toBe("critical");
+        expect(result.detector).toBe("global_circuit_breaker");
+        expect(result.count).toBe(3);
+        expect(result.message).toMatch(/maxSteps limit/i);
+      }
+    });
+
+    it("does not block below maxSteps limit", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = { enabled: false, maxSteps: 5 };
+      const runId = "run-below";
+      // Record 4 calls (below limit of 5)
+      for (let i = 0; i < 4; i += 1) {
+        recordToolCall(state, "read", { path: `/file-${i}.txt` }, `tc-${i}`, config, runId);
+      }
+      const result = detectToolCallLoop(state, "read", { path: "/file-4.txt" }, config, runId);
+      expect(result.stuck).toBe(false);
+    });
+
+    it("enforces maxSteps even when pattern-based detection is disabled", () => {
+      const state = createState();
+      // enabled=false disables pattern detection but maxSteps still works
+      const config: ToolLoopDetectionConfig = { enabled: false, maxSteps: 2 };
+      const runId = "run-disabled";
+      for (let i = 0; i < 2; i += 1) {
+        recordToolCall(state, "unique", { id: i }, `tc-${i}`, config, runId);
+      }
+      const result = detectToolCallLoop(state, "unique", { id: 2 }, config, runId);
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.level).toBe("critical");
+      }
+    });
+
+    it("tracks steps independently per runId", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = { enabled: false, maxSteps: 2 };
+      const runId1 = "run-one";
+      const runId2 = "run-two";
+      // Fill up run-one
+      for (let i = 0; i < 2; i += 1) {
+        recordToolCall(state, "read", { path: `/f${i}` }, `tc${i}`, config, runId1);
+      }
+      // run-one is blocked
+      const result1 = detectToolCallLoop(state, "read", { path: "/f3" }, config, runId1);
+      expect(result1.stuck).toBe(true);
+      // run-two is independent and not blocked
+      const result2 = detectToolCallLoop(state, "read", { path: "/f3" }, config, runId2);
+      expect(result2.stuck).toBe(false);
+    });
+
+    it("ignores maxSteps when runId is not provided", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = { enabled: false, maxSteps: 1 };
+      // No runId — maxSteps cannot be enforced without a run identifier
+      const result = detectToolCallLoop(state, "read", { path: "/file.txt" }, config, undefined);
+      expect(result.stuck).toBe(false);
+    });
+  });
 });

@@ -9,6 +9,8 @@ export type SessionState = {
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
+  /** Per-run total tool call counts for maxSteps enforcement. Keys are runIds. (#37022) */
+  runToolCallCounts?: Map<string, number>;
 };
 
 export type ToolCallRecord = {

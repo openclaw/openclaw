@@ -521,6 +521,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Critical threshold for repetitive patterns when detector is enabled (default: 20).",
   "tools.loopDetection.globalCircuitBreakerThreshold":
     "Global no-progress breaker threshold (default: 30).",
+  "tools.loopDetection.maxSteps":
+    "Hard cap on total tool calls per agent run (recursion_limit). When an agent exceeds this many tool calls the run is blocked regardless of pattern. 0 = disabled (default). Equivalent to LangGraph recursion_limit.",
   "tools.loopDetection.detectors.genericRepeat":
     "Enable generic repeated same-tool/same-params loop detection (default: true).",
   "tools.loopDetection.detectors.knownPollNoProgress":

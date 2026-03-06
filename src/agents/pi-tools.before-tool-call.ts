@@ -105,7 +105,13 @@ export async function runBeforeToolCallHook(args: {
       sessionId: args.ctx?.agentId,
     });
 
-    const loopResult = detectToolCallLoop(sessionState, toolName, params, args.ctx.loopDetection);
+    const loopResult = detectToolCallLoop(
+      sessionState,
+      toolName,
+      params,
+      args.ctx.loopDetection,
+      args.ctx.runId,
+    );
 
     if (loopResult.stuck) {
       if (loopResult.level === "critical") {
@@ -144,7 +150,14 @@ export async function runBeforeToolCallHook(args: {
       }
     }
 
-    recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
+    recordToolCall(
+      sessionState,
+      toolName,
+      params,
+      args.toolCallId,
+      args.ctx.loopDetection,
+      args.ctx.runId,
+    );
   }
 
   const hookRunner = getGlobalHookRunner();

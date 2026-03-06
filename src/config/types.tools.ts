@@ -161,6 +161,13 @@ export type ToolLoopDetectionConfig = {
   criticalThreshold?: number;
   /** Global no-progress breaker threshold (default: 30). */
   globalCircuitBreakerThreshold?: number;
+  /**
+   * Hard cap on total tool calls per agent run (recursion_limit / max_steps).
+   * When the agent exceeds this many tool calls in a single session run, further
+   * tool execution is blocked regardless of pattern. Set to 0 or omit to disable.
+   * Equivalent to LangGraph's recursion_limit. (#37022)
+   */
+  maxSteps?: number;
   /** Detector toggles. */
   detectors?: ToolLoopDetectionDetectorConfig;
 };
