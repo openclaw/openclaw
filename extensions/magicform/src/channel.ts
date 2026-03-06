@@ -252,10 +252,19 @@ export function createMagicFormPlugin() {
               CommandAuthorized: true,
             });
 
-            // Dispatch via the SDK's buffered block dispatcher
+            // Dispatch via the SDK's buffered block dispatcher.
+            // Pass per-request overrides from the webhook payload through replyOptions
+            // so they reach getReplyFromConfig → workspace/config-dir/tool resolution.
             await rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
               ctx: msgCtx,
               cfg: currentCfg,
+              replyOptions: {
+                workspaceOverride: msg.workspaceOverride,
+                configDirOverride: msg.configDirOverride,
+                toolsProfileOverride: msg.toolsProfileOverride,
+                toolsAllowOverride: msg.toolsAllowOverride,
+                toolsDenyOverride: msg.toolsDenyOverride,
+              },
               dispatcherOptions: {
                 deliver: async (payload: { text?: string; body?: string }) => {
                   const text = payload?.text ?? payload?.body;

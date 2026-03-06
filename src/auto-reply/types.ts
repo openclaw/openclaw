@@ -66,6 +66,16 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Override workspace directory for this invocation (channel webhook use case). */
+  workspaceOverride?: string;
+  /** Directory containing bootstrap .md config files to copy into workspace. */
+  configDirOverride?: string;
+  /** Tool profile override (minimal | coding | messaging | full). */
+  toolsProfileOverride?: string;
+  /** Tool allowlist override. */
+  toolsAllowOverride?: string[];
+  /** Tool denylist override. */
+  toolsDenyOverride?: string[];
 };
 
 export type ReplyPayload = {

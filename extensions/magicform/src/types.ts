@@ -47,7 +47,16 @@ export interface MagicFormWebhookPayload {
   conversation_id: string;
   user_id: string;
   user_name?: string;
+  /** Workspace directory for agent-generated files (scoped by memory_scope). */
   workspace?: string;
+  /** Directory containing bootstrap .md config files (AGENTS.md, IDENTITY.md, SOUL.md, etc.). */
+  config_dir?: string;
+  /** Tool profile override (minimal | coding | messaging | full). */
+  tools_profile?: string;
+  /** Tool allowlist override. */
+  tools_allow?: string[];
+  /** Tool denylist override. */
+  tools_deny?: string[];
   metadata?: Record<string, unknown>;
 }
 

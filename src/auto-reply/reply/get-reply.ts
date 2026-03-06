@@ -1,3 +1,5 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -11,6 +13,7 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
@@ -101,12 +104,91 @@ export async function getReplyFromConfig(
     }
   }
 
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  // Apply channel/webhook overrides for workspace, config-dir, and tool policy.
+  // These mirror the CLI override logic in agentCommandInternal (commands/agent.ts).
+  const workspaceBaseDir = cfg.agents?.defaults?.workspaceBaseDir?.trim();
+
+  const workspaceDirRaw = opts?.workspaceOverride?.trim()
+    || resolveAgentWorkspaceDir(cfg, agentId)
+    || DEFAULT_AGENT_WORKSPACE_DIR;
+
+  if (opts?.workspaceOverride?.trim() && workspaceBaseDir) {
+    const resolved = path.resolve(opts.workspaceOverride.trim());
+    const base = path.resolve(workspaceBaseDir);
+    if (!resolved.startsWith(base + path.sep) && resolved !== base) {
+      throw new Error(
+        `workspace override must be under workspaceBaseDir (${base}), got: ${resolved}`,
+      );
+    }
+  }
+
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
   });
   const workspaceDir = workspace.dir;
+
+  // Copy bootstrap .md files from configDirOverride into workspace
+  if (opts?.configDirOverride) {
+    const configDir = path.resolve(opts.configDirOverride.trim());
+
+    if (workspaceBaseDir) {
+      const base = path.resolve(workspaceBaseDir);
+      if (!configDir.startsWith(base + path.sep) && configDir !== base) {
+        throw new Error(
+          `config-dir override must be under workspaceBaseDir (${base}), got: ${configDir}`,
+        );
+      }
+    }
+
+    try {
+      await fs.access(configDir);
+    } catch {
+      defaultRuntime.error?.(`config-dir path does not exist: ${configDir}`);
+    }
+    const bootstrapFileNames = [
+      "AGENTS.md", "IDENTITY.md", "SOUL.md", "TOOLS.md",
+      "USER.md", "HEARTBEAT.md", "BOOTSTRAP.md",
+    ];
+    for (const filename of bootstrapFileNames) {
+      const srcPath = path.join(configDir, filename);
+      try {
+        const content = await fs.readFile(srcPath, "utf-8");
+        await fs.writeFile(path.join(workspaceDir, filename), content, "utf-8");
+      } catch (err: any) {
+        if (err.code !== "ENOENT") throw err;
+      }
+    }
+  }
+
+  // Apply tool policy overrides
+  const VALID_TOOL_PROFILES = ["minimal", "coding", "messaging", "full"];
+  if (opts?.toolsProfileOverride && !VALID_TOOL_PROFILES.includes(opts.toolsProfileOverride)) {
+    throw new Error(
+      `Invalid tools-profile "${opts.toolsProfileOverride}". Use one of: ${VALID_TOOL_PROFILES.join(", ")}`,
+    );
+  }
+  if (opts?.toolsProfileOverride || opts?.toolsAllowOverride || opts?.toolsDenyOverride) {
+    const agentEntry = cfg.agents?.list?.find(
+      (a: any) => normalizeAgentId(a.id) === agentId,
+    );
+    const toolsOverride: Record<string, unknown> = { ...(agentEntry?.tools ?? {}) };
+    if (opts.toolsProfileOverride) toolsOverride.profile = opts.toolsProfileOverride;
+    if (opts.toolsAllowOverride) toolsOverride.allow = opts.toolsAllowOverride;
+    if (opts.toolsDenyOverride) toolsOverride.deny = opts.toolsDenyOverride;
+
+    if (agentEntry) {
+      agentEntry.tools = toolsOverride as any;
+    } else {
+      cfg.agents = cfg.agents ?? {};
+      cfg.agents.list = cfg.agents.list ?? [];
+      cfg.agents.list.push({
+        id: agentId,
+        tools: toolsOverride,
+      } as any);
+    }
+  }
+
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =

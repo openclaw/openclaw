@@ -80,6 +80,14 @@ function parsePayload(body: string): MagicFormWebhookPayload | null {
     user_id: userId,
     user_name: typeof parsed.user_name === "string" ? parsed.user_name.trim() : undefined,
     workspace: typeof parsed.workspace === "string" ? parsed.workspace.trim() : undefined,
+    config_dir: typeof parsed.config_dir === "string" ? parsed.config_dir.trim() : undefined,
+    tools_profile: typeof parsed.tools_profile === "string" ? parsed.tools_profile.trim() : undefined,
+    tools_allow: Array.isArray(parsed.tools_allow)
+      ? parsed.tools_allow.filter((s: unknown): s is string => typeof s === "string")
+      : undefined,
+    tools_deny: Array.isArray(parsed.tools_deny)
+      ? parsed.tools_deny.filter((s: unknown): s is string => typeof s === "string")
+      : undefined,
     metadata: typeof parsed.metadata === "object" && parsed.metadata ? parsed.metadata : undefined,
   };
 }
@@ -99,6 +107,12 @@ export interface WebhookHandlerDeps {
     chatType: string;
     sessionKey: string;
     accountId: string;
+    /** Per-request overrides from webhook payload. */
+    workspaceOverride?: string;
+    configDirOverride?: string;
+    toolsProfileOverride?: string;
+    toolsAllowOverride?: string[];
+    toolsDenyOverride?: string[];
   }) => Promise<string | null>;
   log?: {
     info: (...args: unknown[]) => void;
@@ -209,6 +223,11 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
             chatType: "direct",
             sessionKey,
             accountId: account.accountId,
+            workspaceOverride: payload.workspace,
+            configDirOverride: payload.config_dir,
+            toolsProfileOverride: payload.tools_profile,
+            toolsAllowOverride: payload.tools_allow,
+            toolsDenyOverride: payload.tools_deny,
           }),
           timeoutPromise,
         ]);
