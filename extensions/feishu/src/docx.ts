@@ -809,6 +809,23 @@ async function createDoc(
   };
 }
 
+async function createDocWithContent(
+  client: Lark.Client,
+  title: string,
+  markdown: string,
+  maxBytes: number,
+  options?: { folderToken?: string; grantToRequester?: boolean; requesterOpenId?: string },
+  logger?: Logger,
+) {
+  const created = await createDoc(client, title, options?.folderToken, {
+    grantToRequester: options?.grantToRequester,
+    requesterOpenId: options?.requesterOpenId,
+  });
+  const docToken = created.document_id;
+  const written = await writeDoc(client, docToken, markdown, maxBytes, logger);
+  return { ...created, ...written };
+}
+
 async function writeDoc(
   client: Lark.Client,
   docToken: string,
@@ -1268,7 +1285,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           name: "feishu_doc",
           label: "Feishu Doc",
           description:
-            "Feishu document operations. Actions: read, write, append, insert, create, list_blocks, get_block, update_block, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file, color_text",
+            "Feishu document operations. Actions: read, write, append, insert, create, create_with_content, list_blocks, get_block, update_block, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file, color_text",
           parameters: FeishuDocSchema,
           async execute(_toolCallId, params) {
             const p = params as FeishuDocExecuteParams;
@@ -1314,6 +1331,21 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       grantToRequester: p.grant_to_requester,
                       requesterOpenId: trustedRequesterOpenId,
                     }),
+                  );
+                case "create_with_content":
+                  return json(
+                    await createDocWithContent(
+                      client,
+                      p.title,
+                      p.content,
+                      getMediaMaxBytes(p, defaultAccountId),
+                      {
+                        folderToken: p.folder_token,
+                        grantToRequester: p.grant_to_requester,
+                        requesterOpenId: trustedRequesterOpenId,
+                      },
+                      api.logger,
+                    ),
                   );
                 case "list_blocks":
                   return json(await listBlocks(client, p.doc_token));

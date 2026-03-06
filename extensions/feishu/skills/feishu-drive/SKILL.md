@@ -1,7 +1,7 @@
 ---
 name: feishu-drive
 description: |
-  Feishu cloud storage file management. Activate when user mentions cloud space, folders, drive.
+  Feishu cloud storage file management. Activate when user mentions cloud space, folders, drive, file upload, or document import.
 ---
 
 # Feishu Drive Tool
@@ -62,6 +62,54 @@ In parent folder:
 { "action": "delete", "file_token": "ABC123", "type": "docx" }
 ```
 
+### Upload Text as File
+
+```json
+{
+  "action": "upload",
+  "file_name": "report.md",
+  "content": "# Report\n\nContent here...",
+  "folder_token": "fldcnXXX"
+}
+```
+
+Uploads text content as a file to the specified folder. Returns `file_token` for subsequent operations (e.g. import). Maximum file size: 20MB.
+
+### Import File to Feishu Document
+
+```json
+{
+  "action": "import",
+  "file_token": "boxcnXXX",
+  "file_extension": "md",
+  "target_type": "docx",
+  "folder_token": "fldcnXXX"
+}
+```
+
+Converts an uploaded file into a native Feishu document. Supported source formats: `md`, `docx`, `csv`, `xlsx`. Target types: `docx` (document), `sheet` (spreadsheet).
+
+This action polls for completion (up to 30s) and returns the new document token and URL.
+
+## Upload + Import Workflow
+
+For creating Feishu documents from rich content (especially content with tables):
+
+1. **Upload** the content as a .md file to a folder
+2. **Import** the uploaded file as a Feishu docx
+
+```json
+// Step 1: Upload markdown file
+{ "action": "upload", "file_name": "report.md", "content": "# Report\n\n| Col1 | Col2 |\n|---|---|\n| A | B |", "folder_token": "fldcnXXX" }
+// Returns: { "file_token": "boxcnXXX" }
+
+// Step 2: Import as Feishu document
+{ "action": "import", "file_token": "boxcnXXX", "file_extension": "md", "target_type": "docx", "folder_token": "fldcnXXX" }
+// Returns: { "token": "doccnYYY", "url": "https://...", "type": "docx" }
+```
+
+This workflow supports Markdown tables and other complex formatting that `feishu_doc write` cannot handle.
+
 ## File Types
 
 | Type       | Description             |
@@ -86,8 +134,9 @@ channels:
 
 ## Permissions
 
-- `drive:drive` - Full access (create, move, delete)
+- `drive:drive` - Full access (create, move, delete, upload, import)
 - `drive:drive:readonly` - Read only (list, info)
+- `drive:file` - File upload
 
 ## Known Limitations
 
@@ -95,3 +144,5 @@ channels:
   - `create_folder` without `folder_token` will fail (400 error)
   - Bot can only access files/folders that have been **shared with it**
   - **Workaround**: User must first create a folder manually and share it with the bot, then bot can create subfolders inside it
+- **Upload size limit**: 20MB per file via `uploadAll` API
+- **Import format support**: Not all formats are supported; `md` and `docx` are most reliable for document import

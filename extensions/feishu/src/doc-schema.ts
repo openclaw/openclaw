@@ -51,6 +51,18 @@ export const FeishuDocSchema = Type.Union([
     ),
   }),
   Type.Object({
+    action: Type.Literal("create_with_content"),
+    title: Type.String({ description: "Document title" }),
+    content: Type.String({ description: "Markdown content to write into the new document" }),
+    folder_token: Type.Optional(Type.String({ description: "Target folder token (optional)" })),
+    grant_to_requester: Type.Optional(
+      Type.Boolean({
+        description:
+          "Grant edit permission to the trusted requesting Feishu user from runtime context (default: true).",
+      }),
+    ),
+  }),
+  Type.Object({
     action: Type.Literal("list_blocks"),
     doc_token: Type.String({ description: "Document token" }),
   }),

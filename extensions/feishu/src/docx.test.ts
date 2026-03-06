@@ -442,4 +442,52 @@ describe("feishu_doc image fetch hardening", () => {
       await fs.unlink(localPath);
     }
   });
+
+  it("create_with_content creates a doc and writes content in one step", async () => {
+    documentCreateMock.mockResolvedValue({
+      code: 0,
+      data: { document: { document_id: "doc_new", title: "Test Doc" } },
+    });
+    blockListMock.mockResolvedValue({ code: 0, data: { items: [] } });
+    convertMock.mockResolvedValue({
+      code: 0,
+      data: { blocks: [{ block_type: 2, block_id: "b1" }], first_level_block_ids: ["b1"] },
+    });
+    blockDescendantCreateMock.mockResolvedValue({
+      code: 0,
+      data: { children: [{ block_type: 2, block_id: "b1" }] },
+    });
+
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: { appId: "app_id", appSecret: "app_secret" },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
+      .find((tool) => tool.name === "feishu_doc");
+    expect(feishuDocTool).toBeDefined();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "create_with_content",
+      title: "Test Doc",
+      content: "# Hello\n\nWorld",
+      folder_token: "fld_test",
+    });
+
+    expect(result.details.document_id).toBe("doc_new");
+    expect(result.details.success).toBe(true);
+    expect(result.details.blocks_added).toBe(1);
+    expect(documentCreateMock).toHaveBeenCalledWith({
+      data: { title: "Test Doc", folder_token: "fld_test" },
+    });
+    expect(convertMock).toHaveBeenCalled();
+  });
 });
