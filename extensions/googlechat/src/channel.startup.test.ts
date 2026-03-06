@@ -1,4 +1,4 @@
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/googlechat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStartAccountContext } from "../../test-utils/start-account-context.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -48,18 +48,14 @@ describe("googlechatPlugin gateway.startAccount", () => {
         statusPatchSink: (next) => patches.push({ ...next }),
       }),
     );
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
     let settled = false;
     void task.then(() => {
       settled = true;
     });
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() => {
+      expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce();
+    });
     expect(settled).toBe(false);
-
-    expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce();
     expect(unregister).not.toHaveBeenCalled();
 
     abort.abort();

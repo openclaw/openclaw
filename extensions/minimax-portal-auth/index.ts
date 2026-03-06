@@ -3,7 +3,7 @@ import {
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthResult,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/minimax-portal-auth";
 import { loginMiniMaxPortalOAuth, type MiniMaxRegion } from "./oauth.js";
 
 const PROVIDER_ID = "minimax-portal";
@@ -85,13 +85,19 @@ function createOAuthHandler(region: MiniMaxRegion) {
                 api: "anthropic-messages",
                 models: [
                   buildModelDefinition({
-                    id: "MiniMax-M2.1",
-                    name: "MiniMax M2.1",
+                    id: "MiniMax-M2.5",
+                    name: "MiniMax M2.5",
                     input: ["text"],
                   }),
                   buildModelDefinition({
-                    id: "MiniMax-M2.5",
-                    name: "MiniMax M2.5",
+                    id: "MiniMax-M2.5-highspeed",
+                    name: "MiniMax M2.5 Highspeed",
+                    input: ["text"],
+                    reasoning: true,
+                  }),
+                  buildModelDefinition({
+                    id: "MiniMax-M2.5-Lightning",
+                    name: "MiniMax M2.5 Lightning",
                     input: ["text"],
                     reasoning: true,
                   }),
@@ -102,8 +108,13 @@ function createOAuthHandler(region: MiniMaxRegion) {
           agents: {
             defaults: {
               models: {
-                [modelRef("MiniMax-M2.1")]: { alias: "minimax-m2.1" },
                 [modelRef("MiniMax-M2.5")]: { alias: "minimax-m2.5" },
+                [modelRef("MiniMax-M2.5-highspeed")]: {
+                  alias: "minimax-m2.5-highspeed",
+                },
+                [modelRef("MiniMax-M2.5-Lightning")]: {
+                  alias: "minimax-m2.5-lightning",
+                },
               },
             },
           },
