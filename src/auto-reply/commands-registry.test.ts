@@ -346,6 +346,21 @@ describe("commands registry args", () => {
     ]);
   });
 
+  it("builds internal command text from the canonical text alias instead of native alias", () => {
+    const command = {
+      key: "tts",
+      nativeName: "voice",
+      description: "tts",
+      textAliases: ["/tts"],
+      scope: "both",
+      acceptsArgs: true,
+      argsParsing: "positional",
+      args: [{ name: "action", description: "action", type: "string" }],
+    } satisfies ChatCommandDefinition;
+
+    expect(buildCommandTextFromArgs(command, { values: { action: "on" } })).toBe("/tts on");
+  });
+
   it("does not show menus when arg already provided", () => {
     const command = createUsageModeCommand();
 

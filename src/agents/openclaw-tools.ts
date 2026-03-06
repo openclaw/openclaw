@@ -144,6 +144,7 @@ export function createOpenClawTools(
     ...(messageTool ? [messageTool] : []),
     createTtsTool({
       agentChannel: options?.agentChannel,
+      agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
     createGatewayTool({
