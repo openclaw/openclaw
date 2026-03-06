@@ -92,7 +92,7 @@ export function parseConfigPath(raw: string): {
       }
       // Check bracket type
       if (i + 1 < trimmed.length && (trimmed[i + 1] === "'" || trimmed[i + 1] === '"')) {
-        bracketType = trimmed[i + 1];
+        bracketType = trimmed[i + 1] as "'" | '"';
         inBracket = true;
         i += 2;
         continue;

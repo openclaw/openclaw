@@ -105,6 +105,12 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     const quoteText =
       typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
     const text = payload.text ?? "";
+    const trimmedText = text.trim();
+    // Suppress NO_REPLY sentinel (same logic as Slack)
+    if (isSilentReplyText(trimmedText) && !payload.mediaUrl && !payload.mediaUrls?.length) {
+      return { messageId: "suppressed", chatId: to };
+    }
+
     const mediaUrls = payload.mediaUrls?.length
       ? payload.mediaUrls
       : payload.mediaUrl
