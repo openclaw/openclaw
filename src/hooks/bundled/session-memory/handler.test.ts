@@ -64,7 +64,7 @@ async function runNewWithPreviousSessionEntry(params: {
   tempDir: string;
   previousSessionEntry: { sessionId: string; sessionFile?: string };
   cfg?: OpenClawConfig;
-  action?: "new" | "reset";
+  action?: "new" | "reset" | "delete";
 }): Promise<{ files: string[]; memoryContent: string }> {
   const event = createHookEvent("command", params.action ?? "new", "agent:main:main", {
     cfg:
@@ -87,7 +87,7 @@ async function runNewWithPreviousSessionEntry(params: {
 async function runNewWithPreviousSession(params: {
   sessionContent: string;
   cfg?: (tempDir: string) => OpenClawConfig;
-  action?: "new" | "reset";
+  action?: "new" | "reset" | "delete";
 }): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
   const tempDir = await createCaseWorkspace("workspace");
   const sessionsDir = path.join(tempDir, "sessions");
@@ -225,6 +225,21 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Hi! How can I help?");
     expect(memoryContent).toContain("user: What is 2+2?");
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
+  });
+
+  it("creates memory file with session content on session delete", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Conversation before delete" },
+      { role: "assistant", content: "Saved before session removed" },
+    ]);
+    const { files, memoryContent } = await runNewWithPreviousSession({
+      sessionContent,
+      action: "delete",
+    });
+
+    expect(files.length).toBe(1);
+    expect(memoryContent).toContain("user: Conversation before delete");
+    expect(memoryContent).toContain("assistant: Saved before session removed");
   });
 
   it("creates memory file with session content on /reset command", async () => {

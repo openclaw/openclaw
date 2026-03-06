@@ -1,7 +1,7 @@
 /**
  * Session memory hook handler
  *
- * Saves session context to memory when /new or /reset command is triggered
+ * Saves session context to memory when /new, /reset, or delete is triggered
  * Creates a new dated memory file with LLM-generated slug
  */
 
@@ -168,12 +168,13 @@ async function findPreviousSessionFile(params: {
 }
 
 /**
- * Save session context to memory when /new or /reset command is triggered
+ * Save session context to memory when /new, /reset, or delete command is triggered
  */
 const saveSessionToMemory: HookHandler = async (event) => {
-  // Only trigger on reset/new commands
-  const isResetCommand = event.action === "new" || event.action === "reset";
-  if (event.type !== "command" || !isResetCommand) {
+  // Trigger on reset/new/delete commands
+  const isSessionEndCommand =
+    event.action === "new" || event.action === "reset" || event.action === "delete";
+  if (event.type !== "command" || !isSessionEndCommand) {
     return;
   }
 

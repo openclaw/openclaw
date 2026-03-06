@@ -581,6 +581,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
 
     const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
+    // Trigger session-memory hook before deletion so the handler can
+    // read the transcript while the session entry still exists (#37027).
+    if (entry) {
+      const hookEvent = createInternalHookEvent("command", "delete", target.canonicalKey ?? key, {
+        sessionEntry: entry,
+        previousSessionEntry: entry,
+        commandSource: "gateway:sessions.delete",
+        cfg,
+      });
+      await triggerInternalHook(hookEvent);
+    }
     const mutationCleanupError = await cleanupSessionBeforeMutation({
       cfg,
       key,
