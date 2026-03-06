@@ -7,6 +7,7 @@ import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import {
+  formatCronJobForDisplay,
   getCronChannelOptions,
   parseAt,
   parseCronStaggerMs,
@@ -273,7 +274,7 @@ export function registerCronAddCommand(cron: Command) {
           };
 
           const res = await callGatewayFromCli("cron.add", opts, params);
-          defaultRuntime.log(JSON.stringify(res, null, 2));
+          defaultRuntime.log(JSON.stringify(formatCronJobForDisplay(res as CronJob), null, 2));
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
           defaultRuntime.error(danger(String(err)));
