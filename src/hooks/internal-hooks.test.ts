@@ -4,6 +4,7 @@ import {
   createInternalHookEvent,
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
+  isCronEvent,
   isGatewayStartupEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
@@ -11,6 +12,7 @@ import {
   triggerInternalHook,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
+  type CronHookContext,
   type GatewayStartupHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
@@ -472,6 +474,112 @@ describe("hooks", () => {
 
       const keys = getRegisteredEventKeys();
       expect(keys).toEqual([]);
+    });
+  });
+
+  describe("cron hooks", () => {
+    it("should trigger cron:started handler", async () => {
+      const handler = vi.fn();
+      registerInternalHook("cron:started", handler);
+
+      const event = createInternalHookEvent("cron", "started", "cron:daily-digest", {
+        jobId: "daily-digest",
+        status: "ok",
+      } satisfies CronHookContext);
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+    });
+
+    it("should trigger cron:finished handler with telemetry", async () => {
+      const handler = vi.fn();
+      registerInternalHook("cron:finished", handler);
+
+      const context: CronHookContext = {
+        jobId: "daily-digest",
+        status: "ok",
+        summary: "Ran successfully",
+        durationMs: 1500,
+        delivered: true,
+        deliveryStatus: "delivered",
+        model: "claude-3",
+        provider: "anthropic",
+        usage: {
+          input_tokens: 100,
+          output_tokens: 50,
+          total_tokens: 150,
+        },
+      };
+      const event = createInternalHookEvent("cron", "finished", "cron:daily-digest", context);
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+      expect(handler.mock.calls[0][0].context).toMatchObject({
+        jobId: "daily-digest",
+        usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+      });
+    });
+
+    it("should trigger general cron handler for all actions", async () => {
+      const handler = vi.fn();
+      registerInternalHook("cron:added", handler);
+      registerInternalHook("cron:updated", handler);
+      registerInternalHook("cron:removed", handler);
+      registerInternalHook("cron:started", handler);
+      registerInternalHook("cron:finished", handler);
+
+      const actions = ["added", "updated", "removed", "started", "finished"] as const;
+      for (const action of actions) {
+        const event = createInternalHookEvent("cron", action, `cron:job-${action}`, {
+          jobId: `job-${action}`,
+        } satisfies CronHookContext);
+        await triggerInternalHook(event);
+      }
+
+      expect(handler).toHaveBeenCalledTimes(5);
+    });
+
+    it("should trigger cron:finished handler with error context", async () => {
+      const handler = vi.fn();
+      registerInternalHook("cron:finished", handler);
+
+      const context: CronHookContext = {
+        jobId: "failing-job",
+        status: "error",
+        error: "Agent timeout after 30s",
+        deliveryStatus: "not-delivered",
+      };
+      const event = createInternalHookEvent("cron", "finished", "cron:failing-job", context);
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+      expect(handler.mock.calls[0][0].context.error).toBe("Agent timeout after 30s");
+    });
+  });
+
+  describe("isCronEvent type guard", () => {
+    it("returns true for valid cron events", () => {
+      const event = createInternalHookEvent("cron", "finished", "cron:test", {
+        jobId: "test-job",
+      } satisfies CronHookContext);
+      expect(isCronEvent(event)).toBe(true);
+    });
+
+    it("returns false for non-cron events", () => {
+      const event = createInternalHookEvent("command", "new", "test-session");
+      expect(isCronEvent(event)).toBe(false);
+    });
+
+    it("returns false for invalid cron action", () => {
+      const event = createInternalHookEvent("cron", "invalid-action", "cron:test", {
+        jobId: "test-job",
+      });
+      expect(isCronEvent(event)).toBe(false);
+    });
+
+    it("returns false when jobId is missing", () => {
+      const event = createInternalHookEvent("cron", "started", "cron:test", {});
+      expect(isCronEvent(event)).toBe(false);
     });
   });
 });
