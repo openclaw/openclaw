@@ -33,6 +33,7 @@ export type AuthChoice =
   | "zai-coding-cn"
   | "zai-global"
   | "zai-cn"
+  | "qiniu-api-key"
   | "xiaomi-api-key"
   | "minimax-cloud"
   | "minimax"
@@ -65,6 +66,7 @@ export type AuthChoiceGroupId =
   | "cloudflare-ai-gateway"
   | "moonshot"
   | "zai"
+  | "qiniu"
   | "xiaomi"
   | "opencode-zen"
   | "minimax"
@@ -124,6 +126,8 @@ export type OnboardOptions = {
   kimiCodeApiKey?: string;
   geminiApiKey?: string;
   zaiApiKey?: string;
+  qiniuApiKey?: string;
+  qiniuModelId?: string;
   xiaomiApiKey?: string;
   minimaxApiKey?: string;
   syntheticApiKey?: string;

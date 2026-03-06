@@ -31,6 +31,7 @@ import {
   applyLitellmConfig,
   applyMistralConfig,
   applyXaiConfig,
+  applyQiniuConfig,
   applyXiaomiConfig,
   applyZaiConfig,
   setAnthropicApiKey,
@@ -54,6 +55,7 @@ import {
   setTogetherApiKey,
   setHuggingfaceApiKey,
   setVercelAiGatewayApiKey,
+  setQiniuApiKey,
   setXiaomiApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
@@ -360,6 +362,32 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyXiaomiConfig(nextConfig);
+  }
+  if (authChoice === "qiniu-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "qiniu",
+      cfg: baseConfig,
+      flagValue: opts.qiniuApiKey,
+      flagName: "--qiniu-api-key",
+      envVar: "QINIU_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setQiniuApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "qiniu:default",
+      provider: "qiniu",
+      mode: "api_key",
+    });
+    return applyQiniuConfig(nextConfig, opts.qiniuModelId);
   }
 
   if (authChoice === "xai-api-key") {

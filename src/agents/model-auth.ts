@@ -357,6 +357,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     ollama: "OLLAMA_API_KEY",
     vllm: "VLLM_API_KEY",
     kilocode: "KILOCODE_API_KEY",
+    qiniu: "QINIU_API_KEY",
   };
   const envVar = envMap[normalized];
   if (!envVar) {
