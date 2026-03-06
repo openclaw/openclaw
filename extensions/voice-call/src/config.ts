@@ -68,6 +68,23 @@ export const PlivoConfigSchema = z
   .strict();
 export type PlivoConfig = z.infer<typeof PlivoConfigSchema>;
 
+export const VonageConfigSchema = z
+  .object({
+    /** Vonage Voice API application ID (UUID) */
+    applicationId: z.string().min(1).optional(),
+    /** Private key PEM content for JWT signing */
+    privateKey: z.string().min(1).optional(),
+    /** Optional path to private key PEM file */
+    privateKeyPath: z.string().min(1).optional(),
+    /**
+     * Signature secret used to verify signed webhook bearer tokens.
+     * If omitted, provider will attempt RS256 verification with the app public key.
+     */
+    signatureSecret: z.string().min(1).optional(),
+  })
+  .strict();
+export type VonageConfig = z.infer<typeof VonageConfigSchema>;
+
 // -----------------------------------------------------------------------------
 // STT/TTS Configuration
 // -----------------------------------------------------------------------------
@@ -255,8 +272,8 @@ export const VoiceCallConfigSchema = z
     /** Enable voice call functionality */
     enabled: z.boolean().default(false),
 
-    /** Active provider (telnyx, twilio, plivo, or mock) */
-    provider: z.enum(["telnyx", "twilio", "plivo", "mock"]).optional(),
+    /** Active provider (telnyx, twilio, plivo, vonage, or mock) */
+    provider: z.enum(["telnyx", "twilio", "plivo", "vonage", "mock"]).optional(),
 
     /** Telnyx-specific configuration */
     telnyx: TelnyxConfigSchema.optional(),
@@ -266,6 +283,9 @@ export const VoiceCallConfigSchema = z
 
     /** Plivo-specific configuration */
     plivo: PlivoConfigSchema.optional(),
+
+    /** Vonage-specific configuration */
+    vonage: VonageConfigSchema.optional(),
 
     /** Phone number to call from (E.164) */
     fromNumber: E164Schema.optional(),
@@ -384,6 +404,18 @@ export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig
     resolved.plivo.authToken = resolved.plivo.authToken ?? process.env.PLIVO_AUTH_TOKEN;
   }
 
+  // Vonage
+  if (resolved.provider === "vonage") {
+    resolved.vonage = resolved.vonage ?? {};
+    resolved.vonage.applicationId =
+      resolved.vonage.applicationId ?? process.env.VONAGE_APPLICATION_ID;
+    resolved.vonage.privateKey = resolved.vonage.privateKey ?? process.env.VONAGE_PRIVATE_KEY;
+    resolved.vonage.privateKeyPath =
+      resolved.vonage.privateKeyPath ?? process.env.VONAGE_PRIVATE_KEY_PATH;
+    resolved.vonage.signatureSecret =
+      resolved.vonage.signatureSecret ?? process.env.VONAGE_SIGNATURE_SECRET;
+  }
+
   // Tunnel Config
   resolved.tunnel = resolved.tunnel ?? {
     provider: "none",
@@ -469,6 +501,20 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     if (!config.plivo?.authToken) {
       errors.push(
         "plugins.entries.voice-call.config.plivo.authToken is required (or set PLIVO_AUTH_TOKEN env)",
+      );
+    }
+  }
+
+  if (config.provider === "vonage") {
+    if (!config.vonage?.applicationId) {
+      errors.push(
+        "plugins.entries.voice-call.config.vonage.applicationId is required (or set VONAGE_APPLICATION_ID env)",
+      );
+    }
+
+    if (!config.vonage?.privateKey && !config.vonage?.privateKeyPath) {
+      errors.push(
+        "plugins.entries.voice-call.config.vonage.privateKey or vonage.privateKeyPath is required (or set VONAGE_PRIVATE_KEY/VONAGE_PRIVATE_KEY_PATH env)",
       );
     }
   }

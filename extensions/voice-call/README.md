@@ -7,6 +7,7 @@ Providers:
 - **Twilio** (Programmable Voice + Media Streams)
 - **Telnyx** (Call Control v2)
 - **Plivo** (Voice API + XML transfer + GetInput speech)
+- **Vonage** (Voice API + NCCO transfer + Input speech)
 - **Mock** (dev/no network)
 
 Docs: `https://docs.openclaw.ai/plugins/voice-call`
@@ -36,7 +37,7 @@ Put under `plugins.entries.voice-call.config`:
 
 ```json5
 {
-  provider: "twilio", // or "telnyx" | "plivo" | "mock"
+  provider: "twilio", // or "telnyx" | "plivo" | "vonage" | "mock"
   fromNumber: "+15550001234",
   toNumber: "+15550005678",
 
@@ -56,6 +57,12 @@ Put under `plugins.entries.voice-call.config`:
   plivo: {
     authId: "MAxxxxxxxxxxxxxxxxxxxx",
     authToken: "your_token",
+  },
+
+  vonage: {
+    applicationId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    privateKeyPath: "/path/to/private.key", // or privateKey: "<pem-content>"
+    signatureSecret: "your_signature_secret",
   },
 
   // Webhook server
@@ -138,7 +145,10 @@ same shape — overrides deep-merge with `messages.tts`.
 Notes:
 
 - Edge TTS is ignored for voice calls (telephony audio needs PCM; Edge output is unreliable).
-- Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
+- Core TTS is used when streaming is enabled:
+  - Twilio: media-stream WebSocket playback
+  - Vonage: hosted-audio URL playback via `/stream` (requires reachable `publicUrl`)
+- If streaming playback is unavailable, calls fall back to provider-native voices.
 
 ## CLI
 

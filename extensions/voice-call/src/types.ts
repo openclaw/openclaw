@@ -5,7 +5,7 @@ import type { CallMode } from "./config.js";
 // Provider Identifiers
 // -----------------------------------------------------------------------------
 
-export const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock"]);
+export const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "vonage", "mock"]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
 // -----------------------------------------------------------------------------

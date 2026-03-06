@@ -1,5 +1,5 @@
 ---
-summary: "Voice Call plugin: outbound + inbound calls via Twilio/Telnyx/Plivo (plugin install + config + CLI)"
+summary: "Voice Call plugin: outbound + inbound calls via Twilio/Telnyx/Plivo/Vonage (plugin install + config + CLI)"
 read_when:
   - You want to place an outbound voice call from OpenClaw
   - You are configuring or developing the voice-call plugin
@@ -16,6 +16,7 @@ Current providers:
 - `twilio` (Programmable Voice + Media Streams)
 - `telnyx` (Call Control v2)
 - `plivo` (Voice API + XML transfer + GetInput speech)
+- `vonage` (Voice API + NCCO transfer + Input speech)
 - `mock` (dev/no network)
 
 Quick mental model:
@@ -61,7 +62,7 @@ Set config under `plugins.entries.voice-call.config`:
       "voice-call": {
         enabled: true,
         config: {
-          provider: "twilio", // or "telnyx" | "plivo" | "mock"
+          provider: "twilio", // or "telnyx" | "plivo" | "vonage" | "mock"
           fromNumber: "+15550001234",
           toNumber: "+15550005678",
 
@@ -81,6 +82,12 @@ Set config under `plugins.entries.voice-call.config`:
           plivo: {
             authId: "MAxxxxxxxxxxxxxxxxxxxx",
             authToken: "...",
+          },
+
+          vonage: {
+            applicationId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+            privateKeyPath: "/path/to/private.key", // or privateKey: "<pem-content>"
+            signatureSecret: "...",
           },
 
           // Webhook server
@@ -223,7 +230,10 @@ streaming speech on calls. You can override it under the plugin config with the
 Notes:
 
 - **Edge TTS is ignored for voice calls** (telephony audio needs PCM; Edge output is unreliable).
-- Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
+- Core TTS is used when streaming is enabled:
+  - Twilio: media-stream WebSocket playback
+  - Vonage: hosted-audio URL playback via `/stream` (requires reachable `publicUrl`)
+- If streaming playback is unavailable, calls fall back to provider-native voices.
 
 ### More examples
 

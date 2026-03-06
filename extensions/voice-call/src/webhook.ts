@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import http from "node:http";
 import { URL } from "node:url";
 import {
@@ -13,6 +14,7 @@ import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
+import type { VonageProvider } from "./providers/vonage.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 
@@ -20,8 +22,14 @@ const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
 type WebhookResponsePayload = {
   statusCode: number;
-  body: string;
+  body: string | Buffer;
   headers?: Record<string, string>;
+};
+
+type TemporaryMediaEntry = {
+  audio: Buffer;
+  contentType: string;
+  expiresAt: number;
 };
 
 /**
@@ -36,6 +44,12 @@ export class VoiceCallWebhookServer {
   private provider: VoiceCallProvider;
   private coreConfig: CoreConfig | null;
   private stopStaleCallReaper: (() => void) | null = null;
+
+  /** Public URL for serving temporary provider media */
+  private publicWebhookUrl: string | null = null;
+
+  /** Temporary hosted media (for provider stream playback) */
+  private tempMedia = new Map<string, TemporaryMediaEntry>();
 
   /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
@@ -62,6 +76,45 @@ export class VoiceCallWebhookServer {
    */
   getMediaStreamHandler(): MediaStreamHandler | null {
     return this.mediaStreamHandler;
+  }
+
+  setPublicWebhookUrl(url: string | null): void {
+    this.publicWebhookUrl = url;
+  }
+
+  publishTemporaryMedia(params: {
+    audio: Buffer;
+    contentType: string;
+    ttlMs?: number;
+  }): string | null {
+    if (!this.publicWebhookUrl) {
+      return null;
+    }
+
+    const ttlMs = Math.max(10_000, params.ttlMs ?? 120_000);
+    const id = crypto.randomUUID();
+    this.tempMedia.set(id, {
+      audio: params.audio,
+      contentType: params.contentType,
+      expiresAt: Date.now() + ttlMs,
+    });
+
+    this.pruneTemporaryMedia();
+
+    const base = new URL(this.publicWebhookUrl);
+    base.search = "";
+    base.hash = "";
+    base.pathname = `${this.normalizeWebhookPathForMatch(this.config.serve.path)}/media/${id}`;
+    return base.toString();
+  }
+
+  private pruneTemporaryMedia(): void {
+    const now = Date.now();
+    for (const [id, entry] of this.tempMedia.entries()) {
+      if (entry.expiresAt <= now) {
+        this.tempMedia.delete(id);
+      }
+    }
   }
 
   /**
@@ -105,10 +158,8 @@ export class VoiceCallWebhookServer {
       onTranscript: (providerCallId, transcript) => {
         console.log(`[voice-call] Transcript for ${providerCallId}: ${transcript}`);
 
-        // Clear TTS queue on barge-in (user started speaking, interrupt current playback)
-        if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
-        }
+        // Clear active playback on barge-in (user started speaking)
+        this.interruptProviderPlayback(providerCallId);
 
         // Look up our internal call ID from the provider call ID
         const call = this.manager.getCallByProviderCallId(providerCallId);
@@ -139,9 +190,7 @@ export class VoiceCallWebhookServer {
         }
       },
       onSpeechStart: (providerCallId) => {
-        if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
-        }
+        this.interruptProviderPlayback(providerCallId);
       },
       onPartialTranscript: (callId, partial) => {
         console.log(`[voice-call] Partial for ${callId}: ${partial}`);
@@ -324,6 +373,31 @@ export class VoiceCallWebhookServer {
   ): Promise<WebhookResponsePayload> {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
+    const mediaPrefix = `${this.normalizeWebhookPathForMatch(webhookPath)}/media/`;
+    if (url.pathname.startsWith(mediaPrefix)) {
+      if (req.method !== "GET") {
+        return { statusCode: 405, body: "Method Not Allowed" };
+      }
+      this.pruneTemporaryMedia();
+      const mediaId = url.pathname.slice(mediaPrefix.length).trim();
+      const media = this.tempMedia.get(mediaId);
+      if (!media) {
+        return { statusCode: 404, body: "Not Found" };
+      }
+      if (media.expiresAt <= Date.now()) {
+        this.tempMedia.delete(mediaId);
+        return { statusCode: 410, body: "Gone" };
+      }
+      return {
+        statusCode: 200,
+        headers: {
+          "Content-Type": media.contentType,
+          "Cache-Control": "no-store",
+        },
+        body: media.audio,
+      };
+    }
+
     if (url.pathname === "/voice/hold-music") {
       return {
         statusCode: 200,
@@ -396,10 +470,29 @@ export class VoiceCallWebhookServer {
   private processParsedEvents(events: NormalizedEvent[]): void {
     for (const event of events) {
       try {
+        if (event.type === "call.speech" && event.providerCallId) {
+          this.interruptProviderPlayback(event.providerCallId);
+        }
         this.manager.processEvent(event);
       } catch (err) {
         console.error(`[voice-call] Error processing event ${event.type}:`, err);
       }
+    }
+  }
+
+  private interruptProviderPlayback(providerCallId: string): void {
+    if (this.provider.name === "twilio") {
+      (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
+      return;
+    }
+
+    if (this.provider.name === "vonage") {
+      void (this.provider as VonageProvider).interruptPlayback(providerCallId).catch((err) => {
+        console.warn(
+          `[voice-call] Failed to interrupt Vonage playback for ${providerCallId}:`,
+          err,
+        );
+      });
     }
   }
 

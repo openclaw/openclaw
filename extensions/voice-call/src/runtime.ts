@@ -7,8 +7,9 @@ import { MockProvider } from "./providers/mock.js";
 import { PlivoProvider } from "./providers/plivo.js";
 import { TelnyxProvider } from "./providers/telnyx.js";
 import { TwilioProvider } from "./providers/twilio.js";
+import { VonageProvider } from "./providers/vonage.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
-import { createTelephonyTtsProvider } from "./telephony-tts.js";
+import { createHostedAudioTtsProvider, createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 import { cleanupTailscaleExposure, setupTailscaleExposure } from "./webhook/tailscale.js";
@@ -125,6 +126,22 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           webhookSecurity: config.webhookSecurity,
         },
       );
+    case "vonage":
+      return new VonageProvider(
+        {
+          applicationId: config.vonage?.applicationId,
+          privateKey: config.vonage?.privateKey,
+          privateKeyPath: config.vonage?.privateKeyPath,
+          signatureSecret: config.vonage?.signatureSecret,
+        },
+        {
+          publicUrl: config.publicUrl,
+          skipVerification: config.skipSignatureVerification,
+          webhookSecurity: config.webhookSecurity,
+          ringTimeoutSec: Math.max(1, Math.floor(config.ringTimeoutMs / 1000)),
+          streamingEnabled: config.streaming?.enabled === true,
+        },
+      );
     case "mock":
       return new MockProvider();
     default:
@@ -202,36 +219,66 @@ export async function createVoiceCallRuntime(params: {
 
     const webhookUrl = publicUrl ?? localUrl;
 
+    webhookServer.setPublicWebhookUrl(publicUrl ?? null);
+
     if (publicUrl && provider.name === "twilio") {
       (provider as TwilioProvider).setPublicUrl(publicUrl);
     }
 
-    if (provider.name === "twilio" && config.streaming?.enabled) {
-      const twilioProvider = provider as TwilioProvider;
-      if (ttsRuntime?.textToSpeechTelephony) {
-        try {
-          const ttsProvider = createTelephonyTtsProvider({
-            coreConfig,
-            ttsOverride: config.tts,
-            runtime: ttsRuntime,
-          });
-          twilioProvider.setTTSProvider(ttsProvider);
-          log.info("[voice-call] Telephony TTS provider configured");
-        } catch (err) {
-          log.warn(
-            `[voice-call] Failed to initialize telephony TTS: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
+    if (config.streaming?.enabled) {
+      if (provider.name === "twilio") {
+        const twilioProvider = provider as TwilioProvider;
+        if (ttsRuntime?.textToSpeechTelephony) {
+          try {
+            const ttsProvider = createTelephonyTtsProvider({
+              coreConfig,
+              ttsOverride: config.tts,
+              runtime: ttsRuntime,
+            });
+            twilioProvider.setTTSProvider(ttsProvider);
+            log.info("[voice-call] Telephony TTS provider configured");
+          } catch (err) {
+            log.warn(
+              `[voice-call] Failed to initialize telephony TTS: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+        } else {
+          log.warn("[voice-call] Telephony TTS unavailable; streaming TTS disabled");
         }
-      } else {
-        log.warn("[voice-call] Telephony TTS unavailable; streaming TTS disabled");
+
+        const mediaHandler = webhookServer.getMediaStreamHandler();
+        if (mediaHandler) {
+          twilioProvider.setMediaStreamHandler(mediaHandler);
+          log.info("[voice-call] Media stream handler wired to provider");
+        }
       }
 
-      const mediaHandler = webhookServer.getMediaStreamHandler();
-      if (mediaHandler) {
-        twilioProvider.setMediaStreamHandler(mediaHandler);
-        log.info("[voice-call] Media stream handler wired to provider");
+      if (provider.name === "vonage") {
+        const vonageProvider = provider as VonageProvider;
+        if (ttsRuntime?.textToSpeechTelephony) {
+          try {
+            const hostedAudioProvider = createHostedAudioTtsProvider({
+              coreConfig,
+              ttsOverride: config.tts,
+              runtime: ttsRuntime,
+            });
+            vonageProvider.setHostedAudioTtsProvider(hostedAudioProvider);
+            vonageProvider.setMediaUrlPublisher((params) =>
+              webhookServer.publishTemporaryMedia(params),
+            );
+            log.info("[voice-call] Vonage hosted-audio TTS provider configured");
+          } catch (err) {
+            log.warn(
+              `[voice-call] Failed to initialize Vonage hosted-audio TTS: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+        } else {
+          log.warn("[voice-call] Telephony TTS unavailable; Vonage hosted-audio disabled");
+        }
       }
     }
 
