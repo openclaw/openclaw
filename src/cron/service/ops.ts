@@ -131,6 +131,12 @@ export function stop(state: CronServiceState) {
   stopTimer(state);
 }
 
+export async function flush(state: CronServiceState) {
+  await locked(state, async () => {
+    await persist(state);
+  });
+}
+
 export async function status(state: CronServiceState) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
