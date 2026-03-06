@@ -55,12 +55,19 @@ export function formatCronSchedule(job: CronJob) {
   const s = job.schedule;
   if (s.kind === "at") {
     const atMs = Date.parse(s.at);
-    return Number.isFinite(atMs) ? `At ${formatMs(atMs)}` : `At ${s.at}`;
+    if (!Number.isFinite(atMs)) {
+      return `At ${s.at}`;
+    }
+    const rel = formatRelativeTimestamp(atMs);
+    return `Once ${rel}`;
   }
   if (s.kind === "every") {
     return `Every ${formatDurationHuman(s.everyMs)}`;
   }
-  return `Cron ${s.expr}${s.tz ? ` (${s.tz})` : ""}`;
+  if (s.kind === "cron") {
+    return `Cron ${s.expr}${s.tz ? ` (${s.tz})` : ""}`;
+  }
+  return "unknown";
 }
 
 export function formatCronPayload(job: CronJob) {
