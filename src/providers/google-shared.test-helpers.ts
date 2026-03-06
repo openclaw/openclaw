@@ -1,5 +1,5 @@
-import type { Model } from "@mariozechner/pi-ai/dist/types.js";
 import { expect } from "vitest";
+import type { Model } from "../../node_modules/@mariozechner/pi-ai/dist/types.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 
 export const asRecord = (value: unknown): Record<string, unknown> => {
