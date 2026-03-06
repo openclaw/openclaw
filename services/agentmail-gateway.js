@@ -19,6 +19,11 @@ const SECRETS_PATH = path.join(__dirname, '..', 'secrets', 'agentmail.env');
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'agent_email.json');
 const LOG_PATH = path.join(__dirname, '..', 'logs', 'email_activity.log');
 
+// Cache for inbox ID (to avoid repeated API calls)
+let cachedInboxId = null;
+let cacheTimestamp = null;
+const CACHE_DURATION = 60 * 60 * 1000; // 1 hour
+
 // Rate limiting state
 const rateLimitState = {
   emailsThisHour: 0,
@@ -88,6 +93,56 @@ function logActivity(action, details) {
 }
 
 /**
+ * Get inbox ID for the agent email address
+ * Fetches from API and caches the result
+ */
+async function getInboxId() {
+  const secrets = loadSecrets();
+
+  // Return cached inbox ID if still valid
+  if (cachedInboxId && cacheTimestamp && Date.now() - cacheTimestamp < CACHE_DURATION) {
+    return cachedInboxId;
+  }
+
+  try {
+    const response = await fetch(`${secrets.AGENTMAIL_BASE_URL}/v0/inboxes`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${secrets.AGENTMAIL_API_KEY}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`Failed to fetch inboxes (${response.status}): ${errorData}`);
+    }
+
+    const result = await response.json();
+    const inboxes = result.inboxes || [];
+
+    // Find inbox matching our email address
+    const targetEmail = secrets.AGENTMAIL_EMAIL.toLowerCase();
+    const matchedInbox = inboxes.find((inbox) => {
+      // Check both inbox_id and display_name
+      const inboxId = (inbox.inbox_id || '').toLowerCase();
+      const displayName = (inbox.display_name || '').toLowerCase();
+      return inboxId === targetEmail || displayName === targetEmail;
+    });
+
+    if (!matchedInbox) {
+      throw new Error(`No inbox found for ${secrets.AGENTMAIL_EMAIL}. Available inboxes: ${inboxes.map((i) => `${i.display_name} (${i.inbox_id})`).join(', ')}`);
+    }
+
+    cachedInboxId = matchedInbox.inbox_id;
+    cacheTimestamp = Date.now();
+
+    return cachedInboxId;
+  } catch (error) {
+    throw new Error(`Failed to get inbox ID: ${error.message}`);
+  }
+}
+
+/**
  * Check rate limits
  */
 function checkRateLimit(config) {
@@ -136,10 +191,7 @@ function validateRecipient(recipient, config) {
 }
 
 /**
- * Send email (mock implementation for now)
- *
- * In production, this would call the AgentMail API:
- * POST /api/v1/send
+ * Send email via AgentMail API
  */
 async function sendEmail(to, subject, body) {
   const secrets = loadSecrets();
@@ -161,22 +213,33 @@ async function sendEmail(to, subject, body) {
       message_hash: messageHash,
     });
 
-    // TODO: Implement actual API call to AgentMail
-    // const response = await fetch(`${secrets.AGENTMAIL_BASE_URL}/api/v1/send`, {
-    //   method: 'POST',
-    //   headers: {
-    //     'Authorization': `Bearer ${secrets.AGENTMAIL_API_KEY}`,
-    //     'Content-Type': 'application/json',
-    //   },
-    //   body: JSON.stringify({
-    //     from: secrets.AGENTMAIL_EMAIL,
-    //     to,
-    //     subject,
-    //     body,
-    //   }),
-    // });
+    // Get inbox ID
+    const inboxId = await getInboxId();
 
-    // For now, return success
+    // Call AgentMail API with correct endpoint
+    const response = await fetch(
+      `${secrets.AGENTMAIL_BASE_URL}/v0/inboxes/${inboxId}/messages/send`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${secrets.AGENTMAIL_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          to,
+          subject,
+          text: body,
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`AgentMail API error (${response.status}): ${errorData}`);
+    }
+
+    const result = await response.json();
+
     rateLimitState.emailsThisHour++;
     rateLimitState.emailsThisDay++;
 
@@ -184,11 +247,13 @@ async function sendEmail(to, subject, body) {
       recipient: to,
       subject,
       message_hash: messageHash,
+      message_id: result.message_id,
     });
 
     return {
       status: 'success',
       message: `Email sent to ${to}`,
+      message_id: result.message_id,
     };
   } catch (error) {
     logActivity('send_email_error', {
@@ -201,7 +266,7 @@ async function sendEmail(to, subject, body) {
 }
 
 /**
- * Read agent inbox (mock implementation)
+ * Read agent inbox from AgentMail API
  */
 async function readAgentInbox() {
   const secrets = loadSecrets();
@@ -212,23 +277,37 @@ async function readAgentInbox() {
       email: secrets.AGENTMAIL_EMAIL,
     });
 
-    // TODO: Implement actual API call to AgentMail
-    // const response = await fetch(`${secrets.AGENTMAIL_BASE_URL}/api/v1/inbox`, {
-    //   headers: {
-    //     'Authorization': `Bearer ${secrets.AGENTMAIL_API_KEY}`,
-    //   },
-    // });
+    // Get inbox ID
+    const inboxId = await getInboxId();
 
-    // For now, return empty inbox
+    // Fetch messages from inbox
+    const response = await fetch(
+      `${secrets.AGENTMAIL_BASE_URL}/v0/inboxes/${inboxId}/messages`,
+      {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${secrets.AGENTMAIL_API_KEY}`,
+        },
+      },
+    );
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`AgentMail API error (${response.status}): ${errorData}`);
+    }
+
+    const result = await response.json();
+    const messages = result.messages || result.data || [];
+
     logActivity('read_inbox_success', {
       email: secrets.AGENTMAIL_EMAIL,
-      message_count: 0,
+      message_count: messages.length,
     });
 
     return {
       status: 'success',
-      inbox: [],
-      message: 'No messages in inbox',
+      inbox: messages,
+      message: messages.length > 0 ? `Found ${messages.length} messages` : 'No messages in inbox',
     };
   } catch (error) {
     logActivity('read_inbox_error', {
@@ -240,7 +319,7 @@ async function readAgentInbox() {
 }
 
 /**
- * Extract verification links from inbox
+ * Extract verification links from inbox messages
  */
 async function getVerificationLinks() {
   const secrets = loadSecrets();
@@ -252,8 +331,27 @@ async function getVerificationLinks() {
 
     const inbox = await readAgentInbox();
 
-    // TODO: Parse inbox messages for verification links
+    // Parse messages for verification links (URLs)
     const links = [];
+    const urlRegex = /https?:\/\/[^\s\)]+/g;
+
+    if (inbox.inbox && Array.isArray(inbox.inbox)) {
+      for (const message of inbox.inbox) {
+        const body = message.body || message.content || '';
+        const matches = body.match(urlRegex) || [];
+
+        for (const url of matches) {
+          // Filter for common verification link patterns
+          if (url.includes('verify') || url.includes('confirm') || url.includes('token') || url.includes('code')) {
+            links.push({
+              url,
+              from_message_id: message.id,
+              from_sender: message.from,
+            });
+          }
+        }
+      }
+    }
 
     logActivity('get_verification_links_success', {
       email: secrets.AGENTMAIL_EMAIL,
@@ -263,7 +361,7 @@ async function getVerificationLinks() {
     return {
       status: 'success',
       links,
-      message: 'No verification links found',
+      message: links.length > 0 ? `Found ${links.length} verification links` : 'No verification links found',
     };
   } catch (error) {
     logActivity('get_verification_links_error', {
@@ -297,4 +395,4 @@ function healthCheck() {
 }
 
 // Export public API
-export { sendEmail, readAgentInbox, getVerificationLinks, healthCheck, logActivity };
+export { sendEmail, readAgentInbox, getVerificationLinks, healthCheck, logActivity, getInboxId };
