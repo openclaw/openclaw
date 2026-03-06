@@ -52,7 +52,10 @@ describe("discord component registry — persistence across restart", () => {
     // Verify disk file was written
     expect(fs.existsSync(storePath)).toBe(true);
 
-    // Simulate gateway restart: clear in-memory Maps
+    // Simulate gateway restart: detach store path so flush is a no-op (matching
+    // real restart behaviour where the in-process module is re-initialised from
+    // scratch), then wipe in-memory Maps.
+    setComponentRegistryStorePath(null);
     clearDiscordComponentEntries();
 
     // After restart, entries should be gone from memory
@@ -74,10 +77,37 @@ describe("discord component registry — persistence across restart", () => {
     expect(modal?.title).toBe("Confirm");
   });
 
-  it("loadComponentRegistry evicts expired entries on load", () => {
+  it("clearDiscordComponentEntries flushes empty state to disk so cleared entries do not reappear after restart", () => {
     setComponentRegistryStorePath(storePath);
 
-    // Register one expired and one valid entry directly via disk manipulation
+    // Register an entry so the disk file is populated
+    registerDiscordComponentEntries({
+      entries: [{ id: "btn_clear_test", kind: "button", label: "Temp" }],
+      modals: [],
+      messageId: "msg_clear_test",
+      ttlMs: 60 * 60 * 1000,
+    });
+    expect(fs.existsSync(storePath)).toBe(true);
+
+    // Clear — should overwrite disk with empty state
+    clearDiscordComponentEntries();
+
+    // Disk file should exist but contain empty arrays
+    const diskData = JSON.parse(fs.readFileSync(storePath, "utf8")) as {
+      componentEntries: unknown[];
+      modalEntries: unknown[];
+    };
+    expect(diskData.componentEntries).toHaveLength(0);
+    expect(diskData.modalEntries).toHaveLength(0);
+
+    // Simulated restart: loading from the flushed file should restore nothing
+    loadComponentRegistry(storePath);
+    expect(resolveDiscordComponentEntry({ id: "btn_clear_test", consume: false })).toBeNull();
+  });
+
+  it("loadComponentRegistry evicts expired entries on load", () => {
+    // Write test data directly — do NOT configure the store path yet so that
+    // clearDiscordComponentEntries() below is a memory-only reset (no disk flush).
     const now = Date.now();
     const diskData = {
       componentEntries: [

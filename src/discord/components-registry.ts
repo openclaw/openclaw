@@ -154,4 +154,5 @@ export function resolveDiscordModalEntry(params: {
 export function clearDiscordComponentEntries(): void {
   componentEntries.clear();
   modalEntries.clear();
+  flushToDisk();
 }
