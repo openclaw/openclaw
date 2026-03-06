@@ -272,7 +272,7 @@ describe("config schema", () => {
   });
 
   it("rejects overly deep lookup paths", () => {
-    const buildNestedObjectSchema = (segments: string[]) => {
+    const buildNestedObjectSchema = (segments: string[]): Record<string, unknown> => {
       const [head, ...rest] = segments;
       if (!head) {
         return { type: "string" };

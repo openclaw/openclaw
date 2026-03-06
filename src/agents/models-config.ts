@@ -159,10 +159,24 @@ function mergeWithExistingProviderSecrets(params: {
       continue;
     }
     const preserved: Record<string, unknown> = {};
-    if (typeof existing.apiKey === "string" && existing.apiKey) {
+    const newApiKey = (newEntry as { apiKey?: string }).apiKey;
+    const newBaseUrl = (newEntry as { baseUrl?: string }).baseUrl;
+    // Only fall back to the cached value when the fresh config does not
+    // provide an explicit override.  This ensures that user edits to
+    // openclaw.json (e.g. correcting a baseUrl) take effect immediately
+    // instead of being shadowed by stale values persisted in models.json.
+    if (
+      !(typeof newApiKey === "string" && newApiKey) &&
+      typeof existing.apiKey === "string" &&
+      existing.apiKey
+    ) {
       preserved.apiKey = existing.apiKey;
     }
-    if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+    if (
+      !(typeof newBaseUrl === "string" && newBaseUrl) &&
+      typeof existing.baseUrl === "string" &&
+      existing.baseUrl
+    ) {
       preserved.baseUrl = existing.baseUrl;
     }
     mergedProviders[key] = { ...newEntry, ...preserved };
