@@ -224,4 +224,76 @@ describe("chat view", () => {
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
   });
+
+  it("skips confirmation when starting new session with no messages", () => {
+    const container = document.createElement("div");
+    const onNewSession = vi.fn();
+    const confirmSpy = vi.spyOn(window, "confirm");
+    render(
+      renderChat(
+        createProps({
+          canAbort: false,
+          messages: [],
+          onNewSession,
+        }),
+      ),
+      container,
+    );
+
+    const newSessionButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "New session",
+    );
+    newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(onNewSession).toHaveBeenCalledTimes(1);
+    confirmSpy.mockRestore();
+  });
+
+  it("shows confirmation before starting new session when messages exist", () => {
+    const container = document.createElement("div");
+    const onNewSession = vi.fn();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(
+      renderChat(
+        createProps({
+          canAbort: false,
+          messages: [{ kind: "message", key: "1", message: { role: "user", content: "hi" } }],
+          onNewSession,
+        }),
+      ),
+      container,
+    );
+
+    const newSessionButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "New session",
+    );
+    newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(onNewSession).toHaveBeenCalledTimes(1);
+    confirmSpy.mockRestore();
+  });
+
+  it("does not start new session when user cancels the confirmation", () => {
+    const container = document.createElement("div");
+    const onNewSession = vi.fn();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(
+      renderChat(
+        createProps({
+          canAbort: false,
+          messages: [{ kind: "message", key: "1", message: { role: "user", content: "hi" } }],
+          onNewSession,
+        }),
+      ),
+      container,
+    );
+
+    const newSessionButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "New session",
+    );
+    newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(onNewSession).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
 });
