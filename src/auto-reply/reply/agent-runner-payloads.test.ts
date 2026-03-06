@@ -114,6 +114,22 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("does not suppress session text when message tool sent only media (#37841)", () => {
+    const { replyPayloads } = buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "The spike in Q3 is driven by X" }],
+      messageProvider: "whatsapp",
+      originatingChannel: "whatsapp",
+      originatingTo: "+1234567890",
+      messagingToolSentTexts: [],
+      messagingToolSentMediaUrls: ["file:///tmp/chart.png"],
+      messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+1234567890" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("The spike in Q3 is driven by X");
+  });
+
   it("does not suppress same-target replies when accountId differs", () => {
     const { replyPayloads } = buildReplyPayloads({
       ...baseParams,

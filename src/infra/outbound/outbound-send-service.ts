@@ -50,15 +50,15 @@ type PluginHandledResult = {
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
+  mediaLocalRoots?: readonly string[];
   onHandled?: () => Promise<void> | void;
 }): Promise<PluginHandledResult | null> {
   if (params.ctx.dryRun) {
     return null;
   }
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
-    params.ctx.cfg,
-    params.ctx.agentId ?? params.ctx.mirror?.agentId,
-  );
+  const mediaLocalRoots =
+    params.mediaLocalRoots ??
+    getAgentScopedMediaLocalRoots(params.ctx.cfg, params.ctx.agentId ?? params.ctx.mirror?.agentId);
   const handled = await dispatchChannelMessageAction({
     channel: params.ctx.channel,
     action: params.action,
@@ -98,9 +98,14 @@ export async function executeSendAction(params: {
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+    params.ctx.cfg,
+    params.ctx.agentId ?? params.ctx.mirror?.agentId,
+  );
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,
     action: "send",
+    mediaLocalRoots,
     onHandled: async () => {
       if (!params.ctx.mirror) {
         return;
@@ -142,6 +147,7 @@ export async function executeSendAction(params: {
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
+    mediaLocalRoots,
   });
 
   return {

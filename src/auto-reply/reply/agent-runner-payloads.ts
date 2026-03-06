@@ -91,19 +91,22 @@ export function buildReplyPayloads(params: {
     !params.blockReplyPipeline?.isAborted();
   const messagingToolSentTexts = params.messagingToolSentTexts ?? [];
   const messagingToolSentTargets = params.messagingToolSentTargets ?? [];
-  const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
-    messageProvider: resolveOriginMessageProvider({
-      originatingChannel: params.originatingChannel,
-      provider: params.messageProvider,
-    }),
-    messagingToolSentTargets,
-    originatingTo: resolveOriginMessageTo({
-      originatingTo: params.originatingTo,
-    }),
-    accountId: resolveOriginAccountId({
-      originatingAccountId: params.accountId,
-    }),
-  });
+  const messagingToolSentText = messagingToolSentTexts.length > 0;
+  const suppressMessagingToolReplies =
+    messagingToolSentText &&
+    shouldSuppressMessagingToolReplies({
+      messageProvider: resolveOriginMessageProvider({
+        originatingChannel: params.originatingChannel,
+        provider: params.messageProvider,
+      }),
+      messagingToolSentTargets,
+      originatingTo: resolveOriginMessageTo({
+        originatingTo: params.originatingTo,
+      }),
+      accountId: resolveOriginAccountId({
+        originatingAccountId: params.accountId,
+      }),
+    });
   // Only dedupe against messaging tool sends for the same origin target.
   // Cross-target sends (for example posting to another channel) must not
   // suppress the current conversation's final reply.

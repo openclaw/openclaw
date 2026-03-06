@@ -112,6 +112,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       threadId?: string;
       sessionKey?: string;
       idempotencyKey: string;
+      mediaLocalRoots?: string[];
     };
     const idem = request.idempotencyKey;
     const dedupeKey = `send:${idem}`;
@@ -243,6 +244,11 @@ export const sendHandlers: GatewayRequestHandlers = {
           agentId: effectiveAgentId,
           sessionKey: providedSessionKey ?? derivedRoute?.sessionKey,
         });
+        const callerMediaLocalRoots = Array.isArray(request.mediaLocalRoots)
+          ? (request.mediaLocalRoots as unknown[]).filter(
+              (entry): entry is string => typeof entry === "string" && entry.length > 0,
+            )
+          : undefined;
         const results = await deliverOutboundPayloads({
           cfg,
           channel: outboundChannel,
@@ -253,6 +259,10 @@ export const sendHandlers: GatewayRequestHandlers = {
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,
           deps: outboundDeps,
+          mediaLocalRoots:
+            callerMediaLocalRoots && callerMediaLocalRoots.length > 0
+              ? callerMediaLocalRoots
+              : undefined,
           mirror: providedSessionKey
             ? {
                 sessionKey: providedSessionKey,

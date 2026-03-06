@@ -55,6 +55,8 @@ type MessageSendParams = {
   };
   abortSignal?: AbortSignal;
   silent?: boolean;
+  /** Pre-computed media local roots from the agent context. */
+  mediaLocalRoots?: readonly string[];
 };
 
 export type MessageSendResult = {
@@ -227,6 +229,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
       silent: params.silent,
+      mediaLocalRoots: params.mediaLocalRoots,
       mirror: params.mirror
         ? {
             ...params.mirror,
@@ -260,6 +263,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       channel,
       sessionKey: params.mirror?.sessionKey,
       idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
+      mediaLocalRoots: params.mediaLocalRoots,
     },
   });
 

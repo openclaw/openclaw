@@ -248,6 +248,8 @@ type DeliverOutboundPayloadsCoreParams = {
     groupId?: string;
   };
   silent?: boolean;
+  /** Pre-computed media local roots; overrides agent-derived computation when set. */
+  mediaLocalRoots?: readonly string[];
 };
 
 type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
@@ -530,10 +532,9 @@ async function deliverOutboundPayloadsCore(
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
-    cfg,
-    params.session?.agentId ?? params.mirror?.agentId,
-  );
+  const mediaLocalRoots =
+    params.mediaLocalRoots ??
+    getAgentScopedMediaLocalRoots(cfg, params.session?.agentId ?? params.mirror?.agentId);
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,
