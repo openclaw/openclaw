@@ -10,7 +10,9 @@ import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
-import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { type OpenClawConfig, loadConfig, parseConfigJson5 } from "../../config/config.js";
+import { MissingEnvVarError, resolveConfigEnvVars } from "../../config/env-substitution.js";
+import { applyMergePatch } from "../../config/merge-patch.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -158,6 +160,30 @@ export async function getReplyFromConfig(
       } catch (err: any) {
         if (err.code !== "ENOENT") throw err;
       }
+    }
+
+    // Load and merge per-stack openclaw.json overlay from config directory.
+    const overlayPath = path.join(configDir, "openclaw.json");
+    try {
+      const overlayRaw = await fs.readFile(overlayPath, "utf-8");
+      const parseResult = parseConfigJson5(overlayRaw);
+      if (
+        parseResult.ok &&
+        parseResult.parsed &&
+        typeof parseResult.parsed === "object" &&
+        !Array.isArray(parseResult.parsed)
+      ) {
+        const resolved = resolveConfigEnvVars(parseResult.parsed);
+        const merged = applyMergePatch(cfg, resolved, { mergeObjectArraysById: true });
+        Object.assign(cfg, merged);
+      } else if (!parseResult.ok) {
+        defaultRuntime.error?.(`Failed to parse ${overlayPath}: ${parseResult.error}`);
+      }
+    } catch (err: any) {
+      if (err instanceof MissingEnvVarError) {
+        throw new Error(`Config overlay ${overlayPath}: ${err.message}`);
+      }
+      if (err.code !== "ENOENT") throw err;
     }
   }
 

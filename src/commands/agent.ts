@@ -53,7 +53,9 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, parseConfigJson5 } from "../config/config.js";
+import { MissingEnvVarError, resolveConfigEnvVars } from "../config/env-substitution.js";
+import { applyMergePatch } from "../config/merge-patch.js";
 import {
   mergeSessionEntry,
   parseSessionThreadInfo,
@@ -507,6 +509,30 @@ async function agentCommandInternal(
     }
     if (copiedCount === 0) {
       log.warn(`--config-dir ${configDir} contains no bootstrap .md files`);
+    }
+
+    // Load and merge per-stack openclaw.json overlay from config directory.
+    const overlayPath = path.join(configDir, "openclaw.json");
+    try {
+      const overlayRaw = await fs.readFile(overlayPath, "utf-8");
+      const parseResult = parseConfigJson5(overlayRaw);
+      if (
+        parseResult.ok &&
+        parseResult.parsed &&
+        typeof parseResult.parsed === "object" &&
+        !Array.isArray(parseResult.parsed)
+      ) {
+        const resolved = resolveConfigEnvVars(parseResult.parsed);
+        const merged = applyMergePatch(cfg, resolved, { mergeObjectArraysById: true });
+        Object.assign(cfg, merged);
+      } else if (!parseResult.ok) {
+        log.error(`Failed to parse ${overlayPath}: ${parseResult.error}`);
+      }
+    } catch (err: any) {
+      if (err instanceof MissingEnvVarError) {
+        throw new Error(`Config overlay ${overlayPath}: ${err.message}`);
+      }
+      if (err.code !== "ENOENT") throw err;
     }
   }
 
