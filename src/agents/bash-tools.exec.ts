@@ -373,7 +373,13 @@ export function createExecTool(
         const baseKeysLower = new Set(Object.keys(baseEnv).map((k) => k.toLowerCase()));
         const safe: Record<string, string> = {};
         for (const [key, value] of Object.entries(workspaceEnv)) {
-          if (!baseKeysLower.has(key.toLowerCase())) {
+          const keyLower = key.toLowerCase();
+          // Always block PATH regardless of baseEnv — workspace env must never influence
+          // command resolution, even in minimal environments where PATH is not yet set.
+          if (keyLower === "path") {
+            continue;
+          }
+          if (!baseKeysLower.has(keyLower)) {
             safe[key] = value;
           }
         }
