@@ -530,7 +530,7 @@ export async function handleOpenAiHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const content = resolveAssistantStreamDeltaText(evt);
+      const content = resolveAssistantStreamDeltaText(evt) ?? "";
       if (!content) {
         return;
       }
