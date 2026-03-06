@@ -34,7 +34,6 @@ function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
 const GATEWAY_ACTIONS = [
   "restart",
   "config.get",
-  "config.schema",
   "config.apply",
   "config.patch",
   "update.run",
@@ -48,7 +47,7 @@ const GatewayToolSchema = Type.Object({
   // restart
   delayMs: Type.Optional(Type.Number()),
   reason: Type.Optional(Type.String()),
-  // config.get, config.schema, config.apply, update.run
+  // config.get, config.apply, update.run
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Number()),
@@ -170,10 +169,6 @@ export function createGatewayTool(opts?: {
 
       if (action === "config.get") {
         const result = await callGatewayTool("config.get", gatewayOpts, {});
-        return jsonResult({ ok: true, result });
-      }
-      if (action === "config.schema") {
-        const result = await callGatewayTool("config.schema", gatewayOpts, {});
         return jsonResult({ ok: true, result });
       }
       if (action === "config.apply") {
