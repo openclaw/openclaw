@@ -62,6 +62,12 @@ export type ChatProps = {
   splitRatio?: number;
   assistantName: string;
   assistantAvatar: string | null;
+  // STT state
+  sttActive?: boolean;
+  sttText?: string;
+  onSttToggle?: (active: boolean) => void;
+  onSttResult?: (text: string, isFinal: boolean) => void;
+  onSttData?: (audio: string) => void;
   // Image attachments
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
@@ -244,6 +250,61 @@ export function renderChat(props: ChatProps) {
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && props.sttActive) {
+      e.preventDefault();
+      props.onSttToggle?.(false);
+      stopStt();
+      return;
+    }
+
+    if (
+      e.code === "Space" &&
+      !props.sttActive &&
+      document.activeElement?.tagName !== "TEXTAREA" &&
+      document.activeElement?.tagName !== "INPUT"
+    ) {
+      e.preventDefault();
+      props.onSttToggle?.(true);
+      void startStt(props);
+    }
+
+    if (e.key === "Enter") {
+      if (e.isComposing || e.keyCode === 229) {
+        return;
+      }
+      if (e.shiftKey) {
+        return;
+      } // Allow Shift+Enter for line breaks
+      if (!props.connected) {
+        return;
+      }
+      e.preventDefault();
+      if (canCompose) {
+        props.onSend();
+      }
+    }
+  };
+
+  const handleKeyUp = (e: KeyboardEvent) => {
+    if (e.code === "Space" && props.sttActive) {
+      e.preventDefault();
+      props.onSttToggle?.(false);
+      stopStt();
+    }
+  };
+
+  const toggleStt = () => {
+    const nextActive = !props.sttActive;
+    props.onSttToggle?.(nextActive);
+    if (nextActive) {
+      void startStt(props);
+    } else {
+      stopStt();
+    }
+  };
+
   const assistantIdentity = {
     name: props.assistantName,
     avatar: props.assistantAvatar ?? props.assistantAvatarUrl ?? null,
@@ -421,6 +482,18 @@ export function renderChat(props: ChatProps) {
       }
 
       <div class="chat-compose">
+        ${
+          props.sttActive
+            ? html`
+          <div class="chat-stt-overlay">
+            <div class="chat-stt-overlay__content">
+              <div class="chat-stt-overlay__icon">${icons.mic}</div>
+              <div class="chat-stt-overlay__text">${props.sttText || "Listening..."}</div>
+            </div>
+          </div>
+        `
+            : nothing
+        }
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
           <label class="field chat-compose__field">
@@ -430,24 +503,8 @@ export function renderChat(props: ChatProps) {
               .value=${props.draft}
               dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
-              @keydown=${(e: KeyboardEvent) => {
-                if (e.key !== "Enter") {
-                  return;
-                }
-                if (e.isComposing || e.keyCode === 229) {
-                  return;
-                }
-                if (e.shiftKey) {
-                  return;
-                } // Allow Shift+Enter for line breaks
-                if (!props.connected) {
-                  return;
-                }
-                e.preventDefault();
-                if (canCompose) {
-                  props.onSend();
-                }
-              }}
+              @keydown=${handleKeyDown}
+              @keyup=${handleKeyUp}
               @input=${(e: Event) => {
                 const target = e.target as HTMLTextAreaElement;
                 adjustTextareaHeight(target);
@@ -458,6 +515,15 @@ export function renderChat(props: ChatProps) {
             ></textarea>
           </label>
           <div class="chat-compose__actions">
+            <button
+              class="btn btn--icon ${props.sttActive ? "active" : ""}"
+              type="button"
+              ?disabled=${!props.connected}
+              @click=${toggleStt}
+              title="Voice input"
+            >
+              ${icons.mic}
+            </button>
             <button
               class="btn"
               ?disabled=${!props.connected || (!canAbort && props.sending)}
@@ -613,4 +679,118 @@ function messageKey(message: unknown, index: number): string {
     return `msg:${role}:${timestamp}:${index}`;
   }
   return `msg:${role}:${index}`;
+}
+
+let audioContext: AudioContext | null = null;
+let processor: ScriptProcessorNode | null = null;
+let input: MediaStreamAudioSourceNode | null = null;
+let globalStream: MediaStream | null = null;
+
+interface VoskRecognizer {
+  on(event: string, callback: (message: unknown) => void): void;
+  acceptWaveform(buffer: AudioBuffer): void;
+  remove(): void;
+}
+
+interface VoskModel {
+  KaldiRecognizer: new (sampleRate: number) => VoskRecognizer;
+}
+
+let voskModel: VoskModel | null = null;
+let voskRecognizer: VoskRecognizer | null = null;
+
+async function getVosk() {
+  if (voskModel) {
+    return { model: voskModel };
+  }
+
+  try {
+    console.log("Loading Vosk model...");
+    const { createModel } = await import("vosk-browser");
+    // 使用本地模型以避免 CORS 问题
+    const model = (await createModel(
+      "/models/vosk-model-small-cn-0.22.zip",
+    )) as unknown as VoskModel;
+    voskModel = model;
+    console.log("Vosk model loaded successfully");
+    return { model };
+  } catch (err) {
+    console.error("Failed to load Vosk model:", err);
+    throw err;
+  }
+}
+
+async function startStt(props: ChatProps) {
+  try {
+    // 先请求麦克风权限，这样用户能立刻看到反馈
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    globalStream = stream;
+
+    // 然后再加载模型（如果还没加载的话）
+    const { model } = await getVosk();
+
+    audioContext = new AudioContext({ sampleRate: 16000 });
+
+    // 根据 vosk-browser 0.0.8 的标准用法创建识别器
+    voskRecognizer = new model.KaldiRecognizer(16000);
+
+    interface VoskResult {
+      result: {
+        text: string;
+        partial: string;
+      };
+    }
+
+    voskRecognizer.on("result", (message: unknown) => {
+      const result = (message as VoskResult).result;
+      props.onSttResult?.(result.text, true);
+    });
+    voskRecognizer.on("partialresult", (message: unknown) => {
+      const result = (message as VoskResult).result;
+      props.onSttResult?.(result.partial, false);
+    });
+
+    input = audioContext.createMediaStreamSource(stream);
+    processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+    processor.onaudioprocess = (e) => {
+      if (voskRecognizer) {
+        // vosk-browser 的 acceptWaveform 在 0.0.8 版本中
+        // 可能期望直接接收 AudioBuffer 或特定的 Float32Array
+        voskRecognizer.acceptWaveform(e.inputBuffer);
+      }
+    };
+
+    input.connect(processor);
+    processor.connect(audioContext.destination);
+  } catch (err) {
+    console.error("Failed to start STT:", err);
+    alert("无法启动语音输入: " + (err instanceof Error ? err.message : String(err)));
+    props.onSttToggle?.(false);
+    stopStt();
+  }
+}
+
+function stopStt() {
+  if (processor) {
+    processor.disconnect();
+    processor = null;
+  }
+  if (input) {
+    input.disconnect();
+    input = null;
+  }
+  if (audioContext) {
+    void audioContext.close();
+    audioContext = null;
+  }
+  if (globalStream) {
+    globalStream.getTracks().forEach((track) => track.stop());
+    globalStream = null;
+  }
+  // 我们保留模型以供下次使用，但可以销毁识别器
+  if (voskRecognizer) {
+    voskRecognizer.remove();
+    voskRecognizer = null;
+  }
 }

@@ -117,7 +117,9 @@ describe("handleControlUiHttpRequest", () => {
         const csp = setHeader.mock.calls.find((call) => call[0] === "Content-Security-Policy")?.[1];
         expect(typeof csp).toBe("string");
         expect(String(csp)).toContain("frame-ancestors 'none'");
-        expect(String(csp)).toContain("script-src 'self'");
+        expect(String(csp)).toContain("script-src 'self' blob: 'unsafe-eval' 'wasm-unsafe-eval'");
+        expect(String(csp)).toContain("worker-src 'self' blob:");
+        expect(String(csp)).toContain("connect-src 'self' data: ws: wss:");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
       },
     });

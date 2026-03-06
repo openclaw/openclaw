@@ -1026,7 +1026,11 @@ export function renderApp(state: AppViewState) {
                 sending: state.chatSending,
                 compactionStatus: state.compactionStatus,
                 fallbackStatus: state.fallbackStatus,
-                assistantAvatarUrl: chatAvatarUrl,
+                assistantAvatar: chatAvatarUrl,
+                sttActive: state.sttActive,
+                sttText: state.sttText,
+                onSttToggle: (active) => state.handleSttToggle(active),
+                onSttResult: (text, isFinal) => state.handleSttResult(text, isFinal),
                 messages: state.chatMessages,
                 toolMessages: state.chatToolMessages,
                 stream: state.chatStream,
@@ -1072,7 +1076,6 @@ export function renderApp(state: AppViewState) {
                 onCloseSidebar: () => state.handleCloseSidebar(),
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
                 assistantName: state.assistantName,
-                assistantAvatar: state.assistantAvatar,
               })
             : nothing
         }
