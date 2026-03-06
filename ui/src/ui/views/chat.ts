@@ -213,6 +213,10 @@ function handleDrop(e: DragEvent, props: ChatProps) {
     return;
   }
 
+  // Prevent default as soon as we know files are present, so non-image drops
+  // don't trigger browser navigation to the dropped file.
+  e.preventDefault();
+
   const imageFiles: File[] = [];
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
@@ -225,22 +229,29 @@ function handleDrop(e: DragEvent, props: ChatProps) {
     return;
   }
 
-  e.preventDefault();
-
-  for (const file of imageFiles) {
+  // Batch all FileReader results before updating attachments. Reading
+  // props.attachments inside each individual callback would race: all
+  // callbacks capture the same pre-drop snapshot and each replacement
+  // overwrites the previous, so only the last-read image would survive.
+  const pending = Array.from<ChatAttachment>({ length: imageFiles.length });
+  let loaded = 0;
+  imageFiles.forEach((file, index) => {
     const reader = new FileReader();
     reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
+      pending[index] = {
         id: generateAttachmentId(),
-        dataUrl,
+        dataUrl: reader.result as string,
         mimeType: file.type,
       };
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
+      loaded++;
+      if (loaded === imageFiles.length) {
+        // Read props.attachments once here, after all files are ready, to
+        // pick up any attachment changes that happened during the reads.
+        props.onAttachmentsChange?.([...(props.attachments ?? []), ...pending]);
+      }
     });
     reader.readAsDataURL(file);
-  }
+  });
 }
 
 function renderAttachmentPreview(props: ChatProps) {
