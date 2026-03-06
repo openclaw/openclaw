@@ -87,6 +87,7 @@ export async function startTelegramWebhook(opts: {
   abortSignal?: AbortSignal;
   healthPath?: string;
   publicUrl?: string;
+  onUpdateReceived?: (at?: number) => void;
 }) {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
@@ -168,6 +169,7 @@ export async function startTelegramWebhook(opts: {
         respondText(400, body.error);
         return;
       }
+      opts.onUpdateReceived?.(Date.now());
 
       let replied = false;
       const reply = async (json: string) => {

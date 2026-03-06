@@ -356,6 +356,7 @@ describe("startTelegramWebhook", () => {
   it("invokes webhook handler on matching path", async () => {
     handlerSpy.mockClear();
     createTelegramBotSpy.mockClear();
+    const onUpdateReceived = vi.fn();
     const cfg = { bindings: [] };
     await withStartedWebhook(
       {
@@ -363,6 +364,7 @@ describe("startTelegramWebhook", () => {
         accountId: "opie",
         config: cfg,
         path: TELEGRAM_WEBHOOK_PATH,
+        onUpdateReceived,
       },
       async ({ port }) => {
         expect(createTelegramBotSpy).toHaveBeenCalledWith(
@@ -379,6 +381,7 @@ describe("startTelegramWebhook", () => {
         });
         expect(response.status).toBe(200);
         expect(handlerSpy).toHaveBeenCalled();
+        expect(onUpdateReceived).toHaveBeenCalledTimes(1);
       },
     );
   });

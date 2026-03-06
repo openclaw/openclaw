@@ -34,6 +34,8 @@ export type MonitorTelegramOpts = {
   setStatus?: (next: ChannelAccountSnapshot) => void;
 };
 
+type ChannelAccountStatusPatch = Omit<ChannelAccountSnapshot, "accountId">;
+
 export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
   return {
     sink: {
@@ -129,7 +131,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       cfg,
       accountId: opts.accountId,
     });
-    const setStatus = (next: ChannelAccountSnapshot) => {
+    const setStatus = (next: ChannelAccountStatusPatch) => {
       opts.setStatus?.({
         accountId: account.accountId,
         ...next,
@@ -187,6 +189,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         fetch: proxyFetch,
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
+        onUpdateReceived: markInboundActivity,
       });
       const connectedAt = Date.now();
       setStatus({

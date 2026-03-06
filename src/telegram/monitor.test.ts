@@ -326,6 +326,41 @@ describe("monitorTelegramProvider (grammY)", () => {
     );
   });
 
+  it("pushes webhook inbound activity updates for health monitoring", async () => {
+    const abort = new AbortController();
+    const setStatus = vi.fn();
+    let onUpdateReceived: ((at?: number) => void) | undefined;
+    startTelegramWebhookSpy.mockImplementationOnce(
+      async (opts?: { onUpdateReceived?: typeof onUpdateReceived }) => {
+        onUpdateReceived = opts?.onUpdateReceived;
+        return { server: { close: vi.fn() }, stop: vi.fn() };
+      },
+    );
+
+    const monitor = monitorTelegramProvider({
+      token: "tok",
+      useWebhook: true,
+      webhookUrl: "https://example.test/telegram",
+      webhookSecret: "secret",
+      abortSignal: abort.signal,
+      setStatus,
+    });
+
+    await vi.waitFor(() => expect(startTelegramWebhookSpy).toHaveBeenCalledTimes(1));
+    onUpdateReceived?.(123);
+
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        lastInboundAt: 123,
+        lastEventAt: 123,
+      }),
+    );
+
+    abort.abort();
+    await monitor;
+  });
+
   it("requires mention in groups by default", async () => {
     Object.values(api).forEach((fn) => {
       fn?.mockReset?.();
