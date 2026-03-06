@@ -68,6 +68,10 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
   if (isPartialReasoningTagPrefix(trimmed)) {
     return {};
   }
+  const prefixTrimmed = REASONING_MESSAGE_PREFIX.trim();
+  if (trimmed === prefixTrimmed) {
+    return {};
+  }
   if (
     trimmed.startsWith(REASONING_MESSAGE_PREFIX) &&
     trimmed.length > REASONING_MESSAGE_PREFIX.length

@@ -26,4 +26,18 @@ describe("splitTelegramReasoningText", () => {
   it("does not emit partial reasoning tag prefixes", () => {
     expect(splitTelegramReasoningText("  <thi")).toEqual({});
   });
+
+  it("suppresses bare 'Reasoning:\\n' prefix before content arrives", () => {
+    expect(splitTelegramReasoningText("Reasoning:\n")).toEqual({});
+  });
+
+  it("suppresses trimmed 'Reasoning:' prefix", () => {
+    expect(splitTelegramReasoningText("  Reasoning:  ")).toEqual({});
+  });
+
+  it("keeps full reasoning message with content after prefix", () => {
+    expect(splitTelegramReasoningText("Reasoning:\nActual reasoning here")).toEqual({
+      reasoningText: "Reasoning:\nActual reasoning here",
+    });
+  });
 });
