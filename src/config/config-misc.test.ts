@@ -336,6 +336,62 @@ describe("config paths", () => {
     expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
     expect(getConfigValueAtPath(root, parsed.path)).toBeUndefined();
   });
+
+  it("supports bracket notation for keys containing dots", () => {
+    const parsed = parseConfigPath('models.providers["llama.cpp"].baseUrl');
+    expect(parsed.ok).toBe(true);
+    expect(parsed.path).toEqual(["models", "providers", "llama.cpp", "baseUrl"]);
+
+    const root: Record<string, unknown> = {};
+    setConfigValueAtPath(root, parsed.path!, "http://localhost:8080");
+    expect(getConfigValueAtPath(root, parsed.path!)).toBe("http://localhost:8080");
+    // The key "llama.cpp" must survive as a single object key, not nested.
+    expect((root.models as Record<string, unknown>).providers).toEqual({
+      "llama.cpp": { baseUrl: "http://localhost:8080" },
+    });
+  });
+
+  it("supports single-quoted bracket notation", () => {
+    const parsed = parseConfigPath("models.providers['vllm.ai'].endpoint");
+    expect(parsed.ok).toBe(true);
+    expect(parsed.path).toEqual(["models", "providers", "vllm.ai", "endpoint"]);
+  });
+
+  it("supports bracket notation at the start of the path", () => {
+    const parsed = parseConfigPath('["top.level"].child');
+    expect(parsed.ok).toBe(true);
+    expect(parsed.path).toEqual(["top.level", "child"]);
+  });
+
+  it("supports consecutive bracket segments", () => {
+    const parsed = parseConfigPath('a["b.c"]["d.e"]');
+    expect(parsed.ok).toBe(true);
+    expect(parsed.path).toEqual(["a", "b.c", "d.e"]);
+  });
+
+  it("rejects bracket notation with empty key", () => {
+    expect(parseConfigPath('models.providers[""].baseUrl').ok).toBe(false);
+  });
+
+  it("rejects bracket notation with unclosed quote", () => {
+    expect(parseConfigPath('models.providers["llama.cpp].baseUrl').ok).toBe(false);
+  });
+
+  it("rejects bracket notation with missing closing bracket", () => {
+    expect(parseConfigPath('models.providers["llama.cpp"').ok).toBe(false);
+  });
+
+  it("rejects bracket notation with blocked keys", () => {
+    expect(parseConfigPath('models["__proto__"].polluted').ok).toBe(false);
+    expect(parseConfigPath('["constructor"].polluted').ok).toBe(false);
+  });
+
+  it("rejects leading/trailing dots and consecutive dots", () => {
+    expect(parseConfigPath(".foo.bar").ok).toBe(false);
+    expect(parseConfigPath("foo.bar.").ok).toBe(false);
+    expect(parseConfigPath("foo..bar").ok).toBe(false);
+    expect(parseConfigPath('foo["bar"].').ok).toBe(false);
+  });
 });
 
 describe("config strict validation", () => {
