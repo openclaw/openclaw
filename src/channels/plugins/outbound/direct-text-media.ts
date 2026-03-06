@@ -5,6 +5,7 @@ import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 import type { ChannelOutboundAdapter } from "../types.js";
 
 type DirectSendOptions = {
+  cfg: OpenClawConfig;
   accountId?: string | null;
   replyToId?: string | null;
   mediaUrl?: string;
@@ -121,6 +122,7 @@ export function createDirectTextMediaOutbound<
       sendParams.to,
       sendParams.text,
       sendParams.buildOptions({
+        cfg: sendParams.cfg,
         mediaUrl: sendParams.mediaUrl,
         mediaLocalRoots: sendParams.mediaLocalRoots,
         accountId: sendParams.accountId,

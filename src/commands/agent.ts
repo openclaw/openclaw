@@ -14,6 +14,7 @@ import {
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
+import { resolveBootstrapWarningSignaturesSeen } from "../agents/bootstrap-budget.js";
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -173,11 +174,17 @@ function runAgentAttempt(params: {
   primaryProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
+  allowRateLimitCooldownProbe?: boolean;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
   });
+  const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+    params.sessionEntry?.systemPromptReport,
+  );
+  const bootstrapPromptWarningSignature =
+    bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
   if (isCliProvider(params.providerOverride, params.cfg)) {
     const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
     const runCliWithSession = (nextCliSessionId: string | undefined) =>
@@ -196,6 +203,8 @@ function runAgentAttempt(params: {
         runId: params.runId,
         extraSystemPrompt: params.opts.extraSystemPrompt,
         cliSessionId: nextCliSessionId,
+        bootstrapPromptWarningSignaturesSeen,
+        bootstrapPromptWarningSignature,
         images: params.isFallbackRetry ? undefined : params.opts.images,
         streamParams: params.opts.streamParams,
       });
@@ -316,7 +325,10 @@ function runAgentAttempt(params: {
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
+    allowRateLimitCooldownProbe: params.allowRateLimitCooldownProbe,
     onAgentEvent: params.onAgentEvent,
+    bootstrapPromptWarningSignaturesSeen,
+    bootstrapPromptWarningSignature,
   });
 }
 
@@ -828,7 +840,7 @@ async function agentCommandInternal(
         model,
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
-        run: (providerOverride, modelOverride) => {
+        run: (providerOverride, modelOverride, runOptions) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
           return runAgentAttempt({
@@ -856,6 +868,7 @@ async function agentCommandInternal(
             primaryProvider: provider,
             sessionStore,
             storePath,
+            allowRateLimitCooldownProbe: runOptions?.allowRateLimitCooldownProbe,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (
@@ -873,6 +886,10 @@ async function agentCommandInternal(
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
       if (!lifecycleEnded) {
+        const stopReason = result.meta.stopReason;
+        if (stopReason && stopReason !== "end_turn") {
+          console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
+        }
         emitAgentEvent({
           runId,
           stream: "lifecycle",
@@ -881,6 +898,7 @@ async function agentCommandInternal(
             startedAt,
             endedAt: Date.now(),
             aborted: result.meta.aborted ?? false,
+            stopReason,
           },
         });
       }

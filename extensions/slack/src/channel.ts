@@ -7,6 +7,7 @@ import {
   formatPairingApproveHint,
   getChatChannelMeta,
   handleSlackMessageAction,
+  inspectSlackAccount,
   listSlackMessageActions,
   listSlackAccountIds,
   listSlackDirectoryGroupsFromConfig,
@@ -16,6 +17,8 @@ import {
   normalizeAccountId,
   normalizeSlackMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromRequiredCredentialStatuses,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
   resolveSlackReplyToMode,
@@ -29,7 +32,7 @@ import {
   SlackConfigSchema,
   type ChannelPlugin,
   type ResolvedSlackAccount,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/slack";
 import { getSlackRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("slack");
@@ -131,6 +134,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   config: {
     listAccountIds: (cfg) => listSlackAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
+    inspectAccount: (cfg, accountId) => inspectSlackAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultSlackAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
@@ -365,13 +369,24 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         threadId,
       });
       const result = await send(to, text, {
+        cfg,
         threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
       });
       return { channel: "slack", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, threadId, cfg }) => {
+    sendMedia: async ({
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      cfg,
+    }) => {
       const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
         cfg,
         accountId: accountId ?? undefined,
@@ -380,7 +395,9 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         threadId,
       });
       const result = await send(to, text, {
+        cfg,
         mediaUrl,
+        mediaLocalRoots,
         threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
@@ -415,14 +432,23 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       return await getSlackRuntime().channel.slack.probeSlack(token, timeoutMs);
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => {
-      const configured = isSlackAccountConfigured(account);
+      const mode = account.config.mode ?? "socket";
+      const configured =
+        (mode === "http"
+          ? resolveConfiguredFromRequiredCredentialStatuses(account, [
+              "botTokenStatus",
+              "signingSecretStatus",
+            ])
+          : resolveConfiguredFromRequiredCredentialStatuses(account, [
+              "botTokenStatus",
+              "appTokenStatus",
+            ])) ?? isSlackAccountConfigured(account);
       return {
         accountId: account.accountId,
         name: account.name,
         enabled: account.enabled,
         configured,
-        botTokenSource: account.botTokenSource,
-        appTokenSource: account.appTokenSource,
+        ...projectCredentialSnapshotFields(account),
         running: runtime?.running ?? false,
         lastStartAt: runtime?.lastStartAt ?? null,
         lastStopAt: runtime?.lastStopAt ?? null,

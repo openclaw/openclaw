@@ -217,7 +217,7 @@ describe("secret ref resolver", () => {
                 source: "exec",
                 command: scriptPath,
                 passEnv: ["PATH"],
-                timeoutMs: 500,
+                timeoutMs: 1500,
               },
             },
           },

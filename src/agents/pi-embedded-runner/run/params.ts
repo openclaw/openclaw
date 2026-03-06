@@ -85,6 +85,10 @@ export type RunEmbeddedPiAgentParams = {
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for context mode behavior. */
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
+  bootstrapPromptWarningSignaturesSeen?: string[];
+  /** Last shown bootstrap truncation warning signature for this session. */
+  bootstrapPromptWarningSignature?: string;
   execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
@@ -109,4 +113,12 @@ export type RunEmbeddedPiAgentParams = {
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
+  /**
+   * Allow a single run attempt even when all auth profiles are in cooldown,
+   * but only for inferred `rate_limit` cooldowns.
+   *
+   * This is used by model fallback when trying sibling models on providers
+   * where rate limits are often model-scoped.
+   */
+  allowRateLimitCooldownProbe?: boolean;
 };
