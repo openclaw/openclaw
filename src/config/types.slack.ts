@@ -196,7 +196,7 @@ export type SlackAccountConfig = {
   typingReaction?: string;
   /**
    * Status text shown in Slack Assistant threads while the bot is processing.
-   * Slack automatically prepends the bot name. Default: "is typing…"
+   * Slack automatically prepends the bot name. Default: "is typing..."
    */
   assistantStatus?: string;
 };
