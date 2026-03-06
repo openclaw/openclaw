@@ -313,6 +313,12 @@ export function applyJobResult(
   job.state.lastDeliveryStatus = deliveryStatus;
   job.state.lastDeliveryError =
     deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
+
+  // For announce-mode jobs, successful delivery overrides execution errors.
+  if (deliveryStatus === "delivered") {
+    job.state.lastStatus = "ok";
+  }
+
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.
