@@ -745,16 +745,21 @@ export function registerPluginsCli(program: Command) {
         if (lastAt > 0) {
           const maybeName = id.slice(0, lastAt);
           const version = id.slice(lastAt + 1);
-          if (maybeName in installs) {
-            pluginId = maybeName;
-            const record = installs[maybeName];
+          // installs keys are unscoped (e.g. "matrix" not "@openclaw/matrix"),
+          // so try both the raw name and the unscoped variant.
+          const unscoped = maybeName.includes("/") ? maybeName.split("/").pop()! : maybeName;
+          const key =
+            maybeName in installs ? maybeName : unscoped in installs ? unscoped : undefined;
+          if (key) {
+            pluginId = key;
+            const record = installs[key];
             // Build override from the recorded spec base + user-specified version
             // so scoped packages like @openclaw/matrix resolve correctly.
             const base = record?.spec ?? maybeName;
             // Strip any existing version from the base spec
             const baseLastAt = base.lastIndexOf("@");
             const baseName = baseLastAt > 0 ? base.slice(0, baseLastAt) : base;
-            specOverrides = { [maybeName]: `${baseName}@${version}` };
+            specOverrides = { [key]: `${baseName}@${version}` };
           }
         }
       }

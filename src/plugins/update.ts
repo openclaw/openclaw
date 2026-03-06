@@ -249,6 +249,7 @@ export async function updateNpmInstalledPlugins(params: {
     }
 
     const spec = params.specOverrides?.[pluginId] ?? record.spec;
+    const hasSpecOverride = spec !== record.spec;
 
     let installPath: string;
     try {
@@ -271,7 +272,9 @@ export async function updateNpmInstalledPlugins(params: {
           mode: "update",
           dryRun: true,
           expectedPluginId: pluginId,
-          expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
+          expectedIntegrity: hasSpecOverride
+            ? undefined
+            : expectedIntegrityForUpdate(record.spec, record.integrity),
           onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
             pluginId,
             dryRun: true,
@@ -330,7 +333,9 @@ export async function updateNpmInstalledPlugins(params: {
         spec,
         mode: "update",
         expectedPluginId: pluginId,
-        expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
+        expectedIntegrity: hasSpecOverride
+          ? undefined
+          : expectedIntegrityForUpdate(record.spec, record.integrity),
         onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
           pluginId,
           dryRun: false,
