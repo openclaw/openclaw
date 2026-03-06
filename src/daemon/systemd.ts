@@ -173,22 +173,6 @@ function isSystemctlMissing(detail: string): boolean {
   );
 }
 
-function isSystemdUnitNotEnabled(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
-  const normalized = detail.toLowerCase();
-  return (
-    normalized.includes("disabled") ||
-    normalized.includes("static") ||
-    normalized.includes("indirect") ||
-    normalized.includes("masked") ||
-    normalized.includes("not-found") ||
-    normalized.includes("could not be found") ||
-    normalized.includes("failed to get unit file state")
-  );
-}
-
 function isSystemdUserBusAvailable(res: { stdout: string; stderr: string; code: number }): boolean {
   if (res.code === 0) {
     return true;
@@ -209,7 +193,8 @@ function isSystemdUserBusAvailable(res: { stdout: string; stderr: string; code: 
   if (detail.includes("not supported")) {
     return false;
   }
-  return false;
+  // non-zero but the user manager is running (degraded state, some units failed, etc.)
+  return true;
 }
 
 export async function isSystemdUserServiceAvailable(): Promise<boolean> {
@@ -403,14 +388,7 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl([...systemctlArgs, "is-enabled", unitName]);
-  if (res.code === 0) {
-    return true;
-  }
-  const detail = readSystemctlDetail(res);
-  if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
-    return false;
-  }
-  return false;
+  return res.code === 0;
 }
 
 export async function readSystemdServiceRuntime(
