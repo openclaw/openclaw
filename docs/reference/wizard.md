@@ -94,6 +94,12 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - [iMessage](/channels/imessage): legacy `imsg` CLI path + DB access.
     - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
   </Step>
+  <Step title="Web search">
+    - Pick a provider: Perplexity, Brave, Gemini, Grok, or Kimi (or skip).
+    - Paste your API key (QuickStart auto-detects keys from env vars or existing config).
+    - Skip with `--skip-search`.
+    - Configure later: `openclaw configure --section web`.
+  </Step>
   <Step title="Daemon install">
     - macOS: LaunchAgent
       - Requires a logged-in user session; for headless, use a custom LaunchDaemon (not shipped).
