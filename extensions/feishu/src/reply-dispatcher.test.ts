@@ -591,4 +591,15 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }),
     );
   });
+
+  it("sets disableBlockStreaming to prevent silent reply loss", () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    expect(result.replyOptions.disableBlockStreaming).toBe(true);
+  });
 });
