@@ -263,6 +263,9 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
+    // pnpm stores package files as hard links in its content-addressable store,
+    // so nlink > 1 is expected and not a security concern for read-only assets.
+    rejectHardlinks: false,
   });
   if (!opened.ok) {
     if (opened.reason === "io") {

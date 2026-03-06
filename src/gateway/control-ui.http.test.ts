@@ -285,6 +285,27 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves hard-linked assets (pnpm content-addressable store)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { filePath } = await writeAssetFile(tmp, "app.js", "console.log('ok');\n");
+        // Create a hard link (nlink > 1), simulating pnpm's store layout
+        const linkPath = path.join(path.dirname(filePath), "app-link.js");
+        await fs.link(filePath, linkPath);
+
+        const { res, end, handled } = runControlUiRequest({
+          url: "/assets/app-link.js",
+          method: "GET",
+          rootPath: tmp,
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("console.log('ok');\n");
+      },
+    });
+  });
+
   it("serves HEAD for in-root assets without writing a body", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
