@@ -7,7 +7,6 @@ type PendingToolCallMeta = {
 
 export type PendingToolCallState = {
   size: () => number;
-  entries: () => IterableIterator<[string, PendingToolCallMeta]>;
   snapshot: () => Array<{ id: string; name?: string; createdAtMs: number }>;
   restore: (items: Array<{ id: string; name?: string; createdAtMs: number }>) => void;
   getToolName: (id: string) => string | undefined;
@@ -18,12 +17,6 @@ export type PendingToolCallState = {
   getPendingIds: () => string[];
   getExpiredIds: (ttlMs: number, nowMs?: number) => string[];
   shouldFlushForSanitizedDrop: () => boolean;
-  shouldFlushBeforeNonToolResult: (
-    nextRole: unknown,
-    toolCallCount: number,
-    ttlMs: number,
-    nowMs?: number,
-  ) => boolean;
   shouldFlushBeforeNewToolCalls: (toolCallCount: number) => boolean;
 };
 
@@ -32,7 +25,6 @@ export function createPendingToolCallState(): PendingToolCallState {
 
   return {
     size: () => pending.size,
-    entries: () => pending.entries(),
     snapshot: () => Array.from(pending.entries()).map(([id, meta]) => ({ id, ...meta })),
     restore: (items: Array<{ id: string; name?: string; createdAtMs: number }>) => {
       pending.clear();
@@ -67,28 +59,6 @@ export function createPendingToolCallState(): PendingToolCallState {
       return expired;
     },
     shouldFlushForSanitizedDrop: () => pending.size > 0,
-    // Grace-window behavior: do not flush immediately on first non-tool message.
-    // Only flush when at least one pending tool call has exceeded ttlMs.
-    shouldFlushBeforeNonToolResult: (
-      nextRole: unknown,
-      toolCallCount: number,
-      ttlMs: number,
-      nowMs = Date.now(),
-    ) => {
-      if (pending.size === 0) {
-        return false;
-      }
-      const isNonToolFlow = toolCallCount === 0 || nextRole !== "assistant";
-      if (!isNonToolFlow) {
-        return false;
-      }
-      for (const meta of pending.values()) {
-        if (nowMs - meta.createdAtMs >= ttlMs) {
-          return true;
-        }
-      }
-      return false;
-    },
     shouldFlushBeforeNewToolCalls: (toolCallCount: number) => pending.size > 0 && toolCallCount > 0,
   };
 }

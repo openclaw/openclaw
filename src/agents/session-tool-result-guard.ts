@@ -274,10 +274,6 @@ export function installSessionToolResultGuard(
     if (nextRole === "toolResult") {
       const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
       const toolName = id ? pendingState.getToolName(id) : undefined;
-      if (id) {
-        pendingState.delete(id);
-        savePendingState();
-      }
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
@@ -292,7 +288,13 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      return originalAppend(persisted as never);
+      const appendResult = originalAppend(persisted as never);
+      // Update pending sidecar only after JSONL append succeeds.
+      if (id) {
+        pendingState.delete(id);
+        savePendingState();
+      }
+      return appendResult;
     }
 
     // Skip tool call extraction for aborted/errored assistant messages.
@@ -313,18 +315,10 @@ export function installSessionToolResultGuard(
     // synthetic results (e.g. OpenAI) accumulate stale pending state when a user message
     // interrupts in-flight tool calls, leaving orphaned tool_use blocks in the transcript
     // that cause API 400 errors on subsequent requests.
-    if (
-      pendingState.shouldFlushBeforeNonToolResult(
-        nextRole,
-        toolCalls.length,
-        pendingToolResultGraceMs,
-        Date.now(),
-      )
-    ) {
-      const expiredIds = pendingState.getExpiredIds(pendingToolResultGraceMs, Date.now());
-      if (expiredIds.length > 0) {
-        flushPendingToolResults("ttl_expired", expiredIds);
-      }
+    const expiredIds = pendingState.getExpiredIds(pendingToolResultGraceMs, Date.now());
+    const isNonToolFlow = toolCalls.length === 0 || nextRole !== "assistant";
+    if (isNonToolFlow && expiredIds.length > 0) {
+      flushPendingToolResults("ttl_expired", expiredIds);
     }
     // If new tool calls arrive while older ones are pending, flush the old ones first.
     if (pendingState.shouldFlushBeforeNewToolCalls(toolCalls.length)) {
