@@ -134,7 +134,9 @@ export async function sendTelegramText(
   // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
   if (!htmlText.trim()) {
     if (!hasFallbackText) {
-      throw new Error("telegram sendMessage failed: empty formatted text and empty plain fallback");
+      // Silently skip empty messages to avoid Telegram API 400 error
+      runtime.log?.("telegram sendMessage skipped: empty content");
+      return 0;
     }
     return await sendPlainFallback();
   }
