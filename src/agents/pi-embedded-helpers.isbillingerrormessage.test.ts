@@ -535,6 +535,14 @@ describe("classifyFailoverReason", () => {
     ).toBe("rate_limit");
     expect(classifyFailoverReason("all credentials for model x are cooling down")).toBeNull();
     expect(classifyFailoverReason("invalid request format")).toBe("format");
+    expect(classifyFailoverReason("credit balance too low")).toBe("billing");
+    // Billing with "limit exhausted" must stay billing, not rate_limit (avoids key-disable regression)
+    expect(
+      classifyFailoverReason("HTTP 402 payment required. Your limit exhausted for this plan."),
+    ).toBe("billing");
+    expect(classifyFailoverReason("402 Payment Required: Weekly/Monthly Limit Exhausted")).toBe(
+      "billing",
+    );
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
@@ -583,6 +591,17 @@ describe("classifyFailoverReason", () => {
     // A generic "service unavailable" from a proxy/CDN should stay retryable,
     // but it should not be treated as provider overload / rate limit.
     expect(classifyFailoverReason("LLM error: service unavailable")).toBe("timeout");
+  });
+  it("classifies zhipuai Weekly/Monthly Limit Exhausted as rate_limit (#33785)", () => {
+    expect(
+      classifyFailoverReason(
+        "LLM error 1310: Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-03-06 22:19:54 (request_id: 20260303141547610b7f574d1b44cb)",
+      ),
+    ).toBe("rate_limit");
+    // Independent coverage for broader periodic limit patterns.
+    expect(classifyFailoverReason("LLM error: weekly/monthly limit reached")).toBe("rate_limit");
+    expect(classifyFailoverReason("LLM error: monthly limit reached")).toBe("rate_limit");
+    expect(classifyFailoverReason("LLM error: daily limit exceeded")).toBe("rate_limit");
   });
   it("classifies permanent auth errors as auth_permanent", () => {
     expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");

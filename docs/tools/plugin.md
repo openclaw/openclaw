@@ -66,6 +66,7 @@ Plugins can register:
 - Agent tools
 - CLI commands
 - Background services
+- Context engines
 - Optional config validation
 - **Skills** (by listing `skills` directories in the plugin manifest)
 - **Auto-reply commands** (execute without invoking the AI agent)
@@ -370,6 +371,7 @@ Fields:
 - `allow`: allowlist (optional)
 - `deny`: denylist (optional; deny wins)
 - `load.paths`: extra plugin files/dirs
+- `slots`: exclusive slot selectors such as `memory` and `contextEngine`
 - `entries.<id>`: per‑plugin toggles + config
 
 Config changes **require a gateway restart**.
@@ -393,13 +395,29 @@ Some plugin categories are **exclusive** (only one active at a time). Use
   plugins: {
     slots: {
       memory: "memory-core", // or "none" to disable memory plugins
+      contextEngine: "legacy", // or a plugin id such as "lossless-claw"
     },
   },
 }
 ```
 
-If multiple plugins declare `kind: "memory"`, only the selected one loads. Others
-are disabled with diagnostics.
+Supported exclusive slots:
+
+- `memory`: active memory plugin (`"none"` disables memory plugins)
+- `contextEngine`: active context engine plugin (`"legacy"` is the built-in default)
+
+If multiple plugins declare `kind: "memory"` or `kind: "context-engine"`, only
+the selected plugin loads for that slot. Others are disabled with diagnostics.
+
+### Context engine plugins
+
+Context engine plugins own session context orchestration for ingest, assembly,
+and compaction. Register them from your plugin with
+`api.registerContextEngine(id, factory)`, then select the active engine with
+`plugins.slots.contextEngine`.
+
+Use this when your plugin needs to replace or extend the default context
+pipeline rather than just add memory search or hooks.
 
 ## Control UI (schema + labels)
 
@@ -464,6 +482,37 @@ Plugins export either:
 
 - A function: `(api) => { ... }`
 - An object: `{ id, name, configSchema, register(api) { ... } }`
+
+Context engine plugins can also register a runtime-owned context manager:
+
+```ts
+export default function (api) {
+  api.registerContextEngine("lossless-claw", () => ({
+    info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    async compact() {
+      return { ok: true, compacted: false };
+    },
+  }));
+}
+```
+
+Then enable it in config:
+
+```json5
+{
+  plugins: {
+    slots: {
+      contextEngine: "lossless-claw",
+    },
+  },
+}
+```
 
 ## Plugin hooks
 

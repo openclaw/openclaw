@@ -1,5 +1,8 @@
 type ErrorPattern = RegExp | string;
 
+const PERIODIC_USAGE_LIMIT_RE =
+  /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
+
 const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests|429/,
@@ -115,6 +118,10 @@ export function isRateLimitErrorMessage(raw: string): boolean {
 
 export function isTimeoutErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
+}
+
+export function isPeriodicUsageLimitErrorMessage(raw: string): boolean {
+  return PERIODIC_USAGE_LIMIT_RE.test(raw);
 }
 
 export function isBillingErrorMessage(raw: string): boolean {
