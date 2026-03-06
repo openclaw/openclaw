@@ -1,0 +1,28 @@
+{
+  "name": "@openclaw/magicform",
+  "version": "2026.3.2",
+  "description": "MagicForm channel plugin for OpenClaw",
+  "type": "module",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "magicform",
+      "label": "MagicForm",
+      "selectionLabel": "MagicForm (Webhook)",
+      "docsPath": "/channels/magicform",
+      "docsLabel": "magicform",
+      "blurb": "Connect MagicForm to OpenClaw for agentic task processing.",
+      "order": 91
+    },
+    "install": {
+      "npmSpec": "@openclaw/magicform",
+      "localPath": "extensions/magicform",
+      "defaultChoice": "local"
+    }
+  }
+}

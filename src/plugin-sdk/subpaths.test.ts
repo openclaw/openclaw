@@ -39,6 +39,7 @@ const bundledExtensionSubpathLoaders = [
   { id: "phone-control", load: () => import("openclaw/plugin-sdk/phone-control") },
   { id: "qwen-portal-auth", load: () => import("openclaw/plugin-sdk/qwen-portal-auth") },
   { id: "synology-chat", load: () => import("openclaw/plugin-sdk/synology-chat") },
+  { id: "magicform", load: () => import("openclaw/plugin-sdk/magicform") },
   { id: "talk-voice", load: () => import("openclaw/plugin-sdk/talk-voice") },
   { id: "test-utils", load: () => import("openclaw/plugin-sdk/test-utils") },
   { id: "thread-ownership", load: () => import("openclaw/plugin-sdk/thread-ownership") },

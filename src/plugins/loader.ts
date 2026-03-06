@@ -159,6 +159,7 @@ const pluginSdkScopedAliasEntries = [
     srcFile: "synology-chat.ts",
     distFile: "synology-chat.js",
   },
+  { subpath: "magicform", srcFile: "magicform.ts", distFile: "magicform.js" },
   { subpath: "talk-voice", srcFile: "talk-voice.ts", distFile: "talk-voice.js" },
   { subpath: "test-utils", srcFile: "test-utils.ts", distFile: "test-utils.js" },
   {

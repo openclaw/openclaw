@@ -43,6 +43,7 @@ const pluginSdkSubpaths = [
   "phone-control",
   "qwen-portal-auth",
   "synology-chat",
+  "magicform",
   "talk-voice",
   "test-utils",
   "thread-ownership",
