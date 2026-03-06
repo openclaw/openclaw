@@ -21,11 +21,25 @@ export function loadDotEnv(opts?: { quiet?: boolean }) {
   dotenv.config({ quiet, path: globalEnvPath, override: false });
 }
 
+const MAX_WORKSPACE_ENV_BYTES = 1 * 1024 * 1024;
+
 export function parseWorkspaceDotEnv(workspaceDir: string): Record<string, string> {
   const envPath = path.join(workspaceDir, ".env");
-  if (!fs.existsSync(envPath)) {
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(envPath);
+  } catch {
     return {};
   }
+  if (!stat.isFile()) {
+    return {};
+  }
+  if (stat.size > MAX_WORKSPACE_ENV_BYTES) {
+    logDebug(`workspace .env skipped (too large: ${stat.size} bytes): ${envPath}`);
+    return {};
+  }
+
   let content: string;
   try {
     content = fs.readFileSync(envPath, "utf-8");
