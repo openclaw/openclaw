@@ -1,5 +1,9 @@
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
+import {
+  isLlamaCppProvider,
+  stripLlamaCppUnsupportedKeywords,
+} from "./schema/clean-for-llamacpp.js";
 import { isXaiProvider, stripXaiUnsupportedKeywords } from "./schema/clean-for-xai.js";
 
 function extractEnumValues(schema: unknown): unknown[] | undefined {
@@ -65,7 +69,7 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
 
 export function normalizeToolParameters(
   tool: AnyAgentTool,
-  options?: { modelProvider?: string; modelId?: string },
+  options?: { modelProvider?: string; modelId?: string; modelBaseUrl?: string },
 ): AnyAgentTool {
   const schema =
     tool.parameters && typeof tool.parameters === "object"
@@ -81,6 +85,8 @@ export function normalizeToolParameters(
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
   // - Anthropic expects full JSON Schema draft 2020-12 compliance.
   // - xAI rejects validation-constraint keywords (minLength, maxLength, etc.) outright.
+  // - llama.cpp GBNF grammar converter fails on $schema, additionalProperties, $ref,
+  //   and complex anyOf/oneOf — strip these for llama.cpp-compatible endpoints.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
 
@@ -89,6 +95,7 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
   const isXai = isXaiProvider(options?.modelProvider, options?.modelId);
+  const isLlamaCpp = isLlamaCppProvider(options?.modelProvider, options?.modelBaseUrl);
 
   function applyProviderCleaning(s: unknown): unknown {
     if (isGeminiProvider && !isAnthropicProvider) {
@@ -96,6 +103,9 @@ export function normalizeToolParameters(
     }
     if (isXai) {
       return stripXaiUnsupportedKeywords(s);
+    }
+    if (isLlamaCpp) {
+      return stripLlamaCppUnsupportedKeywords(s);
     }
     return s;
   }

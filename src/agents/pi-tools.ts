@@ -218,6 +218,8 @@ export function createOpenClawCodingTools(options?: {
   modelProvider?: string;
   /** Model id for the current provider (used for model-specific tool gating). */
   modelId?: string;
+  /** Model base URL for the current provider (used for llama.cpp-compat detection). */
+  modelBaseUrl?: string;
   /** Model context window in tokens (used to scale read-tool output budget). */
   modelContextWindowTokens?: number;
   /**
@@ -551,6 +553,7 @@ export function createOpenClawCodingTools(options?: {
     normalizeToolParameters(tool, {
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,
+      modelBaseUrl: options?.modelBaseUrl,
     }),
   );
   const withHooks = normalized.map((tool) =>
