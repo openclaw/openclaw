@@ -105,9 +105,12 @@ vi.mock("ws", () => ({
 
 describe("createDiscordGatewayPlugin", () => {
   let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
+  let waitForDiscordGatewayRegistration: typeof import("./gateway-plugin.js").waitForDiscordGatewayRegistration;
 
   beforeAll(async () => {
-    ({ createDiscordGatewayPlugin } = await import("./gateway-plugin.js"));
+    ({ createDiscordGatewayPlugin, waitForDiscordGatewayRegistration } = await import(
+      "./gateway-plugin.js"
+    ));
   });
 
   function createRuntime() {
@@ -161,7 +164,7 @@ describe("createDiscordGatewayPlugin", () => {
       runtime,
     });
 
-    expect(Object.getPrototypeOf(plugin)).toBe(GatewayPlugin.prototype);
+    expect(plugin).toBeInstanceOf(GatewayPlugin);
     expect(runtime.error).toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
   });
@@ -183,6 +186,7 @@ describe("createDiscordGatewayPlugin", () => {
     ).registerClient({
       options: { token: "token-123" },
     });
+    await waitForDiscordGatewayRegistration(plugin);
 
     expect(restProxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
     expect(undiciFetchMock).toHaveBeenCalledWith(
@@ -193,5 +197,67 @@ describe("createDiscordGatewayPlugin", () => {
       }),
     );
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not raise unhandledRejection when gateway registration fails", async () => {
+    const runtime = createRuntime();
+    const onUnhandled = vi.fn();
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      undiciFetchMock.mockRejectedValueOnce(new Error("fetch failed"));
+      const plugin = createDiscordGatewayPlugin({
+        discordConfig: { proxy: "http://proxy.test:8080" },
+        runtime,
+      });
+
+      (
+        plugin as unknown as {
+          registerClient: (client: { options: { token: string } }) => Promise<void>;
+        }
+      ).registerClient({
+        options: { token: "token-123" },
+      });
+
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(onUnhandled).not.toHaveBeenCalled();
+      await expect(waitForDiscordGatewayRegistration(plugin)).rejects.toThrow(
+        "Failed to get gateway information from Discord: fetch failed",
+      );
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("does not raise unhandledRejection for default gateway registration failures", async () => {
+    const runtime = createRuntime();
+    const onUnhandled = vi.fn();
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      baseRegisterClientSpy.mockImplementationOnce(() => {
+        throw new Error("fetch failed");
+      });
+      const plugin = createDiscordGatewayPlugin({
+        discordConfig: {},
+        runtime,
+      });
+
+      (
+        plugin as unknown as {
+          registerClient: (client: { options: { token: string } }) => Promise<void>;
+        }
+      ).registerClient({
+        options: { token: "token-123" },
+      });
+
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(onUnhandled).not.toHaveBeenCalled();
+      await expect(waitForDiscordGatewayRegistration(plugin)).rejects.toThrow("fetch failed");
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 });

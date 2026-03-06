@@ -35,6 +35,7 @@ const {
   resolveDiscordAllowlistConfigMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
+  waitForDiscordGatewayRegistrationMock,
 } = vi.hoisted(() => {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
   return {
@@ -94,6 +95,7 @@ const {
     })),
     resolveNativeCommandsEnabledMock: vi.fn(() => true),
     resolveNativeSkillsEnabledMock: vi.fn(() => false),
+    waitForDiscordGatewayRegistrationMock: vi.fn(async () => undefined),
   };
 });
 
@@ -236,6 +238,7 @@ vi.mock("./exec-approvals.js", () => ({
 
 vi.mock("./gateway-plugin.js", () => ({
   createDiscordGatewayPlugin: () => ({ id: "gateway-plugin" }),
+  waitForDiscordGatewayRegistration: waitForDiscordGatewayRegistrationMock,
 }));
 
 vi.mock("./listeners.js", () => ({
@@ -373,6 +376,7 @@ describe("monitorDiscordProvider", () => {
     });
     resolveNativeCommandsEnabledMock.mockClear().mockReturnValue(true);
     resolveNativeSkillsEnabledMock.mockClear().mockReturnValue(false);
+    waitForDiscordGatewayRegistrationMock.mockClear().mockResolvedValue(undefined);
   });
 
   it("stops thread bindings when startup fails before lifecycle begins", async () => {
@@ -387,6 +391,22 @@ describe("monitorDiscordProvider", () => {
         runtime: baseRuntime(),
       }),
     ).rejects.toThrow("native command boom");
+
+    expect(monitorLifecycleMock).not.toHaveBeenCalled();
+    expect(createdBindingManagers).toHaveLength(1);
+    expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops thread bindings when gateway registration fails before lifecycle begins", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    waitForDiscordGatewayRegistrationMock.mockRejectedValueOnce(new Error("gateway boot failed"));
+
+    await expect(
+      monitorDiscordProvider({
+        config: baseConfig(),
+        runtime: baseRuntime(),
+      }),
+    ).rejects.toThrow("gateway boot failed");
 
     expect(monitorLifecycleMock).not.toHaveBeenCalled();
     expect(createdBindingManagers).toHaveLength(1);

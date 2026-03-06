@@ -62,7 +62,7 @@ import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { attachEarlyGatewayErrorGuard } from "./gateway-error-guard.js";
-import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
+import { createDiscordGatewayPlugin, waitForDiscordGatewayRegistration } from "./gateway-plugin.js";
 import {
   DiscordMessageListener,
   DiscordPresenceListener,
@@ -650,6 +650,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     releaseEarlyGatewayErrorGuard = earlyGatewayErrorGuard.release;
 
     const lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
+    await waitForDiscordGatewayRegistration(lifecycleGateway);
     if (lifecycleGateway) {
       autoPresenceController = createDiscordAutoPresenceController({
         accountId: account.accountId,

@@ -7,6 +7,10 @@ import type { DiscordAccountConfig } from "../../config/types.js";
 import { danger } from "../../globals.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
+type RegistrationAwareGatewayPlugin = GatewayPlugin & {
+  waitForRegistration: () => Promise<void>;
+};
+
 export function resolveDiscordGatewayIntents(
   intentsConfig?: import("../../config/types.discord.js").DiscordIntentsConfig,
 ): number {
@@ -39,8 +43,37 @@ export function createDiscordGatewayPlugin(params: {
     autoInteractions: true,
   };
 
+  class ManagedGatewayPlugin extends GatewayPlugin {
+    private registrationPromise: Promise<void> | null = null;
+
+    constructor() {
+      super(options);
+    }
+
+    override registerClient(client: Parameters<GatewayPlugin["registerClient"]>[0]) {
+      if (!this.registrationPromise) {
+        this.registrationPromise = this.registerClientSafely(client);
+        // Carbon calls plugin registration synchronously and does not await it.
+        // Attach a local rejection handler so network failures become explicit
+        // channel startup errors instead of process-level unhandled rejections.
+        void this.registrationPromise.catch(() => {});
+      }
+      return this.registrationPromise;
+    }
+
+    waitForRegistration(): Promise<void> {
+      return this.registrationPromise ?? Promise.resolve();
+    }
+
+    protected async registerClientSafely(
+      client: Parameters<GatewayPlugin["registerClient"]>[0],
+    ): Promise<void> {
+      await super.registerClient(client);
+    }
+  }
+
   if (!proxy) {
-    return new GatewayPlugin(options);
+    return new ManagedGatewayPlugin();
   }
 
   try {
@@ -49,12 +82,10 @@ export function createDiscordGatewayPlugin(params: {
 
     params.runtime.log?.("discord: gateway proxy enabled");
 
-    class ProxyGatewayPlugin extends GatewayPlugin {
-      constructor() {
-        super(options);
-      }
-
-      override async registerClient(client: Parameters<GatewayPlugin["registerClient"]>[0]) {
+    class ProxyGatewayPlugin extends ManagedGatewayPlugin {
+      override async registerClientSafely(
+        client: Parameters<GatewayPlugin["registerClient"]>[0],
+      ): Promise<void> {
         if (!this.gatewayInfo) {
           try {
             const response = await undiciFetch("https://discord.com/api/v10/gateway/bot", {
@@ -71,7 +102,7 @@ export function createDiscordGatewayPlugin(params: {
             );
           }
         }
-        return super.registerClient(client);
+        await super.registerClientSafely(client);
       }
 
       override createWebSocket(url: string) {
@@ -82,6 +113,13 @@ export function createDiscordGatewayPlugin(params: {
     return new ProxyGatewayPlugin();
   } catch (err) {
     params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
-    return new GatewayPlugin(options);
+    return new ManagedGatewayPlugin();
   }
+}
+
+export async function waitForDiscordGatewayRegistration(
+  gateway?: GatewayPlugin,
+): Promise<void> {
+  const managedGateway = gateway as RegistrationAwareGatewayPlugin | undefined;
+  await managedGateway?.waitForRegistration?.();
 }
