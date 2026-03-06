@@ -1,43 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { type SseInjectionState, processChunk } from "./sse-event-injection.js";
 
 /**
- * Tests for the SSE event field injection fix applied via pnpm patch to
- * `@mariozechner/pi-ai`. The patch injects `event:` lines into SSE streams
- * from proxies that omit them, which is required by the `@anthropic-ai/sdk`
- * SSE parser.
- *
- * These tests import the patched `processChunk` logic inline to verify
- * correctness without requiring a live HTTP server.
+ * Tests for the SSE event field injection fix.
+ * @see https://github.com/openclaw/openclaw/issues/37571
  */
 
-// Inline the processChunk function from the patch for unit testing
-function processChunk(chunk: string): string {
-  const lines = chunk.split(/\r?\n|\r/);
-  const result: string[] = [];
-  let prevWasEvent = false;
-  for (const line of lines) {
-    if (line.startsWith("event:")) {
-      prevWasEvent = true;
-      result.push(line);
-      continue;
-    }
-    if (line.startsWith("data:") && !prevWasEvent) {
-      const jsonStr = line.slice(5).trim();
-      if (jsonStr) {
-        try {
-          const parsed = JSON.parse(jsonStr);
-          if (parsed && typeof parsed.type === "string") {
-            result.push("event: " + parsed.type);
-          }
-        } catch {
-          // Not valid JSON — leave as-is, no event injection
-        }
-      }
-    }
-    prevWasEvent = false;
-    result.push(line);
-  }
-  return result.join("\n");
+function freshState(): SseInjectionState {
+  return { prevWasEvent: false };
 }
 
 describe("SSE event injection (issue #37571)", () => {
@@ -57,10 +27,9 @@ describe("SSE event injection (issue #37571)", () => {
       "",
     ].join("\n");
 
-    const output = processChunk(input);
+    const output = processChunk(input, freshState());
     const lines = output.split("\n");
 
-    // Each data: line should now be preceded by an event: line
     expect(lines).toContain("event: message_start");
     expect(lines).toContain("event: content_block_start");
     expect(lines).toContain("event: content_block_delta");
@@ -79,22 +48,17 @@ describe("SSE event injection (issue #37571)", () => {
       "",
     ].join("\n");
 
-    const output = processChunk(input);
+    const output = processChunk(input, freshState());
 
-    // Count occurrences of "event: message_start"
-    const matches = output.match(/event: message_start/g);
-    expect(matches).toHaveLength(1);
-
-    const deltaMatches = output.match(/event: content_block_delta/g);
-    expect(deltaMatches).toHaveLength(1);
+    expect(output.match(/event: message_start/g)).toHaveLength(1);
+    expect(output.match(/event: content_block_delta/g)).toHaveLength(1);
   });
 
   it("handles data: lines with non-JSON content gracefully", () => {
     const input = ["data: [DONE]", "", "data: not json", ""].join("\n");
 
-    const output = processChunk(input);
+    const output = processChunk(input, freshState());
 
-    // Should not crash and should not inject event lines
     expect(output).not.toContain("event:");
     expect(output).toContain("data: [DONE]");
     expect(output).toContain("data: not json");
@@ -103,9 +67,8 @@ describe("SSE event injection (issue #37571)", () => {
   it("handles data: lines without a type field", () => {
     const input = ['data: {"id":"msg_1","role":"assistant"}', ""].join("\n");
 
-    const output = processChunk(input);
+    const output = processChunk(input, freshState());
 
-    // No type field -> no event injection
     expect(output).not.toContain("event:");
   });
 
@@ -118,15 +81,10 @@ describe("SSE event injection (issue #37571)", () => {
       "",
     ].join("\n");
 
-    const output = processChunk(input);
-    const lines = output.split("\n");
+    const output = processChunk(input, freshState());
 
-    // message_start should appear only once (from original)
-    const msgStartMatches = output.match(/event: message_start/g);
-    expect(msgStartMatches).toHaveLength(1);
-
-    // content_block_start should be injected
-    expect(lines).toContain("event: content_block_start");
+    expect(output.match(/event: message_start/g)).toHaveLength(1);
+    expect(output).toContain("event: content_block_start");
   });
 
   it("preserves empty lines between SSE events", () => {
@@ -137,9 +95,61 @@ describe("SSE event injection (issue #37571)", () => {
       "",
     ].join("\n");
 
-    const output = processChunk(input);
+    const output = processChunk(input, freshState());
 
-    // Should still have empty separator lines
     expect(output).toContain("\n\n");
+  });
+
+  it("carries prevWasEvent state across chunk boundaries", () => {
+    const state = freshState();
+
+    // First chunk ends with an event: line
+    const chunk1 = "event: message_start\n";
+    processChunk(chunk1, state);
+    expect(state.prevWasEvent).toBe(true);
+
+    // Second chunk starts with the corresponding data: line
+    const chunk2 = 'data: {"type":"message_start","message":{"id":"msg_1"}}\n\n';
+    const output2 = processChunk(chunk2, state);
+
+    // Should NOT inject a duplicate event: line
+    expect(output2).not.toContain("event:");
+    expect(output2).toContain("data:");
+  });
+
+  it("resets state on empty line (dispatch boundary) across chunks", () => {
+    const state = freshState();
+
+    // First chunk: event + data + empty dispatch boundary
+    const chunk1 = [
+      "event: message_start",
+      'data: {"type":"message_start","message":{"id":"msg_1"}}',
+      "",
+      "",
+    ].join("\n");
+    processChunk(chunk1, state);
+    expect(state.prevWasEvent).toBe(false);
+
+    // Second chunk: data without event (should inject)
+    const chunk2 = 'data: {"type":"content_block_start","index":0}\n\n';
+    const output2 = processChunk(chunk2, state);
+    expect(output2).toContain("event: content_block_start");
+  });
+
+  it("does not reset prevWasEvent on intermediate SSE fields (id:, retry:)", () => {
+    const state = freshState();
+
+    // event: line followed by id: field followed by data: line
+    const input = [
+      "event: message_start",
+      "id: 123",
+      'data: {"type":"message_start","message":{"id":"msg_1"}}',
+      "",
+    ].join("\n");
+
+    const output = processChunk(input, state);
+
+    // Should NOT inject a second event: line — the id: field should not reset state
+    expect(output.match(/event: message_start/g)).toHaveLength(1);
   });
 });

@@ -1,8 +1,8 @@
 diff --git a/dist/providers/anthropic.js b/dist/providers/anthropic.js
-index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..ad925e4169c06194acc5f492e7c89ad0a3775ca8 100644
+index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..2834ebd9e309872792e14cc41a526412dbf8e664 100644
 --- a/dist/providers/anthropic.js
 +++ b/dist/providers/anthropic.js
-@@ -376,11 +376,101 @@ export const streamSimpleAnthropic = (model, context, options) => {
+@@ -376,11 +376,122 @@ export const streamSimpleAnthropic = (model, context, options) => {
          thinkingBudgetTokens: adjusted.thinkingBudget,
      });
  };
@@ -15,8 +15,12 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..ad925e4169c06194acc5f492e7c89ad0
 + * and the stream ends with "request ended without sending any chunks".
 + *
 + * This wrapper detects `data:` lines whose JSON payload contains a `"type"` field
-+ * and injects `event: <type>\n` before each such line when the preceding line is
-+ * not already an `event:` line.
++ * and injects `event: <type>\n` before each such line when no `event:` line
++ * precedes it. State is tracked across chunk boundaries so that an `event:` line
++ * at the end of one chunk correctly suppresses injection for the `data:` line at
++ * the start of the next chunk.
++ *
++ * @see https://github.com/openclaw/openclaw/issues/37571
 + */
 +function createSseEventInjectionFetch() {
 +    return async function sseEventInjectionFetch(url, init) {
@@ -30,13 +34,14 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..ad925e4169c06194acc5f492e7c89ad0
 +        const decoder = new TextDecoder();
 +        const encoder = new TextEncoder();
 +        let buffer = "";
++        const state = { prevWasEvent: false };
 +        const readable = new ReadableStream({
 +            async pull(controller) {
 +                const { done, value } = await reader.read();
 +                if (done) {
 +                    // Flush any remaining buffer
 +                    if (buffer.length > 0) {
-+                        controller.enqueue(encoder.encode(processChunk(buffer)));
++                        controller.enqueue(encoder.encode(processChunk(buffer, state)));
 +                        buffer = "";
 +                    }
 +                    controller.close();
@@ -48,7 +53,7 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..ad925e4169c06194acc5f492e7c89ad0
 +                if (lastNewline === -1) return;
 +                const toProcess = buffer.slice(0, lastNewline + 1);
 +                buffer = buffer.slice(lastNewline + 1);
-+                controller.enqueue(encoder.encode(processChunk(toProcess)));
++                controller.enqueue(encoder.encode(processChunk(toProcess, state)));
 +            },
 +            cancel() {
 +                reader.cancel();
@@ -63,33 +68,49 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..ad925e4169c06194acc5f492e7c89ad0
 +}
 +/**
 + * Process a chunk of SSE text, injecting `event:` lines where missing.
-+ * Handles lines separated by \n, \r\n, or \r.
++ *
++ * The `state` parameter carries `prevWasEvent` across calls so that an
++ * `event:` line flushed at the end of one chunk correctly suppresses
++ * injection for the `data:` line at the start of the next chunk.
++ * Only resets on empty lines (SSE dispatch boundaries) or `data:` lines,
++ * so intermediate fields like `id:` or `retry:` do not cause false injection.
 + */
-+function processChunk(chunk) {
++function processChunk(chunk, state) {
 +    const lines = chunk.split(/\r?\n|\r/);
 +    const result = [];
-+    let prevWasEvent = false;
-+    for (const line of lines) {
++    for (let i = 0; i < lines.length; i++) {
++        const line = lines[i];
 +        if (line.startsWith("event:")) {
-+            prevWasEvent = true;
++            state.prevWasEvent = true;
 +            result.push(line);
 +            continue;
 +        }
-+        if (line.startsWith("data:") && !prevWasEvent) {
-+            const jsonStr = line.slice(5).trim();
-+            if (jsonStr) {
-+                try {
-+                    const parsed = JSON.parse(jsonStr);
-+                    if (parsed && typeof parsed.type === "string") {
-+                        result.push("event: " + parsed.type);
++        if (line.startsWith("data:")) {
++            if (!state.prevWasEvent) {
++                const jsonStr = line.slice(5).trim();
++                if (jsonStr) {
++                    try {
++                        const parsed = JSON.parse(jsonStr);
++                        if (parsed && typeof parsed.type === "string") {
++                            result.push("event: " + parsed.type);
++                        }
++                    }
++                    catch {
++                        // Not valid JSON — leave as-is, no event injection
 +                    }
 +                }
-+                catch {
-+                    // Not valid JSON — leave as-is, no event injection
-+                }
 +            }
++            state.prevWasEvent = false;
++            result.push(line);
++            continue;
 +        }
-+        prevWasEvent = false;
++        // Empty line = SSE dispatch boundary — reset state.
++        // Skip the trailing empty string from split (artifact of chunk ending
++        // with \n) since it's not a real dispatch boundary.
++        if (line === "" && i < lines.length - 1) {
++            state.prevWasEvent = false;
++        }
++        // For other SSE fields (id:, retry:, comments) do NOT reset prevWasEvent
 +        result.push(line);
 +    }
 +    return result.join("\n");
@@ -104,7 +125,7 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..ad925e4169c06194acc5f492e7c89ad0
      if (model.provider === "github-copilot") {
          const betaFeatures = [];
          if (interleavedThinking) {
-@@ -391,6 +481,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
+@@ -391,6 +502,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
              authToken: apiKey,
              baseURL: model.baseUrl,
              dangerouslyAllowBrowser: true,
@@ -112,7 +133,7 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..ad925e4169c06194acc5f492e7c89ad0
              defaultHeaders: mergeHeaders({
                  accept: "application/json",
                  "anthropic-dangerous-direct-browser-access": "true",
-@@ -410,6 +501,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
+@@ -410,6 +522,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
              authToken: apiKey,
              baseURL: model.baseUrl,
              dangerouslyAllowBrowser: true,
@@ -120,7 +141,7 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..ad925e4169c06194acc5f492e7c89ad0
              defaultHeaders: mergeHeaders({
                  accept: "application/json",
                  "anthropic-dangerous-direct-browser-access": "true",
-@@ -425,6 +517,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
+@@ -425,6 +538,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
          apiKey,
          baseURL: model.baseUrl,
          dangerouslyAllowBrowser: true,
