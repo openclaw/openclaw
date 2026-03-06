@@ -300,6 +300,8 @@ export async function getReplyFromConfig(
     });
   };
 
+  const optsForRun = resolvedOpts;
+
   const inlineActionResult = await handleInlineActions({
     ctx,
     sessionCtx,
@@ -314,7 +316,7 @@ export async function getReplyFromConfig(
     sessionScope,
     workspaceDir,
     isGroup,
-    opts: resolvedOpts,
+    opts: optsForRun,
     typing,
     allowTextCommands,
     inlineStatusRequested,
@@ -384,7 +386,7 @@ export async function getReplyFromConfig(
     perMessageQueueMode,
     perMessageQueueOptions,
     typing,
-    opts: resolvedOpts,
+    opts: optsForRun,
     defaultProvider,
     defaultModel,
     timeoutMs,

@@ -10,7 +10,8 @@ export default defineConfig({
   test: {
     ...baseTest,
     maxWorkers: 1,
-    include: ["src/**/*.live.test.ts"],
+    include: ["src/**/*.live.test.ts", "test/**/*.live.test.ts"],
     exclude,
+    setupFiles: [],
   },
 });
