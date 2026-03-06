@@ -216,6 +216,19 @@ describe("sandbox docker config", () => {
     }
   });
 
+  it("throws on unresolved SecretRef objects in sandbox env at resolve time", () => {
+    expect(() =>
+      resolveSandboxDockerConfig({
+        scope: "agent",
+        globalDocker: {
+          env: {
+            API_KEY: { source: "env", provider: "default", id: "MY_KEY" } as unknown as string,
+          },
+        },
+      }),
+    ).toThrow(/sandbox\.docker\.env\.API_KEY.*unresolved secret reference/);
+  });
+
   it("rejects non-string values in binds array", () => {
     const res = validateConfigObject({
       agents: {
