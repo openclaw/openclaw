@@ -76,32 +76,39 @@ def package_skill(skill_path, output_dir=None):
 
     # Create the .skill file (zip format)
     try:
+        # Collect all files first, then sort for deterministic ordering
+        files_to_package = []
+        for file_path in skill_path.rglob("*"):
+            # Security: never follow or package symlinks.
+            if file_path.is_symlink():
+                print(f"[WARN] Skipping symlink: {file_path}")
+                continue
+
+            rel_parts = file_path.relative_to(skill_path).parts
+            if any(part in EXCLUDED_DIRS for part in rel_parts):
+                continue
+
+            if file_path.is_file():
+                resolved_file = file_path.resolve()
+                if not _is_within(resolved_file, skill_path):
+                    print(f"[ERROR] File escapes skill root: {file_path}")
+                    return None
+                # If output lives under skill_path, avoid writing archive into itself.
+                if resolved_file == skill_filename.resolve():
+                    print(f"[WARN] Skipping output archive: {file_path}")
+                    continue
+
+                files_to_package.append(file_path)
+
+        # Sort files deterministically by their relative path (as string)
+        files_to_package.sort(key=lambda p: str(p.relative_to(skill_path)))
+
         with zipfile.ZipFile(skill_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
-            # Walk through the skill directory
-            for file_path in skill_path.rglob("*"):
-                # Security: never follow or package symlinks.
-                if file_path.is_symlink():
-                    print(f"[WARN] Skipping symlink: {file_path}")
-                    continue
-
-                rel_parts = file_path.relative_to(skill_path).parts
-                if any(part in EXCLUDED_DIRS for part in rel_parts):
-                    continue
-
-                if file_path.is_file():
-                    resolved_file = file_path.resolve()
-                    if not _is_within(resolved_file, skill_path):
-                        print(f"[ERROR] File escapes skill root: {file_path}")
-                        return None
-                    # If output lives under skill_path, avoid writing archive into itself.
-                    if resolved_file == skill_filename.resolve():
-                        print(f"[WARN] Skipping output archive: {file_path}")
-                        continue
-
-                    # Calculate the relative path within the zip.
-                    arcname = Path(skill_name) / file_path.relative_to(skill_path)
-                    zipf.write(file_path, arcname)
-                    print(f"  Added: {arcname}")
+            for file_path in files_to_package:
+                # Calculate the relative path within the zip.
+                arcname = Path(skill_name) / file_path.relative_to(skill_path)
+                zipf.write(file_path, arcname)
+                print(f"  Added: {arcname}")
 
         print(f"\n[OK] Successfully packaged skill to: {skill_filename}")
         return skill_filename
