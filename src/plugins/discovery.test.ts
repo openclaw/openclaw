@@ -328,6 +328,38 @@ describe("discoverOpenClawPlugins", () => {
     );
   });
 
+  it.runIf(process.platform !== "win32")(
+    "allows bundled plugin paths even when the checkout is world-writable",
+    async () => {
+      const bundledDir = makeTempDir();
+      const pluginDir = path.join(bundledDir, "bundled-pack");
+      fs.mkdirSync(pluginDir, { recursive: true });
+      writePluginPackageManifest({
+        packageDir: pluginDir,
+        packageName: "@openclaw/bundled-pack",
+        extensions: ["./index.ts"],
+      });
+      fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default function () {}", "utf-8");
+      fs.chmodSync(pluginDir, 0o777);
+
+      const result = await withEnvAsync(
+        {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+          OPENCLAW_STATE_DIR: undefined,
+          CLAWDBOT_STATE_DIR: undefined,
+        },
+        async () => discoverOpenClawPlugins({}),
+      );
+
+      expect(result.candidates.some((candidate) => candidate.idHint === "bundled-pack")).toBe(true);
+      expect(
+        result.diagnostics.some(
+          (diag) => diag.source === pluginDir && diag.message.includes("world-writable path"),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it.runIf(process.platform !== "win32" && typeof process.getuid === "function")(
     "blocks suspicious ownership when uid mismatch is detected",
     async () => {

@@ -163,7 +163,10 @@ function checkPathStatAndPermissions(params: {
       };
     }
     const modeBits = stat.mode & 0o777;
-    if ((modeBits & 0o002) !== 0) {
+    // Bundled plugins ship with OpenClaw itself; keep path ownership checks for
+    // external/plugin-load roots, but don't reject stock plugins just because a
+    // dev/test checkout lives under a world-writable temp directory.
+    if ((modeBits & 0o002) !== 0 && params.origin !== "bundled") {
       return {
         reason: "path_world_writable",
         sourcePath: params.source,

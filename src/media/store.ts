@@ -278,6 +278,9 @@ export async function saveMediaSource(
     const id = ext ? `${baseId}${ext}` : baseId;
     const finalDest = path.join(dir, id);
     await fs.rename(tempDest, finalDest);
+    if (process.platform !== "win32") {
+      await fs.chmod(finalDest, MEDIA_FILE_MODE);
+    }
     return { id, path: finalDest, size, contentType: mime };
   }
   // local path
