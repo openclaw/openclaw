@@ -1,0 +1,25 @@
+import "./run-with-concurrency-CjtfZs6b.js";
+import "./paths-CaA28K0s.js";
+import "./logger-LCySwiUR.js";
+import "./model-selection-BWORP6Gv.js";
+import "./github-copilot-token-BWXANsA6.js";
+import "./thinking-B_ujPq7h.js";
+import "./plugins-DixHz2Uh.js";
+import "./accounts-CoCwikG7.js";
+import "./accounts-CVwX9650.js";
+import "./image-ops-BA3ju5Yg.js";
+import "./pi-embedded-helpers-V_SP4T4r.js";
+import "./chrome-D71BypSw.js";
+import "./skills-Risg_IkA.js";
+import "./path-alias-guards-BF_HXkDo.js";
+import "./redact-D2fhu2bA.js";
+import "./errors-f2HfHmuq.js";
+import "./fs-safe-DzDyYmaN.js";
+import "./proxy-env-DVcTD5uq.js";
+import "./store-Bjg5WMyN.js";
+import "./accounts-CdQRN-cd.js";
+import "./paths-D8NIBFju.js";
+import "./tool-images-CLC_3p0e.js";
+import { t as describeImageWithModel } from "./image-1B3RQnPY.js";
+
+export { describeImageWithModel };

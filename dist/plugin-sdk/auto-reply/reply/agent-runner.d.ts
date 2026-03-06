@@ -1,0 +1,38 @@
+import { type SessionEntry } from "../../config/sessions.js";
+import type { TypingMode } from "../../config/types.js";
+import type { TemplateContext } from "../templating.js";
+import { type VerboseLevel } from "../thinking.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { type FollowupRun, type QueueSettings } from "./queue.js";
+import type { TypingController } from "./typing.js";
+export declare function runReplyAgent(params: {
+    commandBody: string;
+    followupRun: FollowupRun;
+    queueKey: string;
+    resolvedQueue: QueueSettings;
+    shouldSteer: boolean;
+    shouldFollowup: boolean;
+    isActive: boolean;
+    isStreaming: boolean;
+    opts?: GetReplyOptions;
+    typing: TypingController;
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+    sessionKey?: string;
+    storePath?: string;
+    defaultModel: string;
+    agentCfgContextTokens?: number;
+    resolvedVerboseLevel: VerboseLevel;
+    isNewSession: boolean;
+    blockStreamingEnabled: boolean;
+    blockReplyChunking?: {
+        minChars: number;
+        maxChars: number;
+        breakPreference: "paragraph" | "newline" | "sentence";
+        flushOnParagraph?: boolean;
+    };
+    resolvedBlockStreamingBreak: "text_end" | "message_end";
+    sessionCtx: TemplateContext;
+    shouldInjectGroupIntro: boolean;
+    typingMode: TypingMode;
+}): Promise<ReplyPayload | ReplyPayload[] | undefined>;

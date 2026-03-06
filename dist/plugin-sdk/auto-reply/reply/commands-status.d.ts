@@ -1,0 +1,26 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry, SessionScope } from "../../config/sessions.js";
+import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type { ReplyPayload } from "../types.js";
+import type { CommandContext } from "./commands-types.js";
+export declare function buildStatusReply(params: {
+    cfg: OpenClawConfig;
+    command: CommandContext;
+    sessionEntry?: SessionEntry;
+    sessionKey: string;
+    parentSessionKey?: string;
+    sessionScope?: SessionScope;
+    storePath?: string;
+    provider: string;
+    model: string;
+    contextTokens: number;
+    resolvedThinkLevel?: ThinkLevel;
+    resolvedVerboseLevel: VerboseLevel;
+    resolvedReasoningLevel: ReasoningLevel;
+    resolvedElevatedLevel?: ElevatedLevel;
+    resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+    isGroup: boolean;
+    defaultGroupActivation: () => "always" | "mention";
+    mediaDecisions?: MediaUnderstandingDecision[];
+}): Promise<ReplyPayload | undefined>;

@@ -1,0 +1,60 @@
+import type { SkillCommandSpec } from "../agents/skills.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { type SessionEntry, type SessionScope } from "../config/sessions.js";
+import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
+import { formatTokenCount as formatTokenCountShared } from "../utils/usage-format.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
+type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
+type AgentConfig = Partial<AgentDefaults> & {
+    model?: AgentDefaults["model"] | string;
+};
+export declare const formatTokenCount: typeof formatTokenCountShared;
+type QueueStatus = {
+    mode?: string;
+    depth?: number;
+    debounceMs?: number;
+    cap?: number;
+    dropPolicy?: string;
+    showDetails?: boolean;
+};
+type StatusArgs = {
+    config?: OpenClawConfig;
+    agent: AgentConfig;
+    agentId?: string;
+    sessionEntry?: SessionEntry;
+    sessionKey?: string;
+    parentSessionKey?: string;
+    sessionScope?: SessionScope;
+    sessionStorePath?: string;
+    groupActivation?: "mention" | "always";
+    resolvedThink?: ThinkLevel;
+    resolvedVerbose?: VerboseLevel;
+    resolvedReasoning?: ReasoningLevel;
+    resolvedElevated?: ElevatedLevel;
+    modelAuth?: string;
+    activeModelAuth?: string;
+    usageLine?: string;
+    timeLine?: string;
+    queue?: QueueStatus;
+    mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
+    subagentsLine?: string;
+    includeTranscriptUsage?: boolean;
+    now?: number;
+};
+export declare const formatContextUsageShort: (total: number | null | undefined, contextTokens: number | null | undefined) => string;
+export declare function buildStatusMessage(args: StatusArgs): string;
+export declare function buildHelpMessage(cfg?: OpenClawConfig): string;
+export type CommandsMessageOptions = {
+    page?: number;
+    surface?: string;
+};
+export type CommandsMessageResult = {
+    text: string;
+    totalPages: number;
+    currentPage: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+};
+export declare function buildCommandsMessage(cfg?: OpenClawConfig, skillCommands?: SkillCommandSpec[], options?: CommandsMessageOptions): string;
+export declare function buildCommandsMessagePaginated(cfg?: OpenClawConfig, skillCommands?: SkillCommandSpec[], options?: CommandsMessageOptions): CommandsMessageResult;
+export {};
