@@ -1310,6 +1310,27 @@ describe("sendStickerTelegram", () => {
 });
 
 describe("shared send behaviors", () => {
+  it("ignores non-numeric replyToMessageId and sends without reply target", async () => {
+    const chatId = "123";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 57,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "reply text", {
+      token: "tok",
+      api,
+      replyToMessageId: Number.NaN,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
+      parse_mode: "HTML",
+    });
+  });
+
   it("includes reply_to_message_id for threaded replies", async () => {
     const cases = [
       {
@@ -1361,6 +1382,27 @@ describe("shared send behaviors", () => {
     for (const testCase of cases) {
       await testCase.run();
     }
+  });
+
+  it("omits reply_to_message_id when replyToMessageId is non-numeric", async () => {
+    const chatId = "123";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 56,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "reply text", {
+      token: "tok",
+      api,
+      replyToMessageId: Number.NaN,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
+      parse_mode: "HTML",
+    });
   });
 
   it("wraps chat-not-found with actionable context", async () => {
