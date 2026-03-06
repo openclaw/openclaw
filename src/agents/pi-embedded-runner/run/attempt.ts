@@ -924,7 +924,9 @@ export async function runEmbeddedAttempt(
       cwd: process.cwd(),
       moduleUrl: import.meta.url,
     });
-    const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const ttsHint = params.config
+      ? buildTtsSystemPromptHint(params.config, sessionAgentId)
+      : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
 
     const appendPrompt = buildEmbeddedSystemPrompt({

@@ -25,7 +25,9 @@ import type {
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
@@ -43,6 +45,8 @@ import {
   summarizeText,
 } from "./tts-core.js";
 export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
+
+const log = createSubsystemLogger("tts");
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
@@ -255,8 +259,40 @@ function resolveModelOverridePolicy(
   };
 }
 
-export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
-  const raw: TtsConfig = cfg.messages?.tts ?? {};
+export function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
+  if (!override) {
+    return base;
+  }
+  return {
+    ...base,
+    ...override,
+    modelOverrides: {
+      ...base.modelOverrides,
+      ...override.modelOverrides,
+    },
+    elevenlabs: {
+      ...base.elevenlabs,
+      ...override.elevenlabs,
+      voiceSettings: {
+        ...base.elevenlabs?.voiceSettings,
+        ...override.elevenlabs?.voiceSettings,
+      },
+    },
+    openai: {
+      ...base.openai,
+      ...override.openai,
+    },
+    edge: {
+      ...base.edge,
+      ...override.edge,
+    },
+  };
+}
+
+export function resolveTtsConfig(cfg: OpenClawConfig, agentId?: string): ResolvedTtsConfig {
+  const globalRaw: TtsConfig = cfg.messages?.tts ?? {};
+  const agentTts = agentId ? cfg.agents?.list?.find((a) => a.id === agentId)?.tts : undefined;
+  const raw = mergeTtsConfig(globalRaw, agentTts);
   const providerSource = raw.provider ? "config" : "default";
   const edgeOutputFormat = raw.edge?.outputFormat?.trim();
   const auto = normalizeTtsAutoMode(raw.auto) ?? (raw.enabled ? "always" : "off");
@@ -324,13 +360,31 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
   };
 }
 
-export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
+export function resolveTtsPrefsPath(config: ResolvedTtsConfig, agentId?: string): string {
   if (config.prefsPath?.trim()) {
     return resolveUserPath(config.prefsPath.trim());
   }
   const envPath = process.env.OPENCLAW_TTS_PREFS?.trim();
   if (envPath) {
     return resolveUserPath(envPath);
+  }
+  const normalizedAgentId = agentId?.trim() ? normalizeAgentId(agentId) : undefined;
+  if (normalizedAgentId) {
+    const agentPrefsPath = path.join(CONFIG_DIR, "settings", `tts.${normalizedAgentId}.json`);
+    const legacyPrefsPath = path.join(CONFIG_DIR, "settings", "tts.json");
+    const isTestEnv = process.env.VITEST === "true" || process.env.NODE_ENV === "test";
+    if (!isTestEnv && !existsSync(agentPrefsPath) && existsSync(legacyPrefsPath)) {
+      try {
+        const legacyPrefs = readFileSync(legacyPrefsPath, "utf8");
+        if (legacyPrefs.trim()) {
+          mkdirSync(path.dirname(agentPrefsPath), { recursive: true });
+          atomicWriteFileSync(agentPrefsPath, legacyPrefs);
+        }
+      } catch {
+        // Ignore migration failures and fall back to the agent path.
+      }
+    }
+    return agentPrefsPath;
   }
   return path.join(CONFIG_DIR, "settings", "tts.json");
 }
@@ -362,9 +416,12 @@ export function resolveTtsAutoMode(params: {
   return params.config.auto;
 }
 
-export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefined {
-  const config = resolveTtsConfig(cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
+export function buildTtsSystemPromptHint(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): string | undefined {
+  const config = resolveTtsConfig(cfg, agentId);
+  const prefsPath = resolveTtsPrefsPath(config, agentId);
   const autoMode = resolveTtsAutoMode({ config, prefsPath });
   if (autoMode === "off") {
     return undefined;
@@ -560,9 +617,11 @@ export async function textToSpeech(params: {
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
+  agentId?: string;
+  config?: ResolvedTtsConfig;
 }): Promise<TtsResult> {
-  const config = resolveTtsConfig(params.cfg);
-  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
+  const config = params.config ?? resolveTtsConfig(params.cfg, params.agentId);
+  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config, params.agentId);
   const channelId = resolveChannelId(params.channel);
   const output = resolveOutputFormat(channelId);
 
@@ -588,6 +647,18 @@ export async function textToSpeech(params: {
           errors.push("edge: disabled");
           continue;
         }
+        if (channelId === "discord") {
+          log.info("synth", {
+            provider,
+            agentId: params.agentId,
+            channel: channelId,
+            voice: config.edge.voice,
+            outputFormat: config.edge.outputFormat,
+          });
+        }
+        logVerbose(
+          `TTS: synth provider=edge agent=${params.agentId ?? "-"} channel=${channelId ?? "-"} voice=${config.edge.voice} format=${config.edge.outputFormat}`,
+        );
 
         const tempRoot = resolvePreferredOpenClawTmpDir();
         mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
@@ -663,6 +734,8 @@ export async function textToSpeech(params: {
       if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
+        const selectedVoiceId = voiceIdOverride ?? config.elevenlabs.voiceId;
+        const selectedModelId = modelIdOverride ?? config.elevenlabs.modelId;
         const voiceSettings = {
           ...config.elevenlabs.voiceSettings,
           ...params.overrides?.elevenlabs?.voiceSettings,
@@ -670,12 +743,24 @@ export async function textToSpeech(params: {
         const seedOverride = params.overrides?.elevenlabs?.seed;
         const normalizationOverride = params.overrides?.elevenlabs?.applyTextNormalization;
         const languageOverride = params.overrides?.elevenlabs?.languageCode;
+        if (channelId === "discord") {
+          log.info("synth", {
+            provider,
+            agentId: params.agentId,
+            channel: channelId,
+            voiceId: selectedVoiceId,
+            modelId: selectedModelId,
+          });
+        }
+        logVerbose(
+          `TTS: synth provider=elevenlabs agent=${params.agentId ?? "-"} channel=${channelId ?? "-"} voiceId=${selectedVoiceId} modelId=${selectedModelId}`,
+        );
         audioBuffer = await elevenLabsTTS({
           text: params.text,
           apiKey,
           baseUrl: config.elevenlabs.baseUrl,
-          voiceId: voiceIdOverride ?? config.elevenlabs.voiceId,
-          modelId: modelIdOverride ?? config.elevenlabs.modelId,
+          voiceId: selectedVoiceId,
+          modelId: selectedModelId,
           outputFormat: output.elevenlabs,
           seed: seedOverride ?? config.elevenlabs.seed,
           applyTextNormalization: normalizationOverride ?? config.elevenlabs.applyTextNormalization,
@@ -686,12 +771,26 @@ export async function textToSpeech(params: {
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
+        const selectedModel = openaiModelOverride ?? config.openai.model;
+        const selectedVoice = openaiVoiceOverride ?? config.openai.voice;
+        if (channelId === "discord") {
+          log.info("synth", {
+            provider,
+            agentId: params.agentId,
+            channel: channelId,
+            voice: selectedVoice,
+            model: selectedModel,
+          });
+        }
+        logVerbose(
+          `TTS: synth provider=openai agent=${params.agentId ?? "-"} channel=${channelId ?? "-"} voice=${selectedVoice} model=${selectedModel}`,
+        );
         audioBuffer = await openaiTTS({
           text: params.text,
           apiKey,
           baseUrl: config.openai.baseUrl,
-          model: openaiModelOverride ?? config.openai.model,
-          voice: openaiVoiceOverride ?? config.openai.voice,
+          model: selectedModel,
+          voice: selectedVoice,
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
         });
@@ -726,9 +825,11 @@ export async function textToSpeechTelephony(params: {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
+  agentId?: string;
+  config?: ResolvedTtsConfig;
 }): Promise<TtsTelephonyResult> {
-  const config = resolveTtsConfig(params.cfg);
-  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
+  const config = params.config ?? resolveTtsConfig(params.cfg, params.agentId);
+  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config, params.agentId);
 
   if (params.text.length > config.maxTextLength) {
     return {
@@ -816,9 +917,10 @@ export async function maybeApplyTtsToPayload(params: {
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
+  agentId?: string;
 }): Promise<ReplyPayload> {
-  const config = resolveTtsConfig(params.cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
+  const config = resolveTtsConfig(params.cfg, params.agentId);
+  const prefsPath = resolveTtsPrefsPath(config, params.agentId);
   const autoMode = resolveTtsAutoMode({
     config,
     prefsPath,
@@ -916,9 +1018,11 @@ export async function maybeApplyTtsToPayload(params: {
   const result = await textToSpeech({
     text: textForAudio,
     cfg: params.cfg,
+    config,
     prefsPath,
     channel: params.channel,
     overrides: directives.overrides,
+    agentId: params.agentId,
   });
 
   if (result.success && result.audioPath) {

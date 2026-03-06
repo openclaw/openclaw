@@ -286,7 +286,8 @@ export function buildCommandTextFromArgs(
   command: ChatCommandDefinition,
   args?: CommandArgs,
 ): string {
-  const commandName = command.nativeName ?? command.key;
+  const textAlias = command.textAliases[0]?.trim();
+  const commandName = textAlias ? textAlias.replace(/^\/+/, "") : command.key;
   return buildCommandText(commandName, serializeCommandArgs(command, args));
 }
 

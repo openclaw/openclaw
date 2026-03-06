@@ -1582,6 +1582,22 @@ async function dispatchDiscordCommandInteraction(params: {
         ...(configuredBinding ? { matchedBy: "binding.channel" as const } : {}),
       }
     : (configuredRoute?.route ?? route);
+  log.info("native command routed", {
+    commandName: command.nativeName ?? command.key,
+    prompt,
+    accountId,
+    applicationId:
+      typeof interaction.rawData.application_id === "string"
+        ? interaction.rawData.application_id
+        : undefined,
+    guildId: interaction.guild?.id ?? undefined,
+    channelId,
+    routeAgentId: route.agentId,
+    effectiveAgentId: effectiveRoute.agentId,
+    effectiveSessionKey: effectiveRoute.sessionKey,
+    boundSessionKey: boundSessionKey || undefined,
+    matchedBy: effectiveRoute.matchedBy,
+  });
   const conversationLabel = isDirectMessage ? (user.globalName ?? user.username) : channelId;
   const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
     channelConfig,
@@ -1601,8 +1617,8 @@ async function dispatchDiscordCommandInteraction(params: {
         ? `discord:group:${channelId}`
         : `discord:channel:${channelId}`,
     To: `slash:${user.id}`,
-    SessionKey: boundSessionKey ?? `agent:${effectiveRoute.agentId}:${sessionPrefix}:${user.id}`,
-    CommandTargetSessionKey: boundSessionKey ?? effectiveRoute.sessionKey,
+    SessionKey: boundSessionKey || effectiveRoute.sessionKey,
+    CommandTargetSessionKey: boundSessionKey || effectiveRoute.sessionKey,
     AccountId: effectiveRoute.accountId,
     ChatType: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
     ConversationLabel: conversationLabel,

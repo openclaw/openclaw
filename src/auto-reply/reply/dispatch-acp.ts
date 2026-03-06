@@ -174,6 +174,15 @@ export async function tryDispatchAcpReply(params: {
     return null;
   }
 
+  const resolvedAcpAgent =
+    acpResolution.kind === "ready"
+      ? (
+          acpResolution.meta.agent?.trim() ||
+          params.cfg.acp?.defaultAgent?.trim() ||
+          resolveAgentIdFromSessionKey(sessionKey)
+        ).trim()
+      : resolveAgentIdFromSessionKey(sessionKey);
+
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
     cfg: params.cfg,
@@ -186,6 +195,7 @@ export async function tryDispatchAcpReply(params: {
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
     onReplyStart: params.onReplyStart,
+    agentId: resolvedAcpAgent,
   });
 
   const promptText = resolveAcpPromptText(params.ctx);
@@ -208,15 +218,6 @@ export async function tryDispatchAcpReply(params: {
         channelRaw: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
         accountIdRaw: params.ctx.AccountId,
       }));
-
-  const resolvedAcpAgent =
-    acpResolution.kind === "ready"
-      ? (
-          acpResolution.meta.agent?.trim() ||
-          params.cfg.acp?.defaultAgent?.trim() ||
-          resolveAgentIdFromSessionKey(sessionKey)
-        ).trim()
-      : resolveAgentIdFromSessionKey(sessionKey);
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
@@ -257,7 +258,7 @@ export async function tryDispatchAcpReply(params: {
     });
 
     await projector.flush(true);
-    const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
+    const ttsMode = resolveTtsConfig(params.cfg, resolvedAcpAgent).mode ?? "final";
     const accumulatedBlockText = delivery.getAccumulatedBlockText();
     if (ttsMode === "final" && delivery.getBlockCount() > 0 && accumulatedBlockText.trim()) {
       try {
@@ -268,6 +269,7 @@ export async function tryDispatchAcpReply(params: {
           kind: "final",
           inboundAudio: params.inboundAudio,
           ttsAuto: params.sessionTtsAuto,
+          agentId: resolvedAcpAgent,
         });
         if (ttsSyntheticReply.mediaUrl) {
           const delivered = await delivery.deliver("final", {

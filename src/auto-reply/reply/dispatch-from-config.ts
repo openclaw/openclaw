@@ -72,8 +72,7 @@ const resolveSessionStoreEntry = (
   sessionKey?: string;
   entry?: SessionEntry;
 } => {
-  const targetSessionKey =
-    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+  const targetSessionKey = ctx.CommandTargetSessionKey?.trim();
   const sessionKey = (targetSessionKey ?? ctx.SessionKey)?.trim();
   if (!sessionKey) {
     return {};
@@ -166,6 +165,7 @@ export async function dispatchReplyFromConfig(params: {
 
   const sessionStoreEntry = resolveSessionStoreEntry(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+  const agentId = resolveSessionAgentId({ sessionKey: acpDispatchSessionKey, config: cfg });
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
@@ -393,6 +393,7 @@ export async function dispatchReplyFromConfig(params: {
               kind: "tool",
               inboundAudio,
               ttsAuto: sessionTtsAuto,
+              agentId,
             });
             const deliveryPayload = resolveToolDeliveryPayload(ttsPayload);
             if (!deliveryPayload) {
@@ -429,6 +430,7 @@ export async function dispatchReplyFromConfig(params: {
               kind: "block",
               inboundAudio,
               ttsAuto: sessionTtsAuto,
+              agentId,
             });
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
@@ -485,6 +487,7 @@ export async function dispatchReplyFromConfig(params: {
         kind: "final",
         inboundAudio,
         ttsAuto: sessionTtsAuto,
+        agentId,
       });
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.
@@ -513,7 +516,7 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
-    const ttsMode = resolveTtsConfig(cfg).mode ?? "final";
+    const ttsMode = resolveTtsConfig(cfg, agentId).mode ?? "final";
     // Generate TTS-only reply after block streaming completes (when there's no final reply).
     // This handles the case where block streaming succeeds and drops final payloads,
     // but we still want TTS audio to be generated from the accumulated block content.
@@ -531,6 +534,7 @@ export async function dispatchReplyFromConfig(params: {
           kind: "final",
           inboundAudio,
           ttsAuto: sessionTtsAuto,
+          agentId,
         });
         // Only send if TTS was actually applied (mediaUrl exists)
         if (ttsSyntheticReply.mediaUrl) {
