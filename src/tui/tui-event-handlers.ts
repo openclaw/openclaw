@@ -177,12 +177,20 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as ChatEvent;
     syncSessionKey();
-    if (
-      typeof evt.sessionKey === "string" &&
-      evt.sessionKey.trim().length > 0 &&
-      !isSameSessionKey(evt.sessionKey, state.currentSessionKey)
-    ) {
-      return;
+    const hasSessionKey = typeof evt.sessionKey === "string" && evt.sessionKey.trim().length > 0;
+    if (hasSessionKey) {
+      if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+        return;
+      }
+    } else {
+      const isKnownRun =
+        evt.runId === state.activeChatRunId ||
+        sessionRuns.has(evt.runId) ||
+        finalizedRuns.has(evt.runId) ||
+        Boolean(isLocalRunId?.(evt.runId));
+      if (!isKnownRun) {
+        return;
+      }
     }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
@@ -223,6 +231,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         tui.requestRender();
         return;
       }
+      const wasLocalRun = Boolean(isLocalRunId?.(evt.runId));
       maybeRefreshHistoryForRun(evt.runId);
       const stopReason =
         evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
@@ -237,7 +246,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         state.showThinking,
         evt.errorMessage,
       );
-      if (finalText === "(no output)") {
+      if (finalText === "(no output)" && wasLocalRun) {
         maybeRefreshHistoryForRun(evt.runId, { force: true });
       }
       const suppressEmptyExternalPlaceholder =
