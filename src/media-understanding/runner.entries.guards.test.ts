@@ -51,6 +51,8 @@ describe("media-understanding formatDecisionSummary guards", () => {
 
   it("drops known whisper subtitle-credit hallucinations", () => {
     expect(sanitizeAudioTranscript("Субтитры сделал DimaTorzok")).toBe("");
+    expect(sanitizeAudioTranscript("Субтитры сделала DimaTorzok")).toBe("");
+    expect(sanitizeAudioTranscript("Субтитры сделали DimaTorzok")).toBe("");
     expect(sanitizeAudioTranscript("subtitles by someguy")).toBe("");
     expect(sanitizeAudioTranscript("translated by cool_name")).toBe("");
   });
