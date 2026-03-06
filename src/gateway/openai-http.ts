@@ -230,8 +230,9 @@ function extractImageUrls(content: unknown): string[] {
   return urls;
 }
 
-type LatestUserImageRefs = {
-  messageIndex: number;
+type ActiveTurnContext = {
+  activeTurnIndex: number;
+  activeUserMessageIndex: number;
   urls: string[];
 };
 
@@ -261,7 +262,7 @@ function parseImageUrlToSource(url: string): InputImageSource {
   return { type: "url", url };
 }
 
-function resolveLatestUserImageRefs(messagesUnknown: unknown): LatestUserImageRefs {
+function resolveActiveTurnContext(messagesUnknown: unknown): ActiveTurnContext {
   const messages = asMessages(messagesUnknown);
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i];
@@ -269,19 +270,24 @@ function resolveLatestUserImageRefs(messagesUnknown: unknown): LatestUserImageRe
       continue;
     }
     const role = typeof msg.role === "string" ? msg.role.trim() : "";
-    if (role !== "user") {
+    const normalizedRole = role === "function" ? "tool" : role;
+    if (normalizedRole !== "user" && normalizedRole !== "tool") {
       continue;
     }
-    return { messageIndex: i, urls: extractImageUrls(msg.content) };
+    return {
+      activeTurnIndex: i,
+      activeUserMessageIndex: normalizedRole === "user" ? i : -1,
+      urls: normalizedRole === "user" ? extractImageUrls(msg.content) : [],
+    };
   }
-  return { messageIndex: -1, urls: [] };
+  return { activeTurnIndex: -1, activeUserMessageIndex: -1, urls: [] };
 }
 
 async function resolveImagesForRequest(
-  latestUserImageRefs: Pick<LatestUserImageRefs, "urls">,
+  activeTurnContext: Pick<ActiveTurnContext, "urls">,
   limits: ResolvedOpenAiChatCompletionsLimits,
 ): Promise<ImageContent[]> {
-  const urls = latestUserImageRefs.urls;
+  const urls = activeTurnContext.urls;
   if (urls.length === 0) {
     return [];
   }
@@ -318,7 +324,7 @@ async function resolveImagesForRequest(
 
 function buildAgentPrompt(
   messagesUnknown: unknown,
-  latestUserMessageIndex: number,
+  activeUserMessageIndex: number,
 ): {
   message: string;
   extraSystemPrompt?: string;
@@ -353,7 +359,7 @@ function buildAgentPrompt(
     // Keep the image-only placeholder scoped to the active user turn so we don't
     // mention historical image-only turns whose bytes are intentionally not replayed.
     const messageContent =
-      normalizedRole === "user" && !content && hasImage && i === latestUserMessageIndex
+      normalizedRole === "user" && !content && hasImage && i === activeUserMessageIndex
         ? IMAGE_ONLY_USER_MESSAGE
         : content;
     if (!messageContent) {
@@ -437,11 +443,11 @@ export async function handleOpenAiHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: true,
   });
-  const latestUserImageRefs = resolveLatestUserImageRefs(payload.messages);
-  const prompt = buildAgentPrompt(payload.messages, latestUserImageRefs.messageIndex);
+  const activeTurnContext = resolveActiveTurnContext(payload.messages);
+  const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
   let images: ImageContent[] = [];
   try {
-    images = await resolveImagesForRequest(latestUserImageRefs, limits);
+    images = await resolveImagesForRequest(activeTurnContext, limits);
   } catch (err) {
     logWarn(`openai-compat: invalid image_url content: ${String(err)}`);
     sendJson(res, 400, {

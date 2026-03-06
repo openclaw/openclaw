@@ -546,6 +546,35 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
+        mockAgentOnce([{ text: "tool follow-up ok" }]);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "look at this" },
+                { type: "image_url", image_url: { url: "https://example.com/image.png" } },
+              ],
+            },
+            { role: "assistant", content: "Checking the image." },
+            { role: "tool", content: "Vision tool says it is blue." },
+          ],
+        });
+        expect(res.status).toBe(200);
+
+        const firstCall = getFirstAgentCall();
+        expect(firstCall?.images).toBeUndefined();
+        const message = getFirstAgentMessage();
+        expectMessageContext(message, {
+          history: ["User: look at this", "Assistant: Checking the image."],
+          current: ["Tool: Vision tool says it is blue."],
+        });
+        expect(message).not.toContain("User sent image(s) with no text.");
+        await res.text();
+      }
+
+      {
         mockAgentOnce([{ text: "hello" }]);
         const json = await postSyncUserMessage("hi");
         expect(json.object).toBe("chat.completion");
