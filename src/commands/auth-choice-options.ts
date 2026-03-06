@@ -185,6 +185,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     hint: "Any OpenAI or Anthropic compatible endpoint",
     choices: ["custom-api-key"],
   },
+  {
+    value: "local-server",
+    label: "Local Server Provider",
+    hint: "Custom inference server with custom body format",
+    choices: ["local-server"],
+  },
 ];
 
 const PROVIDER_AUTH_CHOICE_OPTION_HINTS: Partial<Record<AuthChoice, string>> = {
@@ -298,6 +304,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     hint: "Official fast tier (legacy: Lightning)",
   },
   { value: "custom-api-key", label: "Custom Provider" },
+  {
+    value: "local-server",
+    label: "Local Server Provider",
+    hint: "Custom inference server (any body format)",
+  },
 ];
 
 export function formatAuthChoiceChoicesForCli(params?: {

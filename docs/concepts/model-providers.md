@@ -398,6 +398,77 @@ Then set a model (replace with one of the IDs returned by `/v1/models`):
 
 See [/providers/vllm](/providers/vllm) for details.
 
+### Local Server (fully custom endpoint)
+
+Use this when your inference server exposes a **non-standard API** (not OpenAI-compatible or Anthropic-compatible) — for example, a custom uvicorn/FastAPI server, a research prototype, or any HTTP endpoint you control.
+
+- Provider: any name you choose (e.g. `my-server`)
+- Auth: optional (API key supported)
+- API type: `local-server`
+
+Run the onboarding wizard and select **"Local Server Provider"**:
+
+```bash
+openclaw onboard --auth-choice local-server
+```
+
+The wizard collects:
+
+1. **Endpoint URL** — e.g. `http://100.68.87.28:8000/run-by-cache`
+2. **Model ID** — any label for your model (e.g. `Qwen/Qwen2.5-32B-Instruct`)
+3. **Request body template** — a JSON template with placeholders (`{{prompt}}`, `{{model}}`, `{{max_tokens}}`, `{{messages}}`, `{{system}}`)
+4. **Response path** — dot-path to extract the text from the JSON response (e.g. `response`, `result.text`, `output.generated_text`)
+5. **API key** — optional; leave blank if your server doesn't require auth
+6. **Custom headers** — optional extra headers (e.g. for tenant routing)
+
+Example configuration:
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "my-server/my_model" } },
+  },
+  models: {
+    providers: {
+      "my-server": {
+        baseUrl: "http://100.68.87.28:8000/run-by-cache",
+        api: "local-server",
+        localServer: {
+          template: '{"cache_folder": "translation", "input_text": "{{prompt}}", "mode": "chat"}',
+          responsePath: "response",
+        },
+        models: [
+          {
+            id: "my_model",
+            name: "My Local Model",
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 32000,
+            maxTokens: 4096,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+**Template placeholders:**
+
+| Placeholder      | Description                       |
+| ---------------- | --------------------------------- |
+| `{{prompt}}`     | Last user message (JSON-escaped)  |
+| `{{model}}`      | Model ID string                   |
+| `{{max_tokens}}` | Max tokens (integer)              |
+| `{{messages}}`   | Full conversation as a JSON array |
+| `{{system}}`     | System prompt string              |
+
+**Notes:**
+
+- Tools are disabled automatically for `local-server` providers (the agent completes after one response).
+- No API key is required; leave the field blank during onboarding if your server doesn't enforce auth.
+- The `responsePath` uses dot notation: `response` extracts the top-level `response` key; `result.text` extracts `result → text`.
+
 ### Local proxies (LM Studio, vLLM, LiteLLM, etc.)
 
 Example (OpenAI‑compatible):

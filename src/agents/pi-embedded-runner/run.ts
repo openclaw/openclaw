@@ -818,7 +818,7 @@ export async function runEmbeddedPiAgent(
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             images: params.images,
-            disableTools: params.disableTools,
+            disableTools: params.disableTools || model.api === "local-server",
             provider,
             modelId,
             model,

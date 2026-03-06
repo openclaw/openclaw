@@ -49,3 +49,22 @@ CLI wizard. You will be asked to:
 - Choose an Endpoint ID so multiple custom endpoints can coexist.
 
 For detailed steps, follow the CLI onboarding docs above.
+
+## Local Server Provider
+
+If your inference server exposes a **fully custom (non-standard) API** — such
+as a uvicorn/FastAPI server, a research prototype, or any HTTP endpoint you
+control — choose **Local Server Provider** in the CLI wizard:
+
+```bash
+openclaw onboard --auth-choice local-server
+```
+
+You will be asked to:
+
+- Enter the endpoint URL (e.g. `http://192.168.1.10:8000/infer`).
+- Provide a JSON request body **template** with placeholders like `{{prompt}}`.
+- Specify a **response path** to extract the generated text (e.g. `response`, `result.text`).
+- Optionally enter an API key and custom headers.
+
+See [Model providers — Local Server](/concepts/model-providers#local-server-fully-custom-endpoint) for full configuration details.

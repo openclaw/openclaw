@@ -50,6 +50,7 @@ export type AuthChoice =
   | "byteplus-api-key"
   | "qianfan-api-key"
   | "custom-api-key"
+  | "local-server"
   | "skip";
 export type AuthChoiceGroupId =
   | "openai"
@@ -78,7 +79,8 @@ export type AuthChoiceGroupId =
   | "xai"
   | "volcengine"
   | "byteplus"
-  | "custom";
+  | "custom"
+  | "local-server";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";

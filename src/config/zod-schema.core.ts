@@ -224,6 +224,14 @@ export const ModelDefinitionSchema = z
   })
   .strict();
 
+export const LocalServerBodyTemplateSchema = z
+  .object({
+    template: z.string().min(1),
+    responsePath: z.string().min(1),
+  })
+  .strict()
+  .optional();
+
 export const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1),
@@ -236,6 +244,7 @@ export const ModelProviderSchema = z
     headers: z.record(z.string(), z.string()).optional(),
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),
+    localServer: LocalServerBodyTemplateSchema,
   })
   .strict();
 

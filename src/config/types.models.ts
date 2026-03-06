@@ -9,6 +9,7 @@ export const MODEL_APIS = [
   "github-copilot",
   "bedrock-converse-stream",
   "ollama",
+  "local-server",
 ] as const;
 
 export type ModelApi = (typeof MODEL_APIS)[number];
@@ -47,6 +48,13 @@ export type ModelDefinitionConfig = {
   compat?: ModelCompatConfig;
 };
 
+export type LocalServerBodyTemplate = {
+  /** JSON template with placeholders: {{prompt}}, {{messages}}, {{system}}, {{model}}, {{max_tokens}} */
+  template: string;
+  /** Dot-path to extract generated text from the response JSON (e.g. "result.text", "output") */
+  responsePath: string;
+};
+
 export type ModelProviderConfig = {
   baseUrl: string;
   apiKey?: SecretInput;
@@ -56,6 +64,8 @@ export type ModelProviderConfig = {
   headers?: Record<string, string>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];
+  /** Custom request body template and response extraction for local-server API type */
+  localServer?: LocalServerBodyTemplate;
 };
 
 export type BedrockDiscoveryConfig = {
