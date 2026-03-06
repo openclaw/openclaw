@@ -1132,7 +1132,7 @@ export const FIELD_HELP: Record<string, string> = {
   "cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork":
     "Allow cron webhook deliveries to resolve to private/internal IP addresses. Set to true only on fully trusted internal networks where the webhook target is a known intranet service. Never enable on internet-exposed gateways.",
   "cron.webhookSsrfPolicy.allowedHostnames":
-    "Explicit hostname allowlist for cron webhook SSRF checks. Only these hostnames (exact match or *.suffix) are permitted to resolve to any IP, including private ranges. Prefer this over dangerouslyAllowPrivateNetwork for a tighter scope.",
+    "Explicit hostname allowlist for cron webhook SSRF checks. Only these exact hostnames are permitted to resolve to any IP, including private ranges. Prefer this over dangerouslyAllowPrivateNetwork for a tighter scope.",
   hooks:
     "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
   "hooks.enabled":

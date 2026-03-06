@@ -313,13 +313,8 @@ export function buildGatewayCronService(params: {
       if (mode === "webhook" && to) {
         const webhookUrl = normalizeHttpWebhookUrl(to);
         if (webhookUrl) {
-          const failureAlertSsrfPolicy: SsrFPolicy | undefined = params.cfg.cron?.webhookSsrfPolicy
-            ? {
-                dangerouslyAllowPrivateNetwork:
-                  params.cfg.cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork,
-                allowedHostnames: params.cfg.cron.webhookSsrfPolicy.allowedHostnames,
-              }
-            : undefined;
+          const failureAlertSsrfPolicy: SsrFPolicy | undefined =
+            params.cfg.cron?.webhookSsrfPolicy ?? undefined;
           await postCronWebhook({
             webhookUrl,
             webhookToken,
@@ -370,13 +365,8 @@ export function buildGatewayCronService(params: {
       if (evt.action === "finished") {
         const webhookToken = trimToOptionalString(params.cfg.cron?.webhookToken);
         const legacyWebhook = trimToOptionalString(params.cfg.cron?.webhook);
-        const webhookSsrfPolicy: SsrFPolicy | undefined = params.cfg.cron?.webhookSsrfPolicy
-          ? {
-              dangerouslyAllowPrivateNetwork:
-                params.cfg.cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork,
-              allowedHostnames: params.cfg.cron.webhookSsrfPolicy.allowedHostnames,
-            }
-          : undefined;
+        const webhookSsrfPolicy: SsrFPolicy | undefined =
+          params.cfg.cron?.webhookSsrfPolicy ?? undefined;
         const job = cron.getJob(evt.jobId);
         const legacyNotify = (job as { notify?: unknown } | undefined)?.notify === true;
         const webhookTarget = resolveCronWebhookTarget({
