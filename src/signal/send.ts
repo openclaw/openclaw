@@ -7,6 +7,12 @@ import { signalRpcRequest } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
+export type SignalMentionRange = {
+  start: number;
+  length: number;
+  recipient: string;
+};
+
 export type SignalSendOpts = {
   cfg?: OpenClawConfig;
   baseUrl?: string;
@@ -18,6 +24,7 @@ export type SignalSendOpts = {
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
+  mentions?: SignalMentionRange[];
 };
 
 export type SignalSendResult = {
@@ -96,6 +103,41 @@ function buildTargetParams(
   return null;
 }
 
+function normalizeSignalMentionRecipient(raw: string, index: number): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error(`Signal mention ${index} recipient is required`);
+  }
+  const withoutSignal = trimmed.replace(/^signal:/i, "").trim();
+  if (!withoutSignal) {
+    throw new Error(`Signal mention ${index} recipient is required`);
+  }
+  if (withoutSignal.toLowerCase().startsWith("uuid:")) {
+    const uuid = withoutSignal.slice("uuid:".length).trim();
+    if (!uuid) {
+      throw new Error(`Signal mention ${index} recipient is required`);
+    }
+    return uuid;
+  }
+  return withoutSignal;
+}
+
+function buildSignalMentionParams(mentions?: SignalMentionRange[]): string[] {
+  if (!mentions?.length) {
+    return [];
+  }
+  return mentions.map((mention, index) => {
+    if (!Number.isFinite(mention.start) || mention.start < 0) {
+      throw new Error(`Signal mention ${index} has an invalid start`);
+    }
+    if (!Number.isFinite(mention.length) || mention.length <= 0) {
+      throw new Error(`Signal mention ${index} has an invalid length`);
+    }
+    const recipient = normalizeSignalMentionRecipient(mention.recipient, index);
+    return `${Math.trunc(mention.start)}:${Math.trunc(mention.length)}:${recipient}`;
+  });
+}
+
 export async function sendMessageSignal(
   to: string,
   text: string,
@@ -169,6 +211,10 @@ export async function sendMessageSignal(
   }
   if (attachments && attachments.length > 0) {
     params.attachments = attachments;
+  }
+  const mentionRanges = buildSignalMentionParams(opts.mentions);
+  if (mentionRanges.length > 0) {
+    params.mention = mentionRanges;
   }
 
   const targetParams = buildTargetParams(target, {
