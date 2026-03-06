@@ -269,6 +269,7 @@ export const ToolsWebSearchSchema = z
         z.literal("grok"),
         z.literal("gemini"),
         z.literal("kimi"),
+        z.literal("baidu"),
       ])
       .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
@@ -290,6 +291,12 @@ export const ToolsWebSearchSchema = z
         apiKey: SecretInputSchema.optional().register(sensitive),
         model: z.string().optional(),
         inlineCitations: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    baidu: z
+      .object({
+        apiKey: z.string().optional(),
       })
       .strict()
       .optional(),
