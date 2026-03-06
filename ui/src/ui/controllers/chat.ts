@@ -26,6 +26,84 @@ function isAssistantSilentReply(message: unknown): boolean {
   return typeof text === "string" && isSilentReplyStream(text);
 }
 
+function getMessageRole(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const role = (message as Record<string, unknown>).role;
+  return typeof role === "string" ? role.toLowerCase() : "";
+}
+
+function getMessageTimestamp(message: unknown): number | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const timestamp = (message as Record<string, unknown>).timestamp;
+  return typeof timestamp === "number" ? timestamp : null;
+}
+
+function getMessageFingerprint(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const entry = message as Record<string, unknown>;
+  for (const field of ["toolCallId", "id", "messageId"]) {
+    const value = entry[field];
+    if (typeof value === "string" && value) {
+      return `${field}:${value}`;
+    }
+  }
+  const role = getMessageRole(message);
+  const text = extractText(message);
+  const content = entry.content;
+  const contentKey =
+    Array.isArray(content)
+      ? JSON.stringify(
+          content.map((part) =>
+            part && typeof part === "object"
+              ? {
+                  type: (part as Record<string, unknown>).type,
+                  text: (part as Record<string, unknown>).text,
+                }
+              : part,
+          ),
+        )
+      : text;
+  if (!role || !contentKey) {
+    return null;
+  }
+  return `${role}:${contentKey}`;
+}
+
+function mergeVisibleHistory(state: ChatState, incoming: unknown[]): unknown[] {
+  if (!state.chatRunId || state.chatStreamStartedAt == null) {
+    return incoming;
+  }
+
+  const seen = new Set(incoming.map(getMessageFingerprint).filter((value): value is string => Boolean(value)));
+  const optimisticUsers = state.chatMessages.filter((message) => {
+    if (getMessageRole(message) !== "user") {
+      return false;
+    }
+    const timestamp = getMessageTimestamp(message);
+    if (timestamp == null || timestamp < state.chatStreamStartedAt!) {
+      return false;
+    }
+    const fingerprint = getMessageFingerprint(message);
+    return !fingerprint || !seen.has(fingerprint);
+  });
+
+  if (optimisticUsers.length === 0) {
+    return incoming;
+  }
+
+  return [...incoming, ...optimisticUsers].sort((a, b) => {
+    const left = getMessageTimestamp(a) ?? Number.MAX_SAFE_INTEGER;
+    const right = getMessageTimestamp(b) ?? Number.MAX_SAFE_INTEGER;
+    return left - right;
+  });
+}
+
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -65,7 +143,8 @@ export async function loadChatHistory(state: ChatState) {
       },
     );
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
+    const visibleMessages = messages.filter((message) => !isAssistantSilentReply(message));
+    state.chatMessages = mergeVisibleHistory(state, visibleMessages);
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
     state.lastError = String(err);
