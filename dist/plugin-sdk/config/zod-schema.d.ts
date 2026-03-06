@@ -56,6 +56,7 @@ export declare const OpenClawSchema: z.ZodObject<{
         banner: z.ZodOptional<z.ZodObject<{
             taglineMode: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"random">, z.ZodLiteral<"default">, z.ZodLiteral<"off">]>>;
         }, z.core.$strict>>;
+        devMode: z.ZodOptional<z.ZodBoolean>;
     }, z.core.$strict>>;
     update: z.ZodOptional<z.ZodObject<{
         channel: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"stable">, z.ZodLiteral<"beta">, z.ZodLiteral<"dev">]>>;

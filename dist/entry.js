@@ -383,7 +383,7 @@ if (!isMainModule({
 	}
 	function tryHandleRootHelpFastPath(argv) {
 		if (!isRootHelpInvocation(argv)) return false;
-		import("./program-2SFiYS7H.js").then(({ buildProgram }) => {
+		import("./program-BX2hQ5lW.js").then(({ buildProgram }) => {
 			buildProgram().outputHelp();
 		}).catch((error) => {
 			console.error("[openclaw] Failed to display help:", error instanceof Error ? error.stack ?? error.message : error);
@@ -402,7 +402,7 @@ if (!isMainModule({
 			applyCliProfileEnv({ profile: parsed.profile });
 			process$1.argv = parsed.argv;
 		}
-		if (!tryHandleRootVersionFastPath(process$1.argv) && !tryHandleRootHelpFastPath(process$1.argv)) import("./run-main-D97uU4RT.js").then(({ runCli }) => runCli(process$1.argv)).catch((error) => {
+		if (!tryHandleRootVersionFastPath(process$1.argv) && !tryHandleRootHelpFastPath(process$1.argv)) import("./run-main-BGkpdmHu.js").then(({ runCli }) => runCli(process$1.argv)).catch((error) => {
 			console.error("[openclaw] Failed to start CLI:", error instanceof Error ? error.stack ?? error.message : error);
 			process$1.exitCode = 1;
 		});

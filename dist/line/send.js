@@ -1,5 +1,5 @@
 import { y as logVerbose } from "../utils-DZ2oAc5g.js";
-import { t as loadConfig } from "../config-BPbBtngj.js";
+import { t as loadConfig } from "../config-CpCccDYR.js";
 import { t as recordChannelActivity } from "../channel-activity-DUOy6BRw.js";
 import { resolveLineAccount } from "./accounts.js";
 import { messagingApi } from "@line/bot-sdk";

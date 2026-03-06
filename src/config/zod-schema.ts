@@ -257,6 +257,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        devMode: z.boolean().optional(),
       })
       .strict()
       .optional(),

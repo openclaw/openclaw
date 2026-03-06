@@ -6212,11 +6212,14 @@ const OpenClawSchema = z.object({
 		redactSensitive: z.union([z.literal("off"), z.literal("tools")]).optional(),
 		redactPatterns: z.array(z.string()).optional()
 	}).strict().optional(),
-	cli: z.object({ banner: z.object({ taglineMode: z.union([
-		z.literal("random"),
-		z.literal("default"),
-		z.literal("off")
-	]).optional() }).strict().optional() }).strict().optional(),
+	cli: z.object({
+		banner: z.object({ taglineMode: z.union([
+			z.literal("random"),
+			z.literal("default"),
+			z.literal("off")
+		]).optional() }).strict().optional(),
+		devMode: z.boolean().optional()
+	}).strict().optional(),
 	update: z.object({
 		channel: z.union([
 			z.literal("stable"),

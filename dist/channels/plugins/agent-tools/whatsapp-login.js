@@ -16,7 +16,7 @@ function createWhatsAppLoginTool() {
 			force: Type.Optional(Type.Boolean())
 		}),
 		execute: async (_toolCallId, args) => {
-			const { startWebLoginWithQr, waitForWebLogin } = await import("../../../login-qr-ChXn3JPM.js");
+			const { startWebLoginWithQr, waitForWebLogin } = await import("../../../login-qr-BZj2DVD6.js");
 			if ((args?.action ?? "start") === "wait") {
 				const result = await waitForWebLogin({ timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : void 0 });
 				return {
