@@ -837,6 +837,14 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    queue: z
+      .object({
+        mode: z.union([z.literal("memory"), z.literal("persistent")]).optional(),
+        dbPath: z.string().optional(),
+        autoRecover: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {

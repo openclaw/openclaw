@@ -14,7 +14,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveSignalReactionLevel } from "../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../telegram/inline-buttons.js";
@@ -119,9 +119,17 @@ export type CompactEmbeddedPiSessionParams = {
   attempt?: number;
   maxAttempts?: number;
   lane?: string;
-  enqueue?: typeof enqueueCommand;
+  enqueue?: <T>(
+    taskType: string,
+    payload: unknown,
+    opts?: {
+      warnAfterMs?: number;
+      onWait?: (waitMs: number, queuedAhead: number) => void;
+    },
+  ) => Promise<T>;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
 type CompactionMessageMetrics = {
@@ -771,9 +779,23 @@ export async function compactEmbeddedPiSession(
 ): Promise<EmbeddedPiCompactResult> {
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
-  const enqueueGlobal =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
-  return enqueueCommandInLane(sessionLane, () =>
-    enqueueGlobal(async () => compactEmbeddedPiSessionDirect(params)),
+
+  return enqueueCommandInLane<EmbeddedPiCompactResult>(
+    sessionLane,
+    "SESSION_LOCK",
+    {},
+    {
+      onWait: params.onWait,
+      executeFn: () =>
+        enqueueCommandInLane<EmbeddedPiCompactResult>(
+          globalLane,
+          "EMBEDDED_PI_COMPACT",
+          {},
+          {
+            onWait: params.onWait,
+            executeFn: () => compactEmbeddedPiSessionDirect(params),
+          },
+        ),
+    },
   );
 }

@@ -114,6 +114,19 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  /** Command queue configuration. */
+  queue?: {
+    /**
+     * Queue storage mode.
+     * - "memory" (default): In-memory queue, tasks lost on process restart.
+     * - "persistent": SQLite-backed queue, tasks survive process restarts.
+     */
+    mode?: "memory" | "persistent";
+    /** Custom path for the SQLite database file (only used in persistent mode). */
+    dbPath?: string;
+    /** Whether to auto-recover RUNNING tasks on startup (default: true). */
+    autoRecover?: boolean;
+  };
 };
 
 export type ConfigValidationIssue = {

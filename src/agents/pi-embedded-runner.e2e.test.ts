@@ -141,7 +141,11 @@ const nextSessionFile = () => {
 };
 const nextRunId = (prefix = "run-embedded-test") => `${prefix}-${++runCounter}`;
 const nextSessionKey = () => `agent:test:embedded:${nextRunId("session-key")}`;
-const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
+const immediateEnqueue = async <T>(
+  _taskType: string,
+  _payload: unknown,
+  _opts?: unknown,
+): Promise<T> => undefined as T;
 
 const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string) => {
   const sessionFile = nextSessionFile();

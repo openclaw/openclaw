@@ -136,5 +136,49 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
       ensurePluginRegistryLoaded();
     }
+
+    // Initialize command queue mode
+    try {
+      const { loadConfig } = await import("../../config/io.js");
+      const cfg = loadConfig();
+      const queueConfig = cfg?.queue;
+      const queueMode = process.env.OPENCLAW_QUEUE_MODE?.trim() || queueConfig?.mode || "memory";
+
+      const { setQueueMode } = await import("../../process/queue-backend.js");
+      const customDbPath =
+        process.env.OPENCLAW_QUEUE_DB_PATH?.trim() || queueConfig?.dbPath || undefined;
+      await setQueueMode(queueMode as "memory" | "persistent", customDbPath);
+
+      const { initializeAgentHandlers } = await import("../../agents/handlers.js");
+      initializeAgentHandlers();
+
+      if (queueMode === "persistent") {
+        const { queueBackend } = await import("../../process/queue-backend.js");
+        const { resetAllLanes } = await import("../../process/command-queue.js");
+
+        const autoRecover =
+          process.env.OPENCLAW_QUEUE_AUTO_RECOVER !== "false" && queueConfig?.autoRecover !== false;
+
+        if (autoRecover) {
+          const affectedLanes = queueBackend().recoverRunningTasks();
+          const pendingLanes = queueBackend().getPendingLanes();
+          const totalLanes = new Set([...affectedLanes, ...pendingLanes]);
+
+          if (totalLanes.size > 0) {
+            console.log(
+              `[queue-recovery] recovered ${affectedLanes.length} lanes with RUNNING tasks, ${pendingLanes.length} lanes with PENDING tasks`,
+            );
+          }
+
+          resetAllLanes();
+        }
+      }
+    } catch (err) {
+      if (err instanceof Error && /better-sqlite3|Cannot find module/.test(err.message)) {
+        // Optional native dependency not available — silently continue with in-memory queue
+      } else {
+        console.warn("[queue] Unexpected initialization error:", err);
+      }
+    }
   });
 }
