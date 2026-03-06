@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
@@ -82,52 +81,21 @@ function toWatchGlobRoot(raw: string): string {
   return raw.replaceAll("\\", "/").replace(/\/+$/, "");
 }
 
-function listChildDirectories(dir: string): string[] {
-  try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    const dirs: string[] = [];
-    for (const entry of entries) {
-      if (entry.name.startsWith(".") || entry.name === "node_modules") {
-        continue;
-      }
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        dirs.push(entry.name);
-        continue;
-      }
-      if (entry.isSymbolicLink()) {
-        try {
-          if (fs.statSync(fullPath).isDirectory()) {
-            dirs.push(entry.name);
-          }
-        } catch {
-          // ignore broken symlinks
-        }
-      }
-    }
-    return dirs;
-  } catch {
-    return [];
-  }
-}
-
-function resolveWatchRoot(dir: string): string {
-  const nested = path.join(dir, "skills");
-  try {
-    if (!fs.existsSync(nested) || !fs.statSync(nested).isDirectory()) {
-      return dir;
-    }
-  } catch {
-    return dir;
-  }
-
-  for (const name of listChildDirectories(nested)) {
-    if (fs.existsSync(path.join(nested, name, "SKILL.md"))) {
-      return nested;
+function addWatchTargets(params: {
+  root: string;
+  targets: Set<string>;
+  indexFirst: boolean;
+  indexFileName: string;
+}) {
+  const { root, targets, indexFirst, indexFileName } = params;
+  for (const watchRoot of [root, path.join(root, "skills")]) {
+    const globRoot = toWatchGlobRoot(watchRoot);
+    targets.add(`${globRoot}/SKILL.md`);
+    targets.add(`${globRoot}/*/SKILL.md`);
+    if (indexFirst) {
+      targets.add(`${globRoot}/${indexFileName}`);
     }
   }
-
-  return dir;
 }
 
 export function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): string[] {
@@ -137,14 +105,12 @@ export function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfi
   const loadConfig = config?.skills?.load;
   const indexFileName = loadConfig?.indexFileName?.trim() || "skills-index.json";
   for (const root of resolveWatchPaths(workspaceDir, config)) {
-    const globRoot = toWatchGlobRoot(resolveWatchRoot(root));
-    // Some configs point directly at a skill folder.
-    targets.add(`${globRoot}/SKILL.md`);
-    // Standard layout: <skillsRoot>/<skillName>/SKILL.md
-    targets.add(`${globRoot}/*/SKILL.md`);
-    if (loadConfig?.indexFirst) {
-      targets.add(`${globRoot}/${indexFileName}`);
-    }
+    addWatchTargets({
+      root,
+      targets,
+      indexFirst: loadConfig?.indexFirst === true,
+      indexFileName,
+    });
   }
   return Array.from(targets).toSorted();
 }
