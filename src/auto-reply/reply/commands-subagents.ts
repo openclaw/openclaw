@@ -47,9 +47,12 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     return handleSubagentsHelpAction();
   }
 
-  const requesterKey = resolveRequesterSessionKey(params, {
-    preferCommandTarget: action === "spawn",
-  });
+  const requesterKey =
+    action === "spawn"
+      ? resolveRequesterSessionKey(params, {
+          preferCommandTarget: true,
+        })
+      : resolveRequesterSessionKey(params);
   if (!requesterKey) {
     return stopWithText("⚠️ Missing session key.");
   }

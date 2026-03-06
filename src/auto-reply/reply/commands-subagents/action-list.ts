@@ -1,3 +1,4 @@
+import { countPendingDescendantRuns } from "../../../agents/subagent-registry.js";
 import { loadSessionStore, resolveStorePath } from "../../../config/sessions.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { sortSubagentRuns } from "../subagents-utils.js";
@@ -16,6 +17,18 @@ export function handleSubagentsListAction(ctx: SubagentsCommandContext): Command
   const now = Date.now();
   const recentCutoff = now - RECENT_WINDOW_MINUTES * 60_000;
   const storeCache: SessionStoreCache = new Map();
+  const pendingDescendantCache = new Map<string, number>();
+  const pendingDescendantCount = (sessionKey: string) => {
+    if (pendingDescendantCache.has(sessionKey)) {
+      return pendingDescendantCache.get(sessionKey) ?? 0;
+    }
+    const pending = Math.max(0, countPendingDescendantRuns(sessionKey));
+    pendingDescendantCache.set(sessionKey, pending);
+    return pending;
+  };
+  const isActiveRun = (entry: (typeof runs)[number]) =>
+    !entry.endedAt || pendingDescendantCount(entry.childSessionKey) > 0;
+
   let index = 1;
 
   const mapRuns = (entries: typeof runs, runtimeMs: (entry: (typeof runs)[number]) => number) =>
@@ -34,15 +47,16 @@ export function handleSubagentsListAction(ctx: SubagentsCommandContext): Command
         index,
         runtimeMs: runtimeMs(entry),
         sessionEntry,
+        pendingDescendants: pendingDescendantCount(entry.childSessionKey),
       });
       index += 1;
       return line;
     });
 
-  const activeEntries = sorted.filter((entry) => !entry.endedAt);
+  const activeEntries = sorted.filter((entry) => isActiveRun(entry));
   const activeLines = mapRuns(activeEntries, (entry) => now - (entry.startedAt ?? entry.createdAt));
   const recentEntries = sorted.filter(
-    (entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff,
+    (entry) => !isActiveRun(entry) && !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff,
   );
   const recentLines = mapRuns(
     recentEntries,

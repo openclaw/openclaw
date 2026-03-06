@@ -1296,23 +1296,23 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).not.toContain("after a short hard cutoff.");
   });
 
-  it("lists subagents for the current command session over the target session", async () => {
+  it("lists subagents for the command target session for native /subagents", async () => {
     addSubagentRunForTests({
-      runId: "run-1",
-      childSessionKey: "agent:main:subagent:abc",
-      requesterSessionKey: "agent:main:slack:slash:u1",
-      requesterDisplayKey: "agent:main:slack:slash:u1",
-      task: "do thing",
+      runId: "run-target",
+      childSessionKey: "agent:main:subagent:target",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "agent:main:main",
+      task: "target run",
       cleanup: "keep",
       createdAt: 1000,
       startedAt: 1000,
     });
     addSubagentRunForTests({
-      runId: "run-2",
-      childSessionKey: "agent:main:subagent:def",
+      runId: "run-slash",
+      childSessionKey: "agent:main:subagent:slash",
       requesterSessionKey: "agent:main:slack:slash:u1",
       requesterDisplayKey: "agent:main:slack:slash:u1",
-      task: "another thing",
+      task: "slash run",
       cleanup: "keep",
       createdAt: 2000,
       startedAt: 2000,
@@ -1329,8 +1329,47 @@ describe("handleCommands subagents", () => {
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("active subagents:");
-    expect(result.reply?.text).toContain("do thing");
-    expect(result.reply?.text).not.toContain("\n\n2.");
+    expect(result.reply?.text).toContain("target run");
+    expect(result.reply?.text).not.toContain("slash run");
+  });
+
+  it("keeps ended orchestrators in active list while descendants are pending", async () => {
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-orchestrator-ended",
+      childSessionKey: "agent:main:subagent:orchestrator-ended",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate child workers",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      startedAt: now - 120_000,
+      endedAt: now - 60_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-orchestrator-child-active",
+      childSessionKey: "agent:main:subagent:orchestrator-ended:subagent:child",
+      requesterSessionKey: "agent:main:subagent:orchestrator-ended",
+      requesterDisplayKey: "subagent:orchestrator-ended",
+      task: "child worker still running",
+      cleanup: "keep",
+      createdAt: now - 30_000,
+      startedAt: now - 30_000,
+    });
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/subagents list", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("active (waiting on 1 child)");
+    expect(result.reply?.text).not.toContain(
+      "recent subagents (last 30m):\n-----\n1. orchestrate child workers",
+    );
   });
 
   it("formats subagent usage with io and prompt/cache breakdown", async () => {
