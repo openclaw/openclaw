@@ -28,6 +28,11 @@ import {
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
 import {
+  DEEPINFRA_BASE_URL,
+  DEEPINFRA_MODEL_CATALOG,
+  buildDeepinfraModelDefinition,
+} from "./deepinfra-models.js";
+import {
   buildDoubaoModelDefinition,
   DOUBAO_BASE_URL,
   DOUBAO_MODEL_CATALOG,
@@ -796,6 +801,14 @@ async function buildHuggingfaceProvider(apiKey?: string): Promise<ProviderConfig
   };
 }
 
+function buildDeepinfraProvider(): ProviderConfig {
+  return {
+    baseUrl: DEEPINFRA_BASE_URL,
+    api: "openai-completions",
+    models: DEEPINFRA_MODEL_CATALOG.map(buildDeepinfraModelDefinition),
+  };
+}
+
 function buildTogetherProvider(): ProviderConfig {
   return {
     baseUrl: TOGETHER_BASE_URL,
@@ -1085,6 +1098,16 @@ export async function resolveImplicitProviders(params: {
         apiKey: vllmKey,
       };
     }
+  }
+
+  const deepinfraKey =
+    resolveEnvApiKeyVarName("deepinfra") ??
+    resolveApiKeyFromProfiles({ provider: "deepinfra", store: authStore });
+  if (deepinfraKey) {
+    providers.deepinfra = {
+      ...buildDeepinfraProvider(),
+      apiKey: deepinfraKey,
+    };
   }
 
   const togetherKey =

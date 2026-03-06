@@ -1100,6 +1100,7 @@
                   "providers/cloudflare-ai-gateway",
                   "providers/claude-max-api-proxy",
                   "providers/deepgram",
+                  "providers/deepinfra",
                   "providers/github-copilot",
                   "providers/huggingface",
                   "providers/kilocode",

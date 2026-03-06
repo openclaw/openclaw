@@ -150,6 +150,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["synthetic-api-key"],
   },
   {
+    value: "deepinfra",
+    label: "DeepInfra",
+    hint: "API key",
+    choices: ["deepinfra-api-key"],
+  },
+  {
     value: "together",
     label: "Together AI",
     hint: "API key",

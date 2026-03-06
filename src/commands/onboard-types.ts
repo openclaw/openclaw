@@ -22,6 +22,7 @@ export type AuthChoice =
   | "kimi-code-api-key"
   | "synthetic-api-key"
   | "venice-api-key"
+  | "deepinfra-api-key"
   | "together-api-key"
   | "huggingface-api-key"
   | "codex-cli"
@@ -72,6 +73,7 @@ export type AuthChoiceGroupId =
   | "venice"
   | "mistral"
   | "qwen"
+  | "deepinfra"
   | "together"
   | "huggingface"
   | "qianfan"
@@ -128,6 +130,7 @@ export type OnboardOptions = {
   minimaxApiKey?: string;
   syntheticApiKey?: string;
   veniceApiKey?: string;
+  deepinfraApiKey?: string;
   togetherApiKey?: string;
   huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
