@@ -153,6 +153,20 @@ describe("commands registry", () => {
     expect(native.find((spec) => spec.name === "agentstatus")).toBeTruthy();
   });
 
+  it("rejects nativeNames mapping that collides with another default native name", () => {
+    expect(() =>
+      listNativeCommandSpecsForConfig(
+        { commands: { native: true } },
+        {
+          provider: "slack",
+          nativeNames: {
+            status: "help",
+          },
+        },
+      ),
+    ).toThrow("Duplicate native command name");
+  });
+
   it("resolves custom nativeNames via reverse lookup", () => {
     const nativeNames = {
       status: "ozstatus",
