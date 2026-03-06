@@ -723,6 +723,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         webhookHost: account.config.webhookHost,
         webhookPort: account.config.webhookPort,
         webhookCertPath: account.config.webhookCertPath,
+        setStatus: ctx.setStatus,
       });
     },
     logoutAccount: async ({ accountId, cfg }) => {
