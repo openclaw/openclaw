@@ -64,7 +64,6 @@ export async function handleAbortChat(host: ChatHost) {
   if (!host.connected) {
     return;
   }
-  host.chatMessage = "";
   await abortChatRun(host as unknown as OpenClawApp);
 }
 

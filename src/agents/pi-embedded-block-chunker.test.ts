@@ -120,4 +120,25 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunks).toEqual(["Intro\n```js\nconst a = 1;\n\nconst b = 2;\n```"]);
     expect(chunker.bufferedText).toBe("After fence");
   });
+
+  it("preserves leading paragraph separator when buffer starts with one (cross-turn separator)", () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 100,
+      maxChars: 200,
+      breakPreference: "paragraph",
+      flushOnParagraph: true,
+    });
+
+    // Simulate cross-turn separator added after reset (fixes #35344)
+    chunker.append("\n\n");
+    const chunks1 = drainChunks(chunker);
+    expect(chunks1).toEqual([]);
+    expect(chunker.bufferedText).toBe("\n\n");
+
+    // Next paragraph should include the separator
+    chunker.append("Next paragraph");
+    const chunks2 = drainChunks(chunker);
+    expect(chunks2).toEqual([]);
+    expect(chunker.bufferedText).toBe("\n\nNext paragraph");
+  });
 });
