@@ -1,4 +1,4 @@
-import { listAgentIds } from "../../agents/agent-scope.js";
+import { listAgentEntries, listAgentIds } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -203,6 +203,43 @@ export function applyDefaultModelPrimaryUpdate(params: {
       defaults: {
         ...defaults,
         [params.field]: mergePrimaryFallbackConfig(existing, { primary: key }),
+        models: nextModels,
+      },
+    },
+  };
+}
+
+export function applyAgentModelPrimaryUpdate(params: {
+  cfg: OpenClawConfig;
+  modelRaw: string;
+  agentId: string;
+}): OpenClawConfig {
+  const resolved = resolveModelTarget({ raw: params.modelRaw, cfg: params.cfg });
+  const key = `${resolved.provider}/${resolved.model}`;
+
+  // Ensure model is in the allowlist.
+  const nextModels = { ...params.cfg.agents?.defaults?.models };
+  if (!nextModels[key]) {
+    nextModels[key] = {};
+  }
+
+  const id = normalizeAgentId(params.agentId);
+  const entries = listAgentEntries(params.cfg).map((entry) => ({ ...entry }));
+  const idx = entries.findIndex((entry) => normalizeAgentId(entry.id) === id);
+  if (idx < 0) {
+    throw new Error(`Agent "${params.agentId}" not found in agents.list.`);
+  }
+
+  const existing = toAgentModelListLike(entries[idx].model);
+  entries[idx] = { ...entries[idx], model: mergePrimaryFallbackConfig(existing, { primary: key }) };
+
+  return {
+    ...params.cfg,
+    agents: {
+      ...params.cfg.agents,
+      list: entries,
+      defaults: {
+        ...params.cfg.agents?.defaults,
         models: nextModels,
       },
     },

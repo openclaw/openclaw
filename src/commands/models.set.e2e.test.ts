@@ -125,4 +125,65 @@ describe("models set + fallbacks", () => {
       },
     });
   });
+
+  it("sets model for a specific agent via --agent", async () => {
+    mockConfigSnapshot({
+      agents: {
+        list: [{ id: "coder", model: "openai/gpt-4.1-mini" }],
+        defaults: { models: {} },
+      },
+    });
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("anthropic/claude-opus-4-6", runtime, { agent: "coder" });
+
+    expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    const written = getWrittenConfig();
+    const agents = written.agents as Record<string, unknown>;
+    const list = (agents.list as Array<Record<string, unknown>>)[0];
+    expect(list.model).toEqual({ primary: "anthropic/claude-opus-4-6" });
+    const defaults = agents.defaults as Record<string, unknown>;
+    const models = defaults.models as Record<string, unknown>;
+    expect(models["anthropic/claude-opus-4-6"]).toEqual({});
+  });
+
+  it("throws for unknown agent id", async () => {
+    mockConfigSnapshot({
+      agents: {
+        list: [{ id: "coder" }],
+        defaults: { models: {} },
+      },
+    });
+    const runtime = makeRuntime();
+
+    await expect(
+      modelsSetCommand("openai/gpt-4.1-mini", runtime, { agent: "unknown" }),
+    ).rejects.toThrow(/unknown/i);
+  });
+
+  it("preserves existing agent fallbacks when setting primary", async () => {
+    mockConfigSnapshot({
+      agents: {
+        list: [
+          {
+            id: "coder",
+            model: { primary: "openai/gpt-4.1-mini", fallbacks: ["openai/gpt-4.1"] },
+          },
+        ],
+        defaults: { models: {} },
+      },
+    });
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("anthropic/claude-opus-4-6", runtime, { agent: "coder" });
+
+    expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    const written = getWrittenConfig();
+    const agents = written.agents as Record<string, unknown>;
+    const list = (agents.list as Array<Record<string, unknown>>)[0];
+    expect(list.model).toEqual({
+      primary: "anthropic/claude-opus-4-6",
+      fallbacks: ["openai/gpt-4.1"],
+    });
+  });
 });
