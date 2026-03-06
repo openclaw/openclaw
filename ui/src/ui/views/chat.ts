@@ -212,7 +212,9 @@ function handleFileSelect(e: Event, props: ChatProps) {
 }
 
 function handleDragOver(e: DragEvent, props: ChatProps) {
-  if (!props.connected) return;
+  if (!props.connected) {
+    return;
+  }
   if (!e.dataTransfer?.types.includes("Files")) {
     return; // Only handle file drags, let text drags fall through
   }
