@@ -50,10 +50,10 @@ export CLAWD_TOKEN="062d36430ad4963afe8d5d3305f852427553be50d078d483"
 
 ```bash
 # Basic usage (defaults to Codex on mac-mini)
-spawn-agent.sh --task "Fix billing calculation bug in Stripe webhook"
+spawn-agent.sh --task "Fix billing calculation bug in Stripe webhook" --repo /path/to/repo
 
 # Specify agent
-spawn-agent.sh --task "Build new dashboard UI" --agent claude
+spawn-agent.sh --task "Build new dashboard UI" --agent claude --repo /path/to/repo
 
 # Specify repo and host
 spawn-agent.sh --task "Optimize database queries" \
@@ -61,6 +61,23 @@ spawn-agent.sh --task "Optimize database queries" \
   --repo /home/clawd/Projects/myapp \
   --host beelink2
 ```
+
+### PR Targeting (Fork Safety)
+
+By default, agents always open PRs against the **fork** (`origin` remote), never against upstream. This prevents accidentally sending PRs to the main `openclaw/openclaw` repo.
+
+```bash
+# Default: PR targets origin fork (safe)
+spawn-agent.sh --task "..." --repo /path/to/fork
+
+# Explicit opt-in to target upstream
+spawn-agent.sh --task "..." --repo /path/to/fork --target-upstream
+
+# Or via environment variable
+SWARM_PR_TARGET=upstream spawn-agent.sh --task "..." --repo /path/to/fork
+```
+
+Hard guardrail: if the repo's upstream remote is `openclaw/openclaw` and `--target-upstream` is not passed, spawn is **refused** with a clear error. This prevents agents from accidentally opening PRs on the main openclaw repo.
 
 ### Monitor Progress
 
@@ -186,6 +203,24 @@ spawn-agent.sh --task "Add template system for agency customer - save/edit confi
 # 6. Cleanup
 cleanup-agent.sh agent-task-1708819200-a3f4
 ```
+
+## pr-safe-create.sh
+
+`orchestrator/bin/pr-safe-create.sh` is a fork-safe wrapper around `gh pr create`. It can be used standalone anywhere you need the same guardrails:
+
+```bash
+# In a repo with origin=myfork, upstream=openclaw/openclaw
+cd /path/to/fork
+pr-safe-create.sh --title "My fix" --body "Details"
+# → creates PR against myfork, NOT openclaw/openclaw
+
+# Explicitly target upstream (requires opt-in)
+SWARM_PR_TARGET=upstream pr-safe-create.sh --title "My fix" --body "Details"
+```
+
+Accepts all standard `gh pr create` arguments and forwards them after `--repo <origin-repo>`.
+
+Tests: `orchestrator/tests/test-pr-safe-create.sh`
 
 ## Tips
 
