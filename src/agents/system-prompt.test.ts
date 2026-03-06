@@ -597,15 +597,37 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("agent=work");
   });
 
-  it("includes reasoning visibility hint", () => {
+  it("omits reasoning line when level is off (default) to avoid cache invalidation", () => {
+    // When reasoning is off (default), the Reasoning line must NOT appear in the
+    // system prompt. Including it would change the prompt every time reasoning is
+    // toggled, invalidating the prompt cache on every subsequent turn. (#36520)
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       reasoningLevel: "off",
     });
 
-    expect(prompt).toContain("Reasoning: off");
+    expect(prompt).not.toContain("Reasoning: off");
+    expect(prompt).not.toContain("Reasoning:");
+  });
+
+  it("includes reasoning visibility hint when reasoning is enabled", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningLevel: "on",
+    });
+
+    expect(prompt).toContain("Reasoning: on");
     expect(prompt).toContain("/reasoning");
     expect(prompt).toContain("/status shows Reasoning");
+  });
+
+  it("includes reasoning hint for stream level", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningLevel: "stream",
+    });
+
+    expect(prompt).toContain("Reasoning: stream");
   });
 
   it("builds runtime line with agent and channel details", () => {
