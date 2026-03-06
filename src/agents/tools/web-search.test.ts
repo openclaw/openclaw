@@ -15,6 +15,8 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolvePerplexityApiKey,
+  detectIncompatiblePerplexityConfig,
 } = __testing;
 
 describe("web_search brave language param normalization", () => {
@@ -269,5 +271,108 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("web_search perplexity config resolution", () => {
+  it("normalizes Bearer-prefixed config API key", () => {
+    const result = resolvePerplexityApiKey({ apiKey: "Bearer pplx-config-key" });
+    expect(result).toEqual({ apiKey: "pplx-config-key", source: "config" });
+  });
+
+  it("normalizes Bearer-prefixed PERPLEXITY_API_KEY from env", () => {
+    withEnv({ PERPLEXITY_API_KEY: "Bearer pplx-env-key" }, () => {
+      const result = resolvePerplexityApiKey({});
+      expect(result).toEqual({ apiKey: "pplx-env-key", source: "perplexity_env" });
+    });
+  });
+
+  it("normalizes Bearer-prefixed OPENROUTER_API_KEY from env", () => {
+    withEnv({ OPENROUTER_API_KEY: "Bearer sk-or-env-key" }, () => {
+      const result = resolvePerplexityApiKey({});
+      expect(result).toEqual({ apiKey: "sk-or-env-key", source: "openrouter_env" });
+    });
+  });
+
+  it("prefers config apiKey over environment variables", () => {
+    withEnv({ PERPLEXITY_API_KEY: "pplx-env", OPENROUTER_API_KEY: "sk-or-env" }, () => {
+      const result = resolvePerplexityApiKey({ apiKey: "pplx-config" });
+      expect(result).toEqual({ apiKey: "pplx-config", source: "config" });
+    });
+  });
+
+  it("prefers PERPLEXITY_API_KEY over OPENROUTER_API_KEY when no baseUrl", () => {
+    withEnv({ PERPLEXITY_API_KEY: "pplx-env", OPENROUTER_API_KEY: "sk-or-env" }, () => {
+      const result = resolvePerplexityApiKey({});
+      expect(result).toEqual({ apiKey: "pplx-env", source: "perplexity_env" });
+    });
+  });
+
+  it("prefers OPENROUTER_API_KEY when baseUrl targets OpenRouter", () => {
+    withEnv({ PERPLEXITY_API_KEY: "pplx-env", OPENROUTER_API_KEY: "sk-or-env" }, () => {
+      const result = resolvePerplexityApiKey({
+        baseUrl: "https://openrouter.ai/api/v1",
+      });
+      expect(result).toEqual({ apiKey: "sk-or-env", source: "openrouter_env" });
+    });
+  });
+
+  it("returns none when baseUrl targets OpenRouter but only PERPLEXITY_API_KEY is set", () => {
+    withEnv({ PERPLEXITY_API_KEY: "pplx-env", OPENROUTER_API_KEY: undefined }, () => {
+      const result = resolvePerplexityApiKey({
+        baseUrl: "https://openrouter.ai/api/v1",
+      });
+      expect(result).toEqual({ apiKey: undefined, source: "none" });
+    });
+  });
+
+  it("returns none when no API key is available", () => {
+    withEnv({ PERPLEXITY_API_KEY: undefined, OPENROUTER_API_KEY: undefined }, () => {
+      const result = resolvePerplexityApiKey({});
+      expect(result).toEqual({ apiKey: undefined, source: "none" });
+    });
+  });
+});
+
+describe("detectIncompatiblePerplexityConfig", () => {
+  it("returns error when API key has OpenRouter prefix", () => {
+    const result = detectIncompatiblePerplexityConfig({}, "sk-or-abc123", "config");
+    expect(result).toBeDefined();
+    expect(result!.error).toBe("incompatible_perplexity_config");
+    expect(result!.message).toContain("sk-or-");
+  });
+
+  it("returns error when baseUrl targets non-Perplexity host", () => {
+    const result = detectIncompatiblePerplexityConfig(
+      { baseUrl: "https://openrouter.ai/api/v1" },
+      "pplx-abc123",
+      "config",
+    );
+    expect(result).toBeDefined();
+    expect(result!.error).toBe("incompatible_perplexity_config");
+    expect(result!.message).toContain("openrouter.ai");
+  });
+
+  it("returns error when key source is openrouter_env", () => {
+    const result = detectIncompatiblePerplexityConfig({}, "some-key", "openrouter_env");
+    expect(result).toBeDefined();
+    expect(result!.error).toBe("incompatible_perplexity_config");
+    expect(result!.message).toContain("OPENROUTER_API_KEY");
+  });
+
+  it("returns undefined for valid native Perplexity config", () => {
+    expect(detectIncompatiblePerplexityConfig({}, "pplx-abc123", "config")).toBeUndefined();
+    expect(detectIncompatiblePerplexityConfig({}, "pplx-abc123", "perplexity_env")).toBeUndefined();
+    expect(
+      detectIncompatiblePerplexityConfig(
+        { baseUrl: "https://api.perplexity.ai" },
+        "pplx-abc123",
+        "config",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when apiKey is undefined and source is none", () => {
+    expect(detectIncompatiblePerplexityConfig({}, undefined, "none")).toBeUndefined();
   });
 });

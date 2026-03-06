@@ -15,7 +15,11 @@ function installMockFetch(payload: unknown) {
   return mockFetch;
 }
 
-function createPerplexitySearchTool(perplexityConfig?: { apiKey?: string }) {
+function createPerplexitySearchTool(perplexityConfig?: {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}) {
   return createWebSearchTool({
     config: {
       tools: {
@@ -368,6 +372,47 @@ describe("web_search perplexity Search API", () => {
     expect(body.search_recency_filter).toBe("month");
     expect(body.search_domain_filter).toEqual(["nature.com", ".gov"]);
     expect(body.search_language_filter).toEqual(["en"]);
+  });
+
+  it("rejects OpenRouter API key with clear error instead of calling API", async () => {
+    const mockFetch = installPerplexitySearchApiFetch([]);
+    const tool = createPerplexitySearchTool({ apiKey: "sk-or-openrouter-key" });
+    const result = await tool?.execute?.("call-1", { query: "test" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      error: "incompatible_perplexity_config",
+    });
+    expect(result?.details?.message).toContain("sk-or-");
+    expect(result?.details?.message).toContain("api.perplexity.ai");
+  });
+
+  it("rejects non-Perplexity baseUrl with clear error", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
+    const mockFetch = installPerplexitySearchApiFetch([]);
+    const tool = createPerplexitySearchTool({
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+    const result = await tool?.execute?.("call-1", { query: "test" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      error: "incompatible_perplexity_config",
+    });
+    expect(result?.details?.message).toContain("openrouter.ai");
+  });
+
+  it("rejects OPENROUTER_API_KEY env with clear error when no PERPLEXITY_API_KEY", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-env-key");
+    vi.stubEnv("PERPLEXITY_API_KEY", "");
+    const mockFetch = installPerplexitySearchApiFetch([]);
+    const tool = createPerplexitySearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      error: "incompatible_perplexity_config",
+    });
   });
 });
 

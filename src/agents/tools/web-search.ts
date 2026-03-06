@@ -189,9 +189,11 @@ type BraveSearchResponse = {
 
 type PerplexityConfig = {
   apiKey?: string;
+  baseUrl?: string;
+  model?: string;
 };
 
-type PerplexityApiKeySource = "config" | "perplexity_env" | "none";
+type PerplexityApiKeySource = "config" | "perplexity_env" | "openrouter_env" | "none";
 
 type GrokConfig = {
   apiKey?: string;
@@ -387,7 +389,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
     return {
       error: "missing_perplexity_api_key",
       message:
-        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
+        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey. Note: OpenRouter keys (sk-or-...) are not supported — the Perplexity Search API requires a native Perplexity API key from https://www.perplexity.ai/settings/api.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
@@ -505,17 +507,69 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
   apiKey?: string;
   source: PerplexityApiKeySource;
 } {
-  const fromConfig = normalizeApiKey(perplexity?.apiKey);
+  const fromConfig = stripBearerPrefix(normalizeApiKey(perplexity?.apiKey));
   if (fromConfig) {
     return { apiKey: fromConfig, source: "config" };
   }
 
-  const fromEnvPerplexity = normalizeApiKey(process.env.PERPLEXITY_API_KEY);
-  if (fromEnvPerplexity) {
-    return { apiKey: fromEnvPerplexity, source: "perplexity_env" };
+  // When baseUrl explicitly targets a non-Perplexity host (e.g. OpenRouter),
+  // prefer the OpenRouter key so the request is authenticated correctly.
+  const baseUrlTargetsNonPerplexity = isNonPerplexityBaseUrl(perplexity?.baseUrl);
+
+  const fromEnvPerplexity = stripBearerPrefix(normalizeApiKey(process.env.PERPLEXITY_API_KEY));
+  const fromEnvOpenRouter = stripBearerPrefix(normalizeApiKey(process.env.OPENROUTER_API_KEY));
+
+  if (baseUrlTargetsNonPerplexity) {
+    // When baseUrl explicitly targets a non-Perplexity host, only accept the
+    // OpenRouter key.  Falling back to PERPLEXITY_API_KEY would send a
+    // Perplexity-issued key to a third-party host, which always results in a
+    // 401 and obscures the real configuration error.
+    if (fromEnvOpenRouter) {
+      return { apiKey: fromEnvOpenRouter, source: "openrouter_env" };
+    }
+    // Do NOT fall back to PERPLEXITY_API_KEY here — return "none" so the
+    // caller surfaces a clear missing-key error instead of a cryptic 401.
+  } else {
+    // Default priority: Perplexity key first
+    if (fromEnvPerplexity) {
+      return { apiKey: fromEnvPerplexity, source: "perplexity_env" };
+    }
+    if (fromEnvOpenRouter) {
+      return { apiKey: fromEnvOpenRouter, source: "openrouter_env" };
+    }
   }
 
   return { apiKey: undefined, source: "none" };
+}
+
+/**
+ * Check whether a baseUrl string points to a host other than api.perplexity.ai.
+ * Returns false for undefined/empty/invalid values so the default priority is used.
+ */
+function isNonPerplexityBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    return new URL(trimmed).hostname !== "api.perplexity.ai";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Strip a leading "Bearer " prefix that users sometimes accidentally include
+ * when copy-pasting API keys from documentation or curl examples.
+ */
+function stripBearerPrefix(value: string): string {
+  return value.replace(/^bearer\s+/i, "");
+}
+
+const OPENROUTER_KEY_PREFIX = "sk-or-";
+
+function isOpenRouterApiKey(apiKey: string): boolean {
+  return apiKey.startsWith(OPENROUTER_KEY_PREFIX);
 }
 
 function normalizeApiKey(key: unknown): string {
@@ -853,6 +907,46 @@ async function throwWebSearchApiError(res: Response, providerLabel: string): Pro
   const detailResult = await readResponseText(res, { maxBytes: 64_000 });
   const detail = detailResult.text;
   throw new Error(`${providerLabel} API error (${res.status}): ${detail || res.statusText}`);
+}
+
+/**
+ * Detect configurations that are incompatible with the Perplexity Search API
+ * and return a user-friendly error payload.  The Search API is only available
+ * at api.perplexity.ai with a native Perplexity API key; OpenRouter and other
+ * proxies expose the Sonar chat/completions endpoint which returns AI-
+ * synthesized summaries instead of structured search results.
+ */
+function detectIncompatiblePerplexityConfig(
+  config: PerplexityConfig,
+  apiKey: string | undefined,
+  source: PerplexityApiKeySource,
+): { error: string; message: string; docs: string } | undefined {
+  const hasOpenRouterKey = apiKey ? isOpenRouterApiKey(apiKey) : false;
+  const hasNonPerplexityBaseUrl = isNonPerplexityBaseUrl(config.baseUrl);
+
+  if (hasOpenRouterKey || hasNonPerplexityBaseUrl || source === "openrouter_env") {
+    const reasons: string[] = [];
+    if (hasOpenRouterKey) {
+      reasons.push(`the API key has an OpenRouter prefix (${OPENROUTER_KEY_PREFIX}...)`);
+    }
+    if (hasNonPerplexityBaseUrl) {
+      reasons.push(`baseUrl is set to a non-Perplexity host (${config.baseUrl})`);
+    }
+    if (!hasOpenRouterKey && source === "openrouter_env") {
+      reasons.push("the key was resolved from OPENROUTER_API_KEY");
+    }
+    return {
+      error: "incompatible_perplexity_config",
+      message:
+        `web_search (perplexity) cannot use this configuration because ${reasons.join(" and ")}. ` +
+        "The Perplexity Search API is only available at api.perplexity.ai and requires a native " +
+        "Perplexity API key. OpenRouter exposes Sonar via chat/completions which returns AI-" +
+        "synthesized summaries instead of structured search results. Please set PERPLEXITY_API_KEY " +
+        "to a native key from https://www.perplexity.ai/settings/api, or remove the custom baseUrl.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
+  return undefined;
 }
 
 async function runPerplexitySearchApi(params: {
@@ -1421,6 +1515,22 @@ export function createWebSearchTool(options?: {
     execute: async (_toolCallId, args) => {
       const perplexityAuth =
         provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
+
+      // Reject OpenRouter / non-Perplexity proxy configurations early with a
+      // clear, actionable error instead of letting the request fail with a
+      // cryptic 401 or an incompatible API format.  The Perplexity Search API
+      // is only available at api.perplexity.ai and requires a native key.
+      if (provider === "perplexity" && perplexityAuth) {
+        const incompatible = detectIncompatiblePerplexityConfig(
+          perplexityConfig,
+          perplexityAuth.apiKey,
+          perplexityAuth.source,
+        );
+        if (incompatible) {
+          return jsonResult(incompatible);
+        }
+      }
+
       const apiKey =
         provider === "perplexity"
           ? perplexityAuth?.apiKey
@@ -1619,5 +1729,7 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolvePerplexityApiKey,
+  detectIncompatiblePerplexityConfig,
   resolveRedirectUrl: resolveCitationRedirectUrl,
 } as const;

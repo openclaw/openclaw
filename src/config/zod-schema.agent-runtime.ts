@@ -278,8 +278,9 @@ export const ToolsWebSearchSchema = z
     perplexity: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
-        // Legacy Sonar/OpenRouter fields — kept for backward compatibility
-        // so existing configs don't fail validation. Ignored at runtime.
+        // Custom base URL — accepted by the schema for backward compatibility
+        // but will be rejected at runtime if it points to a non-Perplexity host.
+        // The Perplexity Search API only works at api.perplexity.ai.
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })

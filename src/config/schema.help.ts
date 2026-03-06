@@ -639,11 +639,11 @@ export const FIELD_HELP: Record<string, string> = {
     'Kimi base URL override (default: "https://api.moonshot.ai/v1").',
   "tools.web.search.kimi.model": 'Kimi model override (default: "moonshot-v1-128k").',
   "tools.web.search.perplexity.apiKey":
-    "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var).",
+    "Native Perplexity API key (fallback: PERPLEXITY_API_KEY env var). OpenRouter keys are not supported.",
   "tools.web.search.perplexity.baseUrl":
-    "Perplexity base URL override (default: https://openrouter.ai/api/v1 or https://api.perplexity.ai).",
+    "Perplexity base URL override (default: https://api.perplexity.ai). Non-Perplexity hosts will be rejected at runtime.",
   "tools.web.search.perplexity.model":
-    'Perplexity model override (default: "perplexity/sonar-pro").',
+    "Reserved for future use. Currently ignored by the Perplexity Search API.",
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
