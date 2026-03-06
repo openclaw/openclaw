@@ -1,7 +1,10 @@
-import type { Writable } from "node:stream";
 import path from "node:path";
+import type { Writable } from "node:stream";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
-import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
+import {
+  DEFAULT_GATEWAY_DAEMON_RUNTIME,
+  type GatewayDaemonRuntime,
+} from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
