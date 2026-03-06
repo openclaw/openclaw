@@ -61,8 +61,12 @@ describe("stripInlineDirectiveTagsFromMessageForDisplay", () => {
     expect(result).toBeDefined();
     expect(result).not.toBe(input);
     expect(result?.content).toEqual([unchanged, { type: "text", text: " hello" }]);
-    expect(result?.content?.[0]).toBe(unchanged);
-    expect(result?.content?.[1]).not.toBe(changed);
+    expect(Array.isArray(result?.content)).toBe(true);
+    if (!Array.isArray(result?.content)) {
+      throw new Error("Expected content array");
+    }
+    expect(result.content[0]).toBe(unchanged);
+    expect(result.content[1]).not.toBe(changed);
   });
 
   test("preserves empty-string text when directives are entire content", () => {
