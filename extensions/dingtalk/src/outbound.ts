@@ -1,6 +1,7 @@
+import * as fs from "node:fs";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/dingtalk";
 import { resolveDingtalkAccount } from "./accounts.js";
-import { sendImageMessage } from "./media.js";
+import { uploadMedia, sendImageMessage, sendFileMessage } from "./media.js";
 import { getDingtalkRuntime } from "./runtime.js";
 import { sendTextMessage, sendMarkdownMessage, sendMessageDingtalk } from "./send.js";
 import { containsMarkdown } from "./text-utils.js";
@@ -12,6 +13,14 @@ function resolveOutboundTarget(to: string): {
   conversationId: string;
   senderStaffId: string;
 } {
+  // Explicit prefix from normalizeDingtalkTarget
+  if (to.startsWith("group:")) {
+    return { conversationType: "2", conversationId: to.slice(6), senderStaffId: "" };
+  }
+  if (to.startsWith("user:")) {
+    return { conversationType: "1", conversationId: "", senderStaffId: to.slice(5) };
+  }
+  // Heuristic fallback for bare IDs
   if (GROUP_CID_RE.test(to)) {
     return { conversationType: "2", conversationId: to, senderStaffId: "" };
   }
@@ -71,6 +80,36 @@ export const dingtalkOutbound: ChannelOutboundAdapter = {
     }
 
     if (mediaUrl) {
+      const isLocal =
+        mediaUrl.startsWith("file://") ||
+        mediaUrl.startsWith("/") ||
+        /^[A-Za-z]:[\\/]/.test(mediaUrl);
+
+      if (isLocal) {
+        const filePath = mediaUrl.startsWith("file://") ? mediaUrl.slice(7) : mediaUrl;
+        if (fs.existsSync(filePath)) {
+          const isImage = /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(filePath);
+          const mediaType = isImage ? "image" : "file";
+          const mediaId = await uploadMedia({ account, filePath, type: mediaType });
+          if (isImage) {
+            const result = await sendImageMessage({
+              account,
+              ...target,
+              photoURL: `@lADPDe7s${mediaId}`,
+            });
+            return { channel: "dingtalk", messageId: result.processQueryKey ?? "", ...result };
+          }
+          const result = await sendFileMessage({
+            account,
+            ...target,
+            mediaId,
+            fileName: filePath.split(/[\\/]/).pop() ?? "file",
+            fileType: filePath.split(".").pop() ?? "bin",
+          });
+          return { channel: "dingtalk", messageId: result.processQueryKey ?? "", ...result };
+        }
+      }
+
       const isImage = /\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/i.test(mediaUrl);
       if (isImage) {
         const result = await sendImageMessage({
@@ -81,7 +120,6 @@ export const dingtalkOutbound: ChannelOutboundAdapter = {
         return { channel: "dingtalk", messageId: result.processQueryKey ?? "", ...result };
       }
 
-      // Non-image media: send as markdown link (DingTalk robot API has limited file-send support)
       const result = await sendMarkdownMessage({
         account,
         ...target,

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import type { ReplyPayload } from "openclaw/plugin-sdk/dingtalk";
 import { createAICard, streamAICard, finishAICard, type AICardInstance } from "./card.js";
-import { uploadMedia, sendImageMessage } from "./media.js";
+import { uploadMedia, sendImageMessage, sendFileMessage } from "./media.js";
 import { getDingtalkRuntime } from "./runtime.js";
 import { sendTextMessage, sendMarkdownMessage } from "./send.js";
 import { containsMarkdown } from "./text-utils.js";
@@ -68,28 +68,58 @@ export function createDingtalkReplyDispatcher(params: {
   const sendMediaUrls = async (urls: string[]) => {
     for (const url of urls) {
       try {
-        if (url.startsWith("file://") || url.startsWith("/") || /^[A-Za-z]:[\\/]/.test(url)) {
+        const isLocal =
+          url.startsWith("file://") || url.startsWith("/") || /^[A-Za-z]:[\\/]/.test(url);
+
+        if (isLocal) {
           const filePath = url.startsWith("file://") ? url.slice(7) : url;
           if (!fs.existsSync(filePath)) {
             log(`dingtalk[${account.accountId}]: media file not found: ${filePath}`);
             continue;
           }
-          const mediaId = await uploadMedia({ account, filePath, type: "image" });
-          await sendImageMessage({
-            account,
-            conversationType: ctx.conversationType,
-            conversationId: ctx.conversationId,
-            senderStaffId: ctx.senderStaffId,
-            photoURL: `@lADPDe7s${mediaId}`,
-          });
+          const isImage = /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(filePath);
+          const mediaType = isImage ? "image" : "file";
+          const mediaId = await uploadMedia({ account, filePath, type: mediaType });
+          if (isImage) {
+            await sendImageMessage({
+              account,
+              conversationType: ctx.conversationType,
+              conversationId: ctx.conversationId,
+              senderStaffId: ctx.senderStaffId,
+              photoURL: `@lADPDe7s${mediaId}`,
+            });
+          } else {
+            await sendFileMessage({
+              account,
+              conversationType: ctx.conversationType,
+              conversationId: ctx.conversationId,
+              senderStaffId: ctx.senderStaffId,
+              mediaId,
+              fileName: filePath.split(/[\\/]/).pop() ?? "file",
+              fileType: filePath.split(".").pop() ?? "bin",
+            });
+          }
         } else {
-          await sendImageMessage({
-            account,
-            conversationType: ctx.conversationType,
-            conversationId: ctx.conversationId,
-            senderStaffId: ctx.senderStaffId,
-            photoURL: url,
-          });
+          // Remote URL — detect type by extension, default to image
+          const isImage = !/\.(mp3|wav|ogg|mp4|avi|mov|pdf|docx?|xlsx?|zip|rar)(\?|$)/i.test(url);
+          if (isImage) {
+            await sendImageMessage({
+              account,
+              conversationType: ctx.conversationType,
+              conversationId: ctx.conversationId,
+              senderStaffId: ctx.senderStaffId,
+              photoURL: url,
+            });
+          } else {
+            await sendMarkdownMessage({
+              account,
+              conversationType: ctx.conversationType,
+              conversationId: ctx.conversationId,
+              senderStaffId: ctx.senderStaffId,
+              title: "File",
+              text: `[Download file](${url})`,
+            });
+          }
         }
       } catch (err) {
         log(`dingtalk[${account.accountId}]: failed to send media: ${err}`);

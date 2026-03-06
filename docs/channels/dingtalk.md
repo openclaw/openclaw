@@ -102,11 +102,11 @@ In **应用功能** > **机器人**:
 
 In **权限管理**, grant the following permissions based on the features you need:
 
-| Permission | Required for | Description |
-| --- | --- | --- |
-| `qyapi_robot_sendmsg` | **Always** | Send messages as a robot (proactive messaging) |
-| `Card.Instance.Write` | AI Card streaming | Create interactive card instances |
-| `Card.Streaming.Write` | AI Card streaming | Stream content to interactive cards |
+| Permission             | Required for      | Description                                    |
+| ---------------------- | ----------------- | ---------------------------------------------- |
+| `qyapi_robot_sendmsg`  | **Always**        | Send messages as a robot (proactive messaging) |
+| `Card.Instance.Write`  | AI Card streaming | Create interactive card instances              |
+| `Card.Streaming.Write` | AI Card streaming | Stream content to interactive cards            |
 
 After granting permissions, you must **publish/re-publish the app** for the changes to take effect.
 

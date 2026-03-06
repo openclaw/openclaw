@@ -102,11 +102,11 @@ openclaw channels add
 
 在 **权限管理** 中，根据需要的功能开通以下权限：
 
-| 权限 | 用途 | 说明 |
-| --- | --- | --- |
-| `qyapi_robot_sendmsg` | **必须** | 机器人发送消息（主动发送消息） |
-| `Card.Instance.Write` | AI Card 流式输出 | 创建互动卡片实例 |
-| `Card.Streaming.Write` | AI Card 流式输出 | 向互动卡片推送流式内容 |
+| 权限                   | 用途             | 说明                           |
+| ---------------------- | ---------------- | ------------------------------ |
+| `qyapi_robot_sendmsg`  | **必须**         | 机器人发送消息（主动发送消息） |
+| `Card.Instance.Write`  | AI Card 流式输出 | 创建互动卡片实例               |
+| `Card.Streaming.Write` | AI Card 流式输出 | 向互动卡片推送流式内容         |
 
 开通权限后，必须**重新发布应用**才能生效。
 

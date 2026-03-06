@@ -7,7 +7,8 @@ function stripProviderPrefix(raw: string): string {
 }
 
 /**
- * 标准化钉钉目标 ID / Normalize DingTalk target ID
+ * Normalize DingTalk target ID, preserving explicit routing prefixes (user:/group:)
+ * so that downstream outbound delivery can route correctly instead of guessing.
  */
 export function normalizeDingtalkTarget(raw: string): string | null {
   const trimmed = raw.trim();
@@ -16,20 +17,16 @@ export function normalizeDingtalkTarget(raw: string): string | null {
   const withoutProvider = stripProviderPrefix(trimmed);
   const lowered = withoutProvider.toLowerCase();
 
-  if (lowered.startsWith("user:")) {
-    return withoutProvider.slice("user:".length).trim() || null;
+  // Normalize user-like prefixes to "user:" and group-like to "group:"
+  if (lowered.startsWith("user:") || lowered.startsWith("dm:") || lowered.startsWith("staff:")) {
+    const colonIdx = withoutProvider.indexOf(":");
+    const id = withoutProvider.slice(colonIdx + 1).trim();
+    return id ? `user:${id}` : null;
   }
-  if (lowered.startsWith("dm:")) {
-    return withoutProvider.slice("dm:".length).trim() || null;
-  }
-  if (lowered.startsWith("staff:")) {
-    return withoutProvider.slice("staff:".length).trim() || null;
-  }
-  if (lowered.startsWith("group:")) {
-    return withoutProvider.slice("group:".length).trim() || null;
-  }
-  if (lowered.startsWith("chat:")) {
-    return withoutProvider.slice("chat:".length).trim() || null;
+  if (lowered.startsWith("group:") || lowered.startsWith("chat:")) {
+    const colonIdx = withoutProvider.indexOf(":");
+    const id = withoutProvider.slice(colonIdx + 1).trim();
+    return id ? `group:${id}` : null;
   }
 
   return withoutProvider;

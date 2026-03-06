@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import axios from "axios";
 import { getOAuth2AccessToken } from "./client.js";
 import type { ResolvedDingtalkAccount } from "./types.js";
@@ -68,7 +69,7 @@ export async function createAICard(params: {
 
   try {
     const accessToken = await getOAuth2AccessToken(account);
-    const cardInstanceId = `card_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const cardInstanceId = `card_${randomUUID()}`;
 
     const headers = {
       "x-acs-dingtalk-access-token": accessToken,
@@ -146,7 +147,7 @@ export async function streamAICard(params: {
       `${DINGTALK_API}/v1.0/card/streaming`,
       {
         outTrackId: card.cardInstanceId,
-        guid: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        guid: randomUUID(),
         key: "msgContent",
         content,
         isFull: true,

@@ -43,7 +43,11 @@ export function resolveDefaultDingtalkAccountSelection(cfg: ClawdbotConfig): {
   )?.defaultAccount?.trim();
   const preferred = preferredRaw ? normalizeAccountId(preferredRaw) : undefined;
   if (preferred) {
-    return { accountId: preferred, source: "explicit-default" };
+    const ids = listDingtalkAccountIds(cfg);
+    if (ids.includes(preferred) || preferred === DEFAULT_ACCOUNT_ID) {
+      return { accountId: preferred, source: "explicit-default" };
+    }
+    // defaultAccount points to a non-existent account; fall through to auto-selection
   }
   const ids = listDingtalkAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
