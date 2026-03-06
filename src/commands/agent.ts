@@ -11,6 +11,7 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
+  hasConfiguredModelFallbacks,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
@@ -18,7 +19,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../agents/bootstrap-budge
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { FailoverError } from "../agents/failover-error.js";
+import { FailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 import { formatAgentInternalEventsForPrompt } from "../agents/internal-events.js";
 import { AGENT_LANE_SUBAGENT } from "../agents/lanes.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
@@ -33,6 +34,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import { classifyFailoverReason, isFailoverErrorMessage } from "../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
@@ -476,7 +478,22 @@ async function agentCommandInternal(
       throw acpResolution.error;
     }
 
-    if (acpResolution?.kind === "ready" && sessionKey) {
+    // When model fallbacks are configured, use the embedded path so runWithModelFallback
+    // is applied (e.g. rate limit on primary → try fallback). The ACP path does not
+    // support model fallback, so skip it when fallbacks exist.
+    const hasFallbacks = hasConfiguredModelFallbacks({
+      cfg,
+      agentId: sessionAgentId,
+      sessionKey,
+    });
+    const useAcpPath = acpResolution?.kind === "ready" && sessionKey && !hasFallbacks;
+
+    if (hasFallbacks && acpResolution?.kind === "ready" && sessionKey) {
+      log.info(
+        `Skipping ACP path (model fallbacks configured); using embedded path for sessionKey=${sessionKey.slice(0, 30)}…`,
+      );
+    }
+    if (useAcpPath) {
       const startedAt = Date.now();
       registerAgentRunContext(runId, {
         sessionKey,
@@ -838,10 +855,10 @@ async function agentCommandInternal(
         model,
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
-        run: (providerOverride, modelOverride) => {
+        run: async (providerOverride, modelOverride) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
-          return runAgentAttempt({
+          const result = await runAgentAttempt({
             providerOverride,
             modelOverride,
             cfg,
@@ -877,6 +894,25 @@ async function agentCommandInternal(
               }
             },
           });
+          // Embedded runner can return an error payload instead of throwing. Throw
+          // here so runWithModelFallback treats it as failure and tries the next model.
+          const singlePayload = result?.payloads?.length === 1 ? result.payloads[0] : undefined;
+          const errorText =
+            singlePayload &&
+            singlePayload.isError === true &&
+            typeof singlePayload.text === "string"
+              ? singlePayload.text
+              : "";
+          if (errorText && isFailoverErrorMessage(errorText)) {
+            const reason = classifyFailoverReason(errorText)!;
+            throw new FailoverError(errorText, {
+              reason,
+              status: resolveFailoverStatus(reason),
+              provider: providerOverride,
+              model: modelOverride,
+            });
+          }
+          return result;
         },
       });
       result = fallbackResult.result;
