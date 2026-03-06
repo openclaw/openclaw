@@ -28,7 +28,7 @@ export function formatDurationPrecise(
   ms: number,
   options: FormatDurationSecondsOptions = {},
 ): string {
-  if (!Number.isFinite(ms)) {
+  if (!Number.isFinite(ms) || ms < 0) {
     return "unknown";
   }
   if (ms < 1000) {

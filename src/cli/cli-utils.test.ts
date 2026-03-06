@@ -112,4 +112,21 @@ describe("parseDurationMs", () => {
     expect(() => parseDurationMs("1h30")).toThrow();
     expect(() => parseDurationMs("1h-30m")).toThrow();
   });
+
+  it("respects defaultUnit option for bare numbers", () => {
+    expect(parseDurationMs("10", { defaultUnit: "s" })).toBe(10_000);
+    expect(parseDurationMs("2", { defaultUnit: "m" })).toBe(120_000);
+    expect(parseDurationMs("1", { defaultUnit: "h" })).toBe(3_600_000);
+  });
+
+  it("returns 0 for zero input with any unit", () => {
+    expect(parseDurationMs("0")).toBe(0);
+    expect(parseDurationMs("0ms")).toBe(0);
+    expect(parseDurationMs("0s")).toBe(0);
+  });
+
+  it("rejects non-numeric and whitespace-only strings", () => {
+    expect(() => parseDurationMs("abc")).toThrow();
+    expect(() => parseDurationMs("  ")).toThrow();
+  });
 });

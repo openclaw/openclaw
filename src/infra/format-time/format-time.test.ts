@@ -61,6 +61,10 @@ describe("format-duration", () => {
       expect(formatDurationHuman(null, "unknown")).toBe("unknown");
     });
 
+    it("formats zero duration as 0ms", () => {
+      expect(formatDurationHuman(0)).toBe("0ms");
+    });
+
     it("formats single-unit outputs and day threshold behavior", () => {
       const cases = [
         [500, "500ms"],
@@ -90,9 +94,10 @@ describe("format-duration", () => {
       expect(formatDurationPrecise(1234)).toBe("1.23s");
     });
 
-    it("returns unknown for non-finite", () => {
+    it("returns unknown for non-finite or negative", () => {
       expect(formatDurationPrecise(NaN)).toBe("unknown");
       expect(formatDurationPrecise(Infinity)).toBe("unknown");
+      expect(formatDurationPrecise(-500)).toBe("unknown");
     });
   });
 
@@ -105,6 +110,10 @@ describe("format-duration", () => {
 
     it("supports seconds unit", () => {
       expect(formatDurationSeconds(2000, { unit: "seconds" })).toBe("2 seconds");
+    });
+
+    it("clamps negative values to 0s", () => {
+      expect(formatDurationSeconds(-1000)).toBe("0s");
     });
   });
 });
@@ -158,8 +167,8 @@ describe("format-datetime", () => {
 describe("format-relative", () => {
   describe("formatTimeAgo", () => {
     it("returns fallback for invalid elapsed input", () => {
-      for (const value of [null, undefined, -100]) {
-        expect(formatTimeAgo(value)).toBe("unknown");
+      for (const value of [null, undefined, -100, NaN, Infinity]) {
+        expect(formatTimeAgo(value as never)).toBe("unknown");
       }
       expect(formatTimeAgo(null, { fallback: "n/a" })).toBe("n/a");
     });
@@ -189,8 +198,8 @@ describe("format-relative", () => {
 
   describe("formatRelativeTimestamp", () => {
     it("returns fallback for invalid timestamp input", () => {
-      for (const value of [null, undefined]) {
-        expect(formatRelativeTimestamp(value)).toBe("n/a");
+      for (const value of [null, undefined, NaN, Infinity]) {
+        expect(formatRelativeTimestamp(value as never)).toBe("n/a");
       }
       expect(formatRelativeTimestamp(null, { fallback: "unknown" })).toBe("unknown");
     });
