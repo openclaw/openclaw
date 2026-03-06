@@ -1,0 +1,130 @@
+diff --git a/dist/providers/anthropic.js b/dist/providers/anthropic.js
+index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..ad925e4169c06194acc5f492e7c89ad0a3775ca8 100644
+--- a/dist/providers/anthropic.js
++++ b/dist/providers/anthropic.js
+@@ -376,11 +376,101 @@ export const streamSimpleAnthropic = (model, context, options) => {
+         thinkingBudgetTokens: adjusted.thinkingBudget,
+     });
+ };
++/**
++ * Create a custom fetch wrapper that injects SSE `event:` lines when missing.
++ *
++ * Some third-party proxies serving the Anthropic Messages API return SSE streams
++ * without `event:` field lines. The `@anthropic-ai/sdk` SSE parser requires the
++ * `event:` field to dispatch events — without it, all events are silently dropped
++ * and the stream ends with "request ended without sending any chunks".
++ *
++ * This wrapper detects `data:` lines whose JSON payload contains a `"type"` field
++ * and injects `event: <type>\n` before each such line when the preceding line is
++ * not already an `event:` line.
++ */
++function createSseEventInjectionFetch() {
++    return async function sseEventInjectionFetch(url, init) {
++        const response = await globalThis.fetch(url, init);
++        // Only transform streaming responses (SSE)
++        const contentType = response.headers.get("content-type") || "";
++        if (!contentType.includes("text/event-stream") || !response.body) {
++            return response;
++        }
++        const reader = response.body.getReader();
++        const decoder = new TextDecoder();
++        const encoder = new TextEncoder();
++        let buffer = "";
++        const readable = new ReadableStream({
++            async pull(controller) {
++                const { done, value } = await reader.read();
++                if (done) {
++                    // Flush any remaining buffer
++                    if (buffer.length > 0) {
++                        controller.enqueue(encoder.encode(processChunk(buffer)));
++                        buffer = "";
++                    }
++                    controller.close();
++                    return;
++                }
++                buffer += decoder.decode(value, { stream: true });
++                // Process complete lines only (keep incomplete last line in buffer)
++                const lastNewline = buffer.lastIndexOf("\n");
++                if (lastNewline === -1) return;
++                const toProcess = buffer.slice(0, lastNewline + 1);
++                buffer = buffer.slice(lastNewline + 1);
++                controller.enqueue(encoder.encode(processChunk(toProcess)));
++            },
++            cancel() {
++                reader.cancel();
++            },
++        });
++        return new Response(readable, {
++            status: response.status,
++            statusText: response.statusText,
++            headers: response.headers,
++        });
++    };
++}
++/**
++ * Process a chunk of SSE text, injecting `event:` lines where missing.
++ * Handles lines separated by \n, \r\n, or \r.
++ */
++function processChunk(chunk) {
++    const lines = chunk.split(/\r?\n|\r/);
++    const result = [];
++    let prevWasEvent = false;
++    for (const line of lines) {
++        if (line.startsWith("event:")) {
++            prevWasEvent = true;
++            result.push(line);
++            continue;
++        }
++        if (line.startsWith("data:") && !prevWasEvent) {
++            const jsonStr = line.slice(5).trim();
++            if (jsonStr) {
++                try {
++                    const parsed = JSON.parse(jsonStr);
++                    if (parsed && typeof parsed.type === "string") {
++                        result.push("event: " + parsed.type);
++                    }
++                }
++                catch {
++                    // Not valid JSON — leave as-is, no event injection
++                }
++            }
++        }
++        prevWasEvent = false;
++        result.push(line);
++    }
++    return result.join("\n");
++}
+ function isOAuthToken(apiKey) {
+     return apiKey.includes("sk-ant-oat");
+ }
+ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynamicHeaders) {
+     // Copilot: Bearer auth, selective betas (no fine-grained-tool-streaming)
++    // Inject SSE event field fix for proxies that omit `event:` lines
++    const sseFixFetch = createSseEventInjectionFetch();
+     if (model.provider === "github-copilot") {
+         const betaFeatures = [];
+         if (interleavedThinking) {
+@@ -391,6 +481,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
+             authToken: apiKey,
+             baseURL: model.baseUrl,
+             dangerouslyAllowBrowser: true,
++            fetch: sseFixFetch,
+             defaultHeaders: mergeHeaders({
+                 accept: "application/json",
+                 "anthropic-dangerous-direct-browser-access": "true",
+@@ -410,6 +501,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
+             authToken: apiKey,
+             baseURL: model.baseUrl,
+             dangerouslyAllowBrowser: true,
++            fetch: sseFixFetch,
+             defaultHeaders: mergeHeaders({
+                 accept: "application/json",
+                 "anthropic-dangerous-direct-browser-access": "true",
+@@ -425,6 +517,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
+         apiKey,
+         baseURL: model.baseUrl,
+         dangerouslyAllowBrowser: true,
++        fetch: sseFixFetch,
+         defaultHeaders: mergeHeaders({
+             accept: "application/json",
+             "anthropic-dangerous-direct-browser-access": "true",
