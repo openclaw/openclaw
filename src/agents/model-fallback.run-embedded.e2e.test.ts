@@ -256,6 +256,24 @@ function mockPrimaryOverloadedThenFallbackSuccess() {
   });
 }
 
+function mockAllProvidersOverloaded() {
+  runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+    const attemptParams = params as { provider: string; modelId: string; authProfileId?: string };
+    if (attemptParams.provider === "openai" || attemptParams.provider === "groq") {
+      return makeAttempt({
+        assistantTexts: [],
+        lastAssistant: buildAssistant({
+          provider: attemptParams.provider,
+          model: attemptParams.provider === "openai" ? "mock-1" : "mock-2",
+          stopReason: "error",
+          errorMessage: OVERLOADED_ERROR_PAYLOAD,
+        }),
+      });
+    }
+    throw new Error(`Unexpected provider ${attemptParams.provider}`);
+  });
+}
+
 describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
   it("falls back across providers after overloaded primary failure and persists transient cooldown", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
@@ -292,6 +310,43 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(secondCall?.provider).toBe("groq");
       expect(computeBackoffMock).toHaveBeenCalledTimes(1);
       expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("surfaces a bounded overloaded summary when every fallback candidate is overloaded", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockAllProvidersOverloaded();
+
+      let thrown: unknown;
+      try {
+        await runEmbeddedFallback({
+          agentDir,
+          workspaceDir,
+          sessionKey: "agent:test:all-overloaded",
+          runId: "run:all-overloaded",
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toMatch(/^All models failed \(2\): /);
+      expect((thrown as Error).message).toMatch(
+        /openai\/mock-1: .* \(overloaded\) \| groq\/mock-2: .* \(overloaded\)/,
+      );
+
+      const usageStats = await readUsageStats(agentDir);
+      expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
+      expect(typeof usageStats["groq:p1"]?.cooldownUntil).toBe("number");
+      expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 1 });
+      expect(usageStats["groq:p1"]?.failureCounts).toMatchObject({ overloaded: 1 });
+      expect(usageStats["openai:p1"]?.disabledUntil).toBeUndefined();
+      expect(usageStats["groq:p1"]?.disabledUntil).toBeUndefined();
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      expect(computeBackoffMock).toHaveBeenCalledTimes(2);
+      expect(sleepWithAbortMock).toHaveBeenCalledTimes(2);
     });
   });
 
