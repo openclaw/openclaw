@@ -46,7 +46,7 @@ import {
   resolveHookDeliver,
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
-import { handleOpenAiHttpRequest } from "./openai-http.js";
+import { handleOpenAiHttpRequest, handleOpenAiModelsRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import {
   authorizeCanvasRequest,
@@ -608,6 +608,16 @@ export function createGatewayHttpServer(opts: {
       }
       if (openAiChatCompletionsEnabled) {
         requestStages.push({
+          name: "openai-models",
+          run: () =>
+            handleOpenAiModelsRequest(req, res, {
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        });
+        requestStages.push({
           name: "openai",
           run: () =>
             handleOpenAiHttpRequest(req, res, {
@@ -617,8 +627,7 @@ export function createGatewayHttpServer(opts: {
               allowRealIpFallback,
               rateLimiter,
             }),
-        });
-      }
+        });      }
       if (canvasHost) {
         requestStages.push({
           name: "canvas-auth",

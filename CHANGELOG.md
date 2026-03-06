@@ -2,6 +2,13 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.3.4
+
+### Changes
+
+- OpenAI HTTP/Models: add `GET /v1/models` endpoint to the OpenAI-compatible HTTP API, returning `openclaw` and `openclaw:main` model entries with proper authentication, method validation, and error handling. The endpoint is gated by the `openAiChatCompletionsEnabled` flag.
+
+## 2026.2.27
 ## 2026.3.3
 
 ### Changes
