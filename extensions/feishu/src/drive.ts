@@ -16,14 +16,13 @@ function json(data: unknown) {
 // ============ Actions ============
 
 async function getRootFolderToken(client: Lark.Client): Promise<string> {
-  // Use generic HTTP client to call the root folder meta API
-  // as it's not directly exposed in the SDK
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing internal SDK property
-  const domain = (client as any).domain ?? "https://open.feishu.cn";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing internal SDK property
-  const res = (await (client as any).httpInstance.get(
-    `${domain}/open-apis/drive/explorer/v2/root_folder/meta`,
-  )) as { code: number; msg?: string; data?: { token?: string } };
+  // Use SDK generic request for endpoints not exposed as typed methods.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK generic request method
+  const res = (await (client as any).request({
+    method: "GET",
+    url: "/open-apis/drive/explorer/v2/root_folder/meta",
+    data: {},
+  })) as { code: number; msg?: string; data?: { token?: string } };
   if (res.code !== 0) {
     throw new Error(res.msg ?? "Failed to get root folder");
   }

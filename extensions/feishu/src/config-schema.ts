@@ -130,6 +130,7 @@ const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
  * causing the reply to appear as a topic (话题) under the original message.
  */
 const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
+const StreamingInThreadSchema = z.enum(["disabled", "enabled"]).optional();
 
 export const FeishuGroupSchema = z
   .object({
@@ -142,6 +143,7 @@ export const FeishuGroupSchema = z
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
     replyInThread: ReplyInThreadSchema,
+    streamingInThread: StreamingInThreadSchema,
   })
   .strict();
 
@@ -171,6 +173,7 @@ const FeishuSharedConfigShape = {
   streaming: StreamingModeSchema,
   tools: FeishuToolsConfigSchema,
   replyInThread: ReplyInThreadSchema,
+  streamingInThread: StreamingInThreadSchema,
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),

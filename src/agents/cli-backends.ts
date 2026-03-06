@@ -58,7 +58,7 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
   systemPromptArg: "--append-system-prompt",
   systemPromptMode: "append",
-  systemPromptWhen: "first",
+  systemPromptWhen: "always",
   clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"],
   reliability: {
     watchdog: {

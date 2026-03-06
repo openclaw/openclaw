@@ -46,3 +46,79 @@ describe("feishuPlugin.status.probeAccount", () => {
     expect(result).toMatchObject({ ok: true, appId: "cli_main" });
   });
 });
+
+describe("feishuPlugin.configSchema", () => {
+  it("exposes top-level streamingInThread in channel schema", () => {
+    const schema = feishuPlugin.configSchema?.schema as
+      | {
+          properties?: Record<string, unknown>;
+        }
+      | undefined;
+    const streamingInThread = schema?.properties?.streamingInThread as
+      | { enum?: string[] }
+      | undefined;
+    expect(streamingInThread?.enum).toEqual(["disabled", "enabled"]);
+  });
+
+  it("exposes account-level dispatchMode in channel schema", () => {
+    const schema = feishuPlugin.configSchema?.schema as
+      | {
+          properties?: {
+            accounts?: {
+              additionalProperties?: {
+                properties?: Record<string, unknown>;
+              };
+            };
+          };
+        }
+      | undefined;
+
+    const dispatchMode = schema?.properties?.accounts?.additionalProperties?.properties
+      ?.dispatchMode as { enum?: string[] } | undefined;
+
+    expect(dispatchMode?.enum).toEqual(["auto", "plugin"]);
+  });
+
+  it("exposes account-level streamingInThread in channel schema", () => {
+    const schema = feishuPlugin.configSchema?.schema as
+      | {
+          properties?: {
+            accounts?: {
+              additionalProperties?: {
+                properties?: Record<string, unknown>;
+              };
+            };
+          };
+        }
+      | undefined;
+    const streamingInThread = schema?.properties?.accounts?.additionalProperties?.properties
+      ?.streamingInThread as { enum?: string[] } | undefined;
+    expect(streamingInThread?.enum).toEqual(["disabled", "enabled"]);
+  });
+
+  it("exposes account-level pluginMode.forwardControlCommands in channel schema", () => {
+    const schema = feishuPlugin.configSchema?.schema as
+      | {
+          properties?: {
+            accounts?: {
+              additionalProperties?: {
+                properties?: Record<string, unknown>;
+              };
+            };
+          };
+        }
+      | undefined;
+
+    const pluginMode = schema?.properties?.accounts?.additionalProperties?.properties?.pluginMode as
+      | {
+          properties?: Record<string, unknown>;
+        }
+      | undefined;
+
+    const forwardControlCommands = pluginMode?.properties?.forwardControlCommands as
+      | { type?: string }
+      | undefined;
+
+    expect(forwardControlCommands?.type).toBe("boolean");
+  });
+});

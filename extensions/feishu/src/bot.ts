@@ -224,6 +224,7 @@ type ResolvedFeishuGroupSession = {
   parentPeer: { kind: "group"; id: string } | null;
   groupSessionScope: GroupSessionScope;
   replyInThread: boolean;
+  streamingInThread: boolean;
   threadReply: boolean;
 };
 
@@ -237,11 +238,13 @@ function resolveFeishuGroupSession(params: {
     groupSessionScope?: GroupSessionScope;
     topicSessionMode?: "enabled" | "disabled";
     replyInThread?: "enabled" | "disabled";
+    streamingInThread?: "enabled" | "disabled";
   };
   feishuCfg?: {
     groupSessionScope?: GroupSessionScope;
     topicSessionMode?: "enabled" | "disabled";
     replyInThread?: "enabled" | "disabled";
+    streamingInThread?: "enabled" | "disabled";
   };
 }): ResolvedFeishuGroupSession {
   const { chatId, senderOpenId, messageId, rootId, threadId, groupConfig, feishuCfg } = params;
@@ -252,6 +255,8 @@ function resolveFeishuGroupSession(params: {
   const replyInThread =
     (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
     threadReply;
+  const streamingInThread =
+    (groupConfig?.streamingInThread ?? feishuCfg?.streamingInThread ?? "disabled") === "enabled";
 
   const legacyTopicSessionMode =
     groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
@@ -301,6 +306,7 @@ function resolveFeishuGroupSession(params: {
     parentPeer,
     groupSessionScope,
     replyInThread,
+    streamingInThread,
     threadReply,
   };
 }
@@ -1157,6 +1163,7 @@ export async function handleFeishuMessage(params: {
     const peerId = isGroup ? (groupSession?.peerId ?? ctx.chatId) : ctx.senderOpenId;
     const parentPeer = isGroup ? (groupSession?.parentPeer ?? null) : null;
     const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : false;
+    const streamingInThread = isGroup ? (groupSession?.streamingInThread ?? false) : true;
 
     if (isGroup && groupSession) {
       log(
@@ -1408,6 +1415,7 @@ export async function handleFeishuMessage(params: {
             replyToMessageId: replyTargetMessageId,
             skipReplyToInMessages: !isGroup,
             replyInThread,
+            streamingInThread,
             rootId: ctx.rootId,
             threadReply,
             mentionTargets: ctx.mentionTargets,
@@ -1506,6 +1514,7 @@ export async function handleFeishuMessage(params: {
         replyToMessageId: replyTargetMessageId,
         skipReplyToInMessages: !isGroup,
         replyInThread,
+        streamingInThread,
         rootId: ctx.rootId,
         threadReply,
         mentionTargets: ctx.mentionTargets,
