@@ -54,4 +54,28 @@ describe("resolveBundledSkillsDir", () => {
 
     expect(resolved).toBe(path.join(root, "skills"));
   });
+
+  it("ignores a sibling 'skills' path that is not a valid skills dir (nvm symlink scenario)", async () => {
+    delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sibling-"));
+
+    // Create a sibling "skills" entry that looks like an unrelated CLI tool dir
+    const fakeSkills = path.join(root, "skills");
+    await fs.mkdir(fakeSkills, { recursive: true });
+    // No .md files and no SKILL.md subdirectory — looksLikeSkillsDir should reject it
+
+    const execPath = path.join(root, "node"); // sibling of fakeSkills
+    await fs.writeFile(execPath, "#!/usr/bin/env node\n", "utf-8");
+
+    // Provide a fallback moduleUrl/argv1 so it doesn't resolve anything from the real tree
+    const resolved = resolveBundledSkillsDir({
+      execPath,
+      argv1: execPath,
+      moduleUrl: pathToFileURL(execPath).href,
+      cwd: root,
+    });
+
+    expect(resolved).toBeUndefined();
+  });
 });
