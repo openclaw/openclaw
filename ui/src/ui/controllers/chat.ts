@@ -56,19 +56,18 @@ function getMessageFingerprint(message: unknown): string | null {
   const role = getMessageRole(message);
   const text = extractText(message);
   const content = entry.content;
-  const contentKey =
-    Array.isArray(content)
-      ? JSON.stringify(
-          content.map((part) =>
-            part && typeof part === "object"
-              ? {
-                  type: (part as Record<string, unknown>).type,
-                  text: (part as Record<string, unknown>).text,
-                }
-              : part,
-          ),
-        )
-      : text;
+  const contentKey = Array.isArray(content)
+    ? JSON.stringify(
+        content.map((part) =>
+          part && typeof part === "object"
+            ? {
+                type: (part as Record<string, unknown>).type,
+                text: (part as Record<string, unknown>).text,
+              }
+            : part,
+        ),
+      )
+    : text;
   if (!role || !contentKey) {
     return null;
   }
@@ -80,7 +79,9 @@ function mergeVisibleHistory(state: ChatState, incoming: unknown[]): unknown[] {
     return incoming;
   }
 
-  const seen = new Set(incoming.map(getMessageFingerprint).filter((value): value is string => Boolean(value)));
+  const seen = new Set(
+    incoming.map(getMessageFingerprint).filter((value): value is string => Boolean(value)),
+  );
   const optimisticUsers = state.chatMessages.filter((message) => {
     if (getMessageRole(message) !== "user") {
       return false;
@@ -97,7 +98,7 @@ function mergeVisibleHistory(state: ChatState, incoming: unknown[]): unknown[] {
     return incoming;
   }
 
-  return [...incoming, ...optimisticUsers].sort((a, b) => {
+  return [...incoming, ...optimisticUsers].toSorted((a, b) => {
     const left = getMessageTimestamp(a) ?? Number.MAX_SAFE_INTEGER;
     const right = getMessageTimestamp(b) ?? Number.MAX_SAFE_INTEGER;
     return left - right;
