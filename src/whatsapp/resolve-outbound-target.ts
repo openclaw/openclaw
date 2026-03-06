@@ -43,7 +43,7 @@ export function resolveWhatsAppOutboundTarget(params: {
     return {
       ok: false,
       error: new Error(
-        `Target "${trimmed}" is not listed in the configured WhatsApp allowFrom policy.`,
+        `Target "${normalizedTo}" is not listed in the configured WhatsApp allowFrom policy.`,
       ),
     };
   }
