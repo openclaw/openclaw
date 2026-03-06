@@ -189,7 +189,9 @@ describe("acp.stream legacy key migration (issue #35957)", () => {
     expect(result.config).not.toBeNull();
     const stream = result.config?.acp?.stream as Record<string, unknown> | undefined;
     expect(stream?.showUsage).toBeUndefined();
-    expect(result.changes).toContain("Removed acp.stream.showUsage (no replacement in v2026.3.3).");
+    expect(result.changes).toContain(
+      "Removed acp.stream.showUsage (no direct replacement; see acp.stream.repeatSuppression for similar functionality in v2026.3.3).",
+    );
   });
 
   it("handles all old acp.stream keys simultaneously (v2026.3.2 full config)", () => {
