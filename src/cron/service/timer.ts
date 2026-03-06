@@ -315,6 +315,8 @@ export function applyJobResult(
     deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
 
   // For announce-mode jobs, successful delivery overrides execution errors.
+  const effectiveStatus =
+    deliveryStatus === "delivered" && result.status === "error" ? "ok" : result.status;
   if (deliveryStatus === "delivered") {
     job.state.lastStatus = "ok";
   }
@@ -322,7 +324,7 @@ export function applyJobResult(
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.
-  if (result.status === "error") {
+  if (effectiveStatus === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     const alertConfig = resolveFailureAlert(state, job);
     if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
@@ -354,15 +356,15 @@ export function applyJobResult(
   }
 
   const shouldDelete =
-    job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
+    job.schedule.kind === "at" && job.deleteAfterRun === true && effectiveStatus === "ok";
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
-      if (result.status === "ok" || result.status === "skipped") {
+      if (effectiveStatus === "ok" || effectiveStatus === "skipped") {
         // One-shot done or skipped: disable to prevent tight-loop (#11452).
         job.enabled = false;
         job.state.nextRunAtMs = undefined;
-      } else if (result.status === "error") {
+      } else if (effectiveStatus === "error") {
         const retryConfig = resolveRetryConfig(state.deps.cronConfig);
         const transient = isTransientCronError(result.error, retryConfig.retryOn);
         // consecutiveErrors is always set to ≥1 by the increment block above.
@@ -400,7 +402,7 @@ export function applyJobResult(
           );
         }
       }
-    } else if (result.status === "error" && job.enabled) {
+    } else if (effectiveStatus === "error" && job.enabled) {
       // Apply exponential backoff for errored jobs to prevent retry storms.
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
       let normalNext: number | undefined;
