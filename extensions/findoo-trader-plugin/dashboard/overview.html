@@ -16,6 +16,32 @@
     </style>
     <style>
       /*__PAGE_CSS__*/
+
+      /* ── Onboarding Overlay ── */
+      .onboard-overlay{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center}
+      .onboard-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(4px)}
+      .onboard-card{position:relative;background:var(--surface,#12141c);border:1px solid var(--border,#1e2230);border-radius:16px;padding:32px 36px 24px;max-width:480px;width:90%;box-shadow:0 24px 64px rgba(0,0,0,.5);animation:onboard-in .4s cubic-bezier(.16,1,.3,1)}
+      @keyframes onboard-in{from{opacity:0;transform:translateY(24px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
+      .onboard-progress{height:3px;background:var(--border);border-radius:2px;margin-bottom:24px;overflow:hidden}
+      .onboard-progress__fill{height:100%;background:linear-gradient(90deg,var(--accent,#6366f1),#a78bfa);border-radius:2px;transition:width .4s cubic-bezier(.22,1,.36,1)}
+      .onboard-icon{font-size:40px;margin-bottom:12px}
+      .onboard-title{font-size:20px;font-weight:600;color:var(--text-hi,#f1f3f5);margin-bottom:8px}
+      .onboard-desc{font-size:13px;color:var(--text,#a0a4b0);line-height:1.6;margin-bottom:16px}
+      .onboard-features{display:flex;flex-direction:column;gap:8px;margin-bottom:8px}
+      .onboard-feature{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text)}
+      .onboard-feature__dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+      .onboard-hint{font-size:11px;color:var(--text-dim,#6b7280);background:rgba(99,102,241,.06);border:1px solid rgba(99,102,241,.12);border-radius:6px;padding:8px 12px}
+      .onboard-actions{display:flex;align-items:center;justify-content:space-between;margin-top:24px;padding-top:16px;border-top:1px solid var(--border)}
+      .onboard-dots{display:flex;gap:6px}
+      .onboard-dot{width:8px;height:8px;border-radius:50%;background:var(--border);transition:all .3s;cursor:pointer}
+      .onboard-dot.active{background:var(--accent,#6366f1);transform:scale(1.25)}
+      .onboard-btn{padding:6px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;border:none}
+      .onboard-btn--skip{color:var(--text-dim,#6b7280);background:none}
+      .onboard-btn--skip:hover{color:var(--text)}
+      .onboard-btn--back{color:var(--text);background:var(--card,#1a1d2e);border:1px solid var(--border)}
+      .onboard-btn--next{color:#fff;background:var(--accent,#6366f1)}
+      .onboard-btn--next:hover{filter:brightness(1.1)}
+      .onboard-nav{display:flex;gap:8px}
     </style>
   </head>
   <body>
@@ -336,29 +362,28 @@
           </div>
         </div>
 
-        <!-- Row 4: Top Holdings Table -->
+        <!-- Row 4: Top Strategies Leaderboard -->
         <div
           class="panel-card fade-up d5"
           style="flex: 1; display: flex; flex-direction: column; min-height: 0"
         >
           <div class="panel-card__head">
-            <div class="panel-card__title">Top Holdings</div>
-            <span style="font-size: 9px; color: var(--text-dim)" id="holdCount"></span>
+            <div class="panel-card__title">Top Strategies</div>
+            <span style="font-size: 9px; color: var(--text-dim)" id="topStratCount"></span>
           </div>
           <div style="flex: 1; overflow-y: auto; margin: 0 -12px; padding: 0 12px">
             <table class="fin-table">
               <thead>
                 <tr>
-                  <th>Symbol</th>
-                  <th>Side</th>
-                  <th style="text-align: right">Qty</th>
-                  <th style="text-align: right">Entry</th>
-                  <th style="text-align: right">P&amp;L</th>
-                  <th style="text-align: right">P&amp;L%</th>
-                  <th style="text-align: right">Weight%</th>
+                  <th>#</th>
+                  <th>Strategy</th>
+                  <th>Level</th>
+                  <th>Fitness</th>
+                  <th style="text-align: right">Return</th>
+                  <th style="text-align: right">Action</th>
                 </tr>
               </thead>
-              <tbody id="holdingsBody"></tbody>
+              <tbody id="topStrategiesBody"></tbody>
             </table>
           </div>
         </div>
@@ -600,6 +625,60 @@
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════
+     ONBOARDING OVERLAY (5-step guide for first-time users)
+     ═══════════════════════════════════════════════════════════════ -->
+    <div class="onboard-overlay" id="onboardOverlay" style="display:none">
+      <div class="onboard-backdrop"></div>
+      <div class="onboard-card">
+        <div class="onboard-progress">
+          <div class="onboard-progress__fill" id="onboardProgress"></div>
+        </div>
+        <div class="onboard-step" data-step="1">
+          <div class="onboard-icon">&#x1F680;</div>
+          <h2 class="onboard-title">Welcome to OpenFinClaw</h2>
+          <p class="onboard-desc">Your AI-powered quantitative trading platform. One agent, one fund &mdash; fully autonomous strategy discovery, evolution, and risk management.</p>
+          <div class="onboard-features">
+            <div class="onboard-feature"><span class="onboard-feature__dot" style="background:var(--gain)"></span>Agent-driven strategy lifecycle (L0&#8594;L3)</div>
+            <div class="onboard-feature"><span class="onboard-feature__dot" style="background:var(--info)"></span>Multi-market support (Crypto, US, HK)</div>
+            <div class="onboard-feature"><span class="onboard-feature__dot" style="background:var(--accent,#6366f1)"></span>Real-time risk control &amp; monitoring</div>
+          </div>
+        </div>
+        <div class="onboard-step" data-step="2" style="display:none">
+          <div class="onboard-icon">&#x1F517;</div>
+          <h2 class="onboard-title">Connect Your Exchange</h2>
+          <p class="onboard-desc">Link your exchange API keys to start receiving live market data. Supported: Binance, Bybit, OKX, Bitget, Gate.io, HTX.</p>
+          <div class="onboard-hint">Testnet mode available for risk-free testing.</div>
+        </div>
+        <div class="onboard-step" data-step="3" style="display:none">
+          <div class="onboard-icon">&#x1F6E1;&#xFE0F;</div>
+          <h2 class="onboard-title">Configure Risk Control</h2>
+          <p class="onboard-desc">Set your risk tolerance with one click. Choose a preset (Conservative / Balanced / Aggressive) or fine-tune individual limits.</p>
+          <div class="onboard-hint">Max auto-trade, daily loss limit, position sizing &mdash; all configurable.</div>
+        </div>
+        <div class="onboard-step" data-step="4" style="display:none">
+          <div class="onboard-icon">&#x1F4CA;</div>
+          <h2 class="onboard-title">Choose a Strategy</h2>
+          <p class="onboard-desc">Pick a trading style and the AI agent will deploy matching strategies. Watch them evolve through the L0&#8594;L1&#8594;L2&#8594;L3 pipeline.</p>
+          <div class="onboard-hint">Paper trading first, live only after proven performance.</div>
+        </div>
+        <div class="onboard-step" data-step="5" style="display:none">
+          <div class="onboard-icon">&#x2728;</div>
+          <h2 class="onboard-title">You're All Set!</h2>
+          <p class="onboard-desc">Your dashboard is ready. The AI agent will start discovering and optimizing strategies on each heartbeat cycle.</p>
+          <div class="onboard-hint">Check the Overview for real-time metrics, Strategy for pipeline progress, and Trader for live execution.</div>
+        </div>
+        <div class="onboard-actions">
+          <button class="onboard-btn onboard-btn--skip" id="onboardSkip" onclick="OB.skip()">Skip</button>
+          <div class="onboard-dots" id="onboardDots"></div>
+          <div class="onboard-nav">
+            <button class="onboard-btn onboard-btn--back" id="onboardBack" onclick="OB.prev()" style="display:none">Back</button>
+            <button class="onboard-btn onboard-btn--next" id="onboardNext" onclick="OB.next()">Next</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════
      JAVASCRIPT — Data-driven Overview Dashboard
      ═══════════════════════════════════════════════════════════════ -->
     <script>
@@ -663,6 +742,7 @@
           risk: pageData.risk || {},
           fund: pageData.fund || {},
           config: pageData.config || {},
+          topStrategies: pageData.topStrategies || [],
           feedFilter: "all",
         };
 
@@ -939,64 +1019,39 @@
           $("pipeL3").textContent = counts[3];
         }
 
-        // ── Render: Top Holdings ──
-        function renderHoldings(positions, totalEquity) {
-          var body = $("holdingsBody");
-          if (!positions || !positions.length) {
+        // ── Render: Top Strategies ──
+        function renderTopStrategies(topStrategies) {
+          var body = $("topStrategiesBody");
+          if (!topStrategies || !topStrategies.length) {
             body.innerHTML =
-              '<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:16px;font-size:10px">No open positions</td></tr>';
-            $("holdCount").textContent = "";
+              '<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:16px;font-size:10px">No strategies yet</td></tr>';
+            $("topStratCount").textContent = "";
             return;
           }
-          // Sort by abs PnL descending, top 5
-          var sorted = positions.slice().sort(function (a, b) {
-            return (
-              Math.abs(b.unrealizedPnl || b.pnl || 0) - Math.abs(a.unrealizedPnl || a.pnl || 0)
-            );
-          });
-          var top = sorted.slice(0, 5);
-          $("holdCount").textContent = positions.length + " total";
-          var eq = totalEquity || 0;
+          $("topStratCount").textContent = topStrategies.length + " shown";
+          var levelCls = { L0_INCUBATE: "l0", L1_BACKTEST: "l1", L2_PAPER: "l2", L3_LIVE: "l3" };
+          var levelLabels = { L0_INCUBATE: "L0", L1_BACKTEST: "L1", L2_PAPER: "L2", L3_LIVE: "L3" };
 
           var html = "";
-          top.forEach(function (p) {
-            var pnl = p.unrealizedPnl || p.pnl || 0;
-            var pnlPct = p.pnlPct || p.unrealizedPnlPct || 0;
-            var side = (p.side || "long").toLowerCase();
-            var qty = p.amount || p.qty || p.quantity || 0;
-            var entry = p.entryPrice || p.avgPrice || 0;
-            // Weight = position notional value / total equity
-            var notional = Math.abs(pnl + entry * qty);
-            var weight = eq > 0 ? (notional / eq) * 100 : 0;
+          topStrategies.forEach(function (s, i) {
+            var fit = s.fitness || 0;
+            var fitPct = Math.min(fit * 100, 100);
+            var fitColor = fit >= 0.7 ? "var(--gain)" : fit >= 0.4 ? "var(--l2)" : "var(--l1)";
+            var ret = s.totalReturn || 0;
             html +=
               "<tr>" +
-              '<td class="num" style="color:var(--text-hi)">' +
-              esc(p.symbol) +
-              "</td>" +
-              '<td><span class="pos-row__side pos-row__side--' +
-              side +
-              '">' +
-              side.toUpperCase() +
-              "</span></td>" +
-              '<td class="num" style="text-align:right">' +
-              fmt(qty, 4) +
-              "</td>" +
-              '<td class="num" style="text-align:right">' +
-              (entry > 0 ? fmtUsd(entry) : "--") +
-              "</td>" +
-              '<td class="num ' +
-              pnlClass(pnl) +
-              '" style="text-align:right;font-weight:600">' +
-              fmtUsd(pnl) +
-              "</td>" +
-              '<td class="num ' +
-              pnlClass(pnlPct) +
-              '" style="text-align:right">' +
-              fmtPct(pnlPct) +
-              "</td>" +
-              '<td class="num" style="text-align:right">' +
-              (eq > 0 ? fmt(weight, 1) + "%" : "--") +
-              "</td>" +
+              '<td class="num" style="color:var(--text-dim)">' + (i + 1) + "</td>" +
+              '<td style="color:var(--text-hi);font-weight:600">' + esc(s.name) + "</td>" +
+              '<td><span class="level-badge level-badge--' + (levelCls[s.level] || "l0") + '">' +
+                (levelLabels[s.level] || s.level) + "</span></td>" +
+              '<td><div style="display:flex;align-items:center;gap:6px">' +
+                '<div style="width:50px;height:5px;background:var(--bg);border-radius:2px;overflow:hidden">' +
+                '<div style="width:' + fitPct + '%;height:100%;background:' + fitColor +
+                ';border-radius:2px;transition:width .8s ease"></div></div>' +
+                '<span class="num" style="font-size:9px;font-weight:700">' + fit.toFixed(2) + "</span></div></td>" +
+              '<td class="num ' + pnlClass(ret) + '" style="text-align:right;font-weight:600">' + fmtPct(ret) + "</td>" +
+              '<td style="text-align:right"><a href="/plugins/findoo-trader/dashboard/strategy" ' +
+                'style="font-size:10px;color:var(--text-dim);text-decoration:none">View &#x2192;</a></td>' +
               "</tr>";
           });
           body.innerHTML = html;
@@ -1119,7 +1174,7 @@
           renderRiskStatus(state.risk, state.fund);
           renderStatPills(t);
           renderConfigStatus(state.config);
-          renderHoldings(t.positions, (summary.totalEquity || summary.equity || 0));
+          renderTopStrategies(state.topStrategies || []);
           renderAlerts(state.alerts);
           renderPipeline(t.strategies);
           renderChartStats(t);
@@ -1131,7 +1186,7 @@
           checkEmptyState(t, state.config);
         }
 
-        // ── Empty-state detection: show Getting Started panel + Quick Start ──
+        // ── Empty-state detection: show Getting Started panel + Quick Start + Onboarding ──
         function checkEmptyState(trading, config) {
           var exchanges = (config && config.exchanges) || [];
           var strategies = (trading && trading.strategies) || [];
@@ -1145,6 +1200,13 @@
           // Show Quick Start only when no strategies exist yet
           var qs = $("quickStart");
           if (qs) qs.style.display = strategies.length === 0 ? "" : "none";
+
+          // Onboarding overlay: show on first visit when no exchanges configured
+          var onboarded = false;
+          try { onboarded = localStorage.getItem("ofc_onboarded") === "1"; } catch (e) { /* noop */ }
+          if (!onboarded && exchanges.length === 0) {
+            OB.show();
+          }
         }
 
         // ── Propagate ?embedded=1 to internal dashboard links ──
@@ -1241,10 +1303,10 @@
         // ── SSE Handlers ──
         function onTradingData(data) {
           state.trading = data;
+          if (data.topStrategies) state.topStrategies = data.topStrategies;
           renderTopEquity(data.summary || {});
           renderStatPills(data);
-          var sseSummary = data.summary || {};
-          renderHoldings(data.positions, (sseSummary.totalEquity || sseSummary.equity || 0));
+          renderTopStrategies(state.topStrategies || []);
           renderPipeline(data.strategies);
           renderChartStats(data);
           updateEquityChart(data.snapshots);
@@ -1612,6 +1674,70 @@
             timeEl.textContent = "--";
           }
         }
+
+        // ── Onboarding (5-step overlay) ──
+        window.OB = (function () {
+          var totalSteps = 5;
+          var current = 1;
+
+          function show() {
+            var overlay = $("onboardOverlay");
+            if (!overlay) return;
+            overlay.style.display = "";
+            renderDots();
+            goTo(1);
+          }
+
+          function hide() {
+            var overlay = $("onboardOverlay");
+            if (overlay) overlay.style.display = "none";
+          }
+
+          function complete() {
+            try { localStorage.setItem("ofc_onboarded", "1"); } catch (e) { /* noop */ }
+            hide();
+          }
+
+          function goTo(step) {
+            current = step;
+            var steps = document.querySelectorAll(".onboard-step");
+            steps.forEach(function (s) {
+              s.style.display = parseInt(s.getAttribute("data-step")) === current ? "" : "none";
+            });
+            var fill = $("onboardProgress");
+            if (fill) fill.style.width = (current / totalSteps * 100) + "%";
+            document.querySelectorAll(".onboard-dot").forEach(function (d, i) {
+              d.classList.toggle("active", i + 1 === current);
+            });
+            var back = $("onboardBack");
+            var next = $("onboardNext");
+            if (back) back.style.display = current === 1 ? "none" : "";
+            if (next) next.textContent = current === totalSteps ? "Get Started" : "Next";
+          }
+
+          function renderDots() {
+            var container = $("onboardDots");
+            if (!container) return;
+            var html = "";
+            for (var i = 1; i <= totalSteps; i++) {
+              html += '<div class="onboard-dot' + (i === 1 ? ' active' : '') + '" onclick="OB.goTo(' + i + ')"></div>';
+            }
+            container.innerHTML = html;
+          }
+
+          return {
+            show: show,
+            skip: function () { complete(); },
+            next: function () {
+              if (current >= totalSteps) { complete(); return; }
+              goTo(current + 1);
+            },
+            prev: function () {
+              if (current > 1) goTo(current - 1);
+            },
+            goTo: goTo
+          };
+        })();
 
         // ── Boot ──
         renderAll();

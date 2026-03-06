@@ -266,11 +266,76 @@ export function gatherMissionControlData(deps: DataGatheringDeps) {
   };
 }
 
-/** Gather overview data (mission control + finance config merged). */
+/** Gather overview data (mission control + finance config + top strategies + alerts + risk). */
 export function gatherOverviewData(deps: DataGatheringDeps) {
   const mc = gatherMissionControlData(deps);
   const config = gatherFinanceConfigData(deps);
-  return { ...mc, config };
+  const { runtime, riskConfig } = deps;
+
+  // Top Strategies: reuse evolution lookup pattern from gatherStrategyData
+  const strategyRegistry = runtime.services?.get?.("fin-strategy-registry") as
+    | StrategyRegistryLike
+    | undefined;
+  const strategies = strategyRegistry?.list() ?? [];
+
+  const evoService = runtime.services?.get?.("fin-evolution-engine") as
+    | EvolutionServiceLike
+    | undefined;
+  const evoStore = evoService?.store;
+  const evoLookup = new Map<
+    string,
+    { generation: number; fitness: number; survivalTier: string }
+  >();
+  if (evoStore) {
+    try {
+      for (const node of evoStore.getActiveNodes()) {
+        const existing = evoLookup.get(node.strategyId);
+        if (!existing || node.generation > existing.generation) {
+          evoLookup.set(node.strategyId, {
+            generation: node.generation,
+            fitness: node.fitness,
+            survivalTier: node.survivalTier,
+          });
+        }
+      }
+    } catch {
+      // evolution engine may not be loaded
+    }
+  }
+
+  // Build top strategies (exclude KILLED, sort by fitness desc, top 5)
+  const topStrategies = strategies
+    .filter((s) => s.level !== "KILLED")
+    .map((s) => {
+      const evo = evoLookup.get(s.id);
+      return {
+        id: s.id,
+        name: s.name,
+        level: s.level,
+        fitness: evo?.fitness ?? (s.lastBacktest?.sharpe ?? 0) / 2,
+        totalReturn: s.lastBacktest?.totalReturn ?? 0,
+      };
+    })
+    .sort((a, b) => b.fitness - a.fitness)
+    .slice(0, 5);
+
+  // Alert summary
+  const alertEngine = runtime.services?.get?.("fin-alert-engine") as AlertEngineLike | undefined;
+  const allAlerts = alertEngine?.listAlerts() ?? [];
+  const alertSummary = {
+    total: allAlerts.length,
+    triggered: allAlerts.filter((a) => a.triggeredAt != null).length,
+  };
+
+  // Risk details
+  const riskDetails = {
+    tradingEnabled: riskConfig.enabled,
+    maxAutoUsd: riskConfig.maxAutoTradeUsd,
+    dailyLossUsd: riskConfig.maxDailyLossUsd,
+    maxPositionPct: riskConfig.maxPositionPct,
+  };
+
+  return { ...mc, config, topStrategies, alertSummary, riskDetails };
 }
 
 /** Gather strategy lab data (strategies + backtests + fund allocations). */
