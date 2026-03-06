@@ -678,6 +678,7 @@ export async function runEmbeddedAttempt(
       contextFiles,
       narrativeStory: params.narrativeStory,
       memoryCitationsMode: params.config?.memory?.citations,
+      skipNarrative: false,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
@@ -972,47 +973,37 @@ export async function runEmbeddedAttempt(
         );
       }
 
-      // [MIND] Ephemerally inject resonance/flashback into the last user message
-      // of each API call. Using messages (not systemPrompt) preserves the static
-      // system prompt cache. The resonance is never written to the session file,
-      // so it cannot contaminate STORY.md narrative or confuse session history.
-      if (params.mindResonance) {
-        const inner = activeSession.agent.streamFn;
-        const resonance = params.mindResonance;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown[] };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages) || messages.length === 0) {
-            return inner(model, context, options);
-          }
-          // Prepend resonance to the last user message (LLM-format copy — not stored)
-          const newMessages = [...messages];
-          for (let i = newMessages.length - 1; i >= 0; i--) {
-            const msg = newMessages[i] as { role?: string; content?: unknown };
-            if (msg?.role !== "user") {
-              continue;
-            }
-            const resonanceBlock = { type: "text", text: `${resonance}\n\n` };
-            const content = msg.content;
-            const newContent = Array.isArray(content)
-              ? [resonanceBlock, ...content]
-              : [
-                  resonanceBlock,
-                  {
-                    type: "text",
-                    text: typeof content === "string" ? content : JSON.stringify(content),
-                  },
-                ];
-            newMessages[i] = { ...msg, content: newContent } as unknown;
-            break;
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: newMessages,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
-      }
+      // [MIND] Cache-stabilization: inject narrative/resonance as a dynamic tail
+      // AFTER the stable history. This ensures that the prefix (System + History)
+      // remains bit-identical across turns, maximizing Llama.cpp cache hits.
+      const inner = activeSession.agent.streamFn;
+      activeSession.agent.streamFn = (model, context, options) => {
+        const ctx = context as unknown as { messages?: unknown[] };
+        const messages = ctx?.messages;
+        if (!Array.isArray(messages)) {
+          return inner(model, context, options);
+        }
+
+        const newMessages = [...messages];
+        const tailBlocks: string[] = [];
+
+        // 1. Add Resonance to the tail
+        if (params.mindResonance?.trim()) {
+          tailBlocks.push(`[SUBCONSCIOUS RESONANCE]\n\n${params.mindResonance.trim()}`);
+        }
+
+        if (tailBlocks.length > 0) {
+          newMessages.push({
+            role: "system",
+            content: tailBlocks.join("\n\n---\n\n"),
+          } as unknown);
+        }
+        const nextContext = {
+          ...(context as unknown as Record<string, unknown>),
+          messages: newMessages,
+        } as unknown;
+        return inner(model, nextContext as typeof context, options);
+      };
 
       try {
         const prior = await sanitizeSessionHistory({

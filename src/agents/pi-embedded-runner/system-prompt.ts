@@ -53,6 +53,8 @@ export function buildEmbeddedSystemPrompt(params: {
   contextFiles?: EmbeddedContextFile[];
   narrativeStory?: string;
   memoryCitationsMode?: MemoryCitationsMode;
+  /** If true, skip the narrative story block (caller will handle it). */
+  skipNarrative?: boolean;
 }): string {
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -83,6 +85,7 @@ export function buildEmbeddedSystemPrompt(params: {
     contextFiles: params.contextFiles,
     narrativeStory: params.narrativeStory,
     memoryCitationsMode: params.memoryCitationsMode,
+    skipNarrative: params.skipNarrative,
   });
 }
 

@@ -246,6 +246,8 @@ export function buildAgentSystemPrompt(params: {
   };
   narrativeStory?: string;
   memoryCitationsMode?: MemoryCitationsMode;
+  /** If true, skip the narrative story block (caller will handle it). */
+  skipNarrative?: boolean;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const coreToolSummaries: Record<string, string> = {
@@ -631,7 +633,7 @@ export function buildAgentSystemPrompt(params: {
     }
   }
 
-  if (params.narrativeStory?.trim()) {
+  if (params.narrativeStory?.trim() && !params.skipNarrative) {
     lines.push(
       "# Narrative Story",
       "",

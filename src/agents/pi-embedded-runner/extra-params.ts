@@ -46,6 +46,8 @@ export function resolveExtraParams(params: {
 type CacheRetention = "none" | "short" | "long";
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
+  cache_prompt?: boolean;
+  cache_control?: unknown;
 };
 
 /**
@@ -128,6 +130,12 @@ function createStreamFnWithExtraParams(
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
   }
+  if (typeof extraParams.cache_prompt === "boolean") {
+    streamParams.cache_prompt = extraParams.cache_prompt;
+  }
+  if (extraParams.cache_control != null) {
+    streamParams.cache_control = extraParams.cache_control;
+  }
 
   // Extract OpenRouter provider routing preferences from extraParams.provider.
   // Injected into model.compat.openRouterRouting so pi-ai's buildParams sets
@@ -164,6 +172,18 @@ function createStreamFnWithExtraParams(
     return underlying(effectiveModel, context, {
       ...streamParams,
       ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (streamParams.cache_prompt !== undefined && payloadObj.cache_prompt === undefined) {
+            payloadObj.cache_prompt = streamParams.cache_prompt;
+          }
+          if (streamParams.cache_control !== undefined && payloadObj.cache_control === undefined) {
+            payloadObj.cache_control = streamParams.cache_control;
+          }
+        }
+        options?.onPayload?.(payload);
+      },
     });
   };
 
@@ -473,7 +493,7 @@ function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined):
                 { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
               ];
             } else if (Array.isArray(msg.content) && msg.content.length > 0) {
-              const last = msg.content[msg.content.length - 1];
+              let last = msg.content[msg.content.length - 1];
               if (last && typeof last === "object") {
                 (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
               }
