@@ -425,12 +425,38 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   const env = args.env ?? process.env;
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
-  const res = await execSystemctlUser(env, ["is-enabled", unitName]);
+  let res: { stdout: string; stderr: string; code: number };
+  try {
+    res = await execSystemctlUser(env, ["is-enabled", unitName]);
+  } catch (err) {
+    // systemctl itself failed to spawn (e.g. missing binary on containers).
+    // Treat this as "not enabled" rather than crashing the caller.
+    const detail = err instanceof Error ? err.message : String(err);
+    if (isSystemctlMissing(detail)) {
+      return false;
+    }
+    // Any other spawn/exec error on is-enabled: skip check gracefully.
+    return false;
+  }
   if (res.code === 0) {
     return true;
   }
   const detail = readSystemctlDetail(res);
   if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
+    return false;
+  }
+  // On some systems (containers, non-systemd distros) is-enabled exits with
+  // an unrecognised error instead of the expected status codes. Skip the check
+  // gracefully so the rest of service management can continue.
+  const normalized = detail.toLowerCase();
+  if (
+    normalized.includes("not been booted") ||
+    normalized.includes("failed to connect") ||
+    normalized.includes("dbus") ||
+    normalized.includes("transport endpoint") ||
+    normalized.includes("no such file or directory") ||
+    normalized.includes("not supported")
+  ) {
     return false;
   }
   throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
