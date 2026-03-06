@@ -19,6 +19,29 @@ function isWindowsBatchCommand(resolvedCommand: string): boolean {
   return ext === ".cmd" || ext === ".bat";
 }
 
+/**
+ * Check if we should use cmd.exe wrapper for a command.
+ * This is needed when:
+ * 1. Command is a .cmd/.bat file, OR
+ * 2. Command path contains spaces (like "C:\Program Files\nodejs\...")
+ *    which requires cmd.exe to properly handle the path
+ */
+function shouldUseCmdWrapper(resolvedCommand: string): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  // Always use cmd wrapper for batch files
+  const ext = path.extname(resolvedCommand).toLowerCase();
+  if (ext === ".cmd" || ext === ".bat") {
+    return true;
+  }
+  // Use cmd wrapper for paths with spaces to avoid argument parsing issues
+  if (resolvedCommand.includes(" ")) {
+    return true;
+  }
+  return false;
+}
+
 function escapeForCmdExe(arg: string): string {
   // Reject cmd metacharacters to avoid injection when we must pass a single command line.
   if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
@@ -224,7 +247,7 @@ export async function runCommandWithTimeout(
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
   const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
-  const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
+  const useCmdWrapper = shouldUseCmdWrapper(resolvedCommand);
   const child = spawn(
     useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
     useCmdWrapper
