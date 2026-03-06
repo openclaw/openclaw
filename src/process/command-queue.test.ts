@@ -115,6 +115,32 @@ describe("command queue", () => {
     expect(getQueueSize()).toBe(0);
   });
 
+  it("queues work beyond lane concurrency and drains in FIFO order", async () => {
+    const lane = `subagent-${Date.now()}`;
+    setCommandLaneConcurrency(lane, 3);
+
+    let active = 0;
+    let maxActive = 0;
+    const runOrder: number[] = [];
+
+    const tasks = [1, 2, 3, 4, 5].map((id) =>
+      enqueueCommandInLane(lane, async () => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        runOrder.push(id);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        return id;
+      }),
+    );
+
+    const results = await Promise.all(tasks);
+    expect(results).toEqual([1, 2, 3, 4, 5]);
+    expect(maxActive).toBeLessThanOrEqual(3);
+    expect(getQueueSize(lane)).toBe(0);
+    expect(runOrder[0]).toBe(1);
+  });
+
   it("logs enqueue depth after push", async () => {
     const task = enqueueCommand(async () => {});
 

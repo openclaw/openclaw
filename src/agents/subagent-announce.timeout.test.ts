@@ -488,4 +488,27 @@ describe("subagent announce timeout config", () => {
       "A longer partial summary that should stay silent.",
     );
   });
+
+  it("binds announce agent runs to originating message id for user-triggered tasks", async () => {
+    await runAnnounceFlowForTest("run-reply-bind", {
+      requesterMessageId: "msg-4242",
+    });
+
+    const directAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.expectFinal === true,
+    );
+    expect(directAgentCall?.params?.currentMessageId).toBe("msg-4242");
+  });
+
+  it("does not cross-bind cron announcements to a requester message id", async () => {
+    await runAnnounceFlowForTest("run-cron-no-bind", {
+      requesterMessageId: "msg-777",
+      announceType: "cron job",
+    });
+
+    const directAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.expectFinal === true,
+    );
+    expect(directAgentCall?.params?.currentMessageId).toBeUndefined();
+  });
 });

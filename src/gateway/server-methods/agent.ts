@@ -265,6 +265,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       accountId?: string;
       replyAccountId?: string;
       threadId?: string;
+      currentMessageId?: string;
       groupId?: string;
       groupChannel?: string;
       groupSpace?: string;
@@ -712,6 +713,10 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+    const normalizedCurrentMessageId =
+      typeof request.currentMessageId === "string" && request.currentMessageId.trim()
+        ? request.currentMessageId.trim()
+        : undefined;
 
     dispatchAgentRunFromGateway({
       ingressOpts: {
@@ -735,6 +740,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           groupChannel: resolvedGroupChannel,
           groupSpace: resolvedGroupSpace,
           currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
+          currentMessageId: normalizedCurrentMessageId,
         },
         groupId: resolvedGroupId,
         groupChannel: resolvedGroupChannel,
