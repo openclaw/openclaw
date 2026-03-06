@@ -66,6 +66,8 @@ export type SlackSlashCommandConfig = {
   name?: string;
   /** Optional per-account prefix for native slash commands; must be one lowercase alphanumeric word (e.g. "acct1"). */
   nativePrefix?: string;
+  /** Optional per-command native slash command name overrides keyed by internal command key. */
+  nativeNames?: Record<string, string>;
   /** Session key prefix for slash commands (default: "slack:slash"). */
   sessionPrefix?: string;
   /** Reply ephemerally (default: true). */

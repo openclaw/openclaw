@@ -130,9 +130,17 @@ const NATIVE_NAME_OVERRIDES: Record<string, Record<string, string>> = {
   },
 };
 
-function resolveNativeName(command: ChatCommandDefinition, provider?: string): string | undefined {
+function resolveNativeName(
+  command: ChatCommandDefinition,
+  provider?: string,
+  nativeNames?: Record<string, string>,
+): string | undefined {
   if (!command.nativeName) {
     return undefined;
+  }
+  const mapped = nativeNames?.[command.key]?.trim();
+  if (mapped) {
+    return mapped;
   }
   if (provider) {
     const override = NATIVE_NAME_OVERRIDES[provider]?.[command.key];
@@ -166,9 +174,13 @@ function toNativeCommandSpec(
   command: ChatCommandDefinition,
   provider?: string,
   nativePrefix?: string,
+  nativeNames?: Record<string, string>,
 ): NativeCommandSpec {
   return {
-    name: withNativePrefix(resolveNativeName(command, provider) ?? command.key, nativePrefix),
+    name: withNativePrefix(
+      resolveNativeName(command, provider, nativeNames) ?? command.key,
+      nativePrefix,
+    ),
     description: command.description,
     acceptsArgs: Boolean(command.acceptsArgs),
     args: command.args,
@@ -179,32 +191,41 @@ function listNativeSpecsFromCommands(
   commands: ChatCommandDefinition[],
   provider?: string,
   nativePrefix?: string,
+  nativeNames?: Record<string, string>,
 ): NativeCommandSpec[] {
   return commands
     .filter((command) => command.scope !== "text" && command.nativeName)
-    .map((command) => toNativeCommandSpec(command, provider, nativePrefix));
+    .map((command) => toNativeCommandSpec(command, provider, nativePrefix, nativeNames));
 }
 
 export function listNativeCommandSpecs(params?: {
   skillCommands?: SkillCommandSpec[];
   provider?: string;
   nativePrefix?: string;
+  nativeNames?: Record<string, string>;
 }): NativeCommandSpec[] {
   return listNativeSpecsFromCommands(
     listChatCommands({ skillCommands: params?.skillCommands }),
     params?.provider,
     params?.nativePrefix,
+    params?.nativeNames,
   );
 }
 
 export function listNativeCommandSpecsForConfig(
   cfg: OpenClawConfig,
-  params?: { skillCommands?: SkillCommandSpec[]; provider?: string; nativePrefix?: string },
+  params?: {
+    skillCommands?: SkillCommandSpec[];
+    provider?: string;
+    nativePrefix?: string;
+    nativeNames?: Record<string, string>;
+  },
 ): NativeCommandSpec[] {
   return listNativeSpecsFromCommands(
     listChatCommandsForConfig(cfg, params),
     params?.provider,
     params?.nativePrefix,
+    params?.nativeNames,
   );
 }
 
@@ -224,7 +245,11 @@ function stripNativePrefixCandidate(name: string, nativePrefix?: string): string
 export function findCommandByNativeName(
   name: string,
   provider?: string,
-  params?: { nativePrefix?: string; nativePrefixes?: string[] },
+  params?: {
+    nativePrefix?: string;
+    nativePrefixes?: string[];
+    nativeNames?: Record<string, string>;
+  },
 ): ChatCommandDefinition | undefined {
   const normalized = name.trim().toLowerCase();
   const candidates = new Set<string>([normalized]);
@@ -246,7 +271,7 @@ export function findCommandByNativeName(
     if (command.scope === "text") {
       return false;
     }
-    const resolved = resolveNativeName(command, provider)?.toLowerCase();
+    const resolved = resolveNativeName(command, provider, params?.nativeNames)?.toLowerCase();
     return Boolean(resolved && candidates.has(resolved));
   });
 }

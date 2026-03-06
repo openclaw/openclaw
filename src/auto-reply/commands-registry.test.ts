@@ -121,6 +121,55 @@ describe("commands registry", () => {
     expect(findCommandByNativeName("status", "slack")).toBeUndefined();
   });
 
+  it("applies custom nativeNames mapping for slack native specs", () => {
+    const native = listNativeCommandSpecsForConfig(
+      { commands: { native: true } },
+      {
+        provider: "slack",
+        nativeNames: {
+          status: "ozstatus",
+          compact: "oz-compact",
+        },
+      },
+    );
+    expect(native.find((spec) => spec.name === "ozstatus")).toBeTruthy();
+    expect(native.find((spec) => spec.name === "oz-compact")).toBeTruthy();
+    expect(native.find((spec) => spec.name === "agentstatus")).toBeFalsy();
+    expect(native.find((spec) => spec.name === "compact")).toBeFalsy();
+  });
+
+  it("keeps default native names for unmapped slack commands", () => {
+    const native = listNativeCommandSpecsForConfig(
+      { commands: { native: true } },
+      {
+        provider: "slack",
+        nativeNames: {
+          reset: "oz-reset",
+        },
+      },
+    );
+    expect(native.find((spec) => spec.name === "oz-reset")).toBeTruthy();
+    expect(native.find((spec) => spec.name === "help")).toBeTruthy();
+    expect(native.find((spec) => spec.name === "agentstatus")).toBeTruthy();
+  });
+
+  it("resolves custom nativeNames via reverse lookup", () => {
+    const nativeNames = {
+      status: "ozstatus",
+      stop: "oz-stop",
+    };
+    expect(findCommandByNativeName("ozstatus", "slack", { nativeNames })?.key).toBe("status");
+    expect(findCommandByNativeName("oz-stop", "slack", { nativeNames })?.key).toBe("stop");
+    expect(findCommandByNativeName("agentstatus", "slack", { nativeNames })).toBeUndefined();
+  });
+
+  it("keeps slack native override behavior when nativeNames is not configured", () => {
+    expect(findCommandByNativeName("agentstatus", "slack", { nativeNames: {} })?.key).toBe(
+      "status",
+    );
+    expect(findCommandByNativeName("status", "slack", { nativeNames: {} })).toBeUndefined();
+  });
+
   it("prefixes slack native command specs when nativePrefix is set", () => {
     const native = listNativeCommandSpecsForConfig(
       { commands: { native: true } },
