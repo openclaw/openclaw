@@ -783,7 +783,9 @@ describe("sendMessageTelegram", () => {
     const chatId = "123";
     const sendMessage = vi
       .fn()
-      .mockRejectedValueOnce(new Error("Network request for 'sendMessage' failed after 1 attempts."))
+      .mockRejectedValueOnce(
+        new Error("Network request for 'sendMessage' failed after 1 attempts."),
+      )
       .mockResolvedValueOnce({
         message_id: 7,
         chat: { id: chatId },
