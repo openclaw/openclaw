@@ -212,11 +212,16 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
+    const payload =
+      job.payload && typeof job.payload === "object" && !Array.isArray(job.payload)
+        ? (job.payload as Record<string, unknown>)
+        : null;
+    const payloadKind = typeof payload?.kind === "string" ? payload.kind : "";
+    const payloadModel =
+      payloadKind === "agentTurn" && typeof payload?.model === "string" ? payload.model : "";
+
     const modelLabel = pad(
-      truncate(
-        (job.payload.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
-        CRON_MODEL_PAD,
-      ),
+      truncate(payloadKind === "agentTurn" && payloadModel ? payloadModel : "-", CRON_MODEL_PAD),
       CRON_MODEL_PAD,
     );
 
@@ -253,7 +258,7 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
       coloredStatus,
       coloredTarget,
       coloredAgent,
-      job.payload.kind === "agentTurn" && job.payload.model
+      payloadKind === "agentTurn" && payloadModel
         ? colorize(rich, theme.info, modelLabel)
         : colorize(rich, theme.muted, modelLabel),
     ].join(" ");
