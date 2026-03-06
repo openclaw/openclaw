@@ -160,6 +160,11 @@ export type MsgContext = {
    */
   OriginatingTo?: string;
   /**
+   * True when the current turn intentionally requested external delivery to
+   * OriginatingChannel/OriginatingTo, rather than inheriting stale session route metadata.
+   */
+  ExplicitDeliverRoute?: boolean;
+  /**
    * Provider-specific parent conversation id for threaded contexts.
    * For Discord threads, this is the parent channel id.
    */
