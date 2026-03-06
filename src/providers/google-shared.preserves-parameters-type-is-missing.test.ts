@@ -1,16 +1,22 @@
-import { describe, expect, it } from "vitest";
-import {
-  convertMessages,
-  convertTools,
-} from "../../node_modules/@mariozechner/pi-ai/dist/providers/google-shared.js";
-import type { Context, Tool } from "../../node_modules/@mariozechner/pi-ai/dist/types.js";
+import type { Context, Tool } from "@mariozechner/pi-ai";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   asRecord,
   expectConvertedRoles,
   getFirstToolParameters,
   makeGoogleAssistantMessage,
   makeModel,
+  loadGoogleSharedModule,
 } from "./google-shared.test-helpers.js";
+
+let convertMessages: (...args: unknown[]) => unknown;
+let convertTools: (...args: unknown[]) => unknown;
+
+beforeAll(async () => {
+  const loaded = await loadGoogleSharedModule();
+  convertMessages = loaded.convertMessages as typeof convertMessages;
+  convertTools = loaded.convertTools as typeof convertTools;
+});
 
 describe("google-shared convertTools", () => {
   it("preserves parameters when type is missing", () => {
@@ -279,7 +285,7 @@ describe("google-shared convertMessages", () => {
     expect(contents[2].role).toBe("user");
     expect(contents[3].role).toBe("user");
     const toolResponsePart = contents[2].parts?.find(
-      (part) => typeof part === "object" && part !== null && "functionResponse" in part,
+      (part: unknown) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
     const toolResponse = asRecord(toolResponsePart);
     expect(toolResponse.functionResponse).toBeTruthy();
