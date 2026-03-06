@@ -26,13 +26,21 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
 
   // Bundled install (built)
   // NOTE: there is no src/ tree in a packaged install. Prefer a stable internal entrypoint.
-  const mod = await import("../../../dist/extensionAPI.js");
-  // oxlint-disable-next-line typescript/no-explicit-any
-  const fn = (mod as any).runEmbeddedPiAgent;
-  if (typeof fn !== "function") {
-    throw new Error("Internal error: runEmbeddedPiAgent not available");
+  try {
+    const mod = await import("../../../dist/extensionAPI.js");
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const fn = (mod as any).runEmbeddedPiAgent;
+    if (typeof fn !== "function") {
+      throw new Error("Internal error: runEmbeddedPiAgent not available");
+    }
+    return fn as RunEmbeddedPiAgentFn;
+  } catch (err) {
+    // If neither source nor bundled version is available, provide helpful error
+    throw new Error(
+      `Could not load runEmbeddedPiAgent: ${err instanceof Error ? err.message : String(err)}. ` +
+        "This extension requires OpenClaw to be built or installed.",
+    );
   }
-  return fn as RunEmbeddedPiAgentFn;
 }
 
 function stripCodeFences(s: string): string {
