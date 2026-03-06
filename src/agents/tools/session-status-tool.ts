@@ -417,6 +417,12 @@ export function createSessionStatusTool(opts?: {
       const timeLine = userTime
         ? `🕒 Time: ${userTime} (${userTimezone})`
         : `🕒 Time zone: ${userTimezone}`;
+      let statusCatalog;
+      try {
+        statusCatalog = await loadModelCatalog({ config: cfg });
+      } catch {
+        statusCatalog = undefined;
+      }
 
       const agentDefaults = cfg.agents?.defaults ?? {};
       const defaultLabel = `${configured.provider}/${configured.model}`;
@@ -426,6 +432,7 @@ export function createSessionStatusTool(opts?: {
           : { primary: defaultLabel };
       const statusText = buildStatusMessage({
         config: cfg,
+        catalog: statusCatalog,
         agent: {
           ...agentDefaults,
           model: agentModel,
