@@ -121,6 +121,7 @@ export type OnboardOptions = {
   xiaomiApiKey?: string;
   minimaxApiKey?: string;
   syntheticApiKey?: string;
+  chutesApiKey?: string;
   veniceApiKey?: string;
   togetherApiKey?: string;
   huggingfaceApiKey?: string;

@@ -29,7 +29,7 @@ describe("chutes-models", () => {
   it("discoverChutesModels returns static catalog in test env by default", async () => {
     const models = await discoverChutesModels("test-token");
     expect(models).toHaveLength(CHUTES_MODEL_CATALOG.length);
-    expect(models[0]?.id).toBe("zai-org/GLM-4.7-TEE");
+    expect(models[0]?.id).toBe("Qwen/Qwen3-32B");
   });
 
   it("discoverChutesModels correctly maps API response when not in test env", async () => {
