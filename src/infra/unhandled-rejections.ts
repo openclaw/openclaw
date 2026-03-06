@@ -169,7 +169,7 @@ export function isTransientNetworkError(err: unknown): boolean {
     if (TRANSIENT_NETWORK_MESSAGE_CODE_RE.test(message)) {
       return true;
     }
-    if (message === "fetch failed") {
+    if (message.includes("fetch failed")) {
       return true;
     }
     if (TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
