@@ -157,21 +157,21 @@ Step 4: 跨行业综合
 
 | 排除条件       | 检查方式                                          |
 | -------------- | ------------------------------------------------- |
-| ST / \*ST 标记 | `fin_stock(endpoint="info")` 股票名含 ST          |
+| ST / \*ST 标记 | `fin_stock(endpoint="profile")` 股票名含 ST       |
 | 停牌中         | `fin_stock(endpoint="price/historical", limit=1)` |
-| 上市不满 60 日 | `fin_stock(endpoint="info")` 上市日期             |
+| 上市不满 60 日 | `fin_stock(endpoint="profile")` 上市日期          |
 | 连续 2 年亏损  | `fin_stock(endpoint="fundamental/income")`        |
 
 ### 风险扣分 (降低排名)
 
 | 风险因素           | 检查方式                                            | 扣分  |
 | ------------------ | --------------------------------------------------- | ----- |
-| 高质押比例 > 30%   | `fin_stock(endpoint="ownership/pledge_stat")`       | -2 分 |
+| 高质押比例 > 30%   | `fin_stock(endpoint="pledge/stat")`                 | -2 分 |
 | 解禁高峰 (30 日内) | `fin_stock(endpoint="ownership/share_float")`       | -1 分 |
 | 商誉占净资产 > 30% | `fin_stock(endpoint="fundamental/balance")`         | -2 分 |
 | 经营现金流连续为负 | `fin_stock(endpoint="fundamental/cash")`            | -2 分 |
 | 大股东持续减持     | `fin_stock(endpoint="ownership/shareholder_trade")` | -1 分 |
-| 审计意见非标       | `fin_stock(endpoint="fundamental/audit")`           | -3 分 |
+| 审计意见非标       | 查财报附注 (DataHub 暂无独立审计端点)               | -3 分 |
 
 ## 筛选流程模板
 

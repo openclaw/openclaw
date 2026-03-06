@@ -85,7 +85,7 @@ fin_stock(symbol="600519.SH", endpoint="ownership/repurchase", limit=20)
 #### 工具
 
 ```
-fin_stock(symbol="600519.SH", endpoint="ownership/pledge_stat")
+fin_stock(symbol="600519.SH", endpoint="pledge/stat")
 ```
 
 #### 质押风险分级
@@ -243,8 +243,10 @@ Step 5: fin_stock(endpoint="fundamental/ratios") → 评估受影响标的估值
 ### IPO 日历查询
 
 ```
-fin_stock(endpoint="discovery/ipo_calendar")
+fin_market(endpoint="discovery/new_share")
 ```
+
+注: 使用 fin_market 的 discovery/new_share 端点查看新股上市/申购日历。
 
 ### 打新收益分析
 
@@ -287,7 +289,7 @@ fin_stock(endpoint="discovery/ipo_calendar")
 ```
 Step 1: 筹码面扫描
   fin_stock(endpoint="ownership/shareholder_trade", limit=20)  → 增减持
-  fin_stock(endpoint="ownership/pledge_stat")                   → 质押
+  fin_stock(endpoint="pledge/stat")                   → 质押
   fin_stock(endpoint="ownership/holder_number", limit=8)        → 股东人数
   fin_stock(endpoint="ownership/share_float", limit=10)         → 解禁
 

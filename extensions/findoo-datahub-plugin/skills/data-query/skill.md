@@ -80,9 +80,9 @@ No parameters. Returns list of supported markets, data categories, and total end
 | Tool               | Endpoints | Primary Use Case                                                                  |
 | ------------------ | --------- | --------------------------------------------------------------------------------- |
 | `fin_stock`        | 22        | A/HK/US stock prices, financials, ownership, flow                                 |
-| `fin_index`        | 6         | Index data, constituents, thematic indices                                        |
+| `fin_index`        | 10        | Index data, constituents, thematic indices                                        |
 | `fin_macro`        | 23        | GDP/CPI/PMI/rates/FX/World Bank                                                   |
-| `fin_crypto`       | 20        | CEX tickers, CoinGecko, DeFi protocols                                            |
+| `fin_crypto`       | 21        | CEX tickers, CoinGecko, DeFi protocols                                            |
 | `fin_derivatives`  | 12        | Futures, options, convertible bonds                                               |
 | `fin_market`       | 20        | Dragon-tiger, limit-up, northbound/southbound, margin                             |
 | `fin_etf`          | 9         | ETF NAV, info, historical, fund portfolio/manager/dividends/share/adj_nav, search |

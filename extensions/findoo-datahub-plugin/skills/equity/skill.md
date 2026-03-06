@@ -62,13 +62,13 @@ Use **fin_stock** and **fin_index** for equity analysis across A-share, HK, and 
 | `ownership/holder_number`       | Shareholder count trend      | `fin_stock(symbol="600519.SH", endpoint="ownership/holder_number")`       |
 | `ownership/share_float`         | Floating share structure     | `fin_stock(symbol="600519.SH", endpoint="ownership/share_float")`         |
 | `pledge/stat`                   | Equity pledge statistics     | `fin_stock(symbol="600519.SH", endpoint="pledge/stat")`                   |
-| `adj_factor`                    | 复权因子 (adjust factor)     | `fin_stock(symbol="600519.SH", endpoint="adj_factor")`                    |
+| `fundamental/adj_factor`        | 复权因子 (adjust factor)     | `fin_stock(symbol="600519.SH", endpoint="fundamental/adj_factor")`        |
 | `hk/income`                     | HK stock income statement    | `fin_stock(symbol="00700.HK", endpoint="hk/income")`                      |
 | `us/income`                     | US stock income statement    | `fin_stock(symbol="AAPL", endpoint="us/income")`                          |
 | `moneyflow/individual`          | Capital flow tracking        | `fin_stock(symbol="600519.SH", endpoint="moneyflow/individual")`          |
 | `discovery/gainers`             | Top gainers                  | `fin_stock(endpoint="discovery/gainers")`                                 |
 | `discovery/losers`              | Top losers                   | `fin_stock(endpoint="discovery/losers")`                                  |
-| `discovery/active`              | Most active stocks           | `fin_stock(endpoint="discovery/active")`                                  |
+| `market/top_list`               | Most active / top movers     | `fin_market(endpoint="market/top_list")`                                  |
 
 ### fin_index — 指数 / ETF / 基金
 
@@ -242,7 +242,7 @@ Step 3: fin_stock(moneyflow/individual) → 资金博弈
 结合 `adj_factor` 做复权价格对比：
 
 ```
-fin_stock(symbol="600519.SH", endpoint="adj_factor") → 获取复权因子
+fin_stock(symbol="600519.SH", endpoint="fundamental/adj_factor") → 获取复权因子
 ```
 
 ## Data Notes

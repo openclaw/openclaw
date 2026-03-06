@@ -48,11 +48,11 @@ fin_stock(symbol="00700.HK", endpoint="fundamental/dividends", limit=10)
 ### 跨市场数据
 
 ```
-fin_macro(endpoint="flow/ggt_daily", limit=30)     # 港股通每日资金流向
-fin_macro(endpoint="flow/ggt_top10", limit=20)      # 港股通十大活跃股
-fin_macro(endpoint="flow/hs_const")                 # 港股通标的名单
-fin_currency(symbol="USDHKD", endpoint="spot")      # 美元/港元汇率
-fin_currency(symbol="USDCNY", endpoint="spot")      # 美元/人民币汇率
+fin_market(endpoint="flow/ggt_daily", limit=30)     # 港股通每日资金流向
+fin_market(endpoint="flow/ggt_top10", limit=20)      # 港股通十大活跃股
+fin_market(endpoint="flow/hs_const")                 # 港股通标的名单
+fin_macro(endpoint="currency/price/historical", symbol="USDHKD")  # 美元/港元汇率
+fin_macro(endpoint="currency/price/historical", symbol="USDCNY")  # 美元/人民币汇率
 ```
 
 ### 指数数据
@@ -78,7 +78,7 @@ AH 溢价率 = (A 股价格 / H 股价格 × 汇率) - 1
 数据获取:
   fin_stock(symbol="601398.SH", endpoint="price/historical", limit=1)  # 工行 A
   fin_stock(symbol="01398.HK", endpoint="price/historical", limit=1)   # 工行 H
-  fin_currency(symbol="CNYHKD", endpoint="spot", limit=1)              # 汇率
+  fin_macro(endpoint="currency/price/historical", symbol="CNYHKD", limit=1)  # 汇率
 ```
 
 ### AH 溢价历史统计
@@ -111,7 +111,7 @@ AH 溢价率 = (A 股价格 / H 股价格 × 汇率) - 1
 ### 每日资金流向
 
 ```
-fin_macro(endpoint="flow/ggt_daily", limit=30)
+fin_market(endpoint="flow/ggt_daily", limit=30)
 
 关键字段:
   - 港股通(沪) 净买入
@@ -133,7 +133,7 @@ fin_macro(endpoint="flow/ggt_daily", limit=30)
 ### 十大活跃股分析
 
 ```
-fin_macro(endpoint="flow/ggt_top10", limit=20)
+fin_market(endpoint="flow/ggt_top10", limit=20)
 
 分析维度:
   1. 买入榜 Top 10 行业分布 → 资金偏好方向
@@ -233,7 +233,7 @@ fin_macro(endpoint="flow/ggt_top10", limit=20)
   HKD 走强至 7.75 → 金管局卖出 HKD，银行体系结余增加
 
 数据监控:
-  fin_currency(symbol="USDHKD", endpoint="spot", limit=30)
+  fin_macro(endpoint="currency/price/historical", symbol="USDHKD", limit=30)
 ```
 
 ### 美联储利率传导
@@ -247,9 +247,8 @@ fin_macro(endpoint="flow/ggt_top10", limit=20)
   → 资金流向美元资产
 
 影响评估:
-  fin_macro(endpoint="us/fed_rate")                    # 联储利率
-  fin_macro(endpoint="us/treasury_yield")              # 美债收益率
-  fin_currency(symbol="USDHKD", endpoint="spot")       # 港元汇率
+  fin_macro(endpoint="treasury_us")                     # 美债收益率 (通过收益率变化间接推断联储利率走向)
+  fin_macro(endpoint="currency/price/historical", symbol="USDHKD")  # 港元汇率
   → 三者联动分析
 ```
 
@@ -301,14 +300,14 @@ Step 1: 基本面
 Step 2: 估值陷阱检查
   fin_stock(endpoint="price/historical", limit=20) → 日均成交额
   → 流动性折价评估
-  → 是否港股通标的 (fin_macro(endpoint="flow/hs_const"))
+  → 是否港股通标的 (fin_market(endpoint="flow/hs_const"))
 
 Step 3: AH 溢价 (如适用)
   A 股对应标的价格 + H 股价格 + 汇率
   → 溢价率 vs 历史分位
 
 Step 4: 南向资金态度
-  fin_macro(endpoint="flow/ggt_top10")
+  fin_market(endpoint="flow/ggt_top10")
   → 是否在十大活跃股 + 净买卖方向
 
 Step 5: 股息税影响
@@ -316,8 +315,8 @@ Step 5: 股息税影响
   → 税前 vs 税后股息率
 
 Step 6: 外部环境
-  fin_macro(endpoint="us/fed_rate")
-  fin_currency(symbol="USDHKD")
+  fin_macro(endpoint="treasury_us")  # 通过美债收益率变化间接推断联储利率影响
+  fin_macro(endpoint="currency/price/historical", symbol="USDHKD")
   → 利率环境对估值的影响
 ```
 

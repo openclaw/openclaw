@@ -6,7 +6,7 @@ metadata: { "openclaw": { "emoji": "📦", "requires": { "extensions": ["findoo-
 
 # ETF & Fund Deep Analysis
 
-ETF 与基金深度分析。使用 **fin_etf** 工具的 9 个 endpoint，覆盖基金信息、持仓、基金经理、净值、指数估值、同类比较等全链路。
+ETF 与基金深度分析。使用 **fin_etf** 工具的 endpoint，覆盖基金信息、持仓、基金经理、净值、指数估值、同类比较等全链路。
 
 ## When to Use
 
@@ -42,17 +42,14 @@ ETF 与基金深度分析。使用 **fin_etf** 工具的 9 个 endpoint，覆盖
 
 #### Endpoints
 
-| endpoint           | Description                   | Example                                                      |
-| ------------------ | ----------------------------- | ------------------------------------------------------------ |
-| `info`             | 基金基本信息 (类型/规模/费率) | `fin_etf(symbol="510300.SH", endpoint="info")`               |
-| `nav`              | 单位净值 / 累计净值历史       | `fin_etf(symbol="510300.SH", endpoint="nav", limit=250)`     |
-| `portfolio`        | 前十大持仓 (季度更新)         | `fin_etf(symbol="510300.SH", endpoint="portfolio")`          |
-| `manager`          | 基金经理信息 + 任期业绩       | `fin_etf(symbol="510300.SH", endpoint="manager")`            |
-| `manager/list`     | 按名字搜索基金经理            | `fin_etf(endpoint="manager/list", manager="张坤")`           |
-| `adj_nav`          | 复权净值 (分红再投资)         | `fin_etf(symbol="510300.SH", endpoint="adj_nav", limit=250)` |
-| `index_valuation`  | 跟踪指数估值 (PE/PB 分位数)   | `fin_etf(symbol="510300.SH", endpoint="index_valuation")`    |
-| `premium_discount` | LOF/ETF 折溢价率              | `fin_etf(endpoint="premium_discount")`                       |
-| `similar`          | 同类基金排名                  | `fin_etf(symbol="510300.SH", endpoint="similar")`            |
+| endpoint         | Description                   | Example                                                           |
+| ---------------- | ----------------------------- | ----------------------------------------------------------------- |
+| `info`           | 基金基本信息 (类型/规模/费率) | `fin_etf(symbol="510300.SH", endpoint="info")`                    |
+| `nav`            | 单位净值 / 累计净值历史       | `fin_etf(symbol="510300.SH", endpoint="nav", limit=250)`          |
+| `fund/portfolio` | 前十大持仓 (季度更新)         | `fin_etf(symbol="510300.SH", endpoint="fund/portfolio")`          |
+| `fund/manager`   | 基金经理信息 + 任期业绩       | `fin_etf(symbol="510300.SH", endpoint="fund/manager")`            |
+| `fund/adj_nav`   | 复权净值 (分红再投资)         | `fin_etf(symbol="510300.SH", endpoint="fund/adj_nav", limit=250)` |
+| `search`         | 基金搜索 (含按经理搜索)       | `fin_etf(endpoint="search", manager="张坤")`                      |
 
 ### Symbol 格式
 
@@ -70,23 +67,23 @@ ETF 与基金深度分析。使用 **fin_etf** 工具的 9 个 endpoint，覆盖
    - 管理费 > 1.5%: 费率偏高，需要 alpha 覆盖
    - 成立 < 1 年: 历史业绩不足以评估
 
-2. **持仓分析** `fin_etf(endpoint="portfolio")` — 前十大持仓集中度
+2. **持仓分析** `fin_etf(endpoint="fund/portfolio")` — 前十大持仓集中度
    - 前十大占比 > 60%: 集中持仓，波动大
    - 行业集中度: 单一行业 > 50% → 行业主题基金特征
    - 与上季度对比: 换手情况反映基金经理风格
 
-3. **基金经理评估** `fin_etf(endpoint="manager")` — 任期、规模、历史业绩
+3. **基金经理评估** `fin_etf(endpoint="fund/manager")` — 任期、规模、历史业绩
    - 任期 > 3 年: 有完整牛熊周期经验
    - 管理规模: 50-300 亿为最佳区间 (太小不稳定，太大船大难掉头)
    - 年化收益 vs 同类排名: 前 1/4 为优秀
    - 最大回撤: 控制在 -25% 以内为良好
 
-4. **净值走势** `fin_etf(endpoint="adj_nav", limit=500)` — 复权净值趋势
+4. **净值走势** `fin_etf(endpoint="fund/adj_nav", limit=500)` — 复权净值趋势
    - 计算年化收益率、最大回撤、夏普比率
    - 与基准指数对比: 超额收益 (alpha) 判断
    - 回撤恢复时间: > 6 个月为较慢
 
-5. **估值定位** `fin_etf(endpoint="index_valuation")` — PE/PB 历史分位数
+5. **估值定位** `fin_index(endpoint="daily_basic")` — 通过 fin_index 获取跟踪指数 PE/PB 历史分位数
    - PE 分位 < 20%: 低估区间，可加仓
    - PE 分位 20%-80%: 正常区间，定投
    - PE 分位 > 80%: 高估区间，减仓/止盈
@@ -94,7 +91,7 @@ ETF 与基金深度分析。使用 **fin_etf** 工具的 9 个 endpoint，覆盖
 
 ### 同类比较分析 (3 步)
 
-1. **同类排名** `fin_etf(endpoint="similar")` — 同类基金业绩排名
+1. **同类排名** (DataHub 暂不支持同类排名) — 可手动对比多只基金 `fund/adj_nav` 净值走势
 2. **费率对比** 对比管理费、托管费、申赎费
 3. **持仓差异** 多只基金 `portfolio` 对比 → 重叠度
 
@@ -103,10 +100,10 @@ ETF 与基金深度分析。使用 **fin_etf** 工具的 9 个 endpoint，覆盖
 ### 按经理选基金
 
 ```
-Step 1: fin_etf(endpoint="manager/list", manager="张坤")
+Step 1: fin_etf(endpoint="search", manager="张坤")
         → 获取经理管理的所有基金列表
 
-Step 2: 对每只基金 fin_etf(endpoint="info") + fin_etf(endpoint="adj_nav")
+Step 2: 对每只基金 fin_etf(endpoint="info") + fin_etf(endpoint="fund/adj_nav")
         → 规模、费率、历史净值
 
 Step 3: 综合评估
@@ -137,7 +134,7 @@ Step 3: 综合评估
 │  ├─ 偏股型 → 看经理 alpha + 最大回撤
 │  └─ 混合型 → 看股债配比 + 回撤控制
 └─ 套利/交易
-   ├─ LOF 折溢价 → fin_etf(endpoint="premium_discount")
+   ├─ LOF 折溢价 → fin_etf(endpoint="premium_discount")  # (DataHub 暂不支持折溢价数据)
    └─ ETF T+0 → 跨市场 ETF / 货币 ETF
 ```
 
@@ -164,10 +161,10 @@ Step 3: 综合评估
 ### 常用指数估值查询
 
 ```
-fin_etf(symbol="510300.SH", endpoint="index_valuation")  # 沪深300
-fin_etf(symbol="510500.SH", endpoint="index_valuation")  # 中证500
-fin_etf(symbol="159915.SZ", endpoint="index_valuation")  # 创业板
-fin_etf(symbol="513100.SH", endpoint="index_valuation")  # 纳斯达克100
+fin_index(endpoint="daily_basic", symbol="000300.SH")  # 通过 fin_index 的 daily_basic 端点获取指数 PE/PB  # 沪深300
+fin_index(endpoint="daily_basic", symbol="000905.SH")  # 中证500 PE/PB
+fin_index(endpoint="daily_basic", symbol="399006.SZ")  # 创业板 PE/PB
+# 纳斯达克100: fin_index 暂不支持海外指数估值
 ```
 
 ### 估值分位数解读

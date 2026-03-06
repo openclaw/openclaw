@@ -79,7 +79,7 @@ Use **fin_macro** for macroeconomic indicators and interest rate data via DataHu
 | `currency/price/historical` | FX historical price    | Daily     | `fin_macro(endpoint="currency/price/historical", symbol="USDCNH")` |
 | `currency/search`           | Search currency pairs  | —         | `fin_macro(endpoint="currency/search", symbol="CNH")`              |
 | `currency/snapshots`        | FX real-time snapshots | Intraday  | `fin_macro(endpoint="currency/snapshots")`                         |
-| `currency/news`             | FX related news        | —         | `fin_macro(endpoint="currency/news")`                              |
+| (FX news via fin_currency)  | FX related news        | —         | `fin_currency(endpoint="news/company", symbol="USDCNH")`           |
 
 ## Global (World Bank) (4 endpoints)
 

@@ -112,7 +112,7 @@ Step 2: 收入增长率
 Step 3: 资本成本 (WACC)
   fin_stock(endpoint="fundamental/balance")    # 债务结构
   fin_stock(endpoint="fundamental/ratios")     # Beta
-  fin_macro(endpoint="cn/bond_yield")          # 无风险利率
+  fin_macro(endpoint="treasury_cn")              # 无风险利率 (10年国债)
 ```
 
 #### WACC 计算
@@ -247,7 +247,7 @@ AH 溢价率 = A 股价格 / (H 股价格 × 汇率) - 1
 数据获取:
   fin_stock(symbol="600519.SH", endpoint="price/historical")  # A 股
   fin_stock(symbol="00519.HK", endpoint="price/historical")   # H 股
-  fin_currency(symbol="USDCNY", endpoint="spot")              # 汇率
+  fin_macro(endpoint="currency/price/historical", symbol="USDCNH")  # 汇率
 
 历史均值: AH 溢价约 30-40%
 判断:
