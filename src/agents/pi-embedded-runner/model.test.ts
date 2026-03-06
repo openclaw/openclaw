@@ -8,9 +8,11 @@ vi.mock("../pi-model-discovery.js", () => ({
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildInlineProviderModels, resolveModel } from "./model.js";
 import {
+  buildOpenAIForwardCompatExpectation,
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
   mockDiscoveredModel,
+  mockOpenAITemplateModel,
   mockOpenAICodexTemplateModel,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
@@ -250,6 +252,26 @@ describe("resolveModel", () => {
 
     expect(result.model?.contextWindow).toBe(262144);
     expect(result.model?.maxTokens).toBe(32768);
+  });
+
+  it("builds an openai forward-compat fallback for gpt-5.4", () => {
+    mockOpenAITemplateModel();
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai",
+      id: "gpt-5.4",
+      expectedModel: buildOpenAIForwardCompatExpectation("gpt-5.4"),
+    });
+  });
+
+  it("builds an openai forward-compat fallback for gpt-5.4-pro", () => {
+    mockOpenAITemplateModel();
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai",
+      id: "gpt-5.4-pro",
+      expectedModel: buildOpenAIForwardCompatExpectation("gpt-5.4-pro"),
+    });
   });
 
   it("propagates reasoning from matching configured fallback model", () => {

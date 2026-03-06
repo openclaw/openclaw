@@ -6,6 +6,10 @@ import { normalizeProviderId } from "./model-selection.js";
 
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
+const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
+const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
+const OPENAI_GPT54_MODEL_IDS = new Set([OPENAI_GPT_54_MODEL_ID, OPENAI_GPT_54_PRO_MODEL_ID]);
+const OPENAI_GPT54_TEMPLATE_MODEL_IDS = ["gpt-5.2", "gpt-5.1", "gpt-5"] as const;
 
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
@@ -87,6 +91,55 @@ function resolveOpenAICodexGpt53FallbackModel(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_TOKENS,
     maxTokens: DEFAULT_CONTEXT_TOKENS,
+  } as Model<Api>);
+}
+
+function resolveOpenAIGpt54ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  if (normalizeProviderId(provider) !== "openai") {
+    return undefined;
+  }
+
+  const trimmedModelId = modelId.trim();
+  const lowerModelId = trimmedModelId.toLowerCase();
+  if (!OPENAI_GPT54_MODEL_IDS.has(lowerModelId)) {
+    return undefined;
+  }
+
+  const template = cloneFirstTemplateModel({
+    normalizedProvider: "openai",
+    trimmedModelId,
+    templateIds: [...OPENAI_GPT54_TEMPLATE_MODEL_IDS],
+    modelRegistry,
+    patch: {
+      api: "openai-responses",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    },
+  });
+  if (template) {
+    return template;
+  }
+
+  return normalizeModelCompat({
+    id: trimmedModelId,
+    name: trimmedModelId,
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text", "image"],
+    cost:
+      lowerModelId === OPENAI_GPT_54_PRO_MODEL_ID
+        ? { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 }
+        : { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+    contextWindow: 1_050_000,
+    maxTokens: 128_000,
   } as Model<Api>);
 }
 
@@ -248,6 +301,7 @@ export function resolveForwardCompatModel(
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   return (
+    resolveOpenAIGpt54ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
