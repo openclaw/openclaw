@@ -1,133 +1,149 @@
 {
-  "meta": {
-    "lastTouchedVersion": "2026.2.26",
-    "lastTouchedAt": "2026-02-27T08:25:14.652Z"
-  },
-  "wizard": {
-    "lastRunAt": "2026-02-27T06:49:20.194Z",
-    "lastRunVersion": "2026.2.26",
-    "lastRunCommand": "onboard",
-    "lastRunMode": "local"
-  },
-  "models": {
-    "mode": "merge",
-    "providers": {
-      "oneai": {
-        "baseUrl": "https://oneai.17usoft.com/v1",
-        "apiKey": "${ONEAI_API_KEY}",
-        "api": "openai-completions",
-        "models": [
-          {
-            "id": "glm-5",
-            "name": "glm-5",
-            "reasoning": true,
-            "input": [
-              "text"
-            ],
-            "compat": {
-              "supportsDeveloperRole": false
-            },
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 100000,
-            "maxTokens": 4096
-          },
-          {
-            "id": "kimi-k2.5",
-            "name": "kimi-k2.5",
-            "reasoning": true,
-            "input": [
-              "text"
-            ],
-            "compat": {
-              "supportsDeveloperRole": false
-            },
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 100000,
-            "maxTokens": 4096
-          }
-        ]
-      }
-    }
-  },
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "oneai/glm-5",
-        "fallbacks": [
-          "oneai/kimi-k2.5"
-        ]
-      },
-      "workspace": "~/.openclaw/workspace",
-      "compaction": {
-        "mode": "safeguard"
-      },
-      "userTimezone": "Asia/Shanghai",
-      "thinkingDefault": "high",
-      "verboseDefault":"on",
-      "maxConcurrent": 4,
-      "subagents": {
-        "maxConcurrent": 8
-      }
-    }
-  },
-  "messages": {
-    "ackReactionScope": "group-mentions"
-  },
-  "commands": {
-    "native": "auto",
-    "nativeSkills": "auto",
-    "restart": true,
-    "ownerDisplay": "raw"
-  },
-  "session": {
-    "dmScope": "per-channel-peer"
-  },
-  "gateway": {
-    "port": 18789,
-    "mode": "local",
-    "bind": "lan",
-    "controlUi": {
-      "enabled": true,
-      "allowedOrigins": [
-        "*"
-      ],
-      "dangerouslyAllowHostHeaderOriginFallback": true,
-      "allowInsecureAuth": true,
-      "dangerouslyDisableDeviceAuth": true
+    "meta": {
+        "lastTouchedVersion": "2026.2.26",
+        "lastTouchedAt": "2026-02-27T08:25:14.652Z"
     },
-    "auth": {
-      "mode": "token",
-      "token": "${OPENCLAW_GATEWAY_TOKEN}"
+    "wizard": {
+        "lastRunAt": "2026-02-27T06:49:20.194Z",
+        "lastRunVersion": "2026.2.26",
+        "lastRunCommand": "onboard",
+        "lastRunMode": "local"
     },
-    "allowRealIpFallback": true,
-    "tailscale": {
-      "mode": "off",
-      "resetOnExit": false
-    },
-    "http": {
-      "endpoints": {
-        "chatCompletions": {
-          "enabled": true
-        },
-        "responses": {
-          "enabled": true
+    "models": {
+        "mode": "merge",
+        "providers": {
+            "oneai": {
+                "baseUrl": "https://oneai.17usoft.com/v1",
+                "apiKey": "${ONEAI_API_KEY}",
+                "api": "openai-completions",
+                "models": [
+                    {
+                        "id": "glm-5",
+                        "name": "glm-5",
+                        "reasoning": true,
+                        "input": [
+                            "text"
+                        ],
+                        "compat": {
+                            "supportsDeveloperRole": false
+                        },
+                        "cost": {
+                            "input": 0,
+                            "output": 0,
+                            "cacheRead": 0,
+                            "cacheWrite": 0
+                        },
+                        "contextWindow": 100000,
+                        "maxTokens": 4096
+                    },
+                    {
+                        "id": "kimi-k2.5",
+                        "name": "kimi-k2.5",
+                        "reasoning": true,
+                        "input": [
+                            "text"
+                        ],
+                        "compat": {
+                            "supportsDeveloperRole": false
+                        },
+                        "cost": {
+                            "input": 0,
+                            "output": 0,
+                            "cacheRead": 0,
+                            "cacheWrite": 0
+                        },
+                        "contextWindow": 100000,
+                        "maxTokens": 4096
+                    }
+                ]
+            }
         }
-      }
+    },
+    "agents": {
+        "defaults": {
+            "model": {
+                "primary": "oneai/glm-5",
+                "fallbacks": [
+                    "oneai/kimi-k2.5"
+                ]
+            },
+            "workspace": "~/.openclaw/workspace",
+            "compaction": {
+                "mode": "safeguard"
+            },
+            "userTimezone": "Asia/Shanghai",
+            "thinkingDefault": "high",
+            "verboseDefault": "on",
+            "maxConcurrent": 4,
+            "subagents": {
+                "maxConcurrent": 8
+            }
+        }
+    },
+    "messages": {
+        "ackReactionScope": "group-mentions"
+    },
+    "commands": {
+        "native": "auto",
+        "nativeSkills": "auto",
+        "restart": true,
+        "ownerDisplay": "raw"
+    },
+    "session": {
+        "dmScope": "per-channel-peer"
+    },
+    "gateway": {
+        "port": 18789,
+        "mode": "local",
+        "bind": "lan",
+        "controlUi": {
+            "enabled": true,
+            "allowedOrigins": [
+                "*"
+            ],
+            "dangerouslyAllowHostHeaderOriginFallback": true,
+            "allowInsecureAuth": true,
+            "dangerouslyDisableDeviceAuth": true
+        },
+        "auth": {
+            "mode": "token",
+            "token": "${OPENCLAW_GATEWAY_TOKEN}"
+        },
+        "allowRealIpFallback": true,
+        "tailscale": {
+            "mode": "off",
+            "resetOnExit": false
+        },
+        "http": {
+            "endpoints": {
+                "chatCompletions": {
+                    "enabled": true
+                },
+                "responses": {
+                    "enabled": true
+                }
+            }
+        }
+    },
+    "skills": {
+        "install": {
+            "nodeManager": "pnpm"
+        }
+    },
+    "plugins": {
+        "entries": {
+            "security-model-lock": {
+                "enabled": true,
+                "config": {
+                    "sensitiveSkills": [
+                    ],
+                    "skillsDir": "/app/skills",
+                    "secureModel": {
+                        "provider": "oneai",
+                        "model": "glm-5"
+                    }
+                }
+            }
+        }
     }
-  },
-  "skills": {
-    "install": {
-      "nodeManager": "pnpm"
-    }
-  }
 }
