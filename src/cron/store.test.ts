@@ -170,4 +170,43 @@ describe("saveCronStore", () => {
 
     spy.mockRestore();
   });
+
+  it("skips backup file when skipBackup is true", async () => {
+    const { storePath } = await makeStorePath();
+    const first = makeStore("job-1", true);
+    const second = makeStore("job-2", false);
+
+    await saveCronStore(storePath, first);
+    await saveCronStore(storePath, second, { skipBackup: true });
+
+    await expect(fs.stat(`${storePath}.bak`)).rejects.toThrow();
+    const loaded = await loadCronStore(storePath);
+    expect(loaded).toEqual(second);
+  });
+});
+
+describe("loadCronStore edge cases", () => {
+  it("returns empty store when root JSON is an array", async () => {
+    const { storePath } = await makeStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(storePath, JSON.stringify([{ id: "job-1" }]), "utf-8");
+    const store = await loadCronStore(storePath);
+    expect(store).toEqual({ version: 1, jobs: [] });
+  });
+
+  it("returns empty store when root JSON is null", async () => {
+    const { storePath } = await makeStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(storePath, "null", "utf-8");
+    const store = await loadCronStore(storePath);
+    expect(store).toEqual({ version: 1, jobs: [] });
+  });
+
+  it("returns empty store when jobs field is missing", async () => {
+    const { storePath } = await makeStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(storePath, JSON.stringify({ version: 1 }), "utf-8");
+    const store = await loadCronStore(storePath);
+    expect(store.jobs).toEqual([]);
+  });
 });
