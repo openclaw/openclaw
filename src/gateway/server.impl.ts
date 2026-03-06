@@ -510,7 +510,7 @@ export async function startGatewayServer(
     const resolvedOverride = resolveControlUiRootOverrideSync(controlUiRootOverride);
     const resolvedOverridePath = path.resolve(controlUiRootOverride);
     controlUiRootState = resolvedOverride
-      ? { kind: "resolved", path: resolvedOverride }
+      ? { kind: "resolved", path: resolvedOverride, allowHardlinks: false }
       : { kind: "invalid", path: resolvedOverridePath };
     if (!resolvedOverride) {
       log.warn(`gateway: controlUi.root not found at ${resolvedOverridePath}`);
@@ -533,7 +533,7 @@ export async function startGatewayServer(
       });
     }
     controlUiRootState = resolvedRoot
-      ? { kind: "resolved", path: resolvedRoot }
+      ? { kind: "resolved", path: resolvedRoot, allowHardlinks: true }
       : { kind: "missing" };
   }
 
