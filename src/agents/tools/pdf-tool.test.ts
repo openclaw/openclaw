@@ -804,3 +804,62 @@ describe("model catalog document support", () => {
     expect(modelSupportsDocument(undefined)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gemini PDF URL construction
+// ---------------------------------------------------------------------------
+
+describe("geminiAnalyzePdf URL construction", () => {
+  it("does not duplicate /v1beta when baseUrl already includes it", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "ok" }] } }],
+        }),
+        { status: 200 },
+      ),
+    );
+    try {
+      const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
+      await geminiAnalyzePdf({
+        apiKey: "test-key",
+        modelId: "gemini-2.5-pro",
+        prompt: "summarize",
+        pdfs: [{ base64: "dGVzdA==" }],
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      });
+      const rawUrl = fetchSpy.mock.calls[0]?.[0];
+      const url = typeof rawUrl === "string" ? rawUrl : JSON.stringify(rawUrl);
+      expect(url).toContain("/v1beta/models/");
+      expect(url).not.toContain("/v1beta/v1beta");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("appends /v1beta when baseUrl omits it", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "ok" }] } }],
+        }),
+        { status: 200 },
+      ),
+    );
+    try {
+      const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
+      await geminiAnalyzePdf({
+        apiKey: "test-key",
+        modelId: "gemini-2.5-pro",
+        prompt: "summarize",
+        pdfs: [{ base64: "dGVzdA==" }],
+        baseUrl: "https://generativelanguage.googleapis.com",
+      });
+      const rawUrl = fetchSpy.mock.calls[0]?.[0];
+      const url = typeof rawUrl === "string" ? rawUrl : JSON.stringify(rawUrl);
+      expect(url).toContain("/v1beta/models/");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
