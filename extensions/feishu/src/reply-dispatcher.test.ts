@@ -106,6 +106,17 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("sets disableBlockStreaming in replyOptions", () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
+  });
+
   it("skips typing indicator when account typingIndicator is disabled", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
