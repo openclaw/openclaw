@@ -15,14 +15,9 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { logVerbose } from "../../globals.js";
-import { resolveSessionModelRef } from "../../gateway/session-utils.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
-import {
-  normalizeMainKey,
-  resolveAgentIdFromSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
@@ -98,7 +93,10 @@ async function sendResetSessionNotice(params: {
   cfg: OpenClawConfig;
   accountId: string | undefined;
   threadId: string | number | undefined;
-  sessionEntry?: SessionEntry;
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  defaultModel: string;
 }): Promise<void> {
   const route = resolveResetSessionNoticeRoute({
     ctx: params.ctx,
@@ -107,24 +105,13 @@ async function sendResetSessionNotice(params: {
   if (!route) {
     return;
   }
-  const noticeAgentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  // Current model: what will be used (session override / runtime model / agent default).
-  const currentModel = resolveSessionModelRef(
-    params.cfg,
-    params.sessionEntry,
-    noticeAgentId,
-  );
-  const defaultModel = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: noticeAgentId,
-  });
   await routeReply({
     payload: {
       text: buildResetSessionNoticeText({
-        provider: currentModel.provider,
-        model: currentModel.model,
-        defaultProvider: defaultModel.provider,
-        defaultModel: defaultModel.model,
+        provider: params.provider,
+        model: params.model,
+        defaultProvider: params.defaultProvider,
+        defaultModel: params.defaultModel,
       }),
     },
     channel: route.channel,
@@ -430,7 +417,10 @@ export async function runPreparedReply(
       cfg,
       accountId: ctx.AccountId,
       threadId: ctx.MessageThreadId,
-      sessionEntry,
+      provider,
+      model,
+      defaultProvider,
+      defaultModel,
     });
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
