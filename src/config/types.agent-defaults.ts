@@ -281,6 +281,17 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
     announceTimeoutMs?: number;
+    /** Retry configuration for sub-agent announce delivery on transient failures. */
+    announceRetry?: {
+      /** Number of retry attempts after initial failure (default: 3, max: 10). */
+      attempts?: number;
+      /** Minimum retry delay in ms (default: 5000). */
+      minDelayMs?: number;
+      /** Maximum retry delay cap in ms with exponential backoff (default: 30000). */
+      maxDelayMs?: number;
+      /** Jitter factor (0-1) applied to delays to avoid thundering herd (default: 0.1). */
+      jitter?: number;
+    };
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
