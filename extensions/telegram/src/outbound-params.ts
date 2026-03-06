@@ -6,6 +6,14 @@ function parseIntegerId(value: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function parsePositiveIntegerId(value: string): number | undefined {
+  if (!/^\d+$/.test(value)) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 export function normalizeTelegramReplyToMessageId(value: unknown): number | undefined {
   if (typeof value === "number") {
     return Number.isFinite(value) ? Math.trunc(value) : undefined;
@@ -18,7 +26,14 @@ export function normalizeTelegramReplyToMessageId(value: unknown): number | unde
 }
 
 export function parseTelegramReplyToMessageId(replyToId?: string | null): number | undefined {
-  return normalizeTelegramReplyToMessageId(replyToId);
+  if (replyToId == null) {
+    return undefined;
+  }
+  const trimmed = replyToId.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return parsePositiveIntegerId(trimmed);
 }
 
 export function parseTelegramThreadId(threadId?: string | number | null): number | undefined {
