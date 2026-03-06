@@ -612,6 +612,29 @@ describe("agent event handler", () => {
     expect(nodePayload.runId).toBe("run-fallback-client");
   });
 
+  it("suppresses chat and node session events for non-control-UI-visible runs", () => {
+    const { broadcast, nodeSendToSession, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-hidden",
+    });
+    registerAgentRunContext("run-hidden", {
+      sessionKey: "session-hidden",
+      isControlUiVisible: false,
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-hidden",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Reply from imessage" },
+    });
+    emitLifecycleEnd(handler, "run-hidden", 2);
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(nodeSendToSession).not.toHaveBeenCalled();
+  });
+
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {
     const { broadcast, handler } = createHarness({
       resolveSessionKeyForRun: () => undefined,
