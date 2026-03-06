@@ -14,6 +14,7 @@ import {
   mockGoogleGeminiCliFlashTemplateModel,
   mockGoogleGeminiCliProTemplateModel,
   mockOpenAICodexTemplateModel,
+  mockDiscoveredModel,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
 
@@ -85,6 +86,62 @@ describe("pi embedded model e2e smoke", () => {
       ...GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
       id: "gemini-3.1-flash-preview",
       name: "gemini-3.1-flash-preview",
+      reasoning: true,
+    });
+  });
+
+  it("builds a google forward-compat fallback for gemini-3.1-pro-preview", () => {
+    mockDiscoveredModel({
+      provider: "google",
+      modelId: "gemini-3-pro-preview",
+      templateModel: {
+        id: "gemini-3-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        provider: "google",
+        api: "google-ai",
+        baseUrl: "https://generativelanguage.googleapis.com",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 64000,
+      },
+    });
+
+    const result = resolveModel("google", "gemini-3.1-pro-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google",
+      id: "gemini-3.1-pro-preview",
+      name: "gemini-3.1-pro-preview",
+      reasoning: true,
+    });
+  });
+
+  it("builds a google forward-compat fallback for gemini-3.1-flash-lite-preview", () => {
+    mockDiscoveredModel({
+      provider: "google",
+      modelId: "gemini-3-flash-preview",
+      templateModel: {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        provider: "google",
+        api: "google-ai",
+        baseUrl: "https://generativelanguage.googleapis.com",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 64000,
+      },
+    });
+
+    const result = resolveModel("google", "gemini-3.1-flash-lite-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google",
+      id: "gemini-3.1-flash-lite-preview",
+      name: "gemini-3.1-flash-lite-preview",
       reasoning: true,
     });
   });
