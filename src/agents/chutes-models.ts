@@ -456,6 +456,10 @@ export function buildChutesModelDefinition(
 ): ModelDefinitionConfig {
   return {
     ...model,
+    // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
+    compat: {
+      supportsUsageInStreaming: false,
+    },
   };
 }
 
@@ -481,6 +485,12 @@ let cachedModels: ModelDefinitionConfig[] | null = null;
 let lastDiscoveryTime = 0;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+/** @internal - For testing only */
+export function clearChutesModelCache() {
+  cachedModels = null;
+  lastDiscoveryTime = 0;
+}
+
 /**
  * Discover models from Chutes.ai API with fallback to static catalog.
  * Mimics the logic in Chutes init script.
@@ -504,13 +514,23 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
   }
 
   try {
-    const response = await fetch(`${CHUTES_BASE_URL}/models`, {
+    let response = await fetch(`${CHUTES_BASE_URL}/models`, {
       signal: AbortSignal.timeout(10_000),
       headers,
     });
 
+    if (response.status === 401 && trimmedKey) {
+      // If auth failed, try again without auth (endpoint is public)
+      response = await fetch(`${CHUTES_BASE_URL}/models`, {
+        signal: AbortSignal.timeout(10_000),
+      });
+    }
+
     if (!response.ok) {
-      log.warn(`GET /v1/models failed: HTTP ${response.status}, using static catalog`);
+      // Only log if it's not a common auth/overload error that we have a fallback for
+      if (response.status !== 401 && response.status !== 503) {
+        log.warn(`GET /v1/models failed: HTTP ${response.status}, using static catalog`);
+      }
       return CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition);
     }
 
@@ -555,6 +575,9 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
         },
         contextWindow: entry.context_length || CHUTES_DEFAULT_CONTEXT_WINDOW,
         maxTokens: entry.max_output_length || CHUTES_DEFAULT_MAX_TOKENS,
+        compat: {
+          supportsUsageInStreaming: false,
+        },
       });
     }
 
