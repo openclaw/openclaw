@@ -310,11 +310,12 @@ jobs:
           set -euo pipefail
 
           if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
-          else
-            BASE="${{ github.event.pull_request.base.sha }}"
+            echo "Running full detect-secrets scan on push."
+            pre-commit run --all-files detect-secrets
+            exit 0
           fi
 
+          BASE="${{ github.event.pull_request.base.sha }}"
           changed_files=()
           if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
             while IFS= read -r path; do
