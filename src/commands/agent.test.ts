@@ -545,6 +545,7 @@ describe("agentCommand", () => {
         {
           message: "[Subagent Task]: Analyze the data",
           lane: "subagent",
+          sessionKey: "agent:main:subagent:task-1",
         },
         runtime,
       );
@@ -553,6 +554,52 @@ describe("agentCommand", () => {
       // the generic "Continue where you left off" continuation prompt.
       const secondCallPrompt = vi.mocked(runEmbeddedPiAgent).mock.calls[1]?.[0]?.prompt;
       expect(secondCallPrompt).toBe("[Subagent Task]: Analyze the data");
+    });
+  });
+
+  it("uses continuation prompt for subagent follow-up fallback (not initial spawn)", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        model: {
+          primary: "anthropic/claude-opus-4-5",
+          fallbacks: ["openai/gpt-5.2"],
+        },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-5.2": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-5.2", name: "GPT-5.2", provider: "openai" },
+      ]);
+      vi.mocked(runEmbeddedPiAgent)
+        .mockRejectedValueOnce(Object.assign(new Error("timeout"), { status: 408 }))
+        .mockResolvedValueOnce({
+          payloads: [{ text: "follow-up done" }],
+          meta: {
+            durationMs: 5,
+            agentMeta: { sessionId: "session-followup", provider: "openai", model: "gpt-5.2" },
+          },
+        });
+
+      // Providing sessionId makes this a follow-up (isNewSession = false),
+      // so the body should NOT be preserved on fallback retry.
+      await agentCommand(
+        {
+          message: "Follow-up instruction",
+          lane: "subagent",
+          sessionId: "session-followup",
+        },
+        runtime,
+      );
+
+      const secondCallPrompt = vi.mocked(runEmbeddedPiAgent).mock.calls[1]?.[0]?.prompt;
+      expect(secondCallPrompt).toBe(
+        "Continue where you left off. The previous model attempt failed or timed out.",
+      );
     });
   });
 
