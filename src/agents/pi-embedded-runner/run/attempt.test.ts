@@ -352,6 +352,79 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("read");
     expect(finalToolCall.id).toBe("call_42");
   });
+
+  it("normalizes functionCall block names too", async () => {
+    const finalFunctionCall = { type: "functionCall", name: " read ", id: "  fn_1  " };
+    const finalMessage = { role: "assistant", content: [finalFunctionCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    expect(finalFunctionCall.name).toBe("read");
+    expect(finalFunctionCall.id).toBe("fn_1");
+  });
+
+  it("recovers downgraded Gemini tool-call text into a structured tool call", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `[Tool Call: exec (ID: toolu_1)]
+Arguments: { "command": "pwd" }`,
+        },
+      ],
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["exec"]));
+    const result = (await stream.result()) as { content?: unknown[] };
+
+    expect(result.content).toEqual([
+      {
+        type: "toolCall",
+        id: "toolu_1",
+        name: "exec",
+        arguments: { command: "pwd" },
+      },
+    ]);
+  });
+
+  it("does not recover downgraded markers when mixed with user-facing prose", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `Let me check that for you.
+[Tool Call: exec (ID: toolu_1)]
+Arguments: { "command": "pwd" }`,
+        },
+      ],
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["exec"]));
+    const result = (await stream.result()) as { content?: Array<{ type?: string }> };
+
+    expect(result.content?.[0]?.type).toBe("text");
+  });
 });
 
 describe("isOllamaCompatProvider", () => {

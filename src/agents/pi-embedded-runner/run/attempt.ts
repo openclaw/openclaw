@@ -61,6 +61,7 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
+import { stripDowngradedToolCallText } from "../../pi-embedded-utils.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
@@ -275,6 +276,138 @@ function isToolCallBlockType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
 }
 
+function isAllowedNormalizedToolName(name: string, allowedToolNames?: Set<string>): boolean {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return true;
+  }
+  return allowedToolNames.has(name);
+}
+
+function findMatchingJsonBoundary(input: string): number | null {
+  if (!input) {
+    return null;
+  }
+  const startChar = input[0];
+  if (startChar !== "{" && startChar !== "[") {
+    return null;
+  }
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      depth += 1;
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return i + 1;
+      }
+    }
+  }
+  return null;
+}
+
+function recoverDowngradedToolCallBlockFromText(
+  text: string,
+  allowedToolNames?: Set<string>,
+): { type: "toolCall"; name: string; id?: string; arguments: Record<string, unknown> } | null {
+  // Never convert mixed prose + marker text into executable calls.
+  if (stripDowngradedToolCallText(text).trim().length > 0) {
+    return null;
+  }
+  const marker = text.match(/\[Tool Call:\s*([^\]\n(]+?)\s*\(ID:\s*([^)]+?)\s*\)\]/i);
+  if (!marker) {
+    return null;
+  }
+  const rawName = marker[1] ?? "";
+  const normalizedName = normalizeToolCallNameForDispatch(rawName, allowedToolNames);
+  if (!normalizedName || !isAllowedNormalizedToolName(normalizedName, allowedToolNames)) {
+    return null;
+  }
+
+  const markerEnd = marker.index !== undefined ? marker.index + marker[0].length : marker[0].length;
+  const tail = text.slice(markerEnd);
+  const argumentsMatch = tail.match(/^\s*Arguments\s*:\s*/i);
+  if (!argumentsMatch) {
+    return null;
+  }
+  const rawArgs = tail.slice(argumentsMatch[0].length).trimStart();
+  const jsonEnd = findMatchingJsonBoundary(rawArgs);
+  if (jsonEnd === null) {
+    return null;
+  }
+  const jsonText = rawArgs.slice(0, jsonEnd).trim();
+  const parsed = (() => {
+    try {
+      return JSON.parse(jsonText);
+    } catch {
+      return null;
+    }
+  })();
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const id = marker[2]?.trim() || undefined;
+  return {
+    type: "toolCall",
+    name: normalizedName,
+    ...(id ? { id } : {}),
+    arguments: parsed as Record<string, unknown>,
+  };
+}
+
+function recoverDowngradedToolCallsInMessage(message: unknown, allowedToolNames?: Set<string>): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content) || content.length === 0) {
+    return;
+  }
+  const hasStructuredToolCall = content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    return isToolCallBlockType((block as { type?: unknown }).type);
+  });
+  if (hasStructuredToolCall) {
+    return;
+  }
+  for (let i = 0; i < content.length; i += 1) {
+    const block = content[i];
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const textBlock = block as { type?: unknown; text?: unknown };
+    if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
+      continue;
+    }
+    const recovered = recoverDowngradedToolCallBlockFromText(textBlock.text, allowedToolNames);
+    if (!recovered) {
+      continue;
+    }
+    content[i] = recovered;
+    return;
+  }
+}
+
 function normalizeToolCallIdsInMessage(message: unknown): void {
   if (!message || typeof message !== "object") {
     return;
@@ -351,6 +484,7 @@ function trimWhitespaceFromToolCallNamesInMessage(
   if (!message || typeof message !== "object") {
     return;
   }
+  recoverDowngradedToolCallsInMessage(message, allowedToolNames);
   const content = (message as { content?: unknown }).content;
   if (!Array.isArray(content)) {
     return;
@@ -360,7 +494,7 @@ function trimWhitespaceFromToolCallNamesInMessage(
       continue;
     }
     const typedBlock = block as { type?: unknown; name?: unknown };
-    if (typedBlock.type !== "toolCall" || typeof typedBlock.name !== "string") {
+    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.name !== "string") {
       continue;
     }
     const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames);
