@@ -619,9 +619,9 @@ install_build_tools_linux() {
 
     if command -v zypper &> /dev/null; then
         if is_root; then
-            run_quiet_step "Installing build tools" zypper install -y build-base python3 cmake
+            run_quiet_step "Installing build tools" zypper install -y gcc gcc-c++ make cmake python3
         else
-            run_quiet_step "Installing build tools" sudo zypper install -y build-base python3 cmake
+            run_quiet_step "Installing build tools" sudo zypper install -y gcc gcc-c++ make cmake python3
         fi
         return 0
     fi 
