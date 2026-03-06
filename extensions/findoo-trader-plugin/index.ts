@@ -15,7 +15,7 @@
  * Notification: Telegram event routing + inline approval buttons
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
@@ -251,13 +251,20 @@ const findooTraderPlugin = {
     const enqueueSystemEvent = runtime.system?.enqueueSystemEvent as
       | ((text: string, options: { sessionKey: string; contextKey?: string }) => void)
       | undefined;
+    const wakeDbPath = api.resolvePath("state/findoo-activity-log.sqlite");
     const wakeBridge = enqueueSystemEvent
       ? new AgentWakeBridge({
           enqueueSystemEvent,
           sessionKeyResolver: () => "main",
           activityLog,
+          dbPath: wakeDbPath,
         })
       : undefined;
+
+    // Drain any undelivered wakes from previous gateway session on startup
+    if (wakeBridge) {
+      setTimeout(() => wakeBridge.drainUndelivered(), 2000);
+    }
 
     const pluginEntries = (api.config.plugins?.entries ?? {}) as Record<
       string,
@@ -440,6 +447,7 @@ const findooTraderPlugin = {
       eventStore,
       activityLog,
       wakeBridge,
+      riskController,
     });
 
     // ── L3 Live Reconciler (position drift detection: live vs paper) ──
@@ -471,6 +479,24 @@ const findooTraderPlugin = {
           }),
         liveHealthMonitor,
         liveReconciler,
+        alertEngine,
+        dataProvider: {
+          async getTicker(symbol: string, market: string) {
+            try {
+              const svc = runtime.services?.get?.("fin-data-provider") as
+                | {
+                    getTicker?: (
+                      symbol: string,
+                      market: string,
+                    ) => Promise<{ close?: number } | null>;
+                  }
+                | undefined;
+              return (await svc?.getTicker?.(symbol, market)) ?? null;
+            } catch {
+              return null;
+            }
+          },
+        },
       },
       5 * 60_000, // 5 minutes
     );
@@ -536,6 +562,7 @@ const findooTraderPlugin = {
       strategyRegistry,
       eventStore,
       wakeBridge,
+      liveExecutor,
       intervalMs: 86_400_000, // 24 hours
     });
     briefScheduler.start();
@@ -727,6 +754,52 @@ const findooTraderPlugin = {
       lifecycleEngineResolver: () => lifecycleRef.engine,
     });
 
+    // ── Emergency Stop Bot Commands (/pause + /resume) ──
+
+    api.registerCommand({
+      name: "pause",
+      description: "Emergency stop — halt all trading immediately",
+      acceptsArgs: false,
+      handler: async () => {
+        riskController.pause();
+        let cancelResult = { cancelled: 0, errors: 0 };
+        try {
+          cancelResult = await liveExecutor.cancelAllOpenOrders();
+        } catch {
+          /* exchange offline — pause still effective via risk gate */
+        }
+        eventStore.addEvent({
+          type: "alert_triggered" as "alert_triggered",
+          title: "Emergency Stop",
+          detail: `Trading paused. Cancelled ${cancelResult.cancelled} open orders. Use /resume to restore.`,
+          status: "completed",
+        });
+        activityLog.append({
+          category: "decision",
+          action: "emergency_pause",
+          detail: `Trading paused. Cancelled ${cancelResult.cancelled} orders, ${cancelResult.errors} errors.`,
+        });
+        return {
+          text: `🚨 Trading PAUSED. ${cancelResult.cancelled} orders cancelled. All trading tools blocked until /resume.`,
+        };
+      },
+    });
+
+    api.registerCommand({
+      name: "resume",
+      description: "Resume trading after emergency stop",
+      acceptsArgs: false,
+      handler: async () => {
+        riskController.resume();
+        activityLog.append({
+          category: "decision",
+          action: "emergency_resume",
+          detail: "Trading resumed by user command.",
+        });
+        return { text: "Trading RESUMED. Risk controls active." };
+      },
+    });
+
     // Telegram approval flow: users reply "approve"/"reject" in Telegram chat.
     // Agent heartbeat reads replies → calls fin_fund_promote / fin_fund_reject.
     // No independent polling — all user interaction is Agent-mediated.
@@ -856,6 +929,36 @@ const findooTraderPlugin = {
 
     // ── Prompt context hook: inject financial state into every agent prompt ──
 
+    // ── Compaction recovery: save financial state before context compression ──
+
+    const recoveryFilePath = api.resolvePath("state/compaction-recovery.json");
+
+    api.on("before_compaction", async () => {
+      const snapshot: Record<string, unknown> = {
+        ts: Date.now(),
+        livePositions: [] as unknown[],
+        openOrders: [] as unknown[],
+        equity: { paper: 0, live: 0 },
+        pending: eventStore.listEvents().filter((e) => e.status === "pending"),
+        paused: riskController.isPaused(),
+      };
+      try {
+        snapshot.livePositions = await liveExecutor.fetchPositions();
+        snapshot.openOrders = await liveExecutor.fetchOpenOrders();
+        const bal = await liveExecutor.fetchBalance();
+        (snapshot.equity as { live: number }).live = Number(
+          (bal as { total?: { USDT?: number } }).total?.USDT ?? 0,
+        );
+      } catch {
+        /* exchange offline — degrade gracefully */
+      }
+      (snapshot.equity as { paper: number }).paper = paperEngine
+        .listAccounts()
+        .reduce((s, a) => s + a.equity, 0);
+
+      writeFileSync(recoveryFilePath, JSON.stringify(snapshot, null, 2));
+    });
+
     api.on("before_prompt_build", async () => {
       const context = buildFinancialContext({
         heartbeatChecklist,
@@ -866,6 +969,7 @@ const findooTraderPlugin = {
         eventStore,
         lifecycleEngine: lifecycleRef.engine,
         ideationScheduler,
+        recoveryFilePath,
       });
       if (!context) return;
       return { prependContext: context };

@@ -24,11 +24,16 @@ type EventStoreLike = {
   };
 };
 
+type LiveExecutorLike = {
+  fetchBalance(exchangeId?: string): Promise<Record<string, unknown>>;
+};
+
 export type DailyBriefSchedulerConfig = {
   paperEngine?: PaperEngineLike;
   strategyRegistry?: StrategyRegistryLike;
   eventStore?: EventStoreLike;
   wakeBridge?: AgentWakeBridge;
+  liveExecutor?: LiveExecutorLike;
   intervalMs?: number; // default 86_400_000 (24h)
 };
 
@@ -86,6 +91,17 @@ export class DailyBriefScheduler {
     }
     const dailyPnlPct = totalEquity > 0 ? (dailyPnl / totalEquity) * 100 : 0;
 
+    // Fetch live exchange equity
+    let liveEquity = 0;
+    if (this._deps.liveExecutor) {
+      try {
+        const bal = await this._deps.liveExecutor.fetchBalance();
+        liveEquity = Number((bal as { total?: { USDT?: number } }).total?.USDT ?? 0);
+      } catch {
+        /* exchange offline — degrade gracefully */
+      }
+    }
+
     // Find top/worst strategies by last backtest return
     let topStrategy: DailyBrief["topStrategy"];
     let worstStrategy: DailyBrief["worstStrategy"];
@@ -123,6 +139,7 @@ export class DailyBriefScheduler {
       marketSummary:
         "Market data aggregation pending — connect a data provider for live summaries.",
       portfolioChange: { totalEquity, dailyPnl, dailyPnlPct },
+      liveEquity,
       topStrategy,
       worstStrategy,
       alerts,
@@ -134,10 +151,11 @@ export class DailyBriefScheduler {
 
     // Write to event store
     if (eventStore) {
+      const liveLabel = liveEquity > 0 ? ` | Live: $${liveEquity.toFixed(2)}` : "";
       eventStore.addEvent({
         type: "system",
         title: "Daily Brief",
-        detail: `Equity: $${totalEquity.toFixed(2)} | Strategies: ${strategyRegistry?.list().length ?? 0} | Alerts: ${alerts.length}`,
+        detail: `Paper: $${totalEquity.toFixed(2)}${liveLabel} | Strategies: ${strategyRegistry?.list().length ?? 0} | Alerts: ${alerts.length}`,
         status: "completed",
       });
     }

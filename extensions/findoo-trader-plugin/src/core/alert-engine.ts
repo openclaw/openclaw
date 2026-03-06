@@ -95,6 +95,41 @@ export class AlertEngine implements AlertEngineLike {
     return (result as { changes: number }).changes > 0;
   }
 
+  /** Get all active (untriggered) alerts with parsed conditions. */
+  getActiveAlerts(): Array<{ id: string; condition: AlertCondition }> {
+    const stmt = this.db.prepare(
+      "SELECT id, condition_json FROM alerts WHERE triggered_at IS NULL",
+    );
+    return (stmt.all() as AlertRow[]).map((r) => ({
+      id: r.id,
+      condition: JSON.parse(r.condition_json) as AlertCondition,
+    }));
+  }
+
+  /**
+   * Check all active alerts against current prices, trigger those that match.
+   * Returns IDs of newly triggered alerts.
+   */
+  checkAndTrigger(getPrice: (symbol: string) => number | undefined): string[] {
+    const triggered: string[] = [];
+    for (const alert of this.getActiveAlerts()) {
+      const { kind, symbol, price: target } = alert.condition;
+      if (!symbol || target == null) continue;
+      const current = getPrice(symbol);
+      if (current == null) continue;
+
+      const hit =
+        (kind === "price_above" && current >= target) ||
+        (kind === "price_below" && current <= target);
+
+      if (hit) {
+        this.triggerAlert(alert.id);
+        triggered.push(alert.id);
+      }
+    }
+    return triggered;
+  }
+
   close(): void {
     this.db.close();
   }

@@ -3,6 +3,37 @@
 适用于 A 股 (CAS 准则)、港股 (IFRS 准则) 及 AH 双重上市公司的财务比率体系。
 所有数据可通过 `fin_stock` / `fin_index` / `fin_macro` 工具获取。
 
+## Table of Contents
+
+- [1. 盈利能力 (Profitability)](#1-盈利能力-profitability)
+  - [1.1 加权 ROE](#11-加权-roe-weighted-roe)
+  - [1.2 扣非 PE](#12-扣非-pe-pe-excluding-non-recurring-items)
+  - [1.3 扣非净利润](#13-扣非净利润-non-gaap-net-income)
+  - [1.4 毛利率](#14-毛利率-gross-margin)
+  - [1.5 营业利润率](#15-营业利润率-operating-margin)
+- [2. 流动性 (Liquidity)](#2-流动性-liquidity)
+  - [2.1 流动比率](#21-流动比率-current-ratio)
+  - [2.2 速动比率](#22-速动比率-quick-ratio)
+  - [2.3 现金比率](#23-现金比率-cash-ratio)
+- [3. 杠杆 (Leverage)](#3-杠杆-leverage)
+  - [3.1 资产负债率](#31-资产负债率-debt-to-asset-ratio)
+  - [3.2 利息保障倍数](#32-利息保障倍数-interest-coverage-ratio)
+  - [3.3 净负债率](#33-净负债率-net-gearing-ratio)
+- [4. 运营效率 (Efficiency)](#4-运营效率-efficiency)
+  - [4.1 总资产周转率](#41-总资产周转率-asset-turnover)
+  - [4.2 应收账款周转天数](#42-应收账款周转天数-dso)
+  - [4.3 存货周转天数](#43-存货周转天数-dio)
+  - [4.4 现金循环周期](#44-现金循环周期-ccc)
+- [5. 估值 (Valuation)](#5-估值-valuation)
+  - [5.1 PE / 扣非 PE](#51-pe--扣非-pe)
+  - [5.2 PB](#52-pb-price-to-book)
+  - [5.3 AH 溢价](#53-ah-溢价-ah-premium)
+  - [5.4 EV/EBITDA](#54-evebitda)
+  - [5.5 PEG Ratio](#55-peg-ratio)
+- [DuPont 分解决策树](#dupont-分解决策树)
+- [CAS vs IFRS 关键差异速查](#cas-vs-ifrs-关键差异速查)
+- [综合分析检查清单](#综合分析检查清单)
+
 ---
 
 ## 1. 盈利能力 (Profitability)

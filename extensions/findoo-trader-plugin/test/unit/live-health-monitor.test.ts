@@ -32,6 +32,7 @@ describe("LiveHealthMonitor (Gap 3)", () => {
           info: { initialCapital: 10000 },
         })),
         cancelOrder: vi.fn(async () => ({})),
+        cancelAllOpenOrders: vi.fn(async () => ({ cancelled: 0, errors: 0 })),
       },
       strategyRegistry: {
         list: vi.fn(() => [
@@ -68,6 +69,7 @@ describe("LiveHealthMonitor (Gap 3)", () => {
           info: { initialCapital: 10000 },
         })),
         cancelOrder: vi.fn(async () => ({})),
+        cancelAllOpenOrders: vi.fn(async () => ({ cancelled: 0, errors: 0 })),
       },
       strategyRegistry: {
         list: vi.fn(() => [
@@ -88,6 +90,7 @@ describe("LiveHealthMonitor (Gap 3)", () => {
       liveExecutor: {
         fetchBalance: vi.fn(async () => ({})),
         cancelOrder: vi.fn(async () => ({})),
+        cancelAllOpenOrders: vi.fn(async () => ({ cancelled: 0, errors: 0 })),
       },
       strategyRegistry: { list: vi.fn(() => []) },
       eventStore,
@@ -106,6 +109,7 @@ describe("LiveHealthMonitor (Gap 3)", () => {
           throw new Error("connection refused");
         }),
         cancelOrder: vi.fn(async () => ({})),
+        cancelAllOpenOrders: vi.fn(async () => ({ cancelled: 0, errors: 0 })),
       },
       strategyRegistry: {
         list: vi.fn(() => [

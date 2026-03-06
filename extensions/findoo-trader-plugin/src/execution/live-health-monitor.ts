@@ -21,6 +21,11 @@ type LiveExecutorLike = {
     orderId: string,
     symbol: string,
   ): Promise<Record<string, unknown>>;
+  cancelAllOpenOrders(): Promise<{ cancelled: number; errors: number }>;
+};
+
+type RiskControllerLike = {
+  pause(): void;
 };
 
 type StrategyRegistryLike = {
@@ -60,6 +65,7 @@ export class LiveHealthMonitor {
   private eventStore: AgentEventSqliteStore;
   private activityLog: ActivityLogStore;
   private wakeBridge?: AgentWakeBridge;
+  private riskController?: RiskControllerLike;
   private thresholds: LiveHealthThresholds;
   private lastAlertAt = 0;
 
@@ -69,6 +75,7 @@ export class LiveHealthMonitor {
     eventStore: AgentEventSqliteStore;
     activityLog: ActivityLogStore;
     wakeBridge?: AgentWakeBridge;
+    riskController?: RiskControllerLike;
     thresholds?: Partial<LiveHealthThresholds>;
   }) {
     this.liveExecutor = deps.liveExecutor;
@@ -76,6 +83,7 @@ export class LiveHealthMonitor {
     this.eventStore = deps.eventStore;
     this.activityLog = deps.activityLog;
     this.wakeBridge = deps.wakeBridge;
+    this.riskController = deps.riskController;
     this.thresholds = { ...DEFAULT_THRESHOLDS, ...deps.thresholds };
   }
 
@@ -139,6 +147,14 @@ export class LiveHealthMonitor {
           condition: "l3_circuit_breaker",
           value: lossPct,
         });
+
+        // Auto-pause trading and cancel all open orders on circuit break
+        this.riskController?.pause();
+        try {
+          await this.liveExecutor.cancelAllOpenOrders();
+        } catch {
+          /* exchange offline — pause still effective */
+        }
       }
 
       return { circuitBroken: true, lossPct, strategiesAffected };

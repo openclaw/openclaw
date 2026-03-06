@@ -9,7 +9,7 @@
 ```markdown
 ---
 name: fin-equity
-description: "Equity research — A/HK/US stock prices, financials, money flow, ownership, dividends, index/ETF. Use when: user asks about stock quotes, company analysis, financial statements, or sector ETFs. NOT for: macro data (use fin-macro), crypto (use fin-crypto-defi), derivatives (use fin-derivatives), market-wide radar (use fin-market-radar)."
+description: "Equity research — A/HK/US stock prices, financials, money flow, ownership, dividends, index/ETF. Use when: user asks about stock quotes, company analysis, financial statements, or sector ETFs. NOT for: macro data (use fin-macro), crypto (use fin-crypto-defi), derivatives (use fin-derivatives), market-wide radar (use fin-a-share-radar)."
 metadata: { "openclaw": { "emoji": "📊", "requires": { "extensions": ["findoo-datahub-plugin"] } } }
 ---
 
@@ -32,7 +32,7 @@ Use **fin_stock** and **fin_index** for equity analysis across A-share, HK, and 
 - 宏观经济数据 (GDP/CPI/PMI/利率) → use `/fin-macro`
 - 加密货币 / DeFi 数据 → use `/fin-crypto-defi`
 - 期货 / 期权 / 可转债 → use `/fin-derivatives`
-- 龙虎榜 / 涨停统计 / 大宗交易 / 北向资金 / 融资融券 → use `/fin-market-radar`
+- 龙虎榜 / 涨停统计 / 大宗交易 / 北向资金 / 融资融券 → use `/fin-a-share-radar`
 - 172 endpoint 通用查询 → use `/fin-data-query`
 
 ## Tools & Parameters

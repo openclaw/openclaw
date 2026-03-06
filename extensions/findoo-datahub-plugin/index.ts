@@ -20,10 +20,13 @@ function buildParams(params: Record<string, unknown>): Record<string, string> {
   if (params.start_date) out.start_date = String(params.start_date);
   if (params.end_date) out.end_date = String(params.end_date);
   if (params.trade_date) out.trade_date = String(params.trade_date);
+  if (params.date) out.date = String(params.date);
   if (params.limit) out.limit = String(params.limit);
   if (params.provider) out.provider = String(params.provider);
   if (params.country) out.country = String(params.country);
   if (params.indicator) out.indicator = String(params.indicator);
+  if (params.manager) out.manager = String(params.manager);
+  if (params.hs_type) out.hs_type = String(params.hs_type);
   return out;
 }
 
@@ -143,6 +146,11 @@ const findooDatahubPlugin = {
             type: "string",
             enum: [
               "price/historical",
+              "price/quote",
+              "profile",
+              "search",
+              "screener",
+              // fundamentals — A-share
               "fundamental/income",
               "fundamental/balance",
               "fundamental/cash",
@@ -151,19 +159,68 @@ const findooDatahubPlugin = {
               "fundamental/dividends",
               "fundamental/adj_factor",
               "fundamental/earnings_forecast",
+              "fundamental/financial_audit",
+              "fundamental/financial_express",
+              "fundamental/forecast_vip",
+              "fundamental/revenue_per_segment",
+              "fundamental/management",
+              // ownership & structure
               "ownership/top10_holders",
+              "ownership/top10_float_holders",
+              "ownership/major_holders",
               "ownership/shareholder_trade",
               "ownership/repurchase",
               "ownership/share_float",
               "ownership/holder_number",
+              "ownership/share_statistics",
               "pledge/stat",
-              "profile",
+              "pledge/detail",
+              // money flow & market
               "moneyflow/individual",
               "market/top_list",
+              // discovery & calendar
               "discovery/gainers",
               "discovery/losers",
+              "discovery/active",
+              "discovery/undervalued_growth",
+              "discovery/undervalued_large_caps",
+              "discovery/growth_tech",
+              "discovery/aggressive_small_caps",
+              "discovery/name_change",
+              "calendar/earnings",
+              "calendar/ipo",
+              "compare/peers",
+              "shorts/short_volume",
+              "concept/concept_detail",
+              "concept/concept_list",
+              // estimates (yfinance only — US/HK stocks, not A-share; may hit rate limits)
+              "estimates/consensus",
+              // additional fundamentals (VIP / tushare-only)
+              "fundamental/backup_daily",
+              "fundamental/balance_vip",
+              "fundamental/cashflow_vip",
+              "fundamental/dividend_detail",
+              "fundamental/historical_splits",
+              "fundamental/income_vip",
+              "fundamental/revenue_segment_vip",
+              "fundamental/stock_factor",
+              // HK
               "hk/income",
+              "hk/balancesheet",
+              "hk/cashflow",
+              "hk/fina_indicator",
+              "hk/basic",
+              "hk/hold",
+              "hk/adj_factor",
+              "hk/trade_cal",
+              // US
               "us/income",
+              "us/balancesheet",
+              "us/cashflow",
+              "us/fina_indicator",
+              "us/basic",
+              "us/adj_factor",
+              "us/trade_cal",
             ],
             description: "DataHub equity endpoint path",
           }),
@@ -273,10 +330,16 @@ const findooDatahubPlugin = {
               "currency/price/historical",
               "currency/search",
               "currency/snapshots",
+              "worldbank/country",
               "worldbank/gdp",
               "worldbank/population",
               "worldbank/inflation",
               "worldbank/indicator",
+              // fixedincome (dedicated DataHub paths, same data as shibor/libor/hibor)
+              "fixedincome/rate/shibor",
+              "fixedincome/rate/shibor_lpr",
+              "fixedincome/rate/libor",
+              "fixedincome/rate/hibor",
             ],
             description: "DataHub economy/currency endpoint path",
           }),
@@ -290,11 +353,19 @@ const findooDatahubPlugin = {
           try {
             const endpoint = String(params.endpoint ?? "cpi");
             const qp = buildParams(params);
-            // Route currency/* endpoints to the currency category
-            const results = endpoint.startsWith("currency/")
-              ? await client.currency(endpoint.replace("currency/", ""), qp)
-              : await client.economy(endpoint, qp);
-            const category = endpoint.startsWith("currency/") ? "currency" : "economy";
+            // Route currency/* and fixedincome/* endpoints to their categories
+            let results: unknown[];
+            let category: string;
+            if (endpoint.startsWith("currency/")) {
+              results = await client.currency(endpoint.replace("currency/", ""), qp);
+              category = "currency";
+            } else if (endpoint.startsWith("fixedincome/")) {
+              results = await client.query(endpoint, qp);
+              category = "fixedincome";
+            } else {
+              results = await client.economy(endpoint, qp);
+              category = "economy";
+            }
             return json({
               success: true,
               endpoint: `${category}/${endpoint.startsWith("currency/") ? endpoint.replace("currency/", "") : endpoint}`,
@@ -394,6 +465,8 @@ const findooDatahubPlugin = {
               "defi/dex_volumes",
               "defi/bridges",
               "defi/coin_prices",
+              "price/historical",
+              "search",
             ],
             description: "DataHub crypto endpoint path",
           }),
@@ -446,8 +519,10 @@ const findooDatahubPlugin = {
               "flow/hsgt_flow",
               "flow/hsgt_top10",
               "flow/ggt_daily",
-              "flow/ggt_top10",
+              "flow/ggt_monthly",
               "flow/hs_const",
+              "market/stock_limit",
+              "market_snapshots",
               "discovery/gainers",
               "discovery/losers",
               "discovery/active",
@@ -456,7 +531,19 @@ const findooDatahubPlugin = {
             description: "DataHub equity endpoint for market data",
           }),
           trade_date: Type.Optional(Type.String({ description: "Trade date, e.g. 2025-02-28" })),
+          date: Type.Optional(
+            Type.String({
+              description:
+                "Date param for hsgt_top10 (uses 'date' not 'trade_date'), e.g. 2025-02-28",
+            }),
+          ),
           symbol: Type.Optional(Type.String({ description: "Symbol for specific queries" })),
+          hs_type: Type.Optional(
+            Type.String({
+              description:
+                "Stock Connect type for hs_const: SH (northbound) or SZ (northbound Shenzhen)",
+            }),
+          ),
           start_date: Type.Optional(Type.String()),
           end_date: Type.Optional(Type.String()),
           limit: Type.Optional(Type.Number()),
@@ -684,6 +771,11 @@ const findooDatahubPlugin = {
           symbol: Type.Optional(
             Type.String({
               description: "ETF/Fund code. ETF: 510050.SH; Fund: 110011",
+            }),
+          ),
+          manager: Type.Optional(
+            Type.String({
+              description: "Fund manager name for search endpoint (e.g. 张坤)",
             }),
           ),
           endpoint: Type.Unsafe<string>({

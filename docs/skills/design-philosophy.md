@@ -96,7 +96,7 @@ metadata: { "openclaw": { "emoji": "<emoji>", "requires": { "extensions": ["find
 ### 正确示例
 
 ```yaml
-description: "Equity research — A/HK/US stock prices, financials, money flow, ownership, dividends, index/ETF. Use when: user asks about stock quotes, company analysis, financial statements, or sector ETFs. NOT for: macro data (use fin-macro), crypto (use fin-crypto-defi), derivatives (use fin-derivatives), market-wide radar (use fin-market-radar)."
+description: "Equity research — A/HK/US stock prices, financials, money flow, ownership, dividends, index/ETF. Use when: user asks about stock quotes, company analysis, financial statements, or sector ETFs. NOT for: macro data (use fin-macro), crypto (use fin-crypto-defi), derivatives (use fin-derivatives), market-wide radar (use fin-a-share-radar)."
 ```
 
 ### 错误示例
@@ -136,7 +136,7 @@ description: "Equity research tool that supports A-share Shanghai and Shenzhen s
 - 宏观经济数据 (GDP/CPI/利率) → use `/fin-macro`
 - 加密货币/DeFi 数据 → use `/fin-crypto-defi`
 - 期货/期权/可转债 → use `/fin-derivatives`
-- 全市场雷达 (龙虎榜/涨停/资金流) → use `/fin-market-radar`
+- 全市场雷达 (龙虎榜/涨停/资金流) → use `/fin-a-share-radar`
 - 通用 endpoint 查询 → use `/fin-data-query`
 ```
 
@@ -237,7 +237,7 @@ description: "Equity research tool that supports A-share Shanghai and Shenzhen s
 | ----------------------------------- | ---------------------------------------------- | ---------------- |
 | 个股行情/财报/股东                  | fin-equity                                     | fin_stock        |
 | 指数/ETF/基金                       | fin-equity                                     | fin_index        |
-| 龙虎榜/涨停/大宗/融资/北向/全球指数 | fin-market-radar                               | fin_market       |
+| 龙虎榜/涨停/大宗/融资/北向/全球指数 | fin-a-share-radar                              | fin_market       |
 | GDP/CPI/PMI/利率/国债/WorldBank     | fin-macro                                      | fin_macro        |
 | 期货/期权/可转债                    | fin-derivatives                                | fin_derivatives  |
 | CEX 行情/CoinGecko/DeFi             | fin-crypto-defi                                | fin_crypto       |
@@ -248,7 +248,7 @@ description: "Equity research tool that supports A-share Shanghai and Shenzhen s
 
 ### 关键边界决策
 
-1. **北向资金归 market-radar**（不归 equity）— 因为它是全市场维度的监控数据
+1. **北向资金归 a-share-radar**（不归 equity）— 因为它是全市场维度的监控数据
 2. **fin_data_ohlcv 不单独建 skill** — 它是 equity 和 crypto-defi 的子能力
 3. **fin_data_regime / fin_data_markets 归 data-query** — 它们是基础设施工具
 

@@ -235,6 +235,8 @@ export type DailyBrief = {
   date: string;
   marketSummary: string;
   portfolioChange: { totalEquity: number; dailyPnl: number; dailyPnlPct: number };
+  /** Live exchange equity in USDT (0 if no exchange configured). */
+  liveEquity?: number;
   topStrategy?: { id: string; name: string; dailyReturn: number };
   worstStrategy?: { id: string; name: string; dailyReturn: number };
   alerts: string[];

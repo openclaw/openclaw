@@ -4,6 +4,8 @@
  * and can make autonomous lifecycle decisions via HEARTBEAT.md + fin_* tools.
  */
 
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+
 export interface PromptContextDeps {
   /** Optional HEARTBEAT-FINANCIAL.md checklist content to inject into the prompt. */
   heartbeatChecklist?: string;
@@ -50,10 +52,36 @@ export interface PromptContextDeps {
       lastCycleAt: number | null;
     };
   };
+  /** Path to compaction recovery JSON (written by before_compaction hook). */
+  recoveryFilePath?: string;
 }
 
 export function buildFinancialContext(deps: PromptContextDeps): string {
   const parts: string[] = [];
+
+  // 0. Compaction recovery — inject saved state from before context compression
+  if (deps.recoveryFilePath) {
+    try {
+      if (existsSync(deps.recoveryFilePath)) {
+        const snap = JSON.parse(readFileSync(deps.recoveryFilePath, "utf-8"));
+        if (Date.now() - snap.ts < 3_600_000) {
+          parts.push("=== COMPACTION RECOVERY ===");
+          const eq = snap.equity ?? {};
+          parts.push(`Live equity: $${eq.live ?? 0} | Paper equity: $${eq.paper ?? 0}`);
+          if (snap.livePositions?.length)
+            parts.push(`Positions: ${JSON.stringify(snap.livePositions)}`);
+          if (snap.openOrders?.length)
+            parts.push(`Open orders: ${JSON.stringify(snap.openOrders)}`);
+          if (snap.pending?.length) parts.push(`Pending approvals: ${snap.pending.length}`);
+          if (snap.paused) parts.push("WARNING: Trading is PAUSED (emergency stop active)");
+          parts.push("=== END RECOVERY ===");
+        }
+        unlinkSync(deps.recoveryFilePath);
+      }
+    } catch {
+      /* no recovery file or parse error */
+    }
+  }
 
   // 1. Paper engine summary
   try {

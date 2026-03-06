@@ -160,6 +160,18 @@ type LiveReconcilerLike = {
   getConsecutiveCritical(strategyId: string): number;
 };
 
+type AlertEngineLike = {
+  getActiveAlerts(): Array<{
+    id: string;
+    condition: { kind: string; symbol?: string; price?: number };
+  }>;
+  checkAndTrigger(getPrice: (symbol: string) => number | undefined): string[];
+};
+
+type DataProviderLike = {
+  getTicker(symbol: string, market: string): Promise<{ close?: number } | null>;
+};
+
 export type LifecycleEngineDeps = {
   strategyRegistry: StrategyRegistryLike;
   fundManagerResolver: () => FundManagerLike | undefined;
@@ -171,6 +183,10 @@ export type LifecycleEngineDeps = {
   liveHealthMonitor?: LiveHealthMonitorLike;
   /** Optional L3 live reconciler — detects drift between live and paper positions. */
   liveReconciler?: LiveReconcilerLike;
+  /** Optional alert engine — auto-triggers price alerts each cycle. */
+  alertEngine?: AlertEngineLike;
+  /** Optional data provider — fetches current prices for alert checks. */
+  dataProvider?: DataProviderLike;
 };
 
 export type LifecycleEngineStats = {
@@ -359,6 +375,46 @@ export class LifecycleEngine {
     // Reconcile pending wake events — conditions that cleared since last cycle
     try {
       this.deps.wakeBridge.reconcilePending?.();
+    } catch {
+      // non-critical
+    }
+
+    // Drain undelivered wakes (retry any that failed to enqueue)
+    try {
+      this.deps.wakeBridge.drainUndelivered?.();
+    } catch {
+      // non-critical
+    }
+
+    // ── 5. Alert auto-trigger — check price alerts each cycle ──
+    try {
+      if (this.deps.alertEngine && this.deps.dataProvider) {
+        const alerts = this.deps.alertEngine.getActiveAlerts();
+        if (alerts.length > 0) {
+          const symbols = [
+            ...new Set(alerts.map((a) => a.condition.symbol).filter(Boolean)),
+          ] as string[];
+          const priceCache = new Map<string, number>();
+
+          for (const sym of symbols) {
+            try {
+              const ticker = await this.deps.dataProvider.getTicker(sym, "crypto");
+              if (ticker?.close) priceCache.set(sym, ticker.close);
+            } catch {
+              /* skip unavailable symbols */
+            }
+          }
+
+          const triggered = this.deps.alertEngine.checkAndTrigger((s) => priceCache.get(s));
+          for (const alertId of triggered) {
+            this.deps.wakeBridge.onHealthAlert({
+              accountId: "alert",
+              condition: `alert_triggered:${alertId}`,
+              value: 0,
+            });
+          }
+        }
+      }
     } catch {
       // non-critical
     }

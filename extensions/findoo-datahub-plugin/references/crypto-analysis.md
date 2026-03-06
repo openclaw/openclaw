@@ -1,7 +1,24 @@
-# 加密资产分析框架
+# Crypto Asset Analysis Framework
 
 系统性的加密货币与 DeFi 协议估值、链上分析及风险评估方法论。
 所有数据通过 `fin_crypto` / `fin_data_ohlcv` / `fin_data_regime` / `fin_ta` 工具获取。
+
+---
+
+## Table of Contents
+
+- [1. Token Valuation Methods](#1-token-估值方法)
+- [2. DeFi Protocol Assessment](#2-defi-协议评估清单)
+- [3. On-chain Indicators](#3-链上指标解读)
+- [4. Market Microstructure](#4-市场微观结构)
+- [5. Technical Analysis Integration](#5-技术分析整合)
+- [6. Risk Framework](#6-风险框架)
+- [7. DeFi Ecosystem Health](#7-defi-生态健康度分析)
+- [8. Protocol Valuation Playbook](#8-协议估值实战)
+- [9. Stablecoin Deep Analysis](#9-稳定币深度分析)
+- [10. DeFi Risk Assessment Checklist](#10-defi-风险评估检查清单)
+- [11. Decision Tree](#11-综合评估决策树)
+- [12. DataHub Quick Reference](#12-datahub-数据获取速查)
 
 ---
 
@@ -72,7 +89,18 @@ fin_crypto(endpoint="coin/market", symbol="aave")
 | 65 - 150 | 市值超前于链上活动          |
 | > 150    | 泡沫信号或纯 Store-of-Value |
 
-### 1.4 Token Terminal 框架
+### 1.4 P/S Ratio (Price to Revenue)
+
+```
+P/S = 市值 / 协议总收入 (含 LP 费用)
+
+与传统 P/S 对比:
+  传统 SaaS: 10-30x
+  DeFi 协议: 参考 10-50x (高增长阶段)
+  成熟协议: 5-15x
+```
+
+### 1.5 Token Terminal 框架
 
 综合评估指标矩阵:
 
@@ -84,6 +112,16 @@ fin_crypto(endpoint="coin/market", symbol="aave")
 | Token 解锁计划     | CoinGecko / Token Unlocks                    | 15%  |
 | 代码提交活跃度     | GitHub                                       | 10%  |
 | 治理参与度         | Snapshot / Tally                             | 10%  |
+
+### 1.6 Token 估值特殊考量
+
+| 因素         | 影响              | 评估方法                |
+| ------------ | ----------------- | ----------------------- |
+| Token 解锁   | 稀释压力          | 查看解锁日历 + 流通比例 |
+| 代币用途     | 治理/收入分享/Gas | 收入分享型 > 纯治理型   |
+| 通胀率       | 实际回报稀释      | 年通胀 > 5% 需谨慎      |
+| 回购/销毁    | 通缩机制          | 实际销毁量 vs 新增发行  |
+| 团队/VC 持仓 | 潜在抛压          | 查看 Tokenomics         |
 
 ---
 
@@ -170,6 +208,12 @@ fin_crypto(endpoint="market/funding_rate", symbol="BTC/USDT")
 | -0.05% - -0.01% | > 3 天   | 空头情绪浓厚 | 反向指标，关注底部   |
 | < -0.05%        | > 1 天   | 极度恐慌     | 强反向信号，分批建仓 |
 
+**Funding + OI 组合判断:**
+
+- 高 funding + OI 增加 = 新杠杆多头入场，脆弱性上升
+- 高 funding + OI 下降 = 多头平仓中，拥挤度缓解
+- 负 funding + OI 增加 = 空头加仓，轧空弹簧蓄力
+
 ### 3.2 Stablecoin 流动分析
 
 **DataHub 调用:**
@@ -190,6 +234,8 @@ fin_crypto(endpoint="defi/stablecoins")
 
 ### 3.3 交易所储备 (Exchange Reserves)
 
+> 注意: 以下指标需 Glassnode / CryptoQuant 等第三方数据源，DataHub 暂不提供。
+
 **逻辑:** BTC 从交易所转出 → 长期持有意愿增强 → 供给收紧 → 看多
 
 | 指标                  | 看多                 | 看空                 |
@@ -197,6 +243,18 @@ fin_crypto(endpoint="defi/stablecoins")
 | BTC 交易所余额        | 30天净流出 > 5万 BTC | 30天净流入 > 5万 BTC |
 | ETH 交易所余额        | 同上逻辑             | 同上逻辑             |
 | 巨鲸转账 (> 1000 BTC) | 转入冷钱包           | 转入交易所           |
+
+### 3.4 链上高级指标参考 (需第三方数据源)
+
+| 指标         | 含义                              | 数据来源                   |
+| ------------ | --------------------------------- | -------------------------- |
+| MVRV Ratio   | 市场市值/已实现市值，衡量浮盈程度 | Glassnode / CryptoQuant    |
+| NUPL         | 净未实现盈亏比，市场情绪温度计    | Glassnode                  |
+| 巨鲸交易追踪 | 大额转账方向和频率                | Nansen / Whale Alert       |
+| 交易所余额   | 交易所 BTC/ETH 存量变化           | CryptoQuant / Glassnode    |
+| 矿工行为     | 算力、矿工余额、矿工收入          | Glassnode / Blockchain.com |
+| Gas 费趋势   | 网络需求和拥堵程度                | Etherscan / Glassnode      |
+| 活跃地址数   | 网络使用率                        | Glassnode / IntoTheBlock   |
 
 ---
 
@@ -259,6 +317,31 @@ z = (current_rate - mean) / std
 | 1% - 3% | 正常杠杆               |
 | 3% - 5% | 杠杆偏高，波动放大     |
 | > 5%    | 极端杠杆，清算级联风险 |
+
+### 4.4 BTC Dominance 信号
+
+```
+fin_crypto(endpoint="coin/global_stats")
+→ 提取 btc_dominance 字段
+
+解读:
+  BTC dominance 上升: 资金回流 BTC (避险/山寨币疲弱)
+  BTC dominance 下降: 资金流向山寨币 (风险偏好上升)
+  BTC dominance > 60%: BTC 主导期
+  BTC dominance < 40%: 山寨币季节
+```
+
+### 4.5 市场深度与流动性
+
+```
+fin_crypto(symbol="BTC/USDT", endpoint="market/orderbook")
+fin_crypto(symbol="BTC/USDT", endpoint="market/trades")
+
+分析:
+  买卖盘深度比 → 短期供需力量
+  成交量趋势 → 市场参与度
+  大单占比 → 机构/巨鲸活动间接信号
+```
 
 ---
 
@@ -341,7 +424,172 @@ fin_crypto(endpoint="market/ticker", symbol="XXX/USDT")
 
 ---
 
-## 7. 综合评估决策树
+## 7. DeFi 生态健康度分析
+
+### 7.1 健康指标速查
+
+| 指标          | 工具                                       | 健康       | 一般     | 衰退     |
+| ------------- | ------------------------------------------ | ---------- | -------- | -------- |
+| 各链 TVL      | `fin_crypto(endpoint="defi/chains")`       | > 10% MoM  | 0-10%    | 负增长   |
+| DEX 交易量    | `fin_crypto(endpoint="defi/dex_volumes")`  | 持续增长   | 平稳     | 连续下降 |
+| 协议数量/TVL  | `fin_crypto(endpoint="defi/protocols")`    | 新协议涌入 | 平稳     | 协议退出 |
+| 跨链桥资金流  | `fin_crypto(endpoint="defi/bridges")`      | 资金流入   | 平衡     | 资金流出 |
+| 总市值/交易量 | `fin_crypto(endpoint="coin/global_stats")` | 量价齐升   | 量缩价稳 | 量价齐跌 |
+
+> **数据限制:** 链上活跃地址数、新地址创建、Gas 费、开发者活动等原始链上指标需通过 Glassnode / Nansen / Etherscan API 获取。
+
+### 7.2 生态分析步骤 (6 步)
+
+```
+Step 1: 市场总览
+  fin_crypto(endpoint="coin/global_stats")
+  → 总市值趋势、BTC dominance、24h 交易量
+
+Step 2: DeFi TVL 趋势
+  fin_crypto(endpoint="defi/tvl_historical")
+  → DeFi 总 TVL 是增长还是萎缩
+
+Step 3: 各链 TVL 分布
+  fin_crypto(endpoint="defi/chains")
+  → 哪些链在吸引资金，哪些在流失
+
+Step 4: DEX 活跃度
+  fin_crypto(endpoint="defi/dex_volumes")
+  → 链上交易需求的代理指标
+
+Step 5: 跨链桥资金流
+  fin_crypto(endpoint="defi/bridges")
+  → 资金在链间的流动方向
+
+Step 6: 综合评分
+  市场总量 x 25% + TVL 趋势 x 25% + 链分布 x 20% + DEX 量 x 15% + 桥资金 x 15%
+```
+
+### 7.3 L1/L2 多链生态对比
+
+| 对比维度   | 数据来源                                         | 评估标准         |
+| ---------- | ------------------------------------------------ | ---------------- |
+| TVL        | `fin_crypto(endpoint="defi/chains")`             | 绝对值 + 增长率  |
+| DEX 交易量 | `fin_crypto(endpoint="defi/dex_volumes")`        | 各链 DEX 份额    |
+| 协议数量   | `fin_crypto(endpoint="defi/protocols")` 按链筛选 | > 100 = 生态丰富 |
+| 跨链桥资金 | `fin_crypto(endpoint="defi/bridges")`            | 资金流入方向     |
+| 收益率水平 | `fin_crypto(endpoint="defi/yields")` 按链筛选    | 收益率中位数     |
+
+**生态判断模板:**
+
+- TVL 增长 + 桥净流入 + DEX 量增 → 生态扩张期，关注该链新项目
+- TVL 下降 + 桥净流出 + DEX 量降 → 生态收缩期，谨慎参与
+- TVL 稳定 + 桥双向活跃 → 成熟生态，关注 yield 机会
+
+---
+
+## 8. 协议估值实战
+
+### 8.1 协议对比分析流程
+
+```
+Step 1: 同赛道协议列表
+  DEX: Uniswap, Curve, SushiSwap, PancakeSwap
+  Lending: Aave, Compound, MakerDAO
+  Derivatives: GMX, dYdX, Synthetix
+
+Step 2: 关键指标对比
+  fin_crypto(endpoint="defi/protocol_tvl", symbol="uniswap")
+  fin_crypto(endpoint="defi/protocol_tvl", symbol="aave")
+  fin_crypto(endpoint="defi/fees")
+  → TVL, fees, P/F, P/TVL
+
+Step 3: 输出对比表
+  | 协议 | TVL | Fees (24h) | P/F | P/TVL | 评级 |
+```
+
+### 8.2 DeFi 风险评分矩阵
+
+| 维度             | 低风险                 | 中风险             | 高风险                   |
+| ---------------- | ---------------------- | ------------------ | ------------------------ |
+| TVL/FDV 比率     | > 1.0                  | 0.3 - 1.0          | < 0.3 (泡沫风险)         |
+| 收入可持续性     | fees/TVL > 5% 年化     | fees/TVL 1-5% 年化 | fees/TVL < 1% (补贴驱动) |
+| TVL 稳定性 (30d) | 波动 < 10%             | 波动 10-30%        | 波动 > 30% (不稳定)      |
+| 协议历史         | > 2 年, 无重大安全事件 | 1-2 年             | < 1 年 或 有安全事件     |
+
+### 8.3 DeFi 协议评估模板 (6 步)
+
+```
+Step 1: 基础数据
+  fin_crypto(endpoint="defi/protocol_tvl", symbol="TARGET")
+  → TVL、链分布
+
+Step 2: 费用与收入
+  fin_crypto(endpoint="defi/fees")
+  → 协议费用排名，提取目标协议数据
+
+Step 3: 估值计算
+  P/F, P/TVL, P/S 计算
+  → 同赛道横向对比
+
+Step 4: 安全评估
+  审计/开源/时间/治理 检查清单
+  → 风险评级
+
+Step 5: 收益分析
+  fin_crypto(endpoint="defi/yields")
+  → 收益来源 + 可持续性
+
+Step 6: 综合评级
+  估值 x 30% + 安全 x 30% + 生态 x 20% + 收益 x 20%
+```
+
+---
+
+## 9. 稳定币深度分析
+
+### 9.1 稳定币生态风险
+
+| 风险类型   | 影响               | 监控指标            |
+| ---------- | ------------------ | ------------------- |
+| 脱锚风险   | 系统性恐慌         | USDT/USDC 实时价格  |
+| 储备金风险 | 挤兑 → 脱锚        | 审计报告 + 储备构成 |
+| 监管风险   | 冻结/限制          | 监管政策动态        |
+| 集中度风险 | 单一稳定币占比过高 | 稳定币市值分布      |
+
+---
+
+## 10. DeFi 风险评估检查清单
+
+### 10.1 协议安全检查清单
+
+| 检查维度     | 内容                       | 风险等级判定      |
+| ------------ | -------------------------- | ----------------- |
+| 审计报告     | 是否有知名审计公司审计     | 未审计 = 高危     |
+| 开源程度     | 合约代码是否开源验证       | 未开源 = 高危     |
+| 时间检验     | 上线时间                   | < 3 个月 = 高危   |
+| TVL 规模     | 锁仓量                     | < $10M = 高危     |
+| 治理去中心化 | 多签/DAO/时间锁            | 单人控制 = 高危   |
+| 组合风险     | 依赖其他协议数量           | > 5 层嵌套 = 高危 |
+| 预言机       | 价格源来源                 | 单一来源 = 高危   |
+| 保险覆盖     | 是否有 Nexus Mutual 等保险 | 有 = 加分         |
+
+### 10.2 DeFi 收益率分析
+
+```
+fin_crypto(endpoint="defi/yields")
+
+收益率来源分类:
+  1. 交易手续费分成 (真实收入) → 可持续
+  2. 流动性挖矿奖励 (Token 激励) → 通常不可持续
+  3. 借贷利差 (供需驱动) → 周期性
+  4. 质押收益 (PoS) → 相对稳定
+
+风险评估:
+  APY > 100%: 极高风险 (可能是 Ponzi)
+  APY 20-100%: 高风险 (激励驱动)
+  APY 5-20%: 中等风险 (需评估来源)
+  APY < 5%: 相对安全 (真实收益)
+```
+
+---
+
+## 11. 综合评估决策树
 
 ```
 新标的评估
@@ -368,7 +616,7 @@ fin_crypto(endpoint="market/ticker", symbol="XXX/USDT")
 
 ---
 
-## 8. DataHub 数据获取速查
+## 12. DataHub 数据获取速查
 
 | 分析场景        | 工具调用                                                 | 关键字段                  |
 | --------------- | -------------------------------------------------------- | ------------------------- |

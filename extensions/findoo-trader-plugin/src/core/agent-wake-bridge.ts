@@ -6,8 +6,13 @@
  * finishes backtests, or a strategy reaches promotion eligibility, this bridge
  * calls enqueueSystemEvent() to wake the heartbeat runner so the LLM agent
  * can autonomously respond.
+ *
+ * Wake events are persisted to SQLite so they survive gateway restarts.
  */
 
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { ActivityLogStore } from "./activity-log-store.js";
 
 type EnqueueFn = (text: string, options: { sessionKey: string; contextKey?: string }) => void;
@@ -18,6 +23,8 @@ export interface AgentWakeBridgeConfig {
   sessionKeyResolver: () => string | undefined;
   /** Optional activity log — every wake event is recorded for the Flow timeline. */
   activityLog?: ActivityLogStore;
+  /** SQLite path for persisting pending wakes across restarts. */
+  dbPath?: string;
 }
 
 export interface PendingWake {
@@ -34,11 +41,27 @@ export class AgentWakeBridge {
   /** contextKeys fired during the current cycle (reset each reconcile). */
   private currentCycleFired = new Set<string>();
   private wakeCounter = 0;
+  private db?: DatabaseSync;
 
   constructor(config: AgentWakeBridgeConfig) {
     this.enqueue = config.enqueueSystemEvent;
     this.resolveSessionKey = config.sessionKeyResolver;
     this.activityLog = config.activityLog;
+
+    if (config.dbPath) {
+      mkdirSync(dirname(config.dbPath), { recursive: true });
+      this.db = new DatabaseSync(config.dbPath);
+      this.db.exec("PRAGMA journal_mode = WAL");
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS pending_wakes (
+          wake_id TEXT PRIMARY KEY,
+          context_key TEXT NOT NULL UNIQUE,
+          text TEXT NOT NULL,
+          fired_at INTEGER NOT NULL,
+          delivered INTEGER NOT NULL DEFAULT 0
+        )
+      `);
+    }
   }
 
   /** Returns pending (unresolved) wake entries. */
@@ -56,6 +79,12 @@ export class AgentWakeBridge {
       if (!this.currentCycleFired.has(key)) {
         this.pendingWakes.delete(key);
         resolved++;
+        // Clean from SQLite too
+        try {
+          this.db?.prepare("DELETE FROM pending_wakes WHERE context_key = ?").run(key);
+        } catch {
+          /* non-critical */
+        }
         this.activityLog?.append({
           category: "wake",
           action: "wake_resolved",
@@ -66,6 +95,47 @@ export class AgentWakeBridge {
     }
     this.currentCycleFired.clear();
     return resolved;
+  }
+
+  /**
+   * Retry delivering any undelivered wakes from SQLite.
+   * Called on gateway start and after each lifecycle cycle.
+   */
+  drainUndelivered(): number {
+    if (!this.db) return 0;
+    let delivered = 0;
+    const sessionKey = this.resolveSessionKey();
+    if (!sessionKey) return 0;
+
+    try {
+      const rows = this.db
+        .prepare(
+          "SELECT wake_id, context_key, text, fired_at FROM pending_wakes WHERE delivered = 0",
+        )
+        .all() as Array<{ wake_id: string; context_key: string; text: string; fired_at: number }>;
+
+      for (const row of rows) {
+        try {
+          this.enqueue(row.text, { sessionKey, contextKey: row.context_key });
+          this.db
+            .prepare("UPDATE pending_wakes SET delivered = 1 WHERE wake_id = ?")
+            .run(row.wake_id);
+          delivered++;
+          this.activityLog?.append({
+            category: "wake",
+            action: "wake_drain_delivered",
+            detail: `Drained undelivered wake: ${row.context_key}`,
+            metadata: { wakeId: row.wake_id, contextKey: row.context_key },
+          });
+        } catch {
+          /* individual enqueue failure — will retry next cycle */
+        }
+      }
+    } catch {
+      /* db read failure — non-critical */
+    }
+
+    return delivered;
   }
 
   /** Health alert detected (DD, consecutive loss, low Sharpe). */
@@ -164,12 +234,44 @@ export class AgentWakeBridge {
     const wakeId = `wake-${++this.wakeCounter}-${Date.now()}`;
     this.pendingWakes.set(contextKey, { wakeId, firedAt: Date.now(), contextKey });
 
+    // Persist to SQLite first (survives restart)
+    try {
+      this.db
+        ?.prepare(
+          "INSERT OR REPLACE INTO pending_wakes (wake_id, context_key, text, fired_at, delivered) VALUES (?, ?, ?, ?, 0)",
+        )
+        .run(wakeId, contextKey, text, Date.now());
+    } catch {
+      /* SQLite write failure — continue with in-memory */
+    }
+
     const sessionKey = this.resolveSessionKey();
-    if (!sessionKey) return; // no active session — skip silently
+    if (!sessionKey) {
+      // No active session — event is persisted in SQLite, will be delivered via drainUndelivered()
+      this.activityLog?.append({
+        category: "wake",
+        action: "wake_deferred",
+        detail: `Wake deferred (no session): ${contextKey}`,
+        metadata: { wakeId, contextKey },
+      });
+      return;
+    }
     try {
       this.enqueue(text, { sessionKey, contextKey });
+      // Mark as delivered in SQLite
+      try {
+        this.db?.prepare("UPDATE pending_wakes SET delivered = 1 WHERE wake_id = ?").run(wakeId);
+      } catch {
+        /* non-critical */
+      }
     } catch {
-      // enqueue may throw if sessionKey is invalid — fail silently
+      // enqueue failed — event stays in SQLite for retry
+      this.activityLog?.append({
+        category: "wake",
+        action: "wake_enqueue_failed",
+        detail: `Wake enqueue failed, persisted for retry: ${contextKey}`,
+        metadata: { wakeId, contextKey },
+      });
     }
   }
 }

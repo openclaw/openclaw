@@ -7,8 +7,21 @@ import type { OrderRequest, RiskEvaluation, TradingRiskConfig } from "../types.j
 export class RiskController {
   private dailyLossUsd = 0;
   private dailyLossResetDate = "";
+  private paused = false;
 
   constructor(private config: TradingRiskConfig) {}
+
+  pause(): void {
+    this.paused = true;
+  }
+
+  resume(): void {
+    this.paused = false;
+  }
+
+  isPaused(): boolean {
+    return this.paused;
+  }
 
   /** Reset daily loss tracking if the date has changed. */
   private resetDailyIfNeeded(): void {
@@ -31,6 +44,13 @@ export class RiskController {
       return {
         tier: "reject",
         reason: "Trading is disabled. Set financial.trading.enabled=true in config.",
+      };
+    }
+
+    if (this.paused) {
+      return {
+        tier: "reject",
+        reason: "Trading paused (emergency stop). Use /resume to restore.",
       };
     }
 

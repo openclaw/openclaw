@@ -119,4 +119,35 @@ export class LiveExecutor {
     const { bridge } = await this.getBridge(exchangeId);
     return bridge.fetchOrder(orderId, symbol);
   }
+
+  /** Cancel all open orders across all configured exchanges. */
+  async cancelAllOpenOrders(): Promise<{ cancelled: number; errors: number }> {
+    let cancelled = 0;
+    let errors = 0;
+    const exchanges = this.registry.listExchanges();
+
+    for (const ex of exchanges) {
+      try {
+        const { bridge } = await this.getBridge(ex.id);
+        const openOrders = (await bridge.fetchOpenOrders()) as Array<{
+          id?: string;
+          symbol?: string;
+        }>;
+        for (const order of openOrders) {
+          try {
+            if (order.id && order.symbol) {
+              await bridge.cancelOrder(order.id, order.symbol);
+              cancelled++;
+            }
+          } catch {
+            errors++;
+          }
+        }
+      } catch {
+        errors++;
+      }
+    }
+
+    return { cancelled, errors };
+  }
 }
