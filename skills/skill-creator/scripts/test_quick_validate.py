@@ -67,6 +67,61 @@ metadata: |
 
         self.assertTrue(valid, message)
 
+    def test_rejects_allowed_tools_when_not_a_list(self):
+        skill_dir = self.temp_dir / "bad-allowed-tools"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: bad-allowed-tools
+description: invalid allowed tools
+allowed-tools: gh
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        valid, message = quick_validate.validate_skill(skill_dir)
+
+        self.assertFalse(valid)
+        self.assertEqual(message, "'allowed-tools' must be a list of tool names")
+
+    def test_rejects_allowed_tools_non_string_entries(self):
+        skill_dir = self.temp_dir / "non-string-allowed-tools"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: non-string-allowed-tools
+description: invalid list entries
+allowed-tools:
+  - gh
+  - 123
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        valid, message = quick_validate.validate_skill(skill_dir)
+
+        self.assertFalse(valid)
+        self.assertEqual(message, "'allowed-tools' entry #2 must be a string")
+
+    def test_rejects_allowed_tools_empty_entries(self):
+        skill_dir = self.temp_dir / "empty-allowed-tool"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: empty-allowed-tool
+description: invalid empty tool
+allowed-tools:
+  - gh
+  - "   "
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        valid, message = quick_validate.validate_skill(skill_dir)
+
+        self.assertFalse(valid)
+        self.assertEqual(message, "'allowed-tools' entry #2 cannot be empty")
+
 
 if __name__ == "__main__":
     main()
