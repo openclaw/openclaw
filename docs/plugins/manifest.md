@@ -66,6 +66,10 @@ Optional keys:
 - The manifest is **required for all plugins**, including local filesystem loads.
 - Runtime still loads the plugin module separately; the manifest is only for
   discovery + validation.
+- Exclusive plugin kinds are selected through `plugins.slots.*`.
+  - `kind: "memory"` is selected by `plugins.slots.memory`.
+  - `kind: "context-engine"` is selected by `plugins.slots.contextEngine`
+    (default: built-in `legacy`).
 - If your plugin depends on native modules, document the build steps and any
   package-manager allowlist requirements (for example, pnpm `allow-build-scripts`
   - `pnpm rebuild <package>`).
