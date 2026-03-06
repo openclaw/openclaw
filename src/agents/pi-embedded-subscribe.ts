@@ -1,10 +1,15 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { InlineCodeState } from "../markdown/code-spans.js";
+import type {
+  EmbeddedPiSubscribeContext,
+  EmbeddedPiSubscribeState,
+} from "./pi-embedded-subscribe.handlers.types.js";
+import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
@@ -12,12 +17,7 @@ import {
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
-import type {
-  EmbeddedPiSubscribeContext,
-  EmbeddedPiSubscribeState,
-} from "./pi-embedded-subscribe.handlers.types.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
-import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
@@ -333,15 +333,16 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!params.onToolResult) {
       return;
     }
-    const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
+    const { text: cleanedText, mediaUrls, audioAsVoice } = parseReplyDirectives(message);
     const filteredMediaUrls = filterToolResultMediaUrls(toolName, mediaUrls ?? []);
-    if (!cleanedText && filteredMediaUrls.length === 0) {
+    if (!cleanedText && filteredMediaUrls.length === 0 && !audioAsVoice) {
       return;
     }
     try {
       void params.onToolResult({
         text: cleanedText,
         mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
+        audioAsVoice,
       });
     } catch {
       // ignore tool result delivery failures
@@ -357,11 +358,37 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!output) {
       return;
     }
+    // Parse directives from raw output BEFORE code-fence wrapping,
+    // since fenced code blocks prevent MEDIA/audioAsVoice extraction.
+    const rawDirectives = parseReplyDirectives(output);
     const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
       markdown: useMarkdown,
     });
-    const message = `${agg}\n${formatToolOutputBlock(output)}`;
-    emitToolResultMessage(toolName, message);
+    const wrappedOutput = rawDirectives.text ? formatToolOutputBlock(rawDirectives.text) : "";
+    const message = wrappedOutput ? `${agg}\n${wrappedOutput}` : agg;
+    const {
+      text: cleanedText,
+      mediaUrls: aggMediaUrls,
+      audioAsVoice: aggAudioAsVoice,
+    } = parseReplyDirectives(message);
+    const mediaUrls = [...new Set([...(rawDirectives.mediaUrls ?? []), ...(aggMediaUrls ?? [])])];
+    const audioAsVoice = rawDirectives.audioAsVoice || aggAudioAsVoice;
+    const filteredMediaUrls = filterToolResultMediaUrls(toolName, mediaUrls);
+    if (!cleanedText && filteredMediaUrls.length === 0 && !audioAsVoice) {
+      return;
+    }
+    if (!params.onToolResult) {
+      return;
+    }
+    try {
+      void params.onToolResult({
+        text: cleanedText,
+        mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
+        audioAsVoice,
+      });
+    } catch {
+      // ignore tool result delivery failures
+    }
   };
 
   const stripBlockTags = (
