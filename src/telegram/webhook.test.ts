@@ -386,6 +386,43 @@ describe("startTelegramWebhook", () => {
     );
   });
 
+  it("does not mark activity when webhook secret verification fails", async () => {
+    const onUpdateReceived = vi.fn();
+    webhookCallbackSpy.mockImplementationOnce(
+      () =>
+        vi.fn(
+          async (
+            _update: unknown,
+            _reply: (json: string) => Promise<void>,
+            secretHeader: string | undefined,
+            unauthorized: () => Promise<void>,
+          ) => {
+            if (secretHeader !== TELEGRAM_SECRET) {
+              await unauthorized();
+            }
+          },
+        ) as unknown as typeof handlerSpy,
+    );
+
+    await withStartedWebhook(
+      {
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        onUpdateReceived,
+      },
+      async ({ port }) => {
+        const payload = JSON.stringify({ update_id: 2, message: { text: "hello" } });
+        const response = await postWebhookJson({
+          url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+          payload,
+          secret: "wrong-secret",
+        });
+        expect(response.status).toBe(401);
+        expect(onUpdateReceived).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   it("rejects startup when webhook secret is missing", async () => {
     await expect(
       startTelegramWebhook({

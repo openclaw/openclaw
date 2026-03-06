@@ -169,9 +169,8 @@ export async function startTelegramWebhook(opts: {
         respondText(400, body.error);
         return;
       }
-      opts.onUpdateReceived?.(Date.now());
-
       let replied = false;
+      let unauthorizedRequest = false;
       const reply = async (json: string) => {
         if (replied) {
           return;
@@ -187,6 +186,7 @@ export async function startTelegramWebhook(opts: {
         if (replied) {
           return;
         }
+        unauthorizedRequest = true;
         replied = true;
         respondText(401, "unauthorized");
       };
@@ -194,6 +194,9 @@ export async function startTelegramWebhook(opts: {
       const secretHeader = Array.isArray(secretHeaderRaw) ? secretHeaderRaw[0] : secretHeaderRaw;
 
       await handler(body.value, reply, secretHeader, unauthorized);
+      if (!unauthorizedRequest) {
+        opts.onUpdateReceived?.(Date.now());
+      }
       if (!replied) {
         respondText(200);
       }
