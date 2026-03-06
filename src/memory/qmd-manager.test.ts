@@ -1966,6 +1966,31 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("runs qmd embed in search mode when embedInterval is explicitly configured", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: { interval: "5m", debounceMs: 0, onBoot: false, embedInterval: "30m" },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager({ mode: "full" });
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+    const commandCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
+    expect(commandCalls).toEqual([["update"], ["embed"]]);
+    await manager.close();
+  });
+
   it("retries boot update when qmd reports a retryable lock error", async () => {
     cfg = {
       ...cfg,

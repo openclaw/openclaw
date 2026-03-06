@@ -1124,7 +1124,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private shouldRunEmbed(force?: boolean): boolean {
-    if (this.qmd.searchMode === "search") {
+    if (this.qmd.searchMode === "search" && !this.qmd.update.explicitEmbedInterval) {
       return false;
     }
     const now = Date.now();
