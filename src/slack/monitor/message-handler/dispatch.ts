@@ -81,7 +81,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ? {
         username: outboundIdentity.name,
         iconUrl: outboundIdentity.avatarUrl,
-        iconEmoji: outboundIdentity.emoji,
+        // Slack API expects icon_emoji in :name: format.
+        iconEmoji: outboundIdentity.emoji
+          ? outboundIdentity.emoji.startsWith(":") && outboundIdentity.emoji.endsWith(":")
+            ? outboundIdentity.emoji
+            : `:${outboundIdentity.emoji}:`
+          : undefined,
       }
     : undefined;
 
@@ -363,6 +368,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     token: ctx.botToken,
     accountId: account.accountId,
     maxChars: Math.min(ctx.textLimit, 4000),
+    ...(slackIdentity ? { identity: slackIdentity } : {}),
     resolveThreadTs: () => {
       const ts = replyPlan.nextThreadTs();
       if (ts) {
