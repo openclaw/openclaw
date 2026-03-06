@@ -614,7 +614,6 @@ function normalizeToolCallNameForDispatch(
   if (exact) {
     return exact;
   }
-
   // Some providers put malformed toolCallId-like strings into `name`
   // itself (for example `functionsread3`). Recover conservatively from the
   // name token before consulting the separate id so explicit names like
