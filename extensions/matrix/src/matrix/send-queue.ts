@@ -1,11 +1,32 @@
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-
 export const DEFAULT_SEND_GAP_MS = 150;
 
 type MatrixSendQueueOptions = {
   gapMs?: number;
   delayFn?: (ms: number) => Promise<void>;
 };
+
+// Minimal keyed async queue: serializes concurrent tasks per key.
+// Inlined to avoid openclaw/plugin-sdk/keyed-async-queue alias resolution
+// failures in npm-installed (non-workspace) plugin environments.
+class KeyedAsyncQueue {
+  private readonly tails = new Map<string, Promise<void>>();
+
+  enqueue<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.tails.get(key) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(task);
+    const tail = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.tails.set(key, tail);
+    void tail.finally(() => {
+      if (this.tails.get(key) === tail) {
+        this.tails.delete(key);
+      }
+    });
+    return current;
+  }
+}
 
 // Serialize sends per room to preserve Matrix delivery order.
 const roomQueues = new KeyedAsyncQueue();
