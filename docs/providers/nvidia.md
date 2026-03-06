@@ -20,6 +20,14 @@ openclaw onboard --auth-choice skip
 openclaw models set nvidia/nvidia/llama-3.1-nemotron-70b-instruct
 ```
 
+OpenClaw model refs still use `provider/model`, so NVIDIA configs should keep the
+leading `nvidia/` provider prefix. NVIDIA NIM model IDs can themselves contain
+slashes, so a valid OpenClaw ref can look doubled, such as
+`nvidia/nvidia/llama-3.1-nemotron-70b-instruct` or `nvidia/moonshotai/kimi-k2.5`.
+OpenClaw parses model refs on the first `/`, keeps `nvidia` as the provider, and
+sends the full remaining NVIDIA model ID (`nvidia/llama-3.1-nemotron-70b-instruct`,
+`moonshotai/kimi-k2.5`, and so on) to the NVIDIA API.
+
 If you still pass `--token`, remember it lands in shell history and `ps` output; prefer the env var when possible.
 
 ## Config snippet
@@ -46,6 +54,7 @@ If you still pass `--token`, remember it lands in shell history and `ps` output;
 ## Model IDs
 
 - `nvidia/llama-3.1-nemotron-70b-instruct` (default)
+- `moonshotai/kimi-k2.5`
 - `meta/llama-3.3-70b-instruct`
 - `nvidia/mistral-nemo-minitron-8b-8k-instruct`
 

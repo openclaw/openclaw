@@ -444,6 +444,27 @@ describe("model-selection", () => {
   });
 
   describe("resolveConfiguredModelRef", () => {
+    it("preserves nested NVIDIA model ids after the provider prefix", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "nvidia/moonshotai/kimi-k2.5" },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-4",
+      });
+
+      expect(result).toEqual({
+        provider: "nvidia",
+        model: "moonshotai/kimi-k2.5",
+      });
+    });
+
     it("should fall back to anthropic and warn if provider is missing for non-alias", () => {
       setLoggerOverride({ level: "silent", consoleLevel: "warn" });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

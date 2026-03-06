@@ -182,6 +182,29 @@ describe("buildInlineProviderModels", () => {
 });
 
 describe("resolveModel", () => {
+  it("preserves slash-containing NVIDIA model ids for OpenAI-compatible requests", () => {
+    const cfg = {
+      models: {
+        providers: {
+          nvidia: {
+            baseUrl: "https://integrate.api.nvidia.com/v1",
+            api: "openai-completions",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("nvidia", "moonshotai/kimi-k2.5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "nvidia",
+      id: "moonshotai/kimi-k2.5",
+      api: "openai-completions",
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+    });
+  });
+
   it("includes provider baseUrl in fallback model", () => {
     const cfg = {
       models: {
