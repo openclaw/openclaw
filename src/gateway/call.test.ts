@@ -13,6 +13,7 @@ let lastClientOptions: {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
+  allowPrivateWs?: boolean;
   scopes?: string[];
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
@@ -38,6 +39,7 @@ vi.mock("./client.js", () => ({
       url?: string;
       token?: string;
       password?: string;
+      allowPrivateWs?: boolean;
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
@@ -492,6 +494,24 @@ describe("buildGatewayConnectionDetails", () => {
 
     expect(details.url).toBe("ws://127.0.0.1:18789");
   });
+
+  it("returns the plaintext-internal override when enabled in config", () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        dangerouslyAllowPlaintextInternal: true,
+        remote: { url: "ws://192.168.1.42:18789" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://192.168.1.42:18789");
+    expect(details.allowPrivateWs).toBe(true);
+  });
 });
 
 describe("callGateway error details", () => {
@@ -581,6 +601,24 @@ describe("callGateway error details", () => {
         requiredMethods: ["secrets.resolve"],
       }),
     ).rejects.toThrow(/does not support required method "secrets\.resolve"/i);
+  });
+
+  it("propagates plaintext-internal override from loaded config to GatewayClient", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        dangerouslyAllowPlaintextInternal: true,
+        remote: { url: "ws://192.168.1.42:18789" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.url).toBe("ws://192.168.1.42:18789");
+    expect(lastClientOptions?.allowPrivateWs).toBe(true);
   });
 });
 

@@ -165,6 +165,7 @@ export async function gatewayStatusCommand(
               url: target.url,
               auth,
               timeoutMs,
+              allowPrivateWs: cfg.gateway?.dangerouslyAllowPlaintextInternal === true,
             });
             const configSummary = probe.configSnapshot
               ? extractConfigSummary(probe.configSnapshot)

@@ -46,6 +46,7 @@ type ResolvedGatewayConnection = {
   url: string;
   token?: string;
   password?: string;
+  allowPrivateWs?: boolean;
 };
 
 function trimToUndefined(value: unknown): string | undefined {
@@ -150,6 +151,7 @@ export class GatewayChatClient {
       url: connection.url,
       token: connection.token,
       password: connection.password,
+      allowPrivateWs: connection.allowPrivateWs,
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
@@ -285,10 +287,11 @@ export async function resolveGatewayConnection(
     explicitAuth,
     errorHint: "Fix: pass --token or --password when using --url.",
   });
-  const url = buildGatewayConnectionDetails({
+  const connectionDetails = buildGatewayConnectionDetails({
     config,
     ...(urlOverride ? { url: urlOverride } : {}),
-  }).url;
+  });
+  const url = connectionDetails.url;
 
   if (urlOverride) {
     return {
@@ -326,7 +329,7 @@ export async function resolveGatewayConnection(
           "Missing gateway auth credentials.",
       );
     }
-    return { url, token, password };
+    return { url, token, password, allowPrivateWs: connectionDetails.allowPrivateWs };
   }
 
   if (gatewayAuthMode === "none" || gatewayAuthMode === "trusted-proxy") {
@@ -334,6 +337,7 @@ export async function resolveGatewayConnection(
       url,
       token: explicitAuth.token ?? envToken,
       password: explicitAuth.password ?? envPassword,
+      allowPrivateWs: connectionDetails.allowPrivateWs,
     };
   }
 
@@ -366,6 +370,7 @@ export async function resolveGatewayConnection(
       url,
       token: explicitAuth.token ?? envToken,
       password,
+      allowPrivateWs: connectionDetails.allowPrivateWs,
     };
   }
 
@@ -389,6 +394,7 @@ export async function resolveGatewayConnection(
       url,
       token,
       password: explicitAuth.password ?? envPassword,
+      allowPrivateWs: connectionDetails.allowPrivateWs,
     };
   }
 
@@ -415,6 +421,7 @@ export async function resolveGatewayConnection(
       url,
       token: explicitAuth.token ?? envToken,
       password,
+      allowPrivateWs: connectionDetails.allowPrivateWs,
     };
   }
 
@@ -437,5 +444,6 @@ export async function resolveGatewayConnection(
     url,
     token,
     password: explicitAuth.password ?? envPassword,
+    allowPrivateWs: connectionDetails.allowPrivateWs,
   };
 }

@@ -407,6 +407,7 @@ export class DiscordExecApprovalHandler {
 
     this.gatewayClient = new GatewayClient({
       url: gatewayUrl,
+      allowPrivateWs: this.opts.cfg.gateway?.dangerouslyAllowPlaintextInternal === true,
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: "Discord Exec Approvals",
       mode: GATEWAY_CLIENT_MODES.BACKEND,

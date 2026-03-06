@@ -71,6 +71,7 @@ describe("resolveGatewayConnection", () => {
     expect(result).toEqual({
       url: "wss://override.example/ws",
       ...expected,
+      allowPrivateWs: false,
     });
   });
 
