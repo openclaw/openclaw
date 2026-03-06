@@ -906,13 +906,14 @@ export const chatHandlers: GatewayRequestHandlers = {
           (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
           (isConfiguredMainSessionScope && client?.connect !== undefined && !isFromWebchatClient)),
       );
-      const hasDeliverableRoute =
+      const hasDeliverableRoute = Boolean(
         shouldDeliverExternally &&
         canInheritDeliverableRoute &&
         routeChannelCandidate &&
         routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
         typeof routeToCandidate === "string" &&
-        routeToCandidate.trim().length > 0;
+        routeToCandidate.trim().length > 0,
+      );
       const originatingChannel = hasDeliverableRoute
         ? routeChannelCandidate
         : INTERNAL_MESSAGE_CHANNEL;
