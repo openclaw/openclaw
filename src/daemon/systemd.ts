@@ -175,7 +175,11 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
     normalized.includes("masked") ||
     normalized.includes("not-found") ||
     normalized.includes("could not be found") ||
-    normalized.includes("failed to get unit file state")
+    normalized.includes("failed to get unit file state") ||
+    // systemctl may be present but the user bus can be unavailable in
+    // non-interactive environments (e.g. running under sudo). Treat it as
+    // "not enabled" so install flows can continue.
+    normalized.includes("failed to connect to bus")
   );
 }
 
