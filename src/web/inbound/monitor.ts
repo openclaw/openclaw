@@ -162,6 +162,7 @@ export async function monitorWebInbox(options: {
     groupParticipants?: string[];
     messageTimestampMs?: number;
     access: Awaited<ReturnType<typeof checkInboundAccessControl>>;
+    isFromMe: boolean;
   };
 
   const normalizeInboundMessage = async (
@@ -233,12 +234,13 @@ export async function monitorWebInbox(options: {
       groupParticipants,
       messageTimestampMs,
       access,
+      isFromMe: Boolean(msg.key?.fromMe),
     };
   };
 
   const maybeMarkInboundAsRead = async (inbound: NormalizedInboundMessage) => {
-    const { id, remoteJid, participantJid, access } = inbound;
-    if (id && !access.isSelfChat && options.sendReadReceipts !== false) {
+    const { id, remoteJid, participantJid } = inbound;
+    if (id && !inbound.isFromMe && options.sendReadReceipts !== false) {
       try {
         await sock.readMessages([{ remoteJid, id, participant: participantJid, fromMe: false }]);
         if (shouldLogVerbose()) {
@@ -248,9 +250,9 @@ export async function monitorWebInbox(options: {
       } catch (err) {
         logVerbose(`Failed to mark message ${id} read: ${String(err)}`);
       }
-    } else if (id && access.isSelfChat && shouldLogVerbose()) {
-      // Self-chat mode: never auto-send read receipts (blue ticks) on behalf of the owner.
-      logVerbose(`Self-chat mode: skipping read receipt for ${id}`);
+    } else if (id && inbound.isFromMe && shouldLogVerbose()) {
+      // Own message (fromMe): skipping read receipt.
+      logVerbose(`Skipping read receipt for own message ${id}`);
     }
   };
 
