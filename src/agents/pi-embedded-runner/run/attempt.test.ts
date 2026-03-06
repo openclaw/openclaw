@@ -4,6 +4,7 @@ import {
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
+  resolveProviderAuthHeaderEnabled,
   resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
@@ -11,6 +12,7 @@ import {
   shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
+  wrapStreamFnAuthorizationHeader,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
@@ -178,6 +180,87 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
         sessionAgentId: "main",
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveProviderAuthHeaderEnabled", () => {
+  it("returns true when provider has authHeader enabled", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimaxi.com/anthropic",
+            api: "anthropic-messages",
+            authHeader: true,
+            models: [],
+          },
+        },
+      },
+    };
+
+    expect(resolveProviderAuthHeaderEnabled({ config: cfg, providerId: "minimax" })).toBe(true);
+  });
+
+  it("matches normalized provider ids", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimaxi.com/anthropic",
+            api: "anthropic-messages",
+            authHeader: true,
+            models: [],
+          },
+        },
+      },
+    };
+
+    expect(resolveProviderAuthHeaderEnabled({ config: cfg, providerId: " MiniMax " })).toBe(true);
+  });
+
+  it("returns false when authHeader is not enabled", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.com",
+            api: "anthropic-messages",
+            models: [],
+          },
+        },
+      },
+    };
+
+    expect(resolveProviderAuthHeaderEnabled({ config: cfg, providerId: "custom" })).toBe(false);
+  });
+});
+
+describe("wrapStreamFnAuthorizationHeader", () => {
+  it("injects Authorization header from runtime apiKey", async () => {
+    const baseFn = vi.fn(async () => ({ ok: true }));
+    const wrapped = wrapStreamFnAuthorizationHeader(baseFn as never);
+
+    await wrapped({} as never, {} as never, { apiKey: "sk-minimax-test" } as never);
+
+    const options = baseFn.mock.calls[0]?.[2] as { headers?: Record<string, string> };
+    expect(options?.headers?.Authorization).toBe("Bearer sk-minimax-test");
+  });
+
+  it("preserves existing Authorization header", async () => {
+    const baseFn = vi.fn(async () => ({ ok: true }));
+    const wrapped = wrapStreamFnAuthorizationHeader(baseFn as never);
+
+    await wrapped(
+      {} as never,
+      {} as never,
+      {
+        apiKey: "sk-minimax-test",
+        headers: { Authorization: "Bearer existing" },
+      } as never,
+    );
+
+    const options = baseFn.mock.calls[0]?.[2] as { headers?: Record<string, string> };
+    expect(options?.headers?.Authorization).toBe("Bearer existing");
   });
 });
 
