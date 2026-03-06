@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { HandleCommandsParams } from "./commands-types.js";
 import { buildContextReply } from "./commands-context-report.js";
+import type { HandleCommandsParams } from "./commands-types.js";
 
-function makeParams(commandBodyNormalized: string, truncated: boolean): HandleCommandsParams {
+function makeParams(
+  commandBodyNormalized: string,
+  truncated: boolean,
+  options?: { omitBootstrapLimits?: boolean },
+): HandleCommandsParams {
   return {
     command: {
       commandBodyNormalized,
@@ -25,8 +29,8 @@ function makeParams(commandBodyNormalized: string, truncated: boolean): HandleCo
         source: "run",
         generatedAt: Date.now(),
         workspaceDir: "/tmp/workspace",
-        bootstrapMaxChars: 20_000,
-        bootstrapTotalMaxChars: 150_000,
+        bootstrapMaxChars: options?.omitBootstrapLimits ? undefined : 20_000,
+        bootstrapTotalMaxChars: options?.omitBootstrapLimits ? undefined : 150_000,
         sandbox: { mode: "off", sandboxed: false },
         systemPrompt: {
           chars: 1_000,
@@ -67,13 +71,22 @@ describe("buildContextReply", () => {
     const result = await buildContextReply(makeParams("/context list", true));
     expect(result.text).toContain("Bootstrap max/total: 150,000 chars");
     expect(result.text).toContain("⚠ Bootstrap context is over configured limits");
-    expect(result.text).toContain(
-      "Causes: 1 file(s) exceeded max/file; raw total exceeded max/total.",
-    );
+    expect(result.text).toContain("Causes: 1 file(s) exceeded max/file.");
   });
 
   it("does not show bootstrap truncation warning when there is no truncation", async () => {
     const result = await buildContextReply(makeParams("/context list", false));
     expect(result.text).not.toContain("Bootstrap context is over configured limits");
+  });
+
+  it("falls back to config defaults when legacy reports are missing bootstrap limits", async () => {
+    const result = await buildContextReply(
+      makeParams("/context list", false, {
+        omitBootstrapLimits: true,
+      }),
+    );
+    expect(result.text).toContain("Bootstrap max/file: 20,000 chars");
+    expect(result.text).toContain("Bootstrap max/total: 150,000 chars");
+    expect(result.text).not.toContain("Bootstrap max/file: ? chars");
   });
 });

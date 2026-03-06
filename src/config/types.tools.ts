@@ -1,6 +1,7 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
+import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
   channel?: string;
@@ -327,7 +328,7 @@ export type MemorySearchConfig = {
   provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
   remote?: {
     baseUrl?: string;
-    apiKey?: string;
+    apiKey?: SecretInput;
     headers?: Record<string, string>;
     batch?: {
       /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
@@ -452,11 +453,11 @@ export type ToolsConfig = {
       cacheTtlMinutes?: number;
       /** Perplexity-specific configuration (used when provider="perplexity"). */
       perplexity?: {
-        /** API key for Perplexity or OpenRouter (defaults to PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). */
+        /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
         apiKey?: string;
-        /** Base URL for API requests (defaults to OpenRouter: https://openrouter.ai/api/v1). */
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
         baseUrl?: string;
-        /** Model to use (defaults to "perplexity/sonar-pro"). */
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
         model?: string;
       };
       /** Grok-specific configuration (used when provider="grok"). */

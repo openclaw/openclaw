@@ -6,12 +6,12 @@
  */
 
 import type { OpenClawConfig } from "../config/config.js";
+import { logVerbose } from "../globals.js";
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
   PluginCommandResult,
 } from "./types.js";
-import { logVerbose } from "../globals.js";
 
 type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginId: string;
@@ -322,9 +322,11 @@ export function listPluginCommands(): Array<{
 export function getPluginCommandSpecs(): Array<{
   name: string;
   description: string;
+  acceptsArgs: boolean;
 }> {
   return Array.from(pluginCommands.values()).map((cmd) => ({
     name: cmd.name,
     description: cmd.description,
+    acceptsArgs: cmd.acceptsArgs ?? false,
   }));
 }

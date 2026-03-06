@@ -443,8 +443,12 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## OpenClaw Self-Update");
+    expect(prompt).toContain("config.schema.lookup");
     expect(prompt).toContain("config.apply");
+    expect(prompt).toContain("config.patch");
     expect(prompt).toContain("update.run");
+    expect(prompt).not.toContain("Use config.schema to");
+    expect(prompt).not.toContain("config.schema, config.apply");
   });
 
   it("includes skills guidance when skills prompt is present", () => {
@@ -525,6 +529,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
     );
+  });
+
+  it("renders bootstrap truncation warning even when no context files are injected", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      bootstrapTruncationWarningLines: ["AGENTS.md: 200 raw -> 0 injected"],
+      contextFiles: [],
+    });
+
+    expect(prompt).toContain("# Project Context");
+    expect(prompt).toContain("⚠ Bootstrap truncation warning:");
+    expect(prompt).toContain("- AGENTS.md: 200 raw -> 0 injected");
   });
 
   it("summarizes the message tool when available", () => {
@@ -683,6 +699,15 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("Do not use `exec` (`openclaw ...`, `acpx ...`)");
     expect(prompt).toContain("Use `subagents` only for OpenClaw subagents");
     expect(prompt).toContain("Subagent results auto-announce back to you");
+    expect(prompt).toContain(
+      "After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool.",
+    );
+    expect(prompt).toContain(
+      "Track expected child session keys and only send your final answer after completion events for ALL expected children arrive.",
+    );
+    expect(prompt).toContain(
+      "If a child completion event arrives AFTER you already sent your final answer, reply ONLY with NO_REPLY.",
+    );
     expect(prompt).toContain("Avoid polling loops");
     expect(prompt).toContain("spawned by the main agent");
     expect(prompt).toContain("reported to the main agent");

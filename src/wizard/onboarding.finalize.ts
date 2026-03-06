@@ -10,6 +10,7 @@ import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
 } from "../commands/daemon-runtime.js";
+import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
@@ -165,23 +166,40 @@ export async function finalizeOnboardingWizard(
       let installError: string | null = null;
       try {
         progress.update("Preparing Gateway service…");
-        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-          env: process.env,
-          port: settings.port,
-          token: settings.gatewayToken,
-          runtime: daemonRuntime,
-          warn: (message, title) => prompter.note(message, title),
+        const tokenResolution = await resolveGatewayInstallToken({
           config: nextConfig,
-        });
-
-        progress.update("Installing Gateway service…");
-        await service.install({
           env: process.env,
-          stdout: process.stdout,
-          programArguments,
-          workingDirectory,
-          environment,
         });
+        for (const warning of tokenResolution.warnings) {
+          await prompter.note(warning, "Gateway service");
+        }
+        if (tokenResolution.unavailableReason) {
+          installError = [
+            "Gateway install blocked:",
+            tokenResolution.unavailableReason,
+            "Fix gateway auth config/token input and rerun onboarding.",
+          ].join(" ");
+        } else {
+          const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan(
+            {
+              env: process.env,
+              port: settings.port,
+              token: tokenResolution.token,
+              runtime: daemonRuntime,
+              warn: (message, title) => prompter.note(message, title),
+              config: nextConfig,
+            },
+          );
+
+          progress.update("Installing Gateway service…");
+          await service.install({
+            env: process.env,
+            stdout: process.stdout,
+            programArguments,
+            workingDirectory,
+            environment,
+          });
+        }
       } catch (err) {
         installError = err instanceof Error ? err.message : String(err);
       } finally {
@@ -454,29 +472,35 @@ export async function finalizeOnboardingWizard(
     );
   }
 
-  const webSearchKey = (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
-  const webSearchEnv = (process.env.BRAVE_API_KEY ?? "").trim();
+  const webSearchProvider = nextConfig.tools?.web?.search?.provider ?? "brave";
+  const webSearchKey =
+    webSearchProvider === "perplexity"
+      ? (nextConfig.tools?.web?.search?.perplexity?.apiKey ?? "").trim()
+      : (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
+  const webSearchEnv =
+    webSearchProvider === "perplexity"
+      ? (process.env.PERPLEXITY_API_KEY ?? "").trim()
+      : (process.env.BRAVE_API_KEY ?? "").trim();
   const hasWebSearchKey = Boolean(webSearchKey || webSearchEnv);
   await prompter.note(
     hasWebSearchKey
       ? [
           "Web search is enabled, so your agent can look things up online when needed.",
           "",
+          `Provider: ${webSearchProvider === "perplexity" ? "Perplexity Search" : "Brave Search"}`,
           webSearchKey
-            ? "API key: stored in config (tools.web.search.apiKey)."
-            : "API key: provided via BRAVE_API_KEY env var (Gateway environment).",
+            ? `API key: stored in config (tools.web.search.${webSearchProvider === "perplexity" ? "perplexity.apiKey" : "apiKey"}).`
+            : `API key: provided via ${webSearchProvider === "perplexity" ? "PERPLEXITY_API_KEY" : "BRAVE_API_KEY"} env var (Gateway environment).`,
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n")
       : [
-          "If you want your agent to be able to search the web, you’ll need an API key.",
-          "",
-          "OpenClaw uses Brave Search for the `web_search` tool. Without a Brave Search API key, web search won’t work.",
+          "To enable web search, your agent will need an API key for either Perplexity Search or Brave Search.",
           "",
           "Set it up interactively:",
           `- Run: ${formatCliCommand("openclaw configure --section web")}`,
-          "- Enable web_search and paste your Brave Search API key",
+          "- Choose a provider and paste your API key",
           "",
-          "Alternative: set BRAVE_API_KEY in the Gateway environment (no config changes).",
+          "Alternative: set PERPLEXITY_API_KEY or BRAVE_API_KEY in the Gateway environment (no config changes).",
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
     "Web search (optional)",

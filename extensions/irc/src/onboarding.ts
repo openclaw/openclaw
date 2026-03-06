@@ -8,14 +8,14 @@ import {
   type ChannelOnboardingDmPolicy,
   type DmPolicy,
   type WizardPrompter,
-} from "openclaw/plugin-sdk";
-import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
+} from "openclaw/plugin-sdk/irc";
 import { listIrcAccountIds, resolveDefaultIrcAccountId, resolveIrcAccount } from "./accounts.js";
 import {
   isChannelTarget,
   normalizeIrcAllowEntry,
   normalizeIrcMessagingTarget,
 } from "./normalize.js";
+import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const channel = "irc" as const;
 
