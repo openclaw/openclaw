@@ -26,7 +26,6 @@ from io import BytesIO
 from pathlib import Path
 from urllib import error, parse, request
 
-
 MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
 REMOTE_IMAGE_TIMEOUT_SEC = 20
 
