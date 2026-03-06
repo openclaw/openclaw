@@ -29,9 +29,7 @@ type AudioChatPluginConfig = {
 
 function normalizeStringList(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
-  return input
-    .map((x) => String(x ?? "").trim())
-    .filter(Boolean);
+  return input.map((x) => String(x ?? "").trim()).filter(Boolean);
 }
 
 function getPluginConfig(api: any): AudioChatPluginConfig {
@@ -52,9 +50,7 @@ function getPluginConfig(api: any): AudioChatPluginConfig {
     enabledByDefault: Boolean(root?.enabledByDefault ?? false),
     channels: channels.length > 0 ? channels : ["telegram"],
     defaultMaxChars,
-    tooLongTip:
-      String(root?.tooLongTip ?? DEFAULT_TOO_LONG_TIP).trim() ||
-      DEFAULT_TOO_LONG_TIP,
+    tooLongTip: String(root?.tooLongTip ?? DEFAULT_TOO_LONG_TIP).trim() || DEFAULT_TOO_LONG_TIP,
     voice: String(root?.voice ?? DEFAULT_VOICE).trim() || DEFAULT_VOICE,
     access: {
       directOnly: Boolean(access?.directOnly ?? true),
@@ -154,9 +150,7 @@ async function resolveEdgeTtsPython() {
 }
 
 function isTelegramDirectSessionKey(sessionKey?: string) {
-  return (
-    typeof sessionKey === "string" && sessionKey.includes(":telegram:direct:")
-  );
+  return typeof sessionKey === "string" && sessionKey.includes(":telegram:direct:");
 }
 
 function sessionKeyToChatId(sessionKey: string): string | null {
@@ -180,12 +174,8 @@ async function loadState(stateDir: string, logger: any): Promise<VoiceState> {
     if (!parsed || typeof parsed !== "object") throw new Error("bad state");
     return {
       version: typeof parsed.version === "number" ? parsed.version : 1,
-      updatedAt:
-        typeof parsed.updatedAt === "number" ? parsed.updatedAt : nowMs(),
-      entries:
-        typeof parsed.entries === "object" && parsed.entries
-          ? parsed.entries
-          : {},
+      updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : nowMs(),
+      entries: typeof parsed.entries === "object" && parsed.entries ? parsed.entries : {},
     } as VoiceState;
   } catch (err: any) {
     if (err?.code !== "ENOENT")
@@ -224,10 +214,9 @@ export default function register(api: any) {
     // Startup healthcheck: verify edge-tts and ffmpeg availability.
     try {
       const py = await resolveEdgeTtsPython();
-      await api.runtime.system.runCommandWithTimeout(
-        [py, "-m", "edge_tts", "--help"],
-        { timeoutMs: 15_000 },
-      );
+      await api.runtime.system.runCommandWithTimeout([py, "-m", "edge_tts", "--help"], {
+        timeoutMs: 15_000,
+      });
       await api.runtime.system.runCommandWithTimeout(["ffmpeg", "-version"], {
         timeoutMs: 15_000,
       });
@@ -287,8 +276,7 @@ export default function register(api: any) {
       // Reconstruct sessionKey. Prefer `to` (chat id), fallback to sender.
       const rawTo = ctx.to ? String(ctx.to) : "";
       const rawFrom = ctx.from ? String(ctx.from) : "";
-      const chatId =
-        rawTo.match(/(\d+)$/)?.[1] ?? rawFrom.match(/(\d+)$/)?.[1] ?? senderId;
+      const chatId = rawTo.match(/(\d+)$/)?.[1] ?? rawFrom.match(/(\d+)$/)?.[1] ?? senderId;
 
       if (!chatId) {
         return { text: "audio_chat：无法识别当前会话目标。" };
@@ -418,9 +406,7 @@ export default function register(api: any) {
         `[${PLUGIN_ID}] too-long tip sent (chatId=${params.chatId} len=${params.textLen} max=${params.maxChars})`,
       );
     } catch (err: any) {
-      logger.warn?.(
-        `[${PLUGIN_ID}] too-long tip failed: ${String(err?.message ?? err)}`,
-      );
+      logger.warn?.(`[${PLUGIN_ID}] too-long tip failed: ${String(err?.message ?? err)}`);
     }
   }
 
@@ -453,21 +439,14 @@ export default function register(api: any) {
     const cfg = api.runtime.config.loadConfig();
     const pluginCfg = getPluginConfig(api);
     const voice =
-      String(cfg?.messages?.tts?.edge?.voice ?? pluginCfg.voice).trim() ||
-      pluginCfg.voice;
+      String(cfg?.messages?.tts?.edge?.voice ?? pluginCfg.voice).trim() || pluginCfg.voice;
 
     if (DEBUG_FORENSICS) {
       // Debug: persist the exact text passed to TTS (for troubleshooting)
       try {
-        await fs.writeFile(
-          path.join(mediaRoot, `audio-chat-${ts}.txt`),
-          text + "\n",
-          "utf8",
-        );
+        await fs.writeFile(path.join(mediaRoot, `audio-chat-${ts}.txt`), text + "\n", "utf8");
       } catch (err: any) {
-        logger.warn?.(
-          `[${PLUGIN_ID}] write txt failed: ${String(err?.message ?? err)}`,
-        );
+        logger.warn?.(`[${PLUGIN_ID}] write txt failed: ${String(err?.message ?? err)}`);
       }
     }
 
@@ -524,11 +503,7 @@ export default function register(api: any) {
     }
   }
 
-  async function handleOutboundHook(
-    phase: "sending" | "sent",
-    event: any,
-    ctx: any,
-  ) {
+  async function handleOutboundHook(phase: "sending" | "sent", event: any, ctx: any) {
     try {
       const channelId = String(ctx?.channelId ?? "");
       const to = String(event?.to ?? "");
@@ -599,9 +574,7 @@ export default function register(api: any) {
           lastVoiceSentByChat.set(key, { text: cur.lastText, at: nowMs() });
           logger.info?.(`[${PLUGIN_ID}] voice-sent ok (to=${to})`);
         } catch (err: any) {
-          logger.warn?.(
-            `[${PLUGIN_ID}] auto-voice failed: ${String(err?.message ?? err)}`,
-          );
+          logger.warn?.(`[${PLUGIN_ID}] auto-voice failed: ${String(err?.message ?? err)}`);
         }
       }, 650);
 
@@ -611,9 +584,7 @@ export default function register(api: any) {
         lastUpdatedAt: nowMs(),
       });
     } catch (err: any) {
-      logger.warn?.(
-        `[${PLUGIN_ID}] hook handler error: ${String(err?.message ?? err)}`,
-      );
+      logger.warn?.(`[${PLUGIN_ID}] hook handler error: ${String(err?.message ?? err)}`);
     }
   }
 
@@ -647,12 +618,9 @@ export default function register(api: any) {
       const maxChars = entry?.maxChars ?? pluginCfg.defaultMaxChars;
 
       const msgs: any[] = Array.isArray(event?.messages) ? event.messages : [];
-      const lastAssistant = [...msgs]
-        .reverse()
-        .find((m) => m && m.role === "assistant");
+      const lastAssistant = [...msgs].reverse().find((m) => m && m.role === "assistant");
       let text = "";
-      if (typeof lastAssistant?.content === "string")
-        text = lastAssistant.content;
+      if (typeof lastAssistant?.content === "string") text = lastAssistant.content;
       else if (Array.isArray(lastAssistant?.content)) {
         // OpenAI-style content parts
         const parts = lastAssistant.content
@@ -727,9 +695,7 @@ export default function register(api: any) {
             accountId: String(ctx?.accountId ?? "") || undefined,
           });
           lastVoiceSentByChat.set(key, { text: cur.lastText, at: nowMs() });
-          logger.info?.(
-            `[${PLUGIN_ID}] voice-sent ok (agent_end to=${chatId})`,
-          );
+          logger.info?.(`[${PLUGIN_ID}] voice-sent ok (agent_end to=${chatId})`);
         } catch (err: any) {
           logger.warn?.(
             `[${PLUGIN_ID}] agent_end auto-voice failed: ${String(err?.message ?? err)}`,
@@ -743,13 +709,9 @@ export default function register(api: any) {
         lastUpdatedAt: nowMs(),
       });
     } catch (err: any) {
-      logger.warn?.(
-        `[${PLUGIN_ID}] agent_end handler error: ${String(err?.message ?? err)}`,
-      );
+      logger.warn?.(`[${PLUGIN_ID}] agent_end handler error: ${String(err?.message ?? err)}`);
     }
   });
 
-  logger.info(
-    `[${PLUGIN_ID}] loaded (stateDir=${stateDir}) fingerprint=${BUILD_FINGERPRINT}`,
-  );
+  logger.info(`[${PLUGIN_ID}] loaded (stateDir=${stateDir}) fingerprint=${BUILD_FINGERPRINT}`);
 }
