@@ -104,13 +104,13 @@ describe("findExtraGatewayServices (linux)", () => {
     ]);
   });
   it("handles windows HOME paths", async () => {
-    const windowsHome = "C:\\Users\\MoltBot";
+    const windowsHome = path.join(tempHome, "C:\\Users\\MoltBot");
     const userDir = path.join(windowsHome, ".config", "systemd", "user");
     const servicePath = path.join(userDir, "legacy-moltbot.service");
     await fs.mkdir(userDir, { recursive: true });
     await fs.writeFile(
       servicePath,
-      ["[Service]", "ExecStart=C:\\Users\\MoltBot\\tools\\helper.exe"].join("\n"),
+      ["[Service]", `ExecStart=${windowsHome}\\tools\\helper.exe`].join("\n"),
     );
 
     const result = await findExtraGatewayServices({ HOME: windowsHome });
