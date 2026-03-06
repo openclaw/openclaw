@@ -1,5 +1,6 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { applyCanonicalForwardCompatCatalogEntries } from "./model-facts.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 export type ModelCatalogEntry = {
@@ -7,6 +8,7 @@ export type ModelCatalogEntry = {
   name: string;
   provider: string;
   contextWindow?: number;
+  maxTokens?: number;
   reasoning?: boolean;
   input?: Array<"text" | "image">;
 };
@@ -16,6 +18,7 @@ type DiscoveredModel = {
   name?: string;
   provider: string;
   contextWindow?: number;
+  maxTokens?: number;
   reasoning?: boolean;
   input?: Array<"text" | "image">;
 };
@@ -26,35 +29,6 @@ let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery.js");
 let importPiSdk = defaultImportPiSdk;
-
-const CODEX_PROVIDER = "openai-codex";
-const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
-const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
-
-function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
-  const hasSpark = models.some(
-    (entry) =>
-      entry.provider === CODEX_PROVIDER &&
-      entry.id.toLowerCase() === OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-  );
-  if (hasSpark) {
-    return;
-  }
-
-  const baseModel = models.find(
-    (entry) =>
-      entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === OPENAI_CODEX_GPT53_MODEL_ID,
-  );
-  if (!baseModel) {
-    return;
-  }
-
-  models.push({
-    ...baseModel,
-    id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-    name: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-  });
-}
 
 export function resetModelCatalogCacheForTest() {
   modelCatalogPromise = null;
@@ -122,11 +96,13 @@ export async function loadModelCatalog(params?: {
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow
             : undefined;
+        const maxTokens =
+          typeof entry?.maxTokens === "number" && entry.maxTokens > 0 ? entry.maxTokens : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
-        models.push({ id, name, provider, contextWindow, reasoning, input });
+        models.push({ id, name, provider, contextWindow, maxTokens, reasoning, input });
       }
-      applyOpenAICodexSparkFallback(models);
+      applyCanonicalForwardCompatCatalogEntries(models);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.

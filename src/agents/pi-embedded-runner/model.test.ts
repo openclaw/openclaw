@@ -19,6 +19,15 @@ const makeModel = (id: string) => ({
   maxTokens: 1,
 });
 
+async function loadCanonicalFactsModule() {
+  const module = await import("../model-facts.js").catch(() => null);
+  if (!module?.getCanonicalForwardCompatModelFacts) {
+    expect(module?.getCanonicalForwardCompatModelFacts).toBeTypeOf("function");
+    return null;
+  }
+  return module;
+}
+
 beforeEach(() => {
   vi.mocked(discoverModels).mockReturnValue({
     find: vi.fn(() => null),
@@ -209,6 +218,59 @@ describe("resolveModel", () => {
     });
   });
 
+  it("uses the canonical codex facts layer for gpt-5.4 fallback resolution", async () => {
+    const factsModule = await loadCanonicalFactsModule();
+    if (!factsModule) {
+      return;
+    }
+
+    const templateModel = {
+      id: "gpt-5.2-codex",
+      name: "GPT-5.2 Codex",
+      provider: "openai-codex",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+      contextWindow: 272000,
+      maxTokens: 128000,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "openai-codex" && modelId === "gpt-5.2-codex") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const canonical = factsModule.getCanonicalForwardCompatModelFacts("openai-codex", "gpt-5.4");
+    expect(canonical).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: canonical.provider,
+      id: canonical.id,
+      name: canonical.name,
+      api: canonical.api,
+      baseUrl: canonical.baseUrl,
+      contextWindow: canonical.contextWindow,
+      maxTokens: canonical.maxTokens,
+    });
+  });
+
   it("builds an anthropic forward-compat fallback for claude-opus-4-6", () => {
     const templateModel = {
       id: "claude-opus-4-5",
@@ -351,5 +413,30 @@ describe("resolveModel", () => {
     expect(result.model?.api).toBe("openai-codex-responses");
     expect(result.model?.id).toBe("gpt-5.3-codex");
     expect(result.model?.provider).toBe("openai-codex");
+  });
+
+  it("uses codex fallback for gpt-5.4 even when openai-codex provider is configured", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://custom.example.com",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn(() => null),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.api).toBe("openai-codex-responses");
+    expect(result.model?.id).toBe("gpt-5.4");
+    expect(result.model?.provider).toBe("openai-codex");
+    expect(result.model?.contextWindow).toBe(1_050_000);
+    expect(result.model?.maxTokens).toBe(128_000);
   });
 });

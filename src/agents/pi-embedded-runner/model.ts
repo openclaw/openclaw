@@ -4,6 +4,7 @@ import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { normalizeModelCompat } from "../model-compat.js";
+import { getCanonicalForwardCompatModelFacts } from "../model-facts.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
   discoverAuthStorage,
@@ -18,11 +19,6 @@ type InlineProviderConfig = {
   api?: ModelDefinitionConfig["api"];
   models?: ModelDefinitionConfig[];
 };
-
-const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
-const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
-
-const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
 // pi-ai's built-in Anthropic catalog can lag behind OpenClaw's defaults/docs.
 // Add forward-compat fallbacks for known-new IDs by cloning an older template model.
@@ -40,15 +36,12 @@ function resolveOpenAICodexGpt53FallbackModel(
   if (normalizedProvider !== "openai-codex") {
     return undefined;
   }
-  const loweredModelId = trimmedModelId.toLowerCase();
-  if (
-    loweredModelId !== OPENAI_CODEX_GPT_53_MODEL_ID &&
-    loweredModelId !== OPENAI_CODEX_GPT_53_SPARK_MODEL_ID
-  ) {
+  const facts = getCanonicalForwardCompatModelFacts(normalizedProvider, trimmedModelId);
+  if (!facts) {
     return undefined;
   }
 
-  for (const templateId of OPENAI_CODEX_TEMPLATE_MODEL_IDS) {
+  for (const templateId of facts.runtimeTemplateIds) {
     const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
     if (!template) {
       continue;
@@ -57,20 +50,22 @@ function resolveOpenAICodexGpt53FallbackModel(
       ...template,
       id: trimmedModelId,
       name: trimmedModelId,
+      ...(typeof facts.contextWindow === "number" ? { contextWindow: facts.contextWindow } : {}),
+      ...(typeof facts.maxTokens === "number" ? { maxTokens: facts.maxTokens } : {}),
     } as Model<Api>);
   }
 
   return normalizeModelCompat({
     id: trimmedModelId,
     name: trimmedModelId,
-    api: "openai-codex-responses",
-    provider: normalizedProvider,
-    baseUrl: "https://chatgpt.com/backend-api",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
+    api: facts.api,
+    provider: facts.provider,
+    baseUrl: facts.baseUrl,
+    reasoning: facts.reasoning,
+    input: [...facts.input],
+    cost: { ...facts.cost },
+    contextWindow: facts.fallbackContextWindow,
+    maxTokens: facts.fallbackMaxTokens,
   } as Model<Api>);
 }
 

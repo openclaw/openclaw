@@ -8,6 +8,15 @@ import {
 
 type PiSdkModule = typeof import("./pi-model-discovery.js");
 
+async function loadCanonicalFactsModule() {
+  const module = await import("./model-facts.js").catch(() => null);
+  if (!module?.getCanonicalForwardCompatModelFacts) {
+    expect(module?.getCanonicalForwardCompatModelFacts).toBeTypeOf("function");
+    return null;
+  }
+  return module;
+}
+
 vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
 }));
@@ -122,5 +131,55 @@ describe("loadModelCatalog", () => {
     const spark = result.find((entry) => entry.id === "gpt-5.3-codex-spark");
     expect(spark?.name).toBe("gpt-5.3-codex-spark");
     expect(spark?.reasoning).toBe(true);
+  });
+
+  it("matches the canonical codex facts layer for gpt-5.4", async () => {
+    const factsModule = await loadCanonicalFactsModule();
+    if (!factsModule) {
+      return;
+    }
+
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          AuthStorage: class {},
+          ModelRegistry: class {
+            getAll() {
+              return [
+                {
+                  id: "gpt-5.3-codex",
+                  provider: "openai-codex",
+                  name: "GPT-5.3 Codex",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  contextWindow: 200000,
+                  maxTokens: 64000,
+                },
+              ];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const canonical = factsModule.getCanonicalForwardCompatModelFacts("openai-codex", "gpt-5.4");
+    expect(canonical).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    const gpt54 = result.find(
+      (entry) => entry.provider === "openai-codex" && entry.id === "gpt-5.4",
+    );
+    expect(gpt54).toMatchObject({
+      provider: canonical.provider,
+      id: canonical.id,
+      name: canonical.name,
+      contextWindow: canonical.contextWindow,
+      maxTokens: canonical.maxTokens,
+    });
   });
 });
