@@ -215,6 +215,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private embedBackoffUntil: number | null = null;
   private embedFailureCount = 0;
   private attemptedNullByteCollectionRepair = false;
+  private attemptedDuplicateDocumentRepair = false;
 
   private constructor(params: {
     cfg: OpenClawConfig;
@@ -601,17 +602,17 @@ export class QmdMemoryManager implements MemorySearchManager {
     );
   }
 
-  private async tryRepairNullByteCollections(err: unknown, reason: string): Promise<boolean> {
-    if (this.attemptedNullByteCollectionRepair) {
-      return false;
-    }
-    if (!this.shouldRepairNullByteCollectionError(err)) {
-      return false;
-    }
-    this.attemptedNullByteCollectionRepair = true;
-    log.warn(
-      `qmd update failed with suspected null-byte collection metadata (${reason}); rebuilding managed collections and retrying once`,
+  private shouldRepairDuplicateDocumentConstraint(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    const lower = message.toLowerCase();
+    return (
+      lower.includes("unique constraint failed") &&
+      lower.includes("documents.collection") &&
+      lower.includes("documents.path")
     );
+  }
+
+  private async rebuildManagedCollectionsForRepair(reason: string): Promise<void> {
     for (const collection of this.qmd.collections) {
       try {
         await this.removeCollection(collection.name);
@@ -630,6 +631,39 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
       }
     }
+    log.warn(`qmd managed collections rebuilt for update repair (${reason})`);
+  }
+
+  private async tryRepairNullByteCollections(err: unknown, reason: string): Promise<boolean> {
+    if (this.attemptedNullByteCollectionRepair) {
+      return false;
+    }
+    if (!this.shouldRepairNullByteCollectionError(err)) {
+      return false;
+    }
+    this.attemptedNullByteCollectionRepair = true;
+    log.warn(
+      `qmd update failed with suspected null-byte collection metadata (${reason}); rebuilding managed collections and retrying once`,
+    );
+    await this.rebuildManagedCollectionsForRepair(`null-byte metadata (${reason})`);
+    return true;
+  }
+
+  private async tryRepairDuplicateDocumentConstraint(
+    err: unknown,
+    reason: string,
+  ): Promise<boolean> {
+    if (this.attemptedDuplicateDocumentRepair) {
+      return false;
+    }
+    if (!this.shouldRepairDuplicateDocumentConstraint(err)) {
+      return false;
+    }
+    this.attemptedDuplicateDocumentRepair = true;
+    log.warn(
+      `qmd update failed with duplicate document constraint (${reason}); rebuilding managed collections and retrying once`,
+    );
+    await this.rebuildManagedCollectionsForRepair(`duplicate-document constraint (${reason})`);
     return true;
   }
 
@@ -962,7 +996,10 @@ export class QmdMemoryManager implements MemorySearchManager {
         discardOutput: true,
       });
     } catch (err) {
-      if (!(await this.tryRepairNullByteCollections(err, reason))) {
+      if (
+        !(await this.tryRepairNullByteCollections(err, reason)) &&
+        !(await this.tryRepairDuplicateDocumentConstraint(err, reason))
+      ) {
         throw err;
       }
       await this.runQmd(["update"], {
