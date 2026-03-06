@@ -17,6 +17,7 @@ const ConfigApplyLikeParamsSchema = Type.Object(
     baseHash: Type.Optional(NonEmptyString),
     sessionKey: Type.Optional(Type.String()),
     note: Type.Optional(Type.String()),
+    continuePrompt: Type.Optional(Type.String()),
     restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
@@ -31,6 +32,7 @@ export const UpdateRunParamsSchema = Type.Object(
   {
     sessionKey: Type.Optional(Type.String()),
     note: Type.Optional(Type.String()),
+    continuePrompt: Type.Optional(Type.String()),
     restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   },

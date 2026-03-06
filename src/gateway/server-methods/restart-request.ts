@@ -1,6 +1,7 @@
 export function parseRestartRequestParams(params: unknown): {
   sessionKey: string | undefined;
   note: string | undefined;
+  continuePrompt: string | undefined;
   restartDelayMs: number | undefined;
 } {
   const sessionKey =
@@ -11,10 +12,14 @@ export function parseRestartRequestParams(params: unknown): {
     typeof (params as { note?: unknown }).note === "string"
       ? (params as { note?: string }).note?.trim() || undefined
       : undefined;
+  const continuePrompt =
+    typeof (params as { continuePrompt?: unknown }).continuePrompt === "string"
+      ? (params as { continuePrompt?: string }).continuePrompt?.trim() || undefined
+      : undefined;
   const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
   const restartDelayMs =
     typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
       ? Math.max(0, Math.floor(restartDelayMsRaw))
       : undefined;
-  return { sessionKey, note, restartDelayMs };
+  return { sessionKey, note, continuePrompt, restartDelayMs };
 }

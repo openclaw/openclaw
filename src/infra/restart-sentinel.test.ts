@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  buildRestartSentinelContinuation,
   consumeRestartSentinel,
   formatRestartSentinelMessage,
   readRestartSentinel,
@@ -33,6 +34,10 @@ describe("restart sentinel", () => {
       status: "ok" as const,
       ts: Date.now(),
       sessionKey: "agent:main:whatsapp:dm:+15555550123",
+      continuation: {
+        kind: "agent-turn" as const,
+        prompt: "resume after restart",
+      },
       stats: { mode: "git" },
     };
     const filePath = await writeRestartSentinel(payload);
@@ -98,6 +103,14 @@ describe("restart sentinel", () => {
     const trimmed = trimLogTail(text, 8000);
     expect(trimmed?.length).toBeLessThanOrEqual(8001);
     expect(trimmed?.startsWith("…")).toBe(true);
+  });
+
+  it("builds continuation from a non-empty prompt", () => {
+    expect(buildRestartSentinelContinuation("  continue after restart  ")).toEqual({
+      kind: "agent-turn",
+      prompt: "continue after restart",
+    });
+    expect(buildRestartSentinelContinuation("   ")).toBeUndefined();
   });
 
   it("formats restart messages without volatile timestamps", () => {

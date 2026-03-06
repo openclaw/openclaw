@@ -27,6 +27,11 @@ export type RestartSentinelStats = {
   durationMs?: number | null;
 };
 
+export type RestartSentinelContinuation = {
+  kind: "agent-turn";
+  prompt: string;
+};
+
 export type RestartSentinelPayload = {
   kind: "config-apply" | "config-patch" | "update" | "restart";
   status: "ok" | "error" | "skipped";
@@ -41,6 +46,7 @@ export type RestartSentinelPayload = {
   /** Thread ID for reply threading (e.g., Slack thread_ts). */
   threadId?: string;
   message?: string | null;
+  continuation?: RestartSentinelContinuation | null;
   doctorHint?: string | null;
   stats?: RestartSentinelStats | null;
 };
@@ -52,10 +58,31 @@ export type RestartSentinel = {
 
 const SENTINEL_FILENAME = "restart-sentinel.json";
 
+function normalizeOptionalString(value?: string | null): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 export function formatDoctorNonInteractiveHint(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string {
   return `Run: ${formatCliCommand("openclaw doctor --non-interactive", env)}`;
+}
+
+export function buildRestartSentinelContinuation(
+  prompt?: string | null,
+): RestartSentinelContinuation | undefined {
+  const normalizedPrompt = normalizeOptionalString(prompt);
+  if (!normalizedPrompt) {
+    return undefined;
+  }
+  return {
+    kind: "agent-turn",
+    prompt: normalizedPrompt,
+  };
 }
 
 export function resolveRestartSentinelPath(env: NodeJS.ProcessEnv = process.env): string {

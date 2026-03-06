@@ -5,6 +5,10 @@ const mocks = vi.hoisted(() => ({
   consumeRestartSentinel: vi.fn(async () => ({
     payload: {
       sessionKey: "agent:main:main",
+      continuation: {
+        kind: "agent-turn",
+        prompt: "continue testing",
+      },
       deliveryContext: {
         channel: "whatsapp",
         to: "+15550002",
@@ -27,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15550002" })),
   deliverOutboundPayloads: vi.fn(async () => []),
   enqueueSystemEvent: vi.fn(),
+  agentCommandFromIngress: vi.fn(async () => ({ payloads: [], meta: {} })),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -76,10 +81,14 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
 
+vi.mock("../commands/agent.js", () => ({
+  agentCommandFromIngress: mocks.agentCommandFromIngress,
+}));
+
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 
 describe("scheduleRestartSentinelWake", () => {
-  it("forwards session context to outbound delivery", async () => {
+  it("forwards session context to outbound delivery and starts restart continuation", async () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
@@ -88,6 +97,25 @@ describe("scheduleRestartSentinelWake", () => {
         to: "+15550002",
         session: { key: "agent:main:main", agentId: "agent-from-key" },
       }),
+    );
+    expect(mocks.agentCommandFromIngress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "continue testing",
+        sessionKey: "agent:main:main",
+        channel: "whatsapp",
+        to: "+15550002",
+        deliver: true,
+        messageChannel: "whatsapp",
+        bestEffortDeliver: true,
+        senderIsOwner: true,
+        inputProvenance: {
+          kind: "internal_system",
+          sourceChannel: "whatsapp",
+          sourceTool: "gateway.restart.continuation",
+        },
+      }),
+      expect.any(Object),
+      expect.any(Object),
     );
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
   });

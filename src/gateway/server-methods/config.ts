@@ -21,6 +21,7 @@ import { buildConfigSchema, type ConfigSchemaResponse } from "../../config/schem
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  buildRestartSentinelContinuation,
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
@@ -155,11 +156,12 @@ function parseValidateConfigFromRawOrRespond(
 function resolveConfigRestartRequest(params: unknown): {
   sessionKey: string | undefined;
   note: string | undefined;
+  continuePrompt: string | undefined;
   restartDelayMs: number | undefined;
   deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
   threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
 } {
-  const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
+  const { sessionKey, note, continuePrompt, restartDelayMs } = parseRestartRequestParams(params);
 
   // Extract deliveryContext + threadId for routing after restart
   // Supports both :thread: (most channels) and :topic: (Telegram)
@@ -168,6 +170,7 @@ function resolveConfigRestartRequest(params: unknown): {
   return {
     sessionKey,
     note,
+    continuePrompt,
     restartDelayMs,
     deliveryContext,
     threadId,
@@ -181,6 +184,7 @@ function buildConfigRestartSentinelPayload(params: {
   deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
   threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
   note: string | undefined;
+  continuePrompt: string | undefined;
 }): RestartSentinelPayload {
   return {
     kind: params.kind,
@@ -190,6 +194,7 @@ function buildConfigRestartSentinelPayload(params: {
     deliveryContext: params.deliveryContext,
     threadId: params.threadId,
     message: params.note ?? null,
+    continuation: buildRestartSentinelContinuation(params.continuePrompt) ?? null,
     doctorHint: formatDoctorNonInteractiveHint(),
     stats: {
       mode: params.mode,
@@ -362,7 +367,7 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     await writeConfigFile(validated.config, writeOptions);
 
-    const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
+    const { sessionKey, note, continuePrompt, restartDelayMs, deliveryContext, threadId } =
       resolveConfigRestartRequest(params);
     const payload = buildConfigRestartSentinelPayload({
       kind: "config-patch",
@@ -371,6 +376,7 @@ export const configHandlers: GatewayRequestHandlers = {
       deliveryContext,
       threadId,
       note,
+      continuePrompt,
     });
     const sentinelPath = await tryWriteRestartSentinelPayload(payload);
     const restart = scheduleGatewaySigusr1Restart({
@@ -422,7 +428,7 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     await writeConfigFile(parsed.config, writeOptions);
 
-    const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
+    const { sessionKey, note, continuePrompt, restartDelayMs, deliveryContext, threadId } =
       resolveConfigRestartRequest(params);
     const payload = buildConfigRestartSentinelPayload({
       kind: "config-apply",
@@ -431,6 +437,7 @@ export const configHandlers: GatewayRequestHandlers = {
       deliveryContext,
       threadId,
       note,
+      continuePrompt,
     });
     const sentinelPath = await tryWriteRestartSentinelPayload(payload);
     const restart = scheduleGatewaySigusr1Restart({

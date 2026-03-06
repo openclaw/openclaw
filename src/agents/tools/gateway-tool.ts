@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveConfigSnapshotHash } from "../../config/io.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import {
+  buildRestartSentinelContinuation,
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
@@ -58,6 +59,7 @@ const GatewayToolSchema = Type.Object({
   // config.apply, config.patch, update.run
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
+  continuePrompt: Type.Optional(Type.String()),
   restartDelayMs: Type.Optional(Type.Number()),
 });
 // NOTE: We intentionally avoid top-level `allOf`/`anyOf`/`oneOf` conditionals here:
@@ -74,7 +76,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart. Pass `continuePrompt` when restart should automatically resume work with a fresh agent turn after startup.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -97,6 +99,10 @@ export function createGatewayTool(opts?: {
             : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+        const continuePrompt =
+          typeof params.continuePrompt === "string" && params.continuePrompt.trim()
+            ? params.continuePrompt.trim()
+            : undefined;
         // Extract channel + threadId for routing after restart
         // Supports both :thread: (most channels) and :topic: (Telegram)
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
@@ -108,6 +114,7 @@ export function createGatewayTool(opts?: {
           deliveryContext,
           threadId,
           message: note ?? reason ?? null,
+          continuation: buildRestartSentinelContinuation(continuePrompt) ?? null,
           doctorHint: formatDoctorNonInteractiveHint(),
           stats: {
             mode: "gateway.restart",
@@ -134,6 +141,7 @@ export function createGatewayTool(opts?: {
       const resolveGatewayWriteMeta = (): {
         sessionKey: string | undefined;
         note: string | undefined;
+        continuePrompt: string | undefined;
         restartDelayMs: number | undefined;
       } => {
         const sessionKey =
@@ -142,11 +150,15 @@ export function createGatewayTool(opts?: {
             : opts?.agentSessionKey?.trim() || undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+        const continuePrompt =
+          typeof params.continuePrompt === "string" && params.continuePrompt.trim()
+            ? params.continuePrompt.trim()
+            : undefined;
         const restartDelayMs =
           typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
             ? Math.floor(params.restartDelayMs)
             : undefined;
-        return { sessionKey, note, restartDelayMs };
+        return { sessionKey, note, continuePrompt, restartDelayMs };
       };
 
       const resolveConfigWriteParams = async (): Promise<{
@@ -154,6 +166,7 @@ export function createGatewayTool(opts?: {
         baseHash: string;
         sessionKey: string | undefined;
         note: string | undefined;
+        continuePrompt: string | undefined;
         restartDelayMs: number | undefined;
       }> => {
         const raw = readStringParam(params, "raw", { required: true });
@@ -177,31 +190,33 @@ export function createGatewayTool(opts?: {
         return jsonResult({ ok: true, result });
       }
       if (action === "config.apply") {
-        const { raw, baseHash, sessionKey, note, restartDelayMs } =
+        const { raw, baseHash, sessionKey, note, continuePrompt, restartDelayMs } =
           await resolveConfigWriteParams();
         const result = await callGatewayTool("config.apply", gatewayOpts, {
           raw,
           baseHash,
           sessionKey,
           note,
+          continuePrompt,
           restartDelayMs,
         });
         return jsonResult({ ok: true, result });
       }
       if (action === "config.patch") {
-        const { raw, baseHash, sessionKey, note, restartDelayMs } =
+        const { raw, baseHash, sessionKey, note, continuePrompt, restartDelayMs } =
           await resolveConfigWriteParams();
         const result = await callGatewayTool("config.patch", gatewayOpts, {
           raw,
           baseHash,
           sessionKey,
           note,
+          continuePrompt,
           restartDelayMs,
         });
         return jsonResult({ ok: true, result });
       }
       if (action === "update.run") {
-        const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
+        const { sessionKey, note, continuePrompt, restartDelayMs } = resolveGatewayWriteMeta();
         const updateTimeoutMs = gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
         const updateGatewayOpts = {
           ...gatewayOpts,
@@ -210,6 +225,7 @@ export function createGatewayTool(opts?: {
         const result = await callGatewayTool("update.run", updateGatewayOpts, {
           sessionKey,
           note,
+          continuePrompt,
           restartDelayMs,
           timeoutMs: updateTimeoutMs,
         });

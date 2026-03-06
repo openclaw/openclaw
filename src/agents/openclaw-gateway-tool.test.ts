@@ -37,6 +37,7 @@ function expectConfigMutationCall(params: {
   action: "config.apply" | "config.patch";
   raw: string;
   sessionKey: string;
+  continuePrompt?: string;
 }) {
   expect(params.callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
   expect(params.callGatewayTool).toHaveBeenCalledWith(
@@ -46,6 +47,7 @@ function expectConfigMutationCall(params: {
       raw: params.raw.trim(),
       baseHash: "hash-1",
       sessionKey: params.sessionKey,
+      ...(params.continuePrompt ? { continuePrompt: params.continuePrompt } : {}),
     }),
   );
 }
@@ -70,6 +72,7 @@ describe("gateway tool", () => {
           const result = await tool.execute("call1", {
             action: "restart",
             delayMs: 0,
+            continuePrompt: "resume after restart",
           });
           expect(result.details).toMatchObject({
             ok: true,
@@ -81,12 +84,20 @@ describe("gateway tool", () => {
           const sentinelPath = path.join(stateDir, "restart-sentinel.json");
           const raw = await fs.readFile(sentinelPath, "utf-8");
           const parsed = JSON.parse(raw) as {
-            payload?: { kind?: string; doctorHint?: string | null };
+            payload?: {
+              kind?: string;
+              doctorHint?: string | null;
+              continuation?: { kind?: string; prompt?: string };
+            };
           };
           expect(parsed.payload?.kind).toBe("restart");
           expect(parsed.payload?.doctorHint).toBe(
             "Run: openclaw --profile isolated doctor --non-interactive",
           );
+          expect(parsed.payload?.continuation).toEqual({
+            kind: "agent-turn",
+            prompt: "resume after restart",
+          });
 
           expect(kill).not.toHaveBeenCalled();
           await vi.runAllTimersAsync();
@@ -104,11 +115,13 @@ describe("gateway tool", () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
+    const continuePrompt = "re-run smoke tests after restart";
 
     const raw = '{\n  agents: { defaults: { workspace: "~/openclaw" } }\n}\n';
     await tool.execute("call2", {
       action: "config.apply",
       raw,
+      continuePrompt,
     });
 
     expectConfigMutationCall({
@@ -116,6 +129,7 @@ describe("gateway tool", () => {
       action: "config.apply",
       raw,
       sessionKey,
+      continuePrompt,
     });
   });
 
@@ -142,10 +156,12 @@ describe("gateway tool", () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
+    const continuePrompt = "verify update health";
 
     await tool.execute("call3", {
       action: "update.run",
       note: "test update",
+      continuePrompt,
     });
 
     expect(callGatewayTool).toHaveBeenCalledWith(
@@ -153,6 +169,7 @@ describe("gateway tool", () => {
       expect.any(Object),
       expect.objectContaining({
         note: "test update",
+        continuePrompt,
         sessionKey,
       }),
     );

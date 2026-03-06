@@ -2,6 +2,7 @@ import { loadConfig } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import {
+  buildRestartSentinelContinuation,
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
@@ -21,7 +22,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       return;
     }
     const actor = resolveControlPlaneActor(client);
-    const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
+    const { sessionKey, note, continuePrompt, restartDelayMs } = parseRestartRequestParams(params);
     const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
@@ -63,6 +64,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       deliveryContext,
       threadId,
       message: note ?? null,
+      continuation: buildRestartSentinelContinuation(continuePrompt) ?? null,
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {
         mode: result.mode,

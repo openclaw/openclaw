@@ -67,6 +67,7 @@ vi.mock("./restart-request.js", () => ({
   parseRestartRequestParams: (params: Record<string, unknown>) => ({
     sessionKey: params.sessionKey,
     note: params.note,
+    continuePrompt: params.continuePrompt,
     restartDelayMs: undefined,
   }),
 }));
@@ -140,6 +141,21 @@ describe("update.run sentinel deliveryContext", () => {
       accountId: "workspace-1",
     });
     expect(capturedPayload!.threadId).toBe("1234567890.123456");
+  });
+
+  it("includes continuation when continuePrompt is provided", async () => {
+    capturedPayload = undefined;
+
+    await invokeUpdateRun({
+      sessionKey: "agent:main:webchat:dm:user-123",
+      continuePrompt: "resume validation after restart",
+    });
+
+    expect(capturedPayload).toBeDefined();
+    expect(capturedPayload!.continuation).toEqual({
+      kind: "agent-turn",
+      prompt: "resume validation after restart",
+    });
   });
 });
 

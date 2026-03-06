@@ -1403,6 +1403,7 @@ public struct ConfigApplyParams: Codable, Sendable {
     public let basehash: String?
     public let sessionkey: String?
     public let note: String?
+    public let continueprompt: String?
     public let restartdelayms: Int?
 
     public init(
@@ -1410,12 +1411,14 @@ public struct ConfigApplyParams: Codable, Sendable {
         basehash: String?,
         sessionkey: String?,
         note: String?,
+        continueprompt: String?,
         restartdelayms: Int?)
     {
         self.raw = raw
         self.basehash = basehash
         self.sessionkey = sessionkey
         self.note = note
+        self.continueprompt = continueprompt
         self.restartdelayms = restartdelayms
     }
 
@@ -1424,6 +1427,7 @@ public struct ConfigApplyParams: Codable, Sendable {
         case basehash = "baseHash"
         case sessionkey = "sessionKey"
         case note
+        case continueprompt = "continuePrompt"
         case restartdelayms = "restartDelayMs"
     }
 }
@@ -1433,6 +1437,7 @@ public struct ConfigPatchParams: Codable, Sendable {
     public let basehash: String?
     public let sessionkey: String?
     public let note: String?
+    public let continueprompt: String?
     public let restartdelayms: Int?
 
     public init(
@@ -1440,12 +1445,14 @@ public struct ConfigPatchParams: Codable, Sendable {
         basehash: String?,
         sessionkey: String?,
         note: String?,
+        continueprompt: String?,
         restartdelayms: Int?)
     {
         self.raw = raw
         self.basehash = basehash
         self.sessionkey = sessionkey
         self.note = note
+        self.continueprompt = continueprompt
         self.restartdelayms = restartdelayms
     }
 
@@ -1454,6 +1461,7 @@ public struct ConfigPatchParams: Codable, Sendable {
         case basehash = "baseHash"
         case sessionkey = "sessionKey"
         case note
+        case continueprompt = "continuePrompt"
         case restartdelayms = "restartDelayMs"
     }
 }
@@ -3311,17 +3319,20 @@ public struct ChatEvent: Codable, Sendable {
 public struct UpdateRunParams: Codable, Sendable {
     public let sessionkey: String?
     public let note: String?
+    public let continueprompt: String?
     public let restartdelayms: Int?
     public let timeoutms: Int?
 
     public init(
         sessionkey: String?,
         note: String?,
+        continueprompt: String?,
         restartdelayms: Int?,
         timeoutms: Int?)
     {
         self.sessionkey = sessionkey
         self.note = note
+        self.continueprompt = continueprompt
         self.restartdelayms = restartdelayms
         self.timeoutms = timeoutms
     }
@@ -3329,6 +3340,7 @@ public struct UpdateRunParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case note
+        case continueprompt = "continuePrompt"
         case restartdelayms = "restartDelayMs"
         case timeoutms = "timeoutMs"
     }
