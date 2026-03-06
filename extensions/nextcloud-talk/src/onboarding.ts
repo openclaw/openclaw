@@ -2,6 +2,7 @@ import {
   addWildcardAllowFrom,
   formatDocsLink,
   hasConfiguredSecretInput,
+  isBlockedHostnameOrIp,
   mergeAllowFromEntries,
   promptSingleChannelSecretInput,
   promptAccountId,
@@ -242,6 +243,29 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
       ).trim();
     }
 
+    // Detect private/internal hostnames and require explicit approval.
+    let allowPrivateNetwork = resolvedAccount.config.allowPrivateNetwork ?? false;
+    let isPrivateHost = false;
+    try {
+      const { hostname } = new URL(baseUrl);
+      isPrivateHost = isBlockedHostnameOrIp(hostname);
+    } catch {
+      // Malformed URL — leave isPrivateHost false; validation elsewhere will catch it.
+    }
+    if (isPrivateHost) {
+      allowPrivateNetwork = await prompter.confirm({
+        message:
+          "Nextcloud URL looks like a private/internal host. Allow private network access? (SSRF risk)",
+        initialValue: allowPrivateNetwork,
+      });
+      if (!allowPrivateNetwork) {
+        throw new Error("Refusing private/internal Nextcloud URL without explicit approval");
+      }
+    } else {
+      // Clear stale allowPrivateNetwork when URL changes to a public host.
+      allowPrivateNetwork = false;
+    }
+
     let secret: SecretInput | null = null;
     if (!accountConfigured) {
       await noteNextcloudTalkSecretHelp(prompter);
@@ -264,7 +288,14 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
       secret = secretResult.value;
     }
 
-    if (secretResult.action === "use-env" || secret || baseUrl !== resolvedAccount.baseUrl) {
+    const allowPrivateNetworkChanged =
+      allowPrivateNetwork !== (resolvedAccount.config.allowPrivateNetwork ?? false);
+    if (
+      secretResult.action === "use-env" ||
+      secret ||
+      baseUrl !== resolvedAccount.baseUrl ||
+      allowPrivateNetworkChanged
+    ) {
       if (accountId === DEFAULT_ACCOUNT_ID) {
         next = {
           ...next,
@@ -274,6 +305,7 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
               ...next.channels?.["nextcloud-talk"],
               enabled: true,
               baseUrl,
+              allowPrivateNetwork,
               ...(secret ? { botSecret: secret } : {}),
             },
           },
@@ -293,6 +325,7 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
                   enabled:
                     next.channels?.["nextcloud-talk"]?.accounts?.[accountId]?.enabled ?? true,
                   baseUrl,
+                  allowPrivateNetwork,
                   ...(secret ? { botSecret: secret } : {}),
                 },
               },

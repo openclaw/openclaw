@@ -20,6 +20,7 @@ function buildAccount(): ResolvedNextcloudTalkAccount {
   return {
     accountId: "default",
     enabled: true,
+    allowPrivateNetwork: null,
     baseUrl: "https://nextcloud.example.com",
     secret: "secret",
     secretSource: "config",

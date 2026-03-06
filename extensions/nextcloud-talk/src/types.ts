@@ -27,6 +27,8 @@ export type NextcloudTalkAccountConfig = {
   name?: string;
   /** If false, do not start this Nextcloud Talk account. Default: true. */
   enabled?: boolean;
+  /** Allow connections to private/internal network hosts. Default: false (blocked for SSRF safety). */
+  allowPrivateNetwork?: boolean;
   /** Base URL of the Nextcloud instance (e.g., "https://cloud.example.com"). */
   baseUrl?: string;
   /** Bot shared secret from occ talk:bot:install output. */

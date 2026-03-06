@@ -43,6 +43,7 @@ describe("nextcloud-talk inbound authz", () => {
     const account: ResolvedNextcloudTalkAccount = {
       accountId: "default",
       enabled: true,
+      allowPrivateNetwork: null,
       baseUrl: "",
       secret: "",
       secretSource: "none",
