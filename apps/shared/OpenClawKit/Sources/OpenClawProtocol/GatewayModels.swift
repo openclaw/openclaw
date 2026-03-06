@@ -1460,6 +1460,20 @@ public struct ConfigPatchParams: Codable, Sendable {
 
 public struct ConfigSchemaParams: Codable, Sendable {}
 
+public struct ConfigSchemaLookupParams: Codable, Sendable {
+    public let path: String
+
+    public init(
+        path: String)
+    {
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+    }
+}
+
 public struct ConfigSchemaResponse: Codable, Sendable {
     public let schema: AnyCodable
     public let uihints: [String: AnyCodable]
@@ -1483,6 +1497,36 @@ public struct ConfigSchemaResponse: Codable, Sendable {
         case uihints = "uiHints"
         case version
         case generatedat = "generatedAt"
+    }
+}
+
+public struct ConfigSchemaLookupResult: Codable, Sendable {
+    public let path: String
+    public let schema: AnyCodable
+    public let hint: [String: AnyCodable]?
+    public let hintpath: String?
+    public let children: [[String: AnyCodable]]
+
+    public init(
+        path: String,
+        schema: AnyCodable,
+        hint: [String: AnyCodable]?,
+        hintpath: String?,
+        children: [[String: AnyCodable]])
+    {
+        self.path = path
+        self.schema = schema
+        self.hint = hint
+        self.hintpath = hintpath
+        self.children = children
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case schema
+        case hint
+        case hintpath = "hintPath"
+        case children
     }
 }
 
