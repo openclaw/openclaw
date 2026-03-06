@@ -25,6 +25,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "qianfanApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
+  | "qiniuApiKey"
 >;
 
 export type OnboardProviderAuthFlag = {
@@ -197,5 +198,19 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--byteplus-api-key",
     cliOption: "--byteplus-api-key <key>",
     description: "BytePlus API key",
+  },
+  {
+    optionKey: "qiniuApiKey",
+    authChoice: "qiniu-api-key",
+    cliFlag: "--qiniu-api-key",
+    cliOption: "--qiniu-api-key <key>",
+    description: "Qiniu Cloud API key",
+  },
+  {
+    optionKey: "qiniuModelId",
+    authChoice: "qiniu-api-key",
+    cliFlag: "--qiniu-model-id",
+    cliOption: "--qiniu-model-id <modelId>",
+    description: "Qiniu Cloud model ID (default: minimax/minimax-m2.5)",
   },
 ];
