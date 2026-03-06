@@ -430,21 +430,33 @@ export function registerConfigCli(program: Command) {
     .argument("<value>", "Value (JSON5 or raw string)")
     .option("--strict-json", "Strict JSON5 parsing (error instead of raw string fallback)", false)
     .option("--json", "Legacy alias for --strict-json", false)
+    .option(
+      "--no-validate",
+      "Skip post-write schema validation (useful when setting related keys incrementally)",
+    )
     .action(async (path: string, value: string, opts) => {
       try {
         const parsedPath = parseRequiredPath(path);
         const parsedValue = parseValue(value, {
           strictJson: Boolean(opts.strictJson || opts.json),
         });
-        const snapshot = await loadValidConfig();
+        const skipValidation = opts.validate === false;
+        const snapshot = skipValidation ? await readConfigFileSnapshot() : await loadValidConfig();
+        if (!skipValidation && !snapshot.valid) {
+          // loadValidConfig already exits on invalid config; this is a safety net.
+          return;
+        }
         // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
         // instead of snapshot.config (runtime-merged with defaults).
         // This prevents runtime defaults from leaking into the written config file (issue #6070)
         const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
         ensureValidOllamaProviderForApiKeySet(next, parsedPath);
         setAtPath(next, parsedPath, parsedValue);
-        await writeConfigFile(next);
+        await writeConfigFile(next, { skipValidation });
         defaultRuntime.log(info(`Updated ${path}. Restart the gateway to apply.`));
+        if (skipValidation) {
+          defaultRuntime.log(info("Validation skipped. Run `openclaw config validate` when done."));
+        }
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

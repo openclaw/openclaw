@@ -131,6 +131,12 @@ export type ConfigWriteOptions = {
    * even if schema/default normalization reintroduces them.
    */
   unsetPaths?: string[][];
+  /**
+   * Skip post-write schema validation. Useful for incremental `config set`
+   * calls where an intermediate state would fail validation (e.g. setting
+   * `secrets.providers.default.source` to "file" before `path` exists).
+   */
+  skipValidation?: boolean;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -1066,18 +1072,26 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
     }
 
-    const validated = validateConfigObjectRawWithPlugins(persistCandidate);
-    if (!validated.ok) {
-      const issue = validated.issues[0];
-      const pathLabel = issue?.path ? issue.path : "<root>";
-      const issueMessage = issue?.message ?? "invalid";
-      throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
-    }
-    if (validated.warnings.length > 0) {
-      const details = validated.warnings
-        .map((warning) => `- ${warning.path}: ${warning.message}`)
-        .join("\n");
-      deps.logger.warn(`Config warnings:\n${details}`);
+    let cfgToWrite: OpenClawConfig;
+    if (options.skipValidation) {
+      // Skip schema validation — caller is building config incrementally and
+      // intermediate states may not satisfy cross-field constraints (issue #38022).
+      cfgToWrite = persistCandidate as OpenClawConfig;
+    } else {
+      const validated = validateConfigObjectRawWithPlugins(persistCandidate);
+      if (!validated.ok) {
+        const issue = validated.issues[0];
+        const pathLabel = issue?.path ? issue.path : "<root>";
+        const issueMessage = issue?.message ?? "invalid";
+        throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
+      }
+      if (validated.warnings.length > 0) {
+        const details = validated.warnings
+          .map((warning) => `- ${warning.path}: ${warning.message}`)
+          .join("\n");
+        deps.logger.warn(`Config warnings:\n${details}`);
+      }
+      cfgToWrite = validated.config;
     }
 
     // Restore ${VAR} env var references that were resolved during config loading.
@@ -1087,9 +1101,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     //
     // We use only the root file's parsed content (no $include resolution) to avoid
     // pulling values from included files into the root config on write-back.
-    // Apply env restoration to validated.config (which has runtime defaults stripped
-    // per issue #6070) rather than the raw caller input.
-    let cfgToWrite = validated.config;
     try {
       if (deps.fs.existsSync(configPath)) {
         const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");

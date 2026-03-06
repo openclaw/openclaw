@@ -420,6 +420,65 @@ describe("config cli", () => {
     });
   });
 
+  describe("config set --no-validate (issue #38022)", () => {
+    it("writes config without validation when --no-validate is passed", async () => {
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "secrets.providers.default.source",
+        '"file"',
+        "--no-validate",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect((written as Record<string, unknown>).secrets).toEqual({
+        providers: { default: { source: "file" } },
+      });
+      // skipValidation should be passed through
+      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toEqual({ skipValidation: true });
+    });
+
+    it("allows set on an already-invalid config when --no-validate is passed", async () => {
+      const invalidSnapshot = makeInvalidSnapshot({
+        issues: [{ path: "secrets.providers.default", message: "missing path" }],
+      });
+      // Override resolved to have partial config
+      invalidSnapshot.resolved = {
+        secrets: { providers: { default: { source: "file" } } },
+      } as OpenClawConfig;
+      setSnapshotOnce(invalidSnapshot);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "secrets.providers.default.path",
+        '"/secure/keys.json"',
+        "--no-validate",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(written.secrets).toEqual({
+        providers: { default: { source: "file", path: "/secure/keys.json" } },
+      });
+    });
+
+    it("shows validation skip hint in output", async () => {
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.port", "9000", "--no-validate"]);
+
+      const logCalls = mockLog.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(logCalls).toContain("Validation skipped");
+      expect(logCalls).toContain("openclaw config validate");
+    });
+  });
+
   describe("config file", () => {
     it("prints the active config file path", async () => {
       const resolved: OpenClawConfig = { gateway: { port: 18789 } };
