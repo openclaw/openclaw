@@ -7,6 +7,7 @@ describe("isNonRecoverableSlackAuthError", () => {
     "An API error occurred: invalid_auth",
     "An API error occurred: token_revoked",
     "An API error occurred: token_expired",
+    "An API error occurred: not_allowed_token_type",
     "An API error occurred: not_authed",
     "An API error occurred: org_login_required",
     "An API error occurred: team_access_not_granted",
@@ -19,6 +20,20 @@ describe("isNonRecoverableSlackAuthError", () => {
 
   it("returns true when error is a plain string", () => {
     expect(isNonRecoverableSlackAuthError("account_inactive")).toBe(true);
+  });
+
+  it("returns true when error code is in error.data.error (PlatformError)", () => {
+    const error = Object.assign(new Error("An API error occurred"), {
+      data: { error: "not_allowed_token_type" },
+    });
+    expect(isNonRecoverableSlackAuthError(error)).toBe(true);
+  });
+
+  it("returns true when only error.data.error matches (message is generic)", () => {
+    const error = Object.assign(new Error("request failed"), {
+      data: { error: "token_revoked" },
+    });
+    expect(isNonRecoverableSlackAuthError(error)).toBe(true);
   });
 
   it("matches case-insensitively", () => {

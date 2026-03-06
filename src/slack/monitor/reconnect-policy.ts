@@ -1,5 +1,5 @@
 const SLACK_AUTH_ERROR_RE =
-  /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|missing_scope|cannot_find_service|invalid_token/i;
+  /account_inactive|invalid_auth|token_revoked|token_expired|not_allowed_token_type|not_authed|org_login_required|team_access_not_granted|missing_scope|cannot_find_service|invalid_token/i;
 
 export const SLACK_SOCKET_RECONNECT_POLICY = {
   initialMs: 2_000,
@@ -90,7 +90,13 @@ export function waitForSlackSocketDisconnect(
  */
 export function isNonRecoverableSlackAuthError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  return SLACK_AUTH_ERROR_RE.test(msg);
+  if (SLACK_AUTH_ERROR_RE.test(msg)) {
+    return true;
+  }
+  // Slack PlatformError stores the API error code in error.data.error
+  const dataError =
+    error && typeof error === "object" ? (error as { data?: { error?: string } }).data?.error : undefined;
+  return typeof dataError === "string" && SLACK_AUTH_ERROR_RE.test(dataError);
 }
 
 export function formatUnknownError(error: unknown): string {
