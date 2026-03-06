@@ -4,7 +4,6 @@ import tempfile
 from pathlib import Path
 
 import pytest
-
 from gen import normalize_background, normalize_style, write_gallery
 
 
