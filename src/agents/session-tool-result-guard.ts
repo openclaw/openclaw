@@ -217,7 +217,9 @@ export function installSessionToolResultGuard(
       | "new_tool_calls"
       | "explicit_finalize" = "explicit_finalize",
     ids?: string[],
+    nowMs?: number,
   ) => {
+    const ts = nowMs ?? Date.now();
     if (pendingState.size() === 0) {
       return;
     }
@@ -228,7 +230,7 @@ export function installSessionToolResultGuard(
       for (const id of targetIds) {
         const name = pendingState.getToolName(id);
         const createdAtMs = pendingState.getCreatedAtMs(id);
-        const ageMs = typeof createdAtMs === "number" ? Date.now() - createdAtMs : undefined;
+        const ageMs = typeof createdAtMs === "number" ? ts - createdAtMs : undefined;
         const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
         const flushed = applyBeforeWriteHook(
           persistToolResult(persistMessage(synthetic), {
@@ -338,12 +340,22 @@ export function installSessionToolResultGuard(
     //
     // Grace-window behavior: compute expired IDs once using a single timestamp to
     // avoid redundant iteration and inconsistent Date.now() snapshots.
+    //
+    // The grace window only applies to intermediate assistant messages (long-poll
+    // jitter). Non-assistant messages (user, system, etc.) definitively end the
+    // tool-call turn, so all pending entries must be flushed immediately to
+    // preserve the required message ordering (assistant → toolResult → user).
     const nowMs = Date.now();
-    const expiredIds = pendingState.getExpiredIds(pendingToolResultGraceMs, nowMs);
     const isNonToolFlow =
       (toolCalls.length === 0 || nextRole !== "assistant") && pendingState.size() > 0;
-    if (isNonToolFlow && expiredIds.length > 0) {
-      flushPendingToolResults("ttl_expired", expiredIds);
+    if (isNonToolFlow) {
+      const idsToFlush =
+        nextRole === "assistant"
+          ? pendingState.getExpiredIds(pendingToolResultGraceMs, nowMs)
+          : pendingState.getPendingIds();
+      if (idsToFlush.length > 0) {
+        flushPendingToolResults("ttl_expired", idsToFlush, nowMs);
+      }
     }
 
     // If new tool calls arrive while older ones are pending, flush the old ones first.

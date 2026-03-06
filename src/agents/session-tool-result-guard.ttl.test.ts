@@ -89,15 +89,19 @@ describe("session tool-result guard TTL behavior", () => {
   });
 
   it("selectively flushes only expired entries via TTL path, preserving non-expired ones", () => {
-    // This test validates the core selective-flush behavior: when multiple
-    // pending tool calls have different ages, a user message (non-tool flow)
-    // should only flush the expired ones and leave non-expired ones pending.
+    // This test validates the core selective-flush behavior: when an intermediate
+    // assistant message arrives and multiple pending tool calls have different
+    // ages, only the expired ones are flushed — non-expired ones remain pending.
+    //
+    // The grace window only applies to assistant messages (long-poll jitter).
+    // Non-assistant messages (user, system) always flush all pending entries
+    // immediately (see separate test below).
     //
     // Strategy: use disk-based persistence to simulate different registration
     // times across two guard installations.  The first guard registers call_old
-    // at T+0.  We then create a second guard that restores call_old from disk
-    // and registers call_young at T+20s.  At T+31s, a user message triggers
-    // the TTL check: call_old (age 31s) is expired, call_young (age 11s) is not.
+    // at T+0.  We then inject call_young at T+20s via the pending file.  At
+    // T+31s, an assistant text message triggers the TTL check: call_old
+    // (age 31s) is expired, call_young (age 11s) is not.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-05T10:00:00.000Z"));
 
@@ -117,15 +121,10 @@ describe("session tool-result guard TTL behavior", () => {
     );
     expect(existsSync(pendingFile)).toBe(true);
 
-    // Phase 2: Advance to T+20s.  Open a new session manager that restores
-    // call_old from disk, then register call_young at T+20s.  Because we use
-    // a single assistant message containing only call_young, and call_old is
-    // already pending, shouldFlushBeforeNewToolCalls will fire.  To avoid that,
-    // we manually edit the pending file to add call_young alongside call_old
-    // with a T+20s timestamp, then open a third session manager.
+    // Phase 2: Advance to T+20s.  Inject call_young with T+20s timestamp
+    // directly into the pending file to avoid shouldFlushBeforeNewToolCalls.
     vi.advanceTimersByTime(20_000);
 
-    // Read the persisted state and inject call_young with T+20s timestamp.
     const raw = JSON.parse(readFileSync(pendingFile, "utf8"));
     raw.items.push({
       id: "call_young",
@@ -144,8 +143,10 @@ describe("session tool-result guard TTL behavior", () => {
     // Phase 4: Advance to T+31s.  call_old age = 31s (expired), call_young age = 11s (not expired).
     vi.advanceTimersByTime(11_000);
 
-    // Trigger a user message — this enters the isNonToolFlow path.
-    sm2.appendMessage(asAppendMessage({ role: "user", content: "check", timestamp: Date.now() }));
+    // Trigger an intermediate assistant text message — grace window applies.
+    sm2.appendMessage(
+      asAppendMessage({ role: "assistant", content: [{ type: "text", text: "progress" }] }),
+    );
 
     // call_old should be flushed (expired).
     const messages = sm2
@@ -159,6 +160,41 @@ describe("session tool-result guard TTL behavior", () => {
 
     // call_young should still be pending (not expired, age 11s < 30s).
     expect(guard2.getPendingIds()).toEqual(["call_young"]);
+
+    vi.useRealTimers();
+  });
+
+  it("flushes all pending entries immediately when a user message arrives within grace window", () => {
+    // A user message definitively ends the tool-call turn — real tool results
+    // will not arrive afterwards.  The grace window must NOT apply; all pending
+    // entries are flushed immediately to preserve message ordering.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-05T10:00:00.000Z"));
+
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, { pendingToolResultGraceMs: 30_000 });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      }),
+    );
+
+    // Only 10s elapsed — well within the 30s grace window.
+    vi.advanceTimersByTime(10_000);
+
+    sm.appendMessage(asAppendMessage({ role: "user", content: "stop", timestamp: Date.now() }));
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as unknown as { message: Record<string, unknown> }).message);
+
+    // Synthetic toolResult must appear BEFORE the user message.
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult", "user"]);
+    expect(messages[1].toolCallId).toBe("call_1");
+    expect(messages[1].isError).toBe(true);
 
     vi.useRealTimers();
   });
