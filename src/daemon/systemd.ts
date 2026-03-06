@@ -185,11 +185,16 @@ function isSystemctlBusUnavailable(detail: string): boolean {
     return false;
   }
   const normalized = detail.toLowerCase();
-  return (
-    normalized.includes("failed to connect to bus") ||
-    normalized.includes("no medium found") ||
+  if (normalized.includes("no medium found")) {
+    return true;
+  }
+  if (
+    normalized.includes("failed to connect to bus") &&
     normalized.includes("connection refused")
-  );
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function resolveSystemctlDirectUserScopeArgs(): string[] {
