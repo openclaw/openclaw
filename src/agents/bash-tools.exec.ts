@@ -34,6 +34,7 @@ import type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+import { loadWorkspaceDotEnvForExec } from "./bash-tools.exec.workspace-env.js";
 import {
   buildSandboxEnv,
   clampWithDefault,
@@ -43,7 +44,6 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
-import { loadWorkspaceDotEnvForExec } from "./bash-tools.exec.workspace-env.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
