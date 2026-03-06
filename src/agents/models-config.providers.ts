@@ -13,6 +13,13 @@ import {
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_MODEL_CATALOG,
 } from "../providers/kilocode-shared.js";
+import {
+  QINIU_BASE_URL,
+  QINIU_DEFAULT_CONTEXT_WINDOW,
+  QINIU_DEFAULT_COST,
+  QINIU_DEFAULT_MAX_TOKENS,
+  QINIU_MODEL_CATALOG,
+} from "../providers/qiniu-shared.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
@@ -920,6 +927,22 @@ export function buildKilocodeProvider(): ProviderConfig {
   };
 }
 
+export function buildQiniuProvider(): ProviderConfig {
+  return {
+    baseUrl: QINIU_BASE_URL,
+    api: "anthropic-messages",
+    models: QINIU_MODEL_CATALOG.map((model) => ({
+      id: model.id,
+      name: model.name,
+      reasoning: model.reasoning,
+      input: model.input,
+      cost: QINIU_DEFAULT_COST,
+      contextWindow: model.contextWindow ?? QINIU_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: model.maxTokens ?? QINIU_DEFAULT_MAX_TOKENS,
+    })),
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -1134,6 +1157,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "kilocode", store: authStore });
   if (kilocodeKey) {
     providers.kilocode = { ...buildKilocodeProvider(), apiKey: kilocodeKey };
+  }
+
+  const qiniuKey =
+    resolveEnvApiKeyVarName("qiniu") ??
+    resolveApiKeyFromProfiles({ provider: "qiniu", store: authStore });
+  if (qiniuKey) {
+    providers.qiniu = { ...buildQiniuProvider(), apiKey: qiniuKey };
   }
 
   return providers;

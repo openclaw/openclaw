@@ -35,7 +35,7 @@ let importPiSdk = defaultImportPiSdk;
 const CODEX_PROVIDER = "openai-codex";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
-const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
+const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode", "qiniu"]);
 
 function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
   const hasSpark = models.some(
