@@ -25,6 +25,10 @@ describe("runVoyageEmbeddingBatches", () => {
     baseUrl: "https://api.voyageai.com/v1",
     headers: { Authorization: "Bearer test-key" },
     model: "voyage-4-large",
+    ssrfPolicy: {
+      allowedHostnames: ["api.voyageai.com"],
+      dangerouslyAllowPrivateNetwork: true,
+    },
   };
 
   const mockRequests: VoyageBatchRequest[] = [

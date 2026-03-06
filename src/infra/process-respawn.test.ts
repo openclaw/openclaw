@@ -70,6 +70,8 @@ describe("restartGatewayProcessWithFreshPid", () => {
   it("returns supervised when launchd/systemd hints are present", () => {
     clearSupervisorHints();
     process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+    delete process.env.OPENCLAW_LAUNCHD_LABEL;
+    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
     expect(spawnMock).not.toHaveBeenCalled();
