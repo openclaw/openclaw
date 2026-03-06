@@ -187,8 +187,7 @@ async function resolveArchivedSessionFile(archived: unknown): Promise<string | u
   const candidates = archived.filter(
     (value): value is string => typeof value === "string" && value.trim().length > 0,
   );
-  for (let i = candidates.length - 1; i >= 0; i -= 1) {
-    const candidate = candidates[i];
+  for (const candidate of candidates) {
     try {
       await fs.access(candidate);
       return candidate;

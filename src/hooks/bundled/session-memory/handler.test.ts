@@ -274,6 +274,49 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Archived and saved");
   });
 
+  it("prefers the first archived transcript candidate when multiple archives exist", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-archived-priority-");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const primaryArchive = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "priority-session.jsonl.reset.2026-03-06T03-00-00.000Z",
+      content: createMockSessionContent([
+        { role: "user", content: "Use the primary archive" },
+        { role: "assistant", content: "Primary transcript wins" },
+      ]),
+    });
+    const legacyArchive = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "priority-session.jsonl.deleted.2026-03-06T04-00-00.000Z",
+      content: createMockSessionContent([
+        { role: "user", content: "Ignore the legacy archive" },
+        { role: "assistant", content: "Legacy transcript should not win" },
+      ]),
+    });
+
+    const event = createHookEvent("session", "archived", "agent:main:telegram:direct:123", {
+      cfg: {
+        agents: { defaults: { workspace: tempDir } },
+      } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "priority-session" },
+      sessionEntry: { sessionId: "priority-session" },
+      archiveReason: "reset",
+      archived: [primaryArchive, legacyArchive],
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files).toHaveLength(1);
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+    expect(memoryContent).toContain("user: Use the primary archive");
+    expect(memoryContent).toContain("assistant: Primary transcript wins");
+    expect(memoryContent).not.toContain("Ignore the legacy archive");
+    expect(memoryContent).not.toContain("Legacy transcript should not win");
+  });
+
   it("loads archived transcript content from deleted session files", async () => {
     const tempDir = await makeTempWorkspace("openclaw-session-memory-deleted-");
     const sessionsDir = path.join(tempDir, "sessions");
