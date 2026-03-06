@@ -29,6 +29,13 @@ class OpenClawProtocolConstantsTest {
     assertEquals("location", OpenClawCapability.Location.rawValue)
     assertEquals("sms", OpenClawCapability.Sms.rawValue)
     assertEquals("device", OpenClawCapability.Device.rawValue)
+    assertEquals("notifications", OpenClawCapability.Notifications.rawValue)
+    assertEquals("system", OpenClawCapability.System.rawValue)
+    assertEquals("appUpdate", OpenClawCapability.AppUpdate.rawValue)
+    assertEquals("photos", OpenClawCapability.Photos.rawValue)
+    assertEquals("contacts", OpenClawCapability.Contacts.rawValue)
+    assertEquals("calendar", OpenClawCapability.Calendar.rawValue)
+    assertEquals("motion", OpenClawCapability.Motion.rawValue)
   }
 
   @Test
@@ -55,5 +62,33 @@ class OpenClawProtocolConstantsTest {
     assertEquals("device.info", OpenClawDeviceCommand.Info.rawValue)
     assertEquals("device.permissions", OpenClawDeviceCommand.Permissions.rawValue)
     assertEquals("device.health", OpenClawDeviceCommand.Health.rawValue)
+  }
+
+  @Test
+  fun systemCommandsUseStableStrings() {
+    assertEquals("system.notify", OpenClawSystemCommand.Notify.rawValue)
+  }
+
+  @Test
+  fun photosCommandsUseStableStrings() {
+    assertEquals("photos.latest", OpenClawPhotosCommand.Latest.rawValue)
+  }
+
+  @Test
+  fun contactsCommandsUseStableStrings() {
+    assertEquals("contacts.search", OpenClawContactsCommand.Search.rawValue)
+    assertEquals("contacts.add", OpenClawContactsCommand.Add.rawValue)
+  }
+
+  @Test
+  fun calendarCommandsUseStableStrings() {
+    assertEquals("calendar.events", OpenClawCalendarCommand.Events.rawValue)
+    assertEquals("calendar.add", OpenClawCalendarCommand.Add.rawValue)
+  }
+
+  @Test
+  fun motionCommandsUseStableStrings() {
+    assertEquals("motion.activity", OpenClawMotionCommand.Activity.rawValue)
+    assertEquals("motion.pedometer", OpenClawMotionCommand.Pedometer.rawValue)
   }
 }
