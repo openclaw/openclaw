@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/dingtalk";
 import { resolveDingtalkAccount } from "./accounts.js";
 import { uploadMedia, sendImageMessage, sendFileMessage } from "./media.js";
@@ -86,7 +87,7 @@ export const dingtalkOutbound: ChannelOutboundAdapter = {
         /^[A-Za-z]:[\\/]/.test(mediaUrl);
 
       if (isLocal) {
-        const filePath = mediaUrl.startsWith("file://") ? mediaUrl.slice(7) : mediaUrl;
+        const filePath = mediaUrl.startsWith("file://") ? fileURLToPath(mediaUrl) : mediaUrl;
         if (fs.existsSync(filePath)) {
           const isImage = /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(filePath);
           const mediaType = isImage ? "image" : "file";

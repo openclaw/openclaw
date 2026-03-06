@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { ReplyPayload } from "openclaw/plugin-sdk/dingtalk";
 import { createAICard, streamAICard, finishAICard, type AICardInstance } from "./card.js";
 import { uploadMedia, sendImageMessage, sendFileMessage } from "./media.js";
@@ -72,7 +73,7 @@ export function createDingtalkReplyDispatcher(params: {
           url.startsWith("file://") || url.startsWith("/") || /^[A-Za-z]:[\\/]/.test(url);
 
         if (isLocal) {
-          const filePath = url.startsWith("file://") ? url.slice(7) : url;
+          const filePath = url.startsWith("file://") ? fileURLToPath(url) : url;
           if (!fs.existsSync(filePath)) {
             log(`dingtalk[${account.accountId}]: media file not found: ${filePath}`);
             continue;
