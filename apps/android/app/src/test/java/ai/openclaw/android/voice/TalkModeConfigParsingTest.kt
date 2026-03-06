@@ -43,7 +43,7 @@ class TalkModeConfigParsingTest {
           """
           {
             "voiceId": "voice-legacy",
-            "apiKey": "legacy-key"
+            "apiKey": "legacy-key" // pragma: allowlist secret
           }
           """.trimIndent(),
         )
