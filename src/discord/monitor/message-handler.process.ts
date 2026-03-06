@@ -28,6 +28,7 @@ import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
@@ -600,6 +601,57 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       typingCallbacks,
+      beforeDeliver: async (payload) => {
+        // Skip reasoning payloads — deliver() discards them immediately,
+        // so running hooks on them would produce spurious events.
+        if (payload.isReasoning) {
+          return payload;
+        }
+        // Don't run hooks for payloads that will never be delivered.
+        if (isProcessAborted(abortSignal)) {
+          return payload;
+        }
+        // Run message_sending plugin hooks so plugins can modify or cancel
+        // outbound text.  Without this, same-surface Discord replies bypass
+        // deliverOutboundPayloads and its hook pipeline entirely.
+        const hookRunner = getGlobalHookRunner();
+        if (!hookRunner?.hasHooks("message_sending")) {
+          return payload;
+        }
+        try {
+          const result = await hookRunner.runMessageSending(
+            {
+              to: deliverTarget,
+              content: payload.text ?? "",
+              metadata: {
+                channel: "discord",
+                accountId,
+                mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+              },
+            },
+            { channelId: "discord", accountId },
+          );
+          if (result?.cancel) {
+            return null;
+          }
+          if (result?.content != null) {
+            const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+            if (result.content.trim() === "") {
+              // Empty text with media: strip text but preserve media delivery
+              // (matches applyMessageSendingHook in deliver.ts).
+              // Empty text without media: suppress the payload entirely.
+              if (hasMedia) {
+                return { ...payload, text: "" };
+              }
+              return null;
+            }
+            return { ...payload, text: result.content };
+          }
+        } catch {
+          // Don't block delivery on hook failure.
+        }
+        return payload;
+      },
       deliver: async (payload: ReplyPayload, info) => {
         if (isProcessAborted(abortSignal)) {
           return;

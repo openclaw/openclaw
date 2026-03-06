@@ -21,6 +21,15 @@ type ReplyDispatchDeliverer = (
   info: { kind: ReplyDispatchKind },
 ) => Promise<void>;
 
+/**
+ * Optional hook called just before `deliver()`.  Returning a modified payload
+ * replaces the original; returning `null` cancels delivery for this payload.
+ */
+type ReplyDispatchBeforeDeliver = (
+  payload: ReplyPayload,
+  info: { kind: ReplyDispatchKind },
+) => Promise<ReplyPayload | null> | ReplyPayload | null;
+
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
 
@@ -42,6 +51,8 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
 
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
+  /** Called before `deliver()`.  May modify or cancel (return `null`) the payload. */
+  beforeDeliver?: ReplyDispatchBeforeDeliver;
   responsePrefix?: string;
   /** Static context for response prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
@@ -155,9 +166,17 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
+        // Run optional beforeDeliver hook (e.g. message_sending plugin hooks).
+        let deliverPayload: ReplyPayload | null = normalized;
+        if (options.beforeDeliver) {
+          deliverPayload = await options.beforeDeliver(normalized, { kind });
+          if (!deliverPayload) {
+            return; // Hook cancelled delivery.
+          }
+        }
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        await options.deliver(normalized, { kind });
+        await options.deliver(deliverPayload, { kind });
       })
       .catch((err) => {
         options.onError?.(err, { kind });
