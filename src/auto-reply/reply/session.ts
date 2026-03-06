@@ -22,6 +22,7 @@ import {
   resolveSessionKey,
   resolveSessionTranscriptPath,
   resolveStorePath,
+  seedSessionHistoryFromPrevious,
   type SessionEntry,
   type SessionScope,
   updateSessionStore,
@@ -344,6 +345,32 @@ export async function initSessionState(params: {
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.contextTokens = undefined;
+
+    // Seed the new session with recent conversation history from the
+    // previous session. This provides continuity across daily resets,
+    // idle resets, and gateway restarts so the agent doesn't lose
+    // recent conversation context.
+    if (entry?.sessionId && sessionEntry.sessionFile) {
+      const previousSessionFile = resolveSessionFilePath(entry.sessionId, entry, { agentId });
+      if (previousSessionFile && previousSessionFile !== sessionEntry.sessionFile) {
+        try {
+          const { seeded, turnCount } = await seedSessionHistoryFromPrevious({
+            previousSessionFile,
+            newSessionFile: sessionEntry.sessionFile,
+            newSessionId: sessionEntry.sessionId,
+          });
+          if (seeded) {
+            console.warn(
+              `[session-init] seeded ${turnCount} turns from previous session into ${sessionEntry.sessionFile}`,
+            );
+          }
+        } catch (err) {
+          console.warn(
+            `[session-init] failed to seed history from previous session: ${String(err)}`,
+          );
+        }
+      }
+    }
   }
 
   // Track the user message timestamp and text for restart recovery.

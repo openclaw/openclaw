@@ -75,6 +75,126 @@ async function ensureSessionHeader(params: {
   await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
 }
 
+/**
+ * Default number of user turns to carry over from a previous session
+ * when a new session starts (daily/idle reset or gateway restart).
+ */
+const HISTORY_SEED_TURNS = 10;
+
+type JsonlEntry = {
+  type?: string;
+  message?: {
+    role?: string;
+    content?: unknown;
+  };
+};
+
+/**
+ * Seed a new session's JSONL transcript with the last N user/assistant
+ * turns from a previous session. This provides continuity across session
+ * resets (daily, idle, restart) so the agent doesn't lose recent
+ * conversation context.
+ *
+ * Only user and assistant messages are carried over; tool messages and
+ * other entry types are skipped. The seeded turns are written after the
+ * session header so `readSessionHistory` picks them up naturally.
+ *
+ * This is a no-op when:
+ * - The previous session file doesn't exist or is empty
+ * - The new session file already has content (avoid double-seeding)
+ * - No user/assistant turns are found in the previous session
+ */
+export async function seedSessionHistoryFromPrevious(params: {
+  previousSessionFile: string;
+  newSessionFile: string;
+  newSessionId: string;
+  maxUserTurns?: number;
+}): Promise<{ seeded: boolean; turnCount: number }> {
+  const maxUserTurns = params.maxUserTurns ?? HISTORY_SEED_TURNS;
+
+  // Don't seed if the new session file already has content.
+  try {
+    const stat = await fs.promises.stat(params.newSessionFile);
+    if (stat.size > 0) {
+      return { seeded: false, turnCount: 0 };
+    }
+  } catch {
+    // File doesn't exist yet; we'll create it.
+  }
+
+  // Read the previous session's transcript.
+  let previousContent: string;
+  try {
+    previousContent = await fs.promises.readFile(params.previousSessionFile, "utf-8");
+  } catch {
+    return { seeded: false, turnCount: 0 };
+  }
+
+  if (!previousContent.trim()) {
+    return { seeded: false, turnCount: 0 };
+  }
+
+  // Parse all user/assistant message entries from the previous session.
+  type MessageEntry = { role: "user" | "assistant"; line: string };
+  const messages: MessageEntry[] = [];
+
+  for (const line of previousContent.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    let entry: JsonlEntry;
+    try {
+      entry = JSON.parse(line) as JsonlEntry;
+    } catch {
+      continue;
+    }
+    if (entry.type !== "message" || !entry.message) {
+      continue;
+    }
+    const role = entry.message.role;
+    if (role === "user" || role === "assistant") {
+      messages.push({ role, line });
+    }
+  }
+
+  if (messages.length === 0) {
+    return { seeded: false, turnCount: 0 };
+  }
+
+  // Keep the last N user turns and their associated assistant responses.
+  let userCount = 0;
+  let cutIndex = messages.length;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      userCount++;
+      if (userCount > maxUserTurns) {
+        cutIndex = i + 1;
+        break;
+      }
+    }
+  }
+  const kept = cutIndex < messages.length ? messages.slice(cutIndex) : messages;
+
+  if (kept.length === 0) {
+    return { seeded: false, turnCount: 0 };
+  }
+
+  // Write session header + seeded turns to the new session file.
+  await fs.promises.mkdir(path.dirname(params.newSessionFile), { recursive: true });
+  const header = {
+    type: "session",
+    version: CURRENT_SESSION_VERSION,
+    id: params.newSessionId,
+    timestamp: new Date().toISOString(),
+    cwd: process.cwd(),
+    seededFrom: params.previousSessionFile,
+  };
+  const lines = [JSON.stringify(header), ...kept.map((m) => m.line)];
+  await fs.promises.writeFile(params.newSessionFile, `${lines.join("\n")}\n`, "utf-8");
+
+  return { seeded: true, turnCount: kept.length };
+}
+
 export async function appendAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
