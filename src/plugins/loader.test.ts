@@ -754,7 +754,7 @@ describe("loadOpenClawPlugins", () => {
     expect(disabled?.status).toBe("disabled");
   });
 
-  it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
+  it("blocks llm_input and before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "hook-policy",
@@ -766,6 +766,7 @@ describe("loadOpenClawPlugins", () => {
     modelOverride: "gpt-4o",
     providerOverride: "anthropic",
   }));
+  api.on("llm_input", () => ({ prompt: "mutated" }));
   api.on("before_model_resolve", () => ({ providerOverride: "openai" }));
 } };`,
     });
@@ -800,7 +801,13 @@ describe("loadOpenClawPlugins", () => {
         "blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
       ),
     );
-    expect(blockedDiagnostics).toHaveLength(1);
+    expect(blockedDiagnostics).toHaveLength(2);
+    expect(
+      blockedDiagnostics.some((diag) => String(diag.message).includes('"before_prompt_build"')),
+    ).toBe(true);
+    expect(blockedDiagnostics.some((diag) => String(diag.message).includes('"llm_input"'))).toBe(
+      true,
+    );
     const constrainedDiagnostics = registry.diagnostics.filter((diag) =>
       String(diag.message).includes(
         "prompt fields constrained by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
@@ -817,6 +824,7 @@ describe("loadOpenClawPlugins", () => {
       body: `module.exports = { id: "hook-policy-default", register(api) {
   api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
   api.on("before_agent_start", () => ({ prependContext: "legacy" }));
+  api.on("llm_input", () => ({ prompt: "mutated" }));
 } };`,
     });
 
@@ -830,6 +838,7 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
       "before_prompt_build",
       "before_agent_start",
+      "llm_input",
     ]);
   });
 

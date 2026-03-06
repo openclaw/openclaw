@@ -516,15 +516,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     let effectiveHandler = handler;
     if (policy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
-      if (hookName === "before_prompt_build") {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
-        });
-        return;
-      }
       if (hookName === "before_agent_start") {
         pushDiagnostic({
           level: "warn",
@@ -535,6 +526,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         effectiveHandler = constrainLegacyPromptInjectionHook(
           handler as PluginHookHandlerMap["before_agent_start"],
         ) as PluginHookHandlerMap[K];
+      } else {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        });
+        return;
       }
     }
     record.hookCount += 1;
