@@ -35,6 +35,8 @@ export type GatewayRuntimeConfig = {
   tailscaleMode: "off" | "serve" | "funnel";
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   canvasHostEnabled: boolean;
+  /** Features disabled at startup due to config/environment mismatch. */
+  degradedFeatures?: Array<{ feature: string; reason: string }>;
 };
 
 export async function resolveGatewayRuntimeConfig(params: {
@@ -122,15 +124,34 @@ export async function resolveGatewayRuntimeConfig(params: {
     params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
   assertGatewayAuthConfigured(resolvedAuth);
-  if (tailscaleMode === "funnel" && authMode !== "password") {
+
+  const degradedFeatures: Array<{ feature: string; reason: string }> = [];
+
+  // Tailscale serve/funnel requires loopback bind. If the bind host is not loopback
+  // (e.g. because Tailscale was disabled externally but config still references it),
+  // degrade gracefully: disable Tailscale for this session instead of crashing.
+  // This prevents unbounded crash loops when an optional external service becomes
+  // unavailable without a corresponding config change.
+  let resolvedTailscaleMode = tailscaleMode;
+  if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
+    const reason =
+      `gateway.tailscale.mode=${tailscaleMode} requires bind=loopback, but bind host is ${bindHost}. ` +
+      `Tailscale disabled for this session. To restore: set gateway.bind=loopback or gateway.tailscale.mode=off.`;
+    degradedFeatures.push({ feature: "tailscale", reason });
+    resolvedTailscaleMode = "off";
+  }
+
+  // Tailscale funnel requires password auth. This is a hard security boundary.
+  // Check resolvedTailscaleMode (after graceful degradation) so that a non-loopback
+  // bind that already degraded Tailscale to "off" doesn't also throw here.
+  if (resolvedTailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
     );
   }
-  if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
-    throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
-  }
+
   if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
+
     throw new Error(
       `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD)`,
     );
@@ -181,8 +202,9 @@ export async function resolveGatewayRuntimeConfig(params: {
     resolvedAuth,
     authMode,
     tailscaleConfig,
-    tailscaleMode,
+    tailscaleMode: resolvedTailscaleMode,
     hooksConfig,
     canvasHostEnabled,
+    degradedFeatures: degradedFeatures.length > 0 ? degradedFeatures : undefined,
   };
 }

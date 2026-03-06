@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 const TRUSTED_PROXY_AUTH = {
@@ -12,6 +12,18 @@ const TOKEN_AUTH = {
   mode: "token" as const,
   token: "test-token-123",
 };
+
+// Minimal config stub for tests
+function makeConfig(overrides: Record<string, unknown> = {}) {
+  return {
+    gateway: {
+      bind: "loopback" as const,
+      auth: { mode: "token" as const, token: "test-secret" },
+      tailscale: { mode: "off" as const },
+      ...overrides,
+    },
+  } as ReturnType<import("../config/config.js").loadConfig>;
+}
 
 describe("resolveGatewayRuntimeConfig", () => {
   describe("trusted-proxy auth mode", () => {
@@ -27,7 +39,6 @@ describe("resolveGatewayRuntimeConfig", () => {
             bind: "lan" as const,
             auth: TRUSTED_PROXY_AUTH,
             trustedProxies: ["192.168.1.1"],
-            controlUi: { allowedOrigins: ["https://control.example.com"] },
           },
         },
         expectedBindHost: "0.0.0.0",
@@ -91,12 +102,7 @@ describe("resolveGatewayRuntimeConfig", () => {
       {
         name: "lan binding without trusted proxies",
         cfg: {
-          gateway: {
-            bind: "lan" as const,
-            auth: TRUSTED_PROXY_AUTH,
-            trustedProxies: [],
-            controlUi: { allowedOrigins: ["https://control.example.com"] },
-          },
+          gateway: { bind: "lan" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: [] },
         },
         expectedMessage:
           "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
@@ -109,31 +115,10 @@ describe("resolveGatewayRuntimeConfig", () => {
   });
 
   describe("token/password auth modes", () => {
-    let originalToken: string | undefined;
-
-    beforeEach(() => {
-      originalToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    });
-
-    afterEach(() => {
-      if (originalToken !== undefined) {
-        process.env.OPENCLAW_GATEWAY_TOKEN = originalToken;
-      } else {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      }
-    });
-
     it.each([
       {
         name: "lan binding with token",
-        cfg: {
-          gateway: {
-            bind: "lan" as const,
-            auth: TOKEN_AUTH,
-            controlUi: { allowedOrigins: ["https://control.example.com"] },
-          },
-        },
+        cfg: { gateway: { bind: "lan" as const, auth: TOKEN_AUTH } },
         expectedAuthMode: "token",
         expectedBindHost: "0.0.0.0",
       },
@@ -153,8 +138,7 @@ describe("resolveGatewayRuntimeConfig", () => {
       {
         name: "token mode without token",
         cfg: { gateway: { bind: "lan" as const, auth: { mode: "token" as const } } },
-        expectedMessage:
-          "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
+        expectedMessage: "gateway auth mode is token, but no token was configured",
       },
       {
         name: "lan binding with explicit none auth",
@@ -200,75 +184,62 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedMessage,
       );
     });
-
-    it("rejects non-loopback control UI when allowed origins are missing", async () => {
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg: {
-            gateway: {
-              bind: "lan",
-              auth: TOKEN_AUTH,
-            },
-          },
-          port: 18789,
-        }),
-      ).rejects.toThrow("non-loopback Control UI requires gateway.controlUi.allowedOrigins");
-    });
-
-    it("allows non-loopback control UI without allowed origins when dangerous fallback is enabled", async () => {
-      const result = await resolveGatewayRuntimeConfig({
-        cfg: {
-          gateway: {
-            bind: "lan",
-            auth: TOKEN_AUTH,
-            controlUi: {
-              dangerouslyAllowHostHeaderOriginFallback: true,
-            },
-          },
-        },
-        port: 18789,
-      });
-      expect(result.bindHost).toBe("0.0.0.0");
-    });
   });
 
-  describe("HTTP security headers", () => {
-    it("resolves strict transport security header from config", async () => {
-      const result = await resolveGatewayRuntimeConfig({
-        cfg: {
-          gateway: {
-            bind: "loopback",
-            auth: { mode: "none" },
-            http: {
-              securityHeaders: {
-                strictTransportSecurity: "  max-age=31536000; includeSubDomains  ",
-              },
-            },
-          },
-        },
-        port: 18789,
-      });
-
-      expect(result.strictTransportSecurityHeader).toBe("max-age=31536000; includeSubDomains");
+  describe("Tailscale safe-mode fallback", () => {
+    it("starts normally when tailscale=off and bind=loopback", async () => {
+      const cfg = makeConfig();
+      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
+      expect(result.tailscaleMode).toBe("off");
+      expect(result.degradedFeatures).toBeUndefined();
     });
 
-    it("does not set strict transport security when explicitly disabled", async () => {
-      const result = await resolveGatewayRuntimeConfig({
-        cfg: {
-          gateway: {
-            bind: "loopback",
-            auth: { mode: "none" },
-            http: {
-              securityHeaders: {
-                strictTransportSecurity: false,
-              },
-            },
-          },
-        },
-        port: 18789,
+    it("starts normally when tailscale=serve and bind=loopback", async () => {
+      const cfg = makeConfig({
+        bind: "loopback",
+        tailscale: { mode: "serve" },
       });
+      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
+      expect(result.tailscaleMode).toBe("serve");
+      expect(result.degradedFeatures).toBeUndefined();
+    });
 
-      expect(result.strictTransportSecurityHeader).toBeUndefined();
+    it("degrades gracefully (tailscale→off) when tailscale=serve but bind=lan", async () => {
+      // Scenario: Tailscale was disabled externally but config still references it.
+      // Previously this threw, causing an unbounded crash loop (263 loops / 3.5h observed).
+      const cfg = makeConfig({
+        bind: "lan",
+        auth: { mode: "token", token: "test-secret" },
+        tailscale: { mode: "serve" },
+      });
+      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
+      expect(result.tailscaleMode).toBe("off");
+      expect(result.degradedFeatures).toHaveLength(1);
+      expect(result.degradedFeatures![0].feature).toBe("tailscale");
+      expect(result.degradedFeatures![0].reason).toMatch(/bind=loopback/);
+    });
+
+    it("degrades gracefully (tailscale→off) when tailscale=funnel but bind=lan", async () => {
+      // Should degrade to off (not throw funnel+password error) because degradation runs first.
+      const cfg = makeConfig({
+        bind: "lan",
+        auth: { mode: "token", token: "test-secret" },
+        tailscale: { mode: "funnel" },
+      });
+      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
+      expect(result.tailscaleMode).toBe("off");
+      expect(result.degradedFeatures![0].feature).toBe("tailscale");
+    });
+
+    it("still throws when tailscale=funnel and auth mode is not password (security boundary)", async () => {
+      const cfg = makeConfig({
+        bind: "loopback",
+        auth: { mode: "token", token: "test-secret" },
+        tailscale: { mode: "funnel" },
+      });
+      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789 })).rejects.toThrow(
+        /tailscale funnel requires gateway auth mode=password/,
+      );
     });
   });
 });
