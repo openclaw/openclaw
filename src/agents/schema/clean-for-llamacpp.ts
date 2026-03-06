@@ -22,6 +22,9 @@ export function stripLlamaCppUnsupportedKeywords(schema: unknown): unknown {
 
   // Collapse anyOf/oneOf to the first concrete (non-null) branch.
   // llama.cpp's GBNF grammar converter fails on complex union types.
+  // Preserve sibling keys (description, title, default, etc.) from the parent
+  // object — they are metadata about the field, not part of the union itself,
+  // and losing them silently degrades tool-call quality.
   for (const key of ["anyOf", "oneOf"] as const) {
     if (Array.isArray(obj[key])) {
       const variants = obj[key] as unknown[];
@@ -29,25 +32,35 @@ export function stripLlamaCppUnsupportedKeywords(schema: unknown): unknown {
         variants.find(
           (v) => v && typeof v === "object" && (v as Record<string, unknown>).type !== "null",
         ) ?? variants[0];
-      return stripLlamaCppUnsupportedKeywords(concrete);
+      // Collect sibling keys that are safe to keep (not anyOf/oneOf and not
+      // one of the unsupported keywords we strip globally).
+      const siblings: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(obj)) {
+        if (k !== "anyOf" && k !== "oneOf" && !LLAMACPP_UNSUPPORTED_SCHEMA_KEYWORDS.has(k)) {
+          siblings[k] = v;
+        }
+      }
+      // Resolved concrete branch wins over siblings for overlapping keys so that
+      // the concrete type information is always authoritative.
+      const resolvedConcrete = stripLlamaCppUnsupportedKeywords(concrete) as Record<
+        string,
+        unknown
+      >;
+      return { ...siblings, ...resolvedConcrete };
     }
   }
 
+  // Recursively clean all object-valued properties, not just `properties` and
+  // `items`. This handles $defs, definitions, allOf, and any future containers
+  // so that nested $ref/$schema/additionalProperties are stripped as well.
   const cleaned: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj)) {
     if (LLAMACPP_UNSUPPORTED_SCHEMA_KEYWORDS.has(key)) {
       continue;
     }
-    if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
-      cleaned[key] = Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([k, v]) => [
-          k,
-          stripLlamaCppUnsupportedKeywords(v),
-        ]),
-      );
-    } else if (key === "items" && value && typeof value === "object") {
+    if (value && typeof value === "object") {
       cleaned[key] = Array.isArray(value)
-        ? value.map(stripLlamaCppUnsupportedKeywords)
+        ? (value as unknown[]).map(stripLlamaCppUnsupportedKeywords)
         : stripLlamaCppUnsupportedKeywords(value);
     } else {
       cleaned[key] = value;

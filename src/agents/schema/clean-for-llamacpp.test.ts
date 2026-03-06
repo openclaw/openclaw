@@ -186,4 +186,101 @@ describe("stripLlamaCppUnsupportedKeywords", () => {
     expect(result[1].additionalProperties).toBeUndefined();
     expect(result[1].type).toBe("number");
   });
+
+  it("preserves sibling keys (description, default) when collapsing anyOf", () => {
+    // Greptile-flagged bug: sibling keys on the parent were silently discarded.
+    const schema = {
+      description: "The file path to read",
+      default: "./index.ts",
+      anyOf: [{ type: "string" }, { type: "null" }],
+    };
+    const result = stripLlamaCppUnsupportedKeywords(schema) as Record<string, unknown>;
+    expect(result.anyOf).toBeUndefined();
+    expect(result.type).toBe("string");
+    expect(result.description).toBe("The file path to read");
+    expect(result.default).toBe("./index.ts");
+  });
+
+  it("preserves sibling keys when collapsing oneOf", () => {
+    const schema = {
+      title: "Count field",
+      description: "Number of items",
+      oneOf: [{ type: "null" }, { type: "integer", minimum: 0 }],
+    };
+    const result = stripLlamaCppUnsupportedKeywords(schema) as Record<string, unknown>;
+    expect(result.oneOf).toBeUndefined();
+    expect(result.type).toBe("integer");
+    expect(result.title).toBe("Count field");
+    expect(result.description).toBe("Number of items");
+  });
+
+  it("concrete branch type wins over sibling type when collapsing anyOf", () => {
+    // Concrete branch takes precedence for overlapping keys like `type`.
+    const schema = {
+      type: "object", // sibling — should be overwritten by the concrete branch type
+      anyOf: [{ type: "string" }, { type: "null" }],
+    };
+    const result = stripLlamaCppUnsupportedKeywords(schema) as Record<string, unknown>;
+    expect(result.type).toBe("string");
+  });
+
+  it("strips unsupported keywords inside $defs recursively", () => {
+    // Codex-flagged bug: only properties/items were recursed; $defs was copied verbatim.
+    const schema = {
+      type: "object",
+      $defs: {
+        Item: {
+          type: "object",
+          $schema: "http://json-schema.org/draft-07/schema#",
+          additionalProperties: false,
+          properties: { id: { type: "string" } },
+        },
+      },
+      properties: {
+        item: { $ref: "#/$defs/Item" },
+      },
+    };
+    const result = stripLlamaCppUnsupportedKeywords(schema) as {
+      $defs: { Item: Record<string, unknown> };
+    };
+    expect(result.$defs.Item.$schema).toBeUndefined();
+    expect(result.$defs.Item.additionalProperties).toBeUndefined();
+    expect(result.$defs.Item.type).toBe("object");
+  });
+
+  it("strips unsupported keywords inside allOf recursively", () => {
+    const schema = {
+      allOf: [
+        { $ref: "#/$defs/Base" },
+        { type: "object", additionalProperties: false, properties: { name: { type: "string" } } },
+      ],
+    };
+    const result = stripLlamaCppUnsupportedKeywords(schema) as {
+      allOf: Array<Record<string, unknown>>;
+    };
+    // $ref is stripped, leaving an empty object for the first branch
+    expect(result.allOf[0]).toEqual({});
+    expect(result.allOf[1].additionalProperties).toBeUndefined();
+    expect(result.allOf[1].type).toBe("object");
+  });
+
+  it("strips unsupported keywords inside definitions recursively", () => {
+    const schema = {
+      type: "object",
+      definitions: {
+        Address: {
+          type: "object",
+          additionalProperties: true,
+          $schema: "x",
+          properties: { street: { type: "string" } },
+        },
+      },
+    };
+    const result = stripLlamaCppUnsupportedKeywords(schema) as {
+      definitions: { Address: Record<string, unknown> };
+    };
+    expect(result.definitions.Address.$schema).toBeUndefined();
+    expect(result.definitions.Address.additionalProperties).toBeUndefined();
+    expect(result.definitions.Address.type).toBe("object");
+  });
 });
