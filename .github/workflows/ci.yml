@@ -189,12 +189,10 @@ jobs:
 
   # Report-only dead-code scans. Runs after scope detection and stores machine-readable
   # results as artifacts for later triage before we enable hard gates.
-  # Temporarily disabled in CI while we process initial findings.
   deadcode:
     name: dead-code report
     needs: [docs-scope, changed-scope]
-    # if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    if: false
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     strategy:
       fail-fast: false
