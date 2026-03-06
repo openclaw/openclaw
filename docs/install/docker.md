@@ -113,6 +113,88 @@ Notes:
 - For non-local `OPENCLAW_IMAGE` values, the image must already contain Docker
   CLI support for sandbox execution.
 
+### DinD sidecar (Docker-in-Docker alternative)
+
+The default sandbox approach mounts the host's `docker.sock` to create sibling
+containers. This works when the Gateway runs directly on a Linux host, but
+**breaks on Docker Desktop** (macOS/Windows) or when the Gateway itself runs
+inside a container, because bind-mount paths inside the Gateway container don't
+exist on the host filesystem (causes `Mounts denied` errors).
+
+A **Docker-in-Docker (DinD) sidecar** solves this by running a dedicated Docker
+daemon that shares a volume with the Gateway. Sandbox containers are created
+inside the DinD daemon where paths are consistent.
+
+```
+Gateway container ──(DOCKER_HOST=tcp://dind:2375)──▶ DinD container
+       │                                                    │
+       └── openclaw-state volume (shared) ──────────────────┘
+```
+
+Example `docker-compose.yml`:
+
+```yaml
+services:
+  dind:
+    image: docker:dind
+    privileged: true
+    restart: unless-stopped
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    volumes:
+      - openclaw-state:/home/node/.openclaw
+      - dind-storage:/var/lib/docker
+    networks:
+      - openclaw-net
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+    depends_on:
+      dind:
+        condition: service_healthy
+    volumes:
+      - openclaw-state:/home/node/.openclaw
+    networks:
+      - openclaw-net
+    # ... rest of your gateway config
+
+volumes:
+  openclaw-state:
+  dind-storage:
+
+networks:
+  openclaw-net:
+    driver: bridge
+```
+
+Key points:
+
+- The Gateway image must include Docker CLI (`docker-ce-cli`). Build with
+  `--build-arg OPENCLAW_INSTALL_DOCKER_CLI=1` or install it in your Dockerfile.
+- Both containers mount `openclaw-state` at `/home/node/.openclaw` so sandbox
+  bind-mount paths resolve correctly inside the DinD daemon.
+- `dind-storage` persists the DinD daemon's image cache across restarts (avoids
+  rebuilding the sandbox image every time).
+- Set `agents.defaults.sandbox.docker.network` to `"bridge"` (the DinD daemon's
+  default network) since the default `"none"` prevents network access inside
+  the sandbox.
+- The sandbox image (`openclaw-sandbox:bookworm-slim`) must be built inside the
+  DinD daemon. Run `scripts/sandbox-setup.sh` with `DOCKER_HOST=tcp://dind:2375`
+  after the DinD container is healthy, or build it in a startup script.
+
+Security note: `privileged: true` on the DinD container grants elevated host
+access. This is required for nested Docker and is standard for DinD deployments.
+Keep the DinD container on an internal network and restrict access to the
+Gateway only.
+
 ### Automation/CI (non-interactive, no TTY noise)
 
 For scripts and CI, disable Compose pseudo-TTY allocation with `-T`:
