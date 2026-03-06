@@ -6,6 +6,8 @@ import {
 } from "../legacy-delivery.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { migrateLegacyCronPayload } from "../payload-migration.js";
+import { coerceFiniteScheduleNumber } from "../schedule.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../stagger.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
@@ -91,12 +93,17 @@ function normalizePayloadKind(payload: Record<string, unknown>) {
 function inferPayloadIfMissing(raw: Record<string, unknown>) {
   const message = typeof raw.message === "string" ? raw.message.trim() : "";
   const text = typeof raw.text === "string" ? raw.text.trim() : "";
+  const command = typeof raw.command === "string" ? raw.command.trim() : "";
   if (message) {
     raw.payload = { kind: "agentTurn", message };
     return true;
   }
   if (text) {
     raw.payload = { kind: "systemEvent", text };
+    return true;
+  }
+  if (command) {
+    raw.payload = { kind: "systemEvent", text: command };
     return true;
   }
   return false;
@@ -127,7 +134,7 @@ function copyTopLevelAgentTurnFields(
     typeof raw.timeoutSeconds === "number" &&
     Number.isFinite(raw.timeoutSeconds)
   ) {
-    payload.timeoutSeconds = Math.max(1, Math.floor(raw.timeoutSeconds));
+    payload.timeoutSeconds = Math.max(0, Math.floor(raw.timeoutSeconds));
     mutated = true;
   }
 
@@ -208,6 +215,12 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   if ("provider" in raw) {
     delete raw.provider;
   }
+  if ("command" in raw) {
+    delete raw.command;
+  }
+  if ("timeout" in raw) {
+    delete raw.timeout;
+  }
 }
 
 async function getFileMtimeMs(path: string): Promise<number | null> {
@@ -247,6 +260,26 @@ export async function ensureLoaded(
       mutated = true;
     }
 
+    const rawId = typeof raw.id === "string" ? raw.id.trim() : "";
+    const legacyJobId = typeof raw.jobId === "string" ? raw.jobId.trim() : "";
+    if (!rawId && legacyJobId) {
+      raw.id = legacyJobId;
+      mutated = true;
+    } else if (rawId && raw.id !== rawId) {
+      raw.id = rawId;
+      mutated = true;
+    }
+    if ("jobId" in raw) {
+      delete raw.jobId;
+      mutated = true;
+    }
+
+    if (typeof raw.schedule === "string") {
+      const expr = raw.schedule.trim();
+      raw.schedule = { kind: "cron", expr };
+      mutated = true;
+    }
+
     const nameRaw = raw.name;
     if (typeof nameRaw !== "string" || nameRaw.trim().length === 0) {
       raw.name = inferLegacyName({
@@ -275,6 +308,22 @@ export async function ensureLoaded(
 
     if (typeof raw.enabled !== "boolean") {
       raw.enabled = true;
+      mutated = true;
+    }
+
+    const wakeModeRaw = typeof raw.wakeMode === "string" ? raw.wakeMode.trim().toLowerCase() : "";
+    if (wakeModeRaw === "next-heartbeat") {
+      if (raw.wakeMode !== "next-heartbeat") {
+        raw.wakeMode = "next-heartbeat";
+        mutated = true;
+      }
+    } else if (wakeModeRaw === "now") {
+      if (raw.wakeMode !== "now") {
+        raw.wakeMode = "now";
+        mutated = true;
+      }
+    } else {
+      raw.wakeMode = "now";
       mutated = true;
     }
 
@@ -322,7 +371,9 @@ export async function ensureLoaded(
       "channel" in raw ||
       "to" in raw ||
       "bestEffortDeliver" in raw ||
-      "provider" in raw;
+      "provider" in raw ||
+      "command" in raw ||
+      "timeout" in raw;
     if (hadLegacyTopLevelFields) {
       stripLegacyTopLevelFields(raw);
       mutated = true;
@@ -361,15 +412,18 @@ export async function ensureLoaded(
       }
 
       const everyMsRaw = sched.everyMs;
-      const everyMs =
-        typeof everyMsRaw === "number" && Number.isFinite(everyMsRaw)
-          ? Math.floor(everyMsRaw)
-          : null;
+      const everyMsCoerced = coerceFiniteScheduleNumber(everyMsRaw);
+      const everyMs = everyMsCoerced !== undefined ? Math.floor(everyMsCoerced) : null;
+      if (everyMs !== null && everyMsRaw !== everyMs) {
+        sched.everyMs = everyMs;
+        mutated = true;
+      }
       if ((kind === "every" || sched.kind === "every") && everyMs !== null) {
         const anchorRaw = sched.anchorMs;
+        const anchorCoerced = coerceFiniteScheduleNumber(anchorRaw);
         const normalizedAnchor =
-          typeof anchorRaw === "number" && Number.isFinite(anchorRaw)
-            ? Math.max(0, Math.floor(anchorRaw))
+          anchorCoerced !== undefined
+            ? Math.max(0, Math.floor(anchorCoerced))
             : typeof raw.createdAtMs === "number" && Number.isFinite(raw.createdAtMs)
               ? Math.max(0, Math.floor(raw.createdAtMs))
               : typeof raw.updatedAtMs === "number" && Number.isFinite(raw.updatedAtMs)
@@ -377,6 +431,37 @@ export async function ensureLoaded(
                 : null;
         if (normalizedAnchor !== null && anchorRaw !== normalizedAnchor) {
           sched.anchorMs = normalizedAnchor;
+          mutated = true;
+        }
+      }
+
+      const exprRaw = typeof sched.expr === "string" ? sched.expr.trim() : "";
+      const legacyCronRaw = typeof sched.cron === "string" ? sched.cron.trim() : "";
+      let normalizedExpr = exprRaw;
+      if (!normalizedExpr && legacyCronRaw) {
+        normalizedExpr = legacyCronRaw;
+        sched.expr = normalizedExpr;
+        mutated = true;
+      }
+      if (typeof sched.expr === "string" && sched.expr !== normalizedExpr) {
+        sched.expr = normalizedExpr;
+        mutated = true;
+      }
+      if ("cron" in sched) {
+        delete sched.cron;
+        mutated = true;
+      }
+      if ((kind === "cron" || sched.kind === "cron") && normalizedExpr) {
+        const explicitStaggerMs = normalizeCronStaggerMs(sched.staggerMs);
+        const defaultStaggerMs = resolveDefaultCronStaggerMs(normalizedExpr);
+        const targetStaggerMs = explicitStaggerMs ?? defaultStaggerMs;
+        if (targetStaggerMs === undefined) {
+          if ("staggerMs" in sched) {
+            delete sched.staggerMs;
+            mutated = true;
+          }
+        } else if (sched.staggerMs !== targetStaggerMs) {
+          sched.staggerMs = targetStaggerMs;
           mutated = true;
         }
       }
@@ -407,11 +492,27 @@ export async function ensureLoaded(
 
     const payloadKind =
       payloadRecord && typeof payloadRecord.kind === "string" ? payloadRecord.kind : "";
+    const normalizedSessionTarget =
+      typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
+    if (normalizedSessionTarget === "main" || normalizedSessionTarget === "isolated") {
+      if (raw.sessionTarget !== normalizedSessionTarget) {
+        raw.sessionTarget = normalizedSessionTarget;
+        mutated = true;
+      }
+    } else {
+      const inferredSessionTarget = payloadKind === "agentTurn" ? "isolated" : "main";
+      if (raw.sessionTarget !== inferredSessionTarget) {
+        raw.sessionTarget = inferredSessionTarget;
+        mutated = true;
+      }
+    }
+
     const sessionTarget =
       typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
     // Support isolated, custom session IDs (session:xxx), and resolved "current" as isolated-like
     const isIsolatedAgentTurn =
       sessionTarget === "isolated" ||
+      sessionTarget === "current" ||
       sessionTarget.startsWith("session:") ||
       (sessionTarget === "" && payloadKind === "agentTurn");
     const hasDelivery = delivery && typeof delivery === "object" && !Array.isArray(delivery);
@@ -450,7 +551,7 @@ export async function ensureLoaded(
   }
 
   if (mutated) {
-    await persist(state);
+    await persist(state, { skipBackup: true });
   }
 }
 
@@ -468,11 +569,11 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-export async function persist(state: CronServiceState) {
+export async function persist(state: CronServiceState, opts?: { skipBackup?: boolean }) {
   if (!state.store) {
     return;
   }
-  await saveCronStore(state.deps.storePath, state.store);
+  await saveCronStore(state.deps.storePath, state.store, opts);
   // Update file mtime after save to prevent immediate reload
   state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }

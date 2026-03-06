@@ -28,7 +28,7 @@ async function createBootstrapContext(params: {
   sessionKey: string;
   rootFiles: Array<{ name: string; content: string }>;
 }): Promise<AgentBootstrapHookContext> {
-  const bootstrapFiles = await Promise.all(
+  const bootstrapFiles = (await Promise.all(
     params.rootFiles.map(async (file) => ({
       name: file.name,
       path: await writeWorkspaceFile({
@@ -39,7 +39,7 @@ async function createBootstrapContext(params: {
       content: file.content,
       missing: false,
     })),
-  );
+  )) as AgentBootstrapHookContext["bootstrapFiles"];
   return {
     workspaceDir: params.workspaceDir,
     bootstrapFiles,
@@ -92,7 +92,10 @@ describe("bootstrap-extra-files hook", () => {
 
     const event = createHookEvent("agent", "bootstrap", "agent:main:subagent:abc", context);
     await handler(event);
-
-    expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual([
+      "AGENTS.md",
+      "SOUL.md",
+      "TOOLS.md",
+    ]);
   });
 });

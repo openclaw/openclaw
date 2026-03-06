@@ -1,20 +1,33 @@
+import type { Writable } from "node:stream";
 import { loadConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
+import {
+  isGatewaySecretRefUnavailableError,
+  resolveGatewayCredentialsFromConfig,
+} from "../../gateway/credentials.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   buildDaemonServiceSnapshot,
   createNullWriter,
   type DaemonAction,
+  type DaemonActionResponse,
   emitDaemonActionJson,
 } from "./response.js";
 
 type DaemonLifecycleOptions = {
   json?: boolean;
+};
+
+type RestartPostCheckContext = {
+  json: boolean;
+  stdout: Writable;
+  warnings: string[];
+  fail: (message: string, hints?: string[]) => void;
 };
 
 async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
@@ -30,20 +43,7 @@ async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
 
 function createActionIO(params: { action: DaemonAction; json: boolean }) {
   const stdout = params.json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    hints?: string[];
-    warnings?: string[];
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-  }) => {
+  const emit = (payload: Omit<DaemonActionResponse, "action">) => {
     if (!params.json) {
       return;
     }
@@ -81,6 +81,19 @@ async function handleServiceNotLoaded(params: {
     for (const hint of hints) {
       defaultRuntime.log(`Start with: ${hint}`);
     }
+  }
+}
+
+async function resolveServiceLoadedOrFail(params: {
+  serviceNoun: string;
+  service: GatewayService;
+  fail: ReturnType<typeof createActionIO>["fail"];
+}): Promise<boolean | null> {
+  try {
+    return await params.service.isLoaded({ env: process.env });
+  } catch (err) {
+    params.fail(`${params.serviceNoun} service check failed: ${String(err)}`);
+    return null;
   }
 }
 
@@ -145,11 +158,12 @@ export async function runServiceStart(params: {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "start", json });
 
-  let loaded = false;
-  try {
-    loaded = await params.service.isLoaded({ env: process.env });
-  } catch (err) {
-    fail(`${params.serviceNoun} service check failed: ${String(err)}`);
+  const loaded = await resolveServiceLoadedOrFail({
+    serviceNoun: params.serviceNoun,
+    service: params.service,
+    fail,
+  });
+  if (loaded === null) {
     return;
   }
   if (!loaded) {
@@ -192,11 +206,12 @@ export async function runServiceStop(params: {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "stop", json });
 
-  let loaded = false;
-  try {
-    loaded = await params.service.isLoaded({ env: process.env });
-  } catch (err) {
-    fail(`${params.serviceNoun} service check failed: ${String(err)}`);
+  const loaded = await resolveServiceLoadedOrFail({
+    serviceNoun: params.serviceNoun,
+    service: params.service,
+    fail,
+  });
+  if (loaded === null) {
     return;
   }
   if (!loaded) {
@@ -236,15 +251,18 @@ export async function runServiceRestart(params: {
   service: GatewayService;
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
+  checkTokenDrift?: boolean;
+  postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
 
-  let loaded = false;
-  try {
-    loaded = await params.service.isLoaded({ env: process.env });
-  } catch (err) {
-    fail(`${params.serviceNoun} service check failed: ${String(err)}`);
+  const loaded = await resolveServiceLoadedOrFail({
+    serviceNoun: params.serviceNoun,
+    service: params.service,
+    fail,
+  });
+  if (loaded === null) {
     return false;
   }
   if (!loaded) {
@@ -259,35 +277,48 @@ export async function runServiceRestart(params: {
     return false;
   }
 
-  // Check for token drift before restart (service token vs config token)
   const warnings: string[] = [];
-  try {
-    const command = await params.service.readCommand(process.env);
-    const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
-    const cfg = loadConfig();
-    const configToken =
-      cfg.gateway?.auth?.token ||
-      process.env.OPENCLAW_GATEWAY_TOKEN ||
-      process.env.CLAWDBOT_GATEWAY_TOKEN;
-    const driftIssue = checkTokenDrift({ serviceToken, configToken });
-    if (driftIssue) {
-      const warning = driftIssue.detail
-        ? `${driftIssue.message} ${driftIssue.detail}`
-        : driftIssue.message;
-      warnings.push(warning);
-      if (!json) {
-        defaultRuntime.log(`\n⚠️  ${driftIssue.message}`);
-        if (driftIssue.detail) {
-          defaultRuntime.log(`   ${driftIssue.detail}\n`);
+  if (params.checkTokenDrift) {
+    // Check for token drift before restart (service token vs config token)
+    try {
+      const command = await params.service.readCommand(process.env);
+      const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
+      const cfg = loadConfig();
+      const configToken = resolveGatewayCredentialsFromConfig({
+        cfg,
+        env: process.env,
+        modeOverride: "local",
+      }).token;
+      const driftIssue = checkTokenDrift({ serviceToken, configToken });
+      if (driftIssue) {
+        const warning = driftIssue.detail
+          ? `${driftIssue.message} ${driftIssue.detail}`
+          : driftIssue.message;
+        warnings.push(warning);
+        if (!json) {
+          defaultRuntime.log(`\n⚠️  ${driftIssue.message}`);
+          if (driftIssue.detail) {
+            defaultRuntime.log(`   ${driftIssue.detail}\n`);
+          }
+        }
+      }
+    } catch (err) {
+      if (isGatewaySecretRefUnavailableError(err, "gateway.auth.token")) {
+        const warning =
+          "Unable to verify gateway token drift: gateway.auth.token SecretRef is configured but unavailable in this command path.";
+        warnings.push(warning);
+        if (!json) {
+          defaultRuntime.log(`\n⚠️  ${warning}\n`);
         }
       }
     }
-  } catch {
-    // Non-fatal: token drift check is best-effort
   }
 
   try {
     await params.service.restart({ env: process.env, stdout });
+    if (params.postRestartCheck) {
+      await params.postRestartCheck({ json, stdout, warnings, fail });
+    }
     let restarted = true;
     try {
       restarted = await params.service.isLoaded({ env: process.env });

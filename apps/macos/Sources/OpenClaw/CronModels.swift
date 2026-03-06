@@ -231,15 +231,67 @@ struct CronJob: Identifiable, Codable, Equatable {
     let createdAtMs: Int
     let updatedAtMs: Int
     let schedule: CronSchedule
-    let sessionTarget: String
+    private let sessionTargetRaw: String
     let wakeMode: CronWakeMode
     let payload: CronPayload
     let delivery: CronDelivery?
     let state: CronJobState
 
+    enum CodingKeys: String, CodingKey {
+        case id
+        case agentId
+        case name
+        case description
+        case enabled
+        case deleteAfterRun
+        case createdAtMs
+        case updatedAtMs
+        case schedule
+        case sessionTargetRaw = "sessionTarget"
+        case wakeMode
+        case payload
+        case delivery
+        case state
+    }
+
     /// Parsed session target (predefined or custom session ID)
     var parsedSessionTarget: CronCustomSessionTarget {
-        CronCustomSessionTarget.from(sessionTarget)
+        CronCustomSessionTarget.from(self.sessionTargetRaw)
+    }
+
+    /// Compatibility shim for existing editor/UI code paths that still use the
+    /// predefined enum.
+    var sessionTarget: CronSessionTarget {
+        switch self.parsedSessionTarget {
+        case .predefined(let target):
+            return target
+        case .session:
+            return .isolated
+        }
+    }
+
+    var sessionTargetDisplayValue: String {
+        self.parsedSessionTarget.rawValue
+    }
+
+    var transcriptSessionKey: String? {
+        switch self.parsedSessionTarget {
+        case .predefined(.main):
+            return nil
+        case .predefined(.isolated), .predefined(.current):
+            return "cron:\(self.id)"
+        case .session(let id):
+            return id
+        }
+    }
+
+    var supportsAnnounceDelivery: Bool {
+        switch self.parsedSessionTarget {
+        case .predefined(.main):
+            return false
+        case .predefined(.isolated), .predefined(.current), .session:
+            return true
+        }
     }
 
     var displayName: String {

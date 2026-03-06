@@ -1,5 +1,5 @@
 import path from "node:path";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fetch-guard.js";
 import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
@@ -27,6 +27,7 @@ export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promis
 type FetchMediaOptions = {
   url: string;
   fetchImpl?: FetchLike;
+  requestInit?: RequestInit;
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
@@ -79,19 +80,31 @@ async function readErrorBodySnippet(res: Response, maxChars = 200): Promise<stri
 }
 
 export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
-  const { url, fetchImpl, filePathHint, maxBytes, maxRedirects, ssrfPolicy, lookupFn } = options;
+  const {
+    url,
+    fetchImpl,
+    requestInit,
+    filePathHint,
+    maxBytes,
+    maxRedirects,
+    ssrfPolicy,
+    lookupFn,
+  } = options;
 
   let res: Response;
   let finalUrl = url;
   let release: (() => Promise<void>) | null = null;
   try {
-    const result = await fetchWithSsrFGuard({
-      url,
-      fetchImpl,
-      maxRedirects,
-      policy: ssrfPolicy,
-      lookupFn,
-    });
+    const result = await fetchWithSsrFGuard(
+      withStrictGuardedFetchMode({
+        url,
+        fetchImpl,
+        init: requestInit,
+        maxRedirects,
+        policy: ssrfPolicy,
+        lookupFn,
+      }),
+    );
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;

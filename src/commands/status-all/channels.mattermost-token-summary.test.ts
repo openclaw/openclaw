@@ -17,6 +17,7 @@ function makeMattermostPlugin(): ChannelPlugin {
       docsPath: "/channels/mattermost",
       blurb: "test",
     },
+    capabilities: { chatTypes: ["direct"] },
     config: {
       listAccountIds: () => ["echo"],
       defaultAccountId: () => "echo",
@@ -25,6 +26,63 @@ function makeMattermostPlugin(): ChannelPlugin {
         enabled: true,
         botToken: "bot-token-value",
         baseUrl: "https://mm.example.com",
+      }),
+      isConfigured: () => true,
+      isEnabled: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
+function makeSlackPlugin(params?: { botToken?: string; appToken?: string }): ChannelPlugin {
+  return {
+    id: "slack",
+    meta: {
+      id: "slack",
+      label: "Slack",
+      selectionLabel: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["primary"],
+      defaultAccountId: () => "primary",
+      resolveAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        botToken: params?.botToken ?? "bot-token",
+        appToken: params?.appToken ?? "app-token",
+      }),
+      isConfigured: () => true,
+      isEnabled: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
+function makeTokenPlugin(): ChannelPlugin {
+  return {
+    id: "token-only",
+    meta: {
+      id: "token-only",
+      label: "TokenOnly",
+      selectionLabel: "TokenOnly",
+      docsPath: "/channels/token-only",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["primary"],
+      defaultAccountId: () => "primary",
+      resolveAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        token: "token-value",
       }),
       isConfigured: () => true,
       isEnabled: () => true,
@@ -47,5 +105,33 @@ describe("buildChannelsTable - mattermost token summary", () => {
     expect(mattermostRow).toBeDefined();
     expect(mattermostRow?.state).toBe("ok");
     expect(mattermostRow?.detail).not.toContain("need bot+app");
+  });
+
+  it("keeps bot+app requirement when both fields exist", async () => {
+    vi.mocked(listChannelPlugins).mockReturnValue([
+      makeSlackPlugin({ botToken: "bot-token", appToken: "" }),
+    ]);
+
+    const table = await buildChannelsTable({ channels: {} } as never, {
+      showSecrets: false,
+    });
+
+    const slackRow = table.rows.find((row) => row.id === "slack");
+    expect(slackRow).toBeDefined();
+    expect(slackRow?.state).toBe("warn");
+    expect(slackRow?.detail).toContain("need bot+app");
+  });
+
+  it("still reports single-token channels as ok", async () => {
+    vi.mocked(listChannelPlugins).mockReturnValue([makeTokenPlugin()]);
+
+    const table = await buildChannelsTable({ channels: {} } as never, {
+      showSecrets: false,
+    });
+
+    const tokenRow = table.rows.find((row) => row.id === "token-only");
+    expect(tokenRow).toBeDefined();
+    expect(tokenRow?.state).toBe("ok");
+    expect(tokenRow?.detail).toContain("token");
   });
 });

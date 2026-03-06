@@ -1,13 +1,12 @@
-import { cancel, isCancel } from "@clack/prompts";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+import { cancel, isCancel } from "@clack/prompts";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
@@ -16,6 +15,7 @@ import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { isWSL } from "../infra/wsl.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
 import {
   CONFIG_DIR,
@@ -26,11 +26,13 @@ import {
 } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
+import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
 
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     runtime.exit(0);
+    throw new Error("unreachable");
   }
   return value;
 }
@@ -42,7 +44,7 @@ export function summarizeExistingConfig(config: OpenClawConfig): string {
     rows.push(shortenHomeInString(`workspace: ${defaults.workspace}`));
   }
   if (defaults?.model) {
-    const model = typeof defaults.model === "string" ? defaults.model : defaults.model.primary;
+    const model = resolveAgentModelPrimaryValue(defaults.model);
     if (model) {
       rows.push(shortenHomeInString(`model: ${model}`));
     }

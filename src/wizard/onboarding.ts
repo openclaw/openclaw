@@ -12,9 +12,11 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
+import { normalizeSecretInputString } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
@@ -31,15 +33,21 @@ async function requireRiskAcknowledgement(params: {
       "Security warning — please read.",
       "",
       "OpenClaw is a hobby project and still in beta. Expect sharp edges.",
+      "By default, OpenClaw is a personal agent: one trusted operator boundary.",
       "This bot can read files and run actions if tools are enabled.",
       "A bad prompt can trick it into doing unsafe things.",
       "",
-      "If you’re not comfortable with basic security and access control, don’t run OpenClaw.",
+      "OpenClaw is not a hostile multi-tenant boundary by default.",
+      "If multiple users can message one tool-enabled agent, they share that delegated tool authority.",
+      "",
+      "If you’re not comfortable with security hardening and access control, don’t run OpenClaw.",
       "Ask someone experienced to help before enabling tools or exposing it to the internet.",
       "",
       "Recommended baseline:",
       "- Pairing/allowlists + mention gating.",
+      "- Multi-user/shared inbox: split trust boundaries (separate gateway/credentials, ideally separate OS users/hosts).",
       "- Sandbox + least-privilege tools.",
+      "- Shared inboxes: isolate DM sessions (`session.dmScope: per-channel-peer`) and keep tool access minimal.",
       "- Keep secrets out of the agent’s reachable filesystem.",
       "- Use the strongest available model for any bot with tools or untrusted inboxes.",
       "",
@@ -53,7 +61,8 @@ async function requireRiskAcknowledgement(params: {
   );
 
   const ok = await params.prompter.confirm({
-    message: "I understand this is powerful and inherently risky. Continue?",
+    message:
+      "I understand this is personal-by-default and shared/multi-user use requires lock-down. Continue?",
     initialValue: false,
   });
   if (!ok) {
@@ -272,16 +281,78 @@ export async function runOnboardingWizard(
 
   const localPort = resolveGatewayPort(baseConfig);
   const localUrl = `ws://127.0.0.1:${localPort}`;
+  let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
+  try {
+    const resolvedGatewayToken = await resolveOnboardingSecretInputString({
+      config: baseConfig,
+      value: baseConfig.gateway?.auth?.token,
+      path: "gateway.auth.token",
+      env: process.env,
+    });
+    if (resolvedGatewayToken) {
+      localGatewayToken = resolvedGatewayToken;
+    }
+  } catch (error) {
+    await prompter.note(
+      [
+        "Could not resolve gateway.auth.token SecretRef for onboarding probe.",
+        error instanceof Error ? error.message : String(error),
+      ].join("\n"),
+      "Gateway auth",
+    );
+  }
+  let localGatewayPassword =
+    process.env.OPENCLAW_GATEWAY_PASSWORD ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
+  try {
+    const resolvedGatewayPassword = await resolveOnboardingSecretInputString({
+      config: baseConfig,
+      value: baseConfig.gateway?.auth?.password,
+      path: "gateway.auth.password",
+      env: process.env,
+    });
+    if (resolvedGatewayPassword) {
+      localGatewayPassword = resolvedGatewayPassword;
+    }
+  } catch (error) {
+    await prompter.note(
+      [
+        "Could not resolve gateway.auth.password SecretRef for onboarding probe.",
+        error instanceof Error ? error.message : String(error),
+      ].join("\n"),
+      "Gateway auth",
+    );
+  }
+
   const localProbe = await onboardHelpers.probeGatewayReachable({
     url: localUrl,
-    token: baseConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
-    password: baseConfig.gateway?.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD,
+    token: localGatewayToken,
+    password: localGatewayPassword,
   });
   const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
+  let remoteGatewayToken = normalizeSecretInputString(baseConfig.gateway?.remote?.token);
+  try {
+    const resolvedRemoteGatewayToken = await resolveOnboardingSecretInputString({
+      config: baseConfig,
+      value: baseConfig.gateway?.remote?.token,
+      path: "gateway.remote.token",
+      env: process.env,
+    });
+    if (resolvedRemoteGatewayToken) {
+      remoteGatewayToken = resolvedRemoteGatewayToken;
+    }
+  } catch (error) {
+    await prompter.note(
+      [
+        "Could not resolve gateway.remote.token SecretRef for onboarding probe.",
+        error instanceof Error ? error.message : String(error),
+      ].join("\n"),
+      "Gateway auth",
+    );
+  }
   const remoteProbe = remoteUrl
     ? await onboardHelpers.probeGatewayReachable({
         url: remoteUrl,
-        token: baseConfig.gateway?.remote?.token,
+        token: remoteGatewayToken,
       })
     : null;
 
@@ -314,7 +385,9 @@ export async function runOnboardingWizard(
   if (mode === "remote") {
     const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
     const { logConfigUpdated } = await import("../config/logging.js");
-    let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter);
+    let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter, {
+      secretInputMode: opts.secretInputMode,
+    });
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
     await writeConfigFile(nextConfig);
     logConfigUpdated(runtime);
@@ -360,6 +433,7 @@ export async function runOnboardingWizard(
       prompter,
       runtime,
       config: nextConfig,
+      secretInputMode: opts.secretInputMode,
     });
     nextConfig = customResult.config;
   } else {
@@ -403,6 +477,7 @@ export async function runOnboardingWizard(
     nextConfig,
     localPort,
     quickstartGateway,
+    secretInputMode: opts.secretInputMode,
     prompter,
     runtime,
   });
@@ -426,6 +501,7 @@ export async function runOnboardingWizard(
       skipDmPolicyPrompt: flow === "quickstart",
       skipConfirm: flow === "quickstart",
       quickstartDefaults: flow === "quickstart",
+      secretInputMode: opts.secretInputMode,
     });
   }
 

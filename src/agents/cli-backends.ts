@@ -20,9 +20,11 @@ const CLAUDE_MODEL_ALIASES: Record<string, string> = {
   "claude-opus-4-5": "opus",
   "claude-opus-4": "opus",
   sonnet: "sonnet",
+  "sonnet-4.6": "sonnet",
   "sonnet-4.5": "sonnet",
   "sonnet-4.1": "sonnet",
   "sonnet-4.0": "sonnet",
+  "claude-sonnet-4-6": "sonnet",
   "claude-sonnet-4-5": "sonnet",
   "claude-sonnet-4-1": "sonnet",
   "claude-sonnet-4-0": "sonnet",
@@ -31,14 +33,19 @@ const CLAUDE_MODEL_ALIASES: Record<string, string> = {
   "claude-haiku-3-5": "haiku",
 };
 
+const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
+const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
+const CLAUDE_BYPASS_PERMISSIONS_MODE = "bypassPermissions";
+
 const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   command: "claude",
-  args: ["-p", "--output-format", "json", "--dangerously-skip-permissions"],
+  args: ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions"],
   resumeArgs: [
     "-p",
     "--output-format",
     "json",
-    "--dangerously-skip-permissions",
+    "--permission-mode",
+    "bypassPermissions",
     "--resume",
     "{sessionId}",
   ],
@@ -145,6 +152,48 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
   };
 }
 
+function normalizeClaudePermissionArgs(args?: string[]): string[] | undefined {
+  if (!args) {
+    return args;
+  }
+  const normalized: string[] = [];
+  let sawLegacySkip = false;
+  let hasPermissionMode = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG) {
+      sawLegacySkip = true;
+      continue;
+    }
+    if (arg === CLAUDE_PERMISSION_MODE_ARG) {
+      hasPermissionMode = true;
+      normalized.push(arg);
+      const maybeValue = args[i + 1];
+      if (typeof maybeValue === "string") {
+        normalized.push(maybeValue);
+        i += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith(`${CLAUDE_PERMISSION_MODE_ARG}=`)) {
+      hasPermissionMode = true;
+    }
+    normalized.push(arg);
+  }
+  if (sawLegacySkip && !hasPermissionMode) {
+    normalized.push(CLAUDE_PERMISSION_MODE_ARG, CLAUDE_BYPASS_PERMISSIONS_MODE);
+  }
+  return normalized;
+}
+
+function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
+  return {
+    ...config,
+    args: normalizeClaudePermissionArgs(config.args),
+    resumeArgs: normalizeClaudePermissionArgs(config.resumeArgs),
+  };
+}
+
 export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
   const ids = new Set<string>([
     normalizeBackendKey("claude-cli"),
@@ -167,11 +216,12 @@ export function resolveCliBackendConfig(
 
   if (normalized === "claude-cli") {
     const merged = mergeBackendConfig(DEFAULT_CLAUDE_BACKEND, override);
-    const command = merged.command?.trim();
+    const config = normalizeClaudeBackendConfig(merged);
+    const command = config.command?.trim();
     if (!command) {
       return null;
     }
-    return { id: normalized, config: { ...merged, command } };
+    return { id: normalized, config: { ...config, command } };
   }
   if (normalized === "codex-cli") {
     const merged = mergeBackendConfig(DEFAULT_CODEX_BACKEND, override);

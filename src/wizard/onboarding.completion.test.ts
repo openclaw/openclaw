@@ -9,18 +9,19 @@ function createPrompter(confirmValue = false) {
 }
 
 function createDeps() {
-  return {
+  const deps: NonNullable<Parameters<typeof setupOnboardingShellCompletion>[0]["deps"]> = {
     resolveCliName: () => "openclaw",
-    checkShellCompletionStatus: vi.fn(async () => ({
-      shell: "zsh",
+    checkShellCompletionStatus: vi.fn(async (_binName: string) => ({
+      shell: "zsh" as const,
       profileInstalled: false,
       cacheExists: false,
       cachePath: "/tmp/openclaw.zsh",
       usesSlowPattern: false,
     })),
-    ensureCompletionCacheExists: vi.fn(async () => true),
+    ensureCompletionCacheExists: vi.fn(async (_binName: string) => true),
     installCompletion: vi.fn(async () => {}),
   };
+  return deps;
 }
 
 describe("setupOnboardingShellCompletion", () => {

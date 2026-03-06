@@ -59,18 +59,23 @@ describe("browser control server", () => {
   it("agent contract: navigation + common act commands", async () => {
     const base = await startServerAndBase();
 
-    const nav = await postJson(`${base}/navigate`, {
+    const nav = await postJson<{ ok: boolean; targetId?: string }>(`${base}/navigate`, {
       url: "https://example.com",
     });
     expect(nav.ok).toBe(true);
     expect(typeof nav.targetId).toBe("string");
-    expect(pwMocks.navigateViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      url: "https://example.com",
-    });
+    expect(pwMocks.navigateViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        url: "https://example.com",
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+        },
+      }),
+    );
 
-    const click = await postJson(`${base}/act`, {
+    const click = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "click",
       ref: "1",
       button: "left",
@@ -96,7 +101,7 @@ describe("browser control server", () => {
       /'selector' is not supported/i,
     );
 
-    const type = await postJson(`${base}/act`, {
+    const type = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "type",
       ref: "1",
       text: "",
@@ -111,7 +116,7 @@ describe("browser control server", () => {
       slowly: false,
     });
 
-    const press = await postJson(`${base}/act`, {
+    const press = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "press",
       key: "Enter",
     });
@@ -122,7 +127,7 @@ describe("browser control server", () => {
       key: "Enter",
     });
 
-    const hover = await postJson(`${base}/act`, {
+    const hover = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "hover",
       ref: "2",
     });
@@ -133,7 +138,7 @@ describe("browser control server", () => {
       ref: "2",
     });
 
-    const scroll = await postJson(`${base}/act`, {
+    const scroll = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "scrollIntoView",
       ref: "2",
     });
@@ -144,7 +149,7 @@ describe("browser control server", () => {
       ref: "2",
     });
 
-    const drag = await postJson(`${base}/act`, {
+    const drag = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "drag",
       startRef: "3",
       endRef: "4",

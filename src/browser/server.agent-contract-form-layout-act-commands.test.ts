@@ -1,7 +1,9 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fetch as realFetch } from "undici";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_UPLOAD_DIR } from "./paths.js";
+import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
   installAgentContractHooks,
   postJson,
@@ -16,6 +18,23 @@ import {
 const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
 
+async function withSymlinkPathEscape<T>(params: {
+  rootDir: string;
+  run: (relativePath: string) => Promise<T>;
+}): Promise<T> {
+  const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-route-escape-"));
+  const linkName = `escape-link-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const linkPath = path.join(params.rootDir, linkName);
+  await fs.mkdir(params.rootDir, { recursive: true });
+  await fs.symlink(outsideDir, linkPath);
+  try {
+    return await params.run(`${linkName}/pwned.zip`);
+  } finally {
+    await fs.unlink(linkPath).catch(() => {});
+    await fs.rm(outsideDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 describe("browser control server", () => {
   installAgentContractHooks();
 
@@ -26,7 +45,7 @@ describe("browser control server", () => {
     async () => {
       const base = await startServerAndBase();
 
-      const select = await postJson(`${base}/act`, {
+      const select = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "select",
         ref: "5",
         values: ["a", "b"],
@@ -39,18 +58,37 @@ describe("browser control server", () => {
         values: ["a", "b"],
       });
 
-      const fill = await postJson(`${base}/act`, {
-        kind: "fill",
-        fields: [{ ref: "6", type: "textbox", value: "hello" }],
-      });
-      expect(fill.ok).toBe(true);
-      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        fields: [{ ref: "6", type: "textbox", value: "hello" }],
-      });
+      const fillCases: Array<{
+        input: Record<string, unknown>;
+        expected: Record<string, unknown>;
+      }> = [
+        {
+          input: { ref: "6", type: "textbox", value: "hello" },
+          expected: { ref: "6", type: "textbox", value: "hello" },
+        },
+        {
+          input: { ref: "7", value: "world" },
+          expected: { ref: "7", type: "text", value: "world" },
+        },
+        {
+          input: { ref: "8", type: "   ", value: "trimmed-default" },
+          expected: { ref: "8", type: "text", value: "trimmed-default" },
+        },
+      ];
+      for (const { input, expected } of fillCases) {
+        const fill = await postJson<{ ok: boolean }>(`${base}/act`, {
+          kind: "fill",
+          fields: [input],
+        });
+        expect(fill.ok).toBe(true);
+        expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+          cdpUrl: state.cdpBaseUrl,
+          targetId: "abcd1234",
+          fields: [expected],
+        });
+      }
 
-      const resize = await postJson(`${base}/act`, {
+      const resize = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "resize",
         width: 800,
         height: 600,
@@ -63,7 +101,7 @@ describe("browser control server", () => {
         height: 600,
       });
 
-      const wait = await postJson(`${base}/act`, {
+      const wait = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "wait",
         timeMs: 5,
       });
@@ -76,7 +114,7 @@ describe("browser control server", () => {
         textGone: undefined,
       });
 
-      const evalRes = await postJson(`${base}/act`, {
+      const evalRes = await postJson<{ ok: boolean; result?: string }>(`${base}/act`, {
         kind: "evaluate",
         fn: "() => 1",
       });
@@ -101,14 +139,14 @@ describe("browser control server", () => {
       setBrowserControlServerEvaluateEnabled(false);
       const base = await startServerAndBase();
 
-      const waitRes = await postJson(`${base}/act`, {
+      const waitRes = await postJson<{ error?: string }>(`${base}/act`, {
         kind: "wait",
         fn: "() => window.ready === true",
       });
       expect(waitRes.error).toContain("browser.evaluateEnabled=false");
       expect(pwMocks.waitForViaPlaywright).not.toHaveBeenCalled();
 
-      const res = await postJson(`${base}/act`, {
+      const res = await postJson<{ error?: string }>(`${base}/act`, {
         kind: "evaluate",
         fn: "() => 1",
       });
@@ -185,11 +223,11 @@ describe("browser control server", () => {
     expect(consoleRes.ok).toBe(true);
     expect(Array.isArray(consoleRes.messages)).toBe(true);
 
-    const pdf = await postJson(`${base}/pdf`, {});
+    const pdf = await postJson<{ ok: boolean; path?: string }>(`${base}/pdf`, {});
     expect(pdf.ok).toBe(true);
     expect(typeof pdf.path).toBe("string");
 
-    const shot = await postJson(`${base}/screenshot`, {
+    const shot = await postJson<{ ok: boolean; path?: string }>(`${base}/screenshot`, {
       element: "body",
       type: "jpeg",
     });
@@ -267,6 +305,58 @@ describe("browser control server", () => {
     expect(downloadRes.error).toContain("Invalid path");
     expect(pwMocks.downloadViaPlaywright).not.toHaveBeenCalled();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "trace stop rejects symlinked write path escape under trace dir",
+    async () => {
+      const base = await startServerAndBase();
+      await withSymlinkPathEscape({
+        rootDir: DEFAULT_TRACE_DIR,
+        run: async (pathEscape) => {
+          const res = await postJson<{ error?: string }>(`${base}/trace/stop`, {
+            path: pathEscape,
+          });
+          expect(res.error).toContain("Invalid path");
+          expect(pwMocks.traceStopViaPlaywright).not.toHaveBeenCalled();
+        },
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "wait/download rejects symlinked write path escape under downloads dir",
+    async () => {
+      const base = await startServerAndBase();
+      await withSymlinkPathEscape({
+        rootDir: DEFAULT_DOWNLOAD_DIR,
+        run: async (pathEscape) => {
+          const res = await postJson<{ error?: string }>(`${base}/wait/download`, {
+            path: pathEscape,
+          });
+          expect(res.error).toContain("Invalid path");
+          expect(pwMocks.waitForDownloadViaPlaywright).not.toHaveBeenCalled();
+        },
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "download rejects symlinked write path escape under downloads dir",
+    async () => {
+      const base = await startServerAndBase();
+      await withSymlinkPathEscape({
+        rootDir: DEFAULT_DOWNLOAD_DIR,
+        run: async (pathEscape) => {
+          const res = await postJson<{ error?: string }>(`${base}/download`, {
+            ref: "e12",
+            path: pathEscape,
+          });
+          expect(res.error).toContain("Invalid path");
+          expect(pwMocks.downloadViaPlaywright).not.toHaveBeenCalled();
+        },
+      });
+    },
+  );
 
   it("wait/download accepts in-root relative output path", async () => {
     const base = await startServerAndBase();

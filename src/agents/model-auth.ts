@@ -279,6 +279,13 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("QWEN_OAUTH_TOKEN") ?? pick("QWEN_PORTAL_API_KEY");
   }
 
+  if (normalized === "volcengine" || normalized === "volcengine-plan") {
+    return pick("VOLCANO_ENGINE_API_KEY");
+  }
+
+  if (normalized === "byteplus" || normalized === "byteplus-plan") {
+    return pick("BYTEPLUS_API_KEY");
+  }
   if (normalized === "minimax-portal") {
     return pick("MINIMAX_OAUTH_TOKEN") ?? pick("MINIMAX_API_KEY");
   }
@@ -315,6 +322,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     qianfan: "QIANFAN_API_KEY",
     ollama: "OLLAMA_API_KEY",
     vllm: "VLLM_API_KEY",
+    kilocode: "KILOCODE_API_KEY",
   };
   const envVar = envMap[normalized];
   if (!envVar) {

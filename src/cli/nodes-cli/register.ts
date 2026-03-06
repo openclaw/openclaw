@@ -8,6 +8,7 @@ import { registerNodesInvokeCommands } from "./register.invoke.js";
 import { registerNodesLocationCommands } from "./register.location.js";
 import { registerNodesNotifyCommand } from "./register.notify.js";
 import { registerNodesPairingCommands } from "./register.pairing.js";
+import { registerNodesPushCommand } from "./register.push.js";
 import { registerNodesScreenCommands } from "./register.screen.js";
 import { registerNodesStatusCommands } from "./register.status.js";
 
@@ -30,6 +31,7 @@ export function registerNodesCli(program: Command) {
   registerNodesPairingCommands(nodes);
   registerNodesInvokeCommands(nodes);
   registerNodesNotifyCommand(nodes);
+  registerNodesPushCommand(nodes);
   registerNodesCanvasCommands(nodes);
   registerNodesCameraCommands(nodes);
   registerNodesScreenCommands(nodes);

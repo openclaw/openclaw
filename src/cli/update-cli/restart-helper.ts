@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -23,6 +24,30 @@ function isBatchSafe(value: string): boolean {
   return /^[A-Za-z0-9 _\-().]+$/.test(value);
 }
 
+function resolveSystemdUnit(env: NodeJS.ProcessEnv): string {
+  const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
+  if (override) {
+    return override.endsWith(".service") ? override : `${override}.service`;
+  }
+  return `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
+}
+
+function resolveLaunchdLabel(env: NodeJS.ProcessEnv): string {
+  const override = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  if (override) {
+    return override;
+  }
+  return resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+}
+
+function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
+  const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
+  if (override) {
+    return override;
+  }
+  return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
+}
+
 /**
  * Prepares a standalone script to restart the gateway service.
  * This script is written to a temporary directory and does not depend on
@@ -31,6 +56,7 @@ function isBatchSafe(value: string): boolean {
  */
 export async function prepareRestartScript(
   env: NodeJS.ProcessEnv = process.env,
+  gatewayPort: number = DEFAULT_GATEWAY_PORT,
 ): Promise<string | null> {
   const tmpDir = os.tmpdir();
   const timestamp = Date.now();
@@ -41,8 +67,8 @@ export async function prepareRestartScript(
 
   try {
     if (platform === "linux") {
-      const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
-      const escaped = shellEscape(`${serviceName}.service`);
+      const unitName = resolveSystemdUnit(env);
+      const escaped = shellEscape(unitName);
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
@@ -53,30 +79,57 @@ systemctl --user restart '${escaped}'
 rm -f "$0"
 `;
     } else if (platform === "darwin") {
-      const label = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+      const label = resolveLaunchdLabel(env);
       const escaped = shellEscape(label);
       // Fallback to 501 if getuid is not available (though it should be on macOS)
       const uid = process.getuid ? process.getuid() : 501;
+      // Resolve HOME at generation time via env/process.env to match launchd.ts,
+      // and shell-escape the label in the plist filename to prevent injection.
+      const home = env.HOME?.trim() || process.env.HOME || os.homedir();
+      const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+      const escapedPlistPath = shellEscape(plistPath);
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
-launchctl kickstart -k 'gui/${uid}/${escaped}'
+# Try kickstart first (works when the service is still registered).
+# If it fails (e.g. after bootout), re-register via bootstrap then kickstart.
+if ! launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null; then
+  launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' 2>/dev/null
+  launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null || true
+fi
 # Self-cleanup
 rm -f "$0"
 `;
     } else if (platform === "win32") {
-      const taskName = resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
+      const taskName = resolveWindowsTaskName(env);
       if (!isBatchSafe(taskName)) {
         return null;
       }
+      const port =
+        Number.isFinite(gatewayPort) && gatewayPort > 0 ? gatewayPort : DEFAULT_GATEWAY_PORT;
       filename = `openclaw-restart-${timestamp}.bat`;
       scriptContent = `@echo off
 REM Standalone restart script — survives parent process termination.
 REM Wait briefly to ensure file locks are released after update.
 timeout /t 2 /nobreak >nul
 schtasks /End /TN "${taskName}"
+REM Poll for gateway port release before rerun; force-kill listener if stuck.
+set /a attempts=0
+:wait_for_port_release
+set /a attempts+=1
+netstat -ano | findstr /R /C:":${port} .*LISTENING" >nul
+if errorlevel 1 goto port_released
+if %attempts% GEQ 10 goto force_kill_listener
+timeout /t 1 /nobreak >nul
+goto wait_for_port_release
+:force_kill_listener
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":${port} .*LISTENING"') do (
+  taskkill /F /PID %%P >nul 2>&1
+  goto port_released
+)
+:port_released
 schtasks /Run /TN "${taskName}"
 REM Self-cleanup
 del "%~f0"

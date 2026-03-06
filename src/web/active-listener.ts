@@ -6,7 +6,6 @@ export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
   accountId?: string;
   fileName?: string;
-  linkPreview?: boolean;
 };
 
 export type ActiveWebListener = {

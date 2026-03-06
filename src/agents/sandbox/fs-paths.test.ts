@@ -102,4 +102,24 @@ describe("resolveSandboxFsPathWithMounts", () => {
       }),
     ).toThrow(/Path escapes sandbox root/);
   });
+
+  it("prefers custom bind mounts over default workspace mount at /workspace", () => {
+    const sandbox = createSandbox({
+      docker: {
+        ...createSandbox().docker,
+        binds: ["/tmp/override:/workspace:ro"],
+      },
+    });
+    const mounts = buildSandboxFsMounts(sandbox);
+    const resolved = resolveSandboxFsPathWithMounts({
+      filePath: "/workspace/docs/AGENTS.md",
+      cwd: sandbox.workspaceDir,
+      defaultWorkspaceRoot: sandbox.workspaceDir,
+      defaultContainerRoot: sandbox.containerWorkdir,
+      mounts,
+    });
+
+    expect(resolved.hostPath).toBe(path.join(path.resolve("/tmp/override"), "docs", "AGENTS.md"));
+    expect(resolved.writable).toBe(false);
+  });
 });

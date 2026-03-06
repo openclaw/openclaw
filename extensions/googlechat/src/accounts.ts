@@ -1,6 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { createAccountListHelpers } from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "openclaw/plugin-sdk/account-id";
+import { isSecretRef } from "openclaw/plugin-sdk/googlechat";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
 import type { GoogleChatAccountConfig } from "./types.config.js";
 
 export type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
@@ -18,13 +22,30 @@ export type ResolvedGoogleChatAccount = {
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
 const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
 
-const { listAccountIds } = createAccountListHelpers("googlechat");
-export const listGoogleChatAccountIds = listAccountIds;
+function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
+  const accounts = cfg.channels?.["googlechat"]?.accounts;
+  if (!accounts || typeof accounts !== "object") {
+    return [];
+  }
+  return Object.keys(accounts).filter(Boolean);
+}
+
+export function listGoogleChatAccountIds(cfg: OpenClawConfig): string[] {
+  const ids = listConfiguredAccountIds(cfg);
+  if (ids.length === 0) {
+    return [DEFAULT_ACCOUNT_ID];
+  }
+  return ids.toSorted((a, b) => a.localeCompare(b));
+}
 
 export function resolveDefaultGoogleChatAccountId(cfg: OpenClawConfig): string {
   const channel = cfg.channels?.["googlechat"];
-  if (channel?.defaultAccount?.trim()) {
-    return channel.defaultAccount.trim();
+  const preferred = normalizeOptionalAccountId(channel?.defaultAccount);
+  if (
+    preferred &&
+    listGoogleChatAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
+  ) {
+    return preferred;
   }
   const ids = listGoogleChatAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
@@ -56,6 +77,9 @@ function mergeGoogleChatAccountConfig(
 
 function parseServiceAccount(value: unknown): Record<string, unknown> | null {
   if (value && typeof value === "object") {
+    if (isSecretRef(value)) {
+      return null;
+    }
     return value as Record<string, unknown>;
   }
   if (typeof value !== "string") {
@@ -84,6 +108,18 @@ function resolveCredentialsFromConfig(params: {
   const inline = parseServiceAccount(account.serviceAccount);
   if (inline) {
     return { credentials: inline, source: "inline" };
+  }
+
+  if (isSecretRef(account.serviceAccount)) {
+    throw new Error(
+      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccount.source}:${account.serviceAccount.provider}:${account.serviceAccount.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+    );
+  }
+
+  if (isSecretRef(account.serviceAccountRef)) {
+    throw new Error(
+      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccountRef.source}:${account.serviceAccountRef.provider}:${account.serviceAccountRef.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+    );
   }
 
   const file = account.serviceAccountFile?.trim();

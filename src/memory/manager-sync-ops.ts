@@ -12,15 +12,20 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "./embeddings-mistral.js";
+import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
 import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
 import { DEFAULT_VOYAGE_EMBEDDING_MODEL } from "./embeddings-voyage.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
   type GeminiEmbeddingClient,
+  type MistralEmbeddingClient,
+  type OllamaEmbeddingClient,
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
+import { isFileMissingError } from "./fs-utils.js";
 import {
   buildFileEntry,
   ensureDir,
@@ -44,6 +49,7 @@ type MemoryIndexMeta = {
   model: string;
   provider: string;
   providerKey?: string;
+  sources?: MemorySource[];
   chunkTokens: number;
   chunkOverlap: number;
   vectorDims?: number;
@@ -87,10 +93,12 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
+  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
+  protected mistral?: MistralEmbeddingClient;
+  protected ollama?: OllamaEmbeddingClient;
   protected abstract batch: {
     enabled: boolean;
     wait: boolean;
@@ -128,6 +136,7 @@ export abstract class MemoryManagerSyncOps {
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
+  private lastMetaSerialized: string | null = null;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract db: DatabaseSync;
@@ -344,7 +353,10 @@ export abstract class MemoryManagerSyncOps {
     this.fts.available = result.ftsAvailable;
     if (result.ftsError) {
       this.fts.loadError = result.ftsError;
-      log.warn(`fts unavailable: ${result.ftsError}`);
+      // Only warn when hybrid search is enabled; otherwise this is expected noise.
+      if (this.fts.enabled) {
+        log.warn(`fts unavailable: ${result.ftsError}`);
+      }
     }
   }
 
@@ -522,7 +534,15 @@ export abstract class MemoryManagerSyncOps {
     if (end <= start) {
       return 0;
     }
-    const handle = await fs.open(absPath, "r");
+    let handle;
+    try {
+      handle = await fs.open(absPath, "r");
+    } catch (err) {
+      if (isFileMissingError(err)) {
+        return 0;
+      }
+      throw err;
+    }
     try {
       let offset = start;
       let count = 0;
@@ -625,9 +645,9 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths);
-    const fileEntries = await Promise.all(
-      files.map(async (file) => buildFileEntry(file, this.workspaceDir)),
-    );
+    const fileEntries = (
+      await Promise.all(files.map(async (file) => buildFileEntry(file, this.workspaceDir)))
+    ).filter((entry): entry is MemoryFileEntry => entry !== null);
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
       needsFullReindex: params.needsFullReindex,
@@ -842,12 +862,14 @@ export abstract class MemoryManagerSyncOps {
     }
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
+    const configuredSources = this.resolveConfiguredSourcesForMeta();
     const needsFullReindex =
       params?.force ||
       !meta ||
       (this.provider && meta.model !== this.provider.model) ||
       (this.provider && meta.provider !== this.provider.id) ||
       meta.providerKey !== this.providerKey ||
+      this.metaSourcesDiffer(meta, configuredSources) ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
       (vectorReady && !meta?.vectorDims);
@@ -942,7 +964,13 @@ export abstract class MemoryManagerSyncOps {
     if (this.fallbackFrom) {
       return false;
     }
-    const fallbackFrom = this.provider.id as "openai" | "gemini" | "local" | "voyage";
+    const fallbackFrom = this.provider.id as
+      | "openai"
+      | "gemini"
+      | "local"
+      | "voyage"
+      | "mistral"
+      | "ollama";
 
     const fallbackModel =
       fallback === "gemini"
@@ -951,7 +979,11 @@ export abstract class MemoryManagerSyncOps {
           ? DEFAULT_OPENAI_EMBEDDING_MODEL
           : fallback === "voyage"
             ? DEFAULT_VOYAGE_EMBEDDING_MODEL
-            : this.settings.model;
+            : fallback === "mistral"
+              ? DEFAULT_MISTRAL_EMBEDDING_MODEL
+              : fallback === "ollama"
+                ? DEFAULT_OLLAMA_EMBEDDING_MODEL
+                : this.settings.model;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
@@ -969,6 +1001,8 @@ export abstract class MemoryManagerSyncOps {
     this.openAi = fallbackResult.openAi;
     this.gemini = fallbackResult.gemini;
     this.voyage = fallbackResult.voyage;
+    this.mistral = fallbackResult.mistral;
+    this.ollama = fallbackResult.ollama;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallback})`, { reason });
@@ -1047,6 +1081,7 @@ export abstract class MemoryManagerSyncOps {
         model: this.provider?.model ?? "fts-only",
         provider: this.provider?.id ?? "none",
         providerKey: this.providerKey!,
+        sources: this.resolveConfiguredSourcesForMeta(),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
       };
@@ -1117,6 +1152,7 @@ export abstract class MemoryManagerSyncOps {
       model: this.provider?.model ?? "fts-only",
       provider: this.provider?.id ?? "none",
       providerKey: this.providerKey!,
+      sources: this.resolveConfiguredSourcesForMeta(),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
     };
@@ -1146,21 +1182,59 @@ export abstract class MemoryManagerSyncOps {
       | { value: string }
       | undefined;
     if (!row?.value) {
+      this.lastMetaSerialized = null;
       return null;
     }
     try {
-      return JSON.parse(row.value) as MemoryIndexMeta;
+      const parsed = JSON.parse(row.value) as MemoryIndexMeta;
+      this.lastMetaSerialized = row.value;
+      return parsed;
     } catch {
+      this.lastMetaSerialized = null;
       return null;
     }
   }
 
   protected writeMeta(meta: MemoryIndexMeta) {
     const value = JSON.stringify(meta);
+    if (this.lastMetaSerialized === value) {
+      return;
+    }
     this.db
       .prepare(
         `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
       )
       .run(META_KEY, value);
+    this.lastMetaSerialized = value;
+  }
+
+  private resolveConfiguredSourcesForMeta(): MemorySource[] {
+    const normalized = Array.from(this.sources)
+      .filter((source): source is MemorySource => source === "memory" || source === "sessions")
+      .toSorted();
+    return normalized.length > 0 ? normalized : ["memory"];
+  }
+
+  private normalizeMetaSources(meta: MemoryIndexMeta): MemorySource[] {
+    if (!Array.isArray(meta.sources)) {
+      // Backward compatibility for older indexes that did not persist sources.
+      return ["memory"];
+    }
+    const normalized = Array.from(
+      new Set(
+        meta.sources.filter(
+          (source): source is MemorySource => source === "memory" || source === "sessions",
+        ),
+      ),
+    ).toSorted();
+    return normalized.length > 0 ? normalized : ["memory"];
+  }
+
+  private metaSourcesDiffer(meta: MemoryIndexMeta, configuredSources: MemorySource[]): boolean {
+    const metaSources = this.normalizeMetaSources(meta);
+    if (metaSources.length !== configuredSources.length) {
+      return true;
+    }
+    return metaSources.some((source, index) => source !== configuredSources[index]);
   }
 }
