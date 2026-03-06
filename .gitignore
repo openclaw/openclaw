@@ -39,9 +39,10 @@ apps/shared/OpenClawKit/Package.resolved
 bin/
 bin/clawdbot-mac
 bin/docs-list
-# un-ignore tracked orchestrator scripts living under a bin/ directory
+# Exception: coder-swarm orchestrator scripts live in a bin/ subdirectory
 !skills/coder-swarm/scripts/orchestrator/bin/
 !skills/coder-swarm/scripts/orchestrator/bin/*.sh
+!skills/coder-swarm/scripts/orchestrator/tests/
 apps/macos/.build-local/
 apps/macos/.swiftpm/
 apps/shared/MoltbotKit/.swiftpm/

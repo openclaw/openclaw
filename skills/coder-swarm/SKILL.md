@@ -22,7 +22,23 @@ Use this skill to run coding agents safely with worktree isolation.
 - Work always runs in a new git worktree + branch.
 - No destructive git operations by default.
 - PR creation is attempted automatically when possible (`gh` available).
+- PRs always target the fork (`origin`) by default, never upstream.
+- If upstream remote is `openclaw/openclaw`, spawning is refused unless `--target-upstream` is passed.
 - If PR is not possible, task is marked complete with a reason.
+
+## PR Targeting
+
+By default agents open PRs against the `origin` fork, not upstream. To target upstream explicitly:
+
+```bash
+# Via CLI flag
+scripts/swarm-spawn.sh --task "..." --repo /path --target-upstream
+
+# Via environment variable
+SWARM_PR_TARGET=upstream scripts/swarm-spawn.sh --task "..." --repo /path
+```
+
+Use `pr-safe-create.sh` (in `orchestrator/bin/`) as a drop-in for `gh pr create` anywhere you need the same fork-safety guarantees.
 
 ## Operational Notes
 

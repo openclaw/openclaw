@@ -18,6 +18,9 @@ TASK_B64=""
 BRANCH_PREFIX="agent-task"
 WATCHERS="[]"
 
+# PR target: "origin" (default, fork-safe) or "upstream" (explicit opt-in)
+SWARM_PR_TARGET="${SWARM_PR_TARGET:-origin}"
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -45,6 +48,11 @@ while [[ $# -gt 0 ]]; do
             WATCHERS="$2"
             shift 2
             ;;
+        --target-upstream)
+            # Explicit opt-in to target upstream remote for PR creation
+            SWARM_PR_TARGET="upstream"
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -62,7 +70,7 @@ fi
 
 if [[ -z "$TASK_DESC" ]]; then
     echo "Error: --task or --task-file required"
-    echo "Usage: spawn-agent.sh --task 'description' --repo /abs/path [--task-file /path/to/prompt.txt] [--agent codex|claude|gemini] [--host local|mac-mini|beelink2|auto] [--watchers '[{\"type\":\"session\",\"sessionKey\":\"agent:main:main\"}]']"
+    echo "Usage: spawn-agent.sh --task 'description' --repo /abs/path [--task-file /path/to/prompt.txt] [--agent codex|claude|gemini] [--host local|mac-mini|beelink2|auto] [--watchers '[{\"type\":\"session\",\"sessionKey\":\"agent:main:main\"}]'] [--target-upstream]"
     exit 1
 fi
 
@@ -103,6 +111,28 @@ if [[ "$REPO_PATH" =~ [\;\`\$\(\)] ]]; then
     exit 1
 fi
 
+# Pre-flight fork-safety check: if repo has an upstream remote that is
+# openclaw/openclaw and --target-upstream was not passed, refuse early.
+_parse_github_repo_from_url() {
+    local url="$1"
+    local repo
+    repo=$(echo "$url" | sed -E 's|.*github\.com[/:]([^/]+/[^/.]+)(\.git)?$|\1|')
+    [[ "$repo" != "$url" ]] && echo "$repo" || echo ""
+}
+
+if [[ "$SWARM_PR_TARGET" != "upstream" ]] && command -v git >/dev/null 2>&1; then
+    _upstream_url=$(git -C "$REPO_PATH" remote get-url upstream 2>/dev/null || true)
+    if [[ -n "$_upstream_url" ]]; then
+        _upstream_repo=$(_parse_github_repo_from_url "$_upstream_url")
+        if [[ "$_upstream_repo" == "openclaw/openclaw" ]]; then
+            echo "Error: upstream remote of '$REPO_PATH' is openclaw/openclaw."
+            echo "       Refusing to spawn an agent that would PR to the upstream repo by default."
+            echo "       Use --target-upstream to confirm you want to PR there."
+            exit 1
+        fi
+    fi
+fi
+
 # Determine execution host
 if [[ "$HOST" == "auto" ]]; then
     if [[ "$PREFERRED_HOST" == "mac-mini" ]]; then
@@ -133,6 +163,7 @@ echo "    Task: ${TASK_DESC}"
 echo "    ID: ${TASK_ID}"
 echo "    Host: ${HOST}"
 echo "    Repo: ${REPO_PATH}"
+echo "    PR target: ${SWARM_PR_TARGET}"
 
 # Function to execute on target host
 execute_on_host() {
@@ -161,9 +192,10 @@ AGENT_FLAGS="__AGENT_FLAGS__"
 AGENT_MODEL_FLAGS="__AGENT_MODEL_FLAGS__"
 AGENT_INVOKE="__AGENT_INVOKE__"
 TASK_B64="__TASK_B64__"
+SWARM_PR_TARGET="__SWARM_PR_TARGET__"
 TASK_DESC="$(printf '%s' "$TASK_B64" | base64 -d 2>/dev/null || printf '%s' "$TASK_B64" | base64 --decode 2>/dev/null || true)"
 
-ORCH_INSTRUCTIONS="You are running inside an isolated git worktree created for this task. Do the requested work end-to-end.\n\nRequired completion protocol:\n1) Make the code/doc changes.\n2) Run relevant checks/tests for changed scope.\n3) Commit all changes with a clear commit message.\n4) If 'gh' is available and this repo has an origin remote, push branch and open a PR against main.\n5) Print a concise completion summary including files changed and PR URL/number if created.\n6) If PR creation is not possible, explicitly state why and leave committed changes on this branch.\n\nBe decisive and avoid asking for interactive approvals; prefer finishing the task in one pass."
+ORCH_INSTRUCTIONS="You are running inside an isolated git worktree created for this task. Do the requested work end-to-end.\n\nRequired completion protocol:\n1) Make the code/doc changes.\n2) Run relevant checks/tests for changed scope.\n3) Commit all changes with a clear commit message.\n4) If 'gh' is available and this repo has an origin remote, push branch and open a PR. ALWAYS target the fork (origin), not upstream. Steps:\n   a) Detect origin: ORIGIN_URL=\$(git remote get-url origin); ORIGIN_REPO=\$(echo \"\$ORIGIN_URL\" | sed -E 's|.*github\\.com[/:]([^/]+/[^/.]+)(\\.git)?\\$|\\1|')\n   b) Check upstream: UPSTREAM_REPO=\$(git remote get-url upstream 2>/dev/null | sed -E 's|.*github\\.com[/:]([^/]+/[^/.]+)(\\.git)?\\$|\\1|' || true)\n   c) If upstream exists, differs from origin, and env SWARM_PR_TARGET is not 'upstream':\n      - If upstream is openclaw/openclaw: print 'ERROR: refusing to PR to openclaw/openclaw upstream; set SWARM_PR_TARGET=upstream to confirm' and skip PR creation.\n      - Otherwise: note you are targeting origin fork.\n   d) Push and create PR: git push origin HEAD && gh pr create --repo \"\$ORIGIN_REPO\" --base main --title '...' --body '...'\n   e) If SWARM_PR_TARGET=upstream is set in env, targeting upstream is allowed.\n5) Print a concise completion summary including files changed and PR URL/number if created.\n6) If PR creation is not possible, explicitly state why and leave committed changes on this branch.\n\nBe decisive and avoid asking for interactive approvals; prefer finishing the task in one pass."
 
 FULL_PROMPT="$ORCH_INSTRUCTIONS\n\nTask:\n$TASK_DESC"
 SAFE_PROMPT=${FULL_PROMPT//\'/\'\"\'\"\'}
@@ -184,13 +216,15 @@ fi
 
 # Launch agent in tmux
 tmux new-session -d -s "$TMUX_SESSION" -c "$WORKTREE_DIR"
+# Export SWARM_PR_TARGET into the tmux session so the agent inherits it
+tmux setenv -t "$TMUX_SESSION" SWARM_PR_TARGET "$SWARM_PR_TARGET"
 
 case "$AGENT_INVOKE" in
   prompt)
-    LAUNCH_CMD="$AGENT_CMD --model $AGENT_MODEL $AGENT_FLAGS $AGENT_MODEL_FLAGS -p '$SAFE_PROMPT'"
+    LAUNCH_CMD="SWARM_PR_TARGET=$SWARM_PR_TARGET $AGENT_CMD --model $AGENT_MODEL $AGENT_FLAGS $AGENT_MODEL_FLAGS -p '$SAFE_PROMPT'"
     ;;
   exec|*)
-    LAUNCH_CMD="$AGENT_CMD --model $AGENT_MODEL $AGENT_FLAGS $AGENT_MODEL_FLAGS exec '$SAFE_PROMPT'"
+    LAUNCH_CMD="SWARM_PR_TARGET=$SWARM_PR_TARGET $AGENT_CMD --model $AGENT_MODEL $AGENT_FLAGS $AGENT_MODEL_FLAGS exec '$SAFE_PROMPT'"
     ;;
 esac
 
@@ -213,6 +247,7 @@ SPAWN_SCRIPT="${SPAWN_SCRIPT//__AGENT_FLAGS__/$AGENT_FLAGS}"
 SPAWN_SCRIPT="${SPAWN_SCRIPT//__AGENT_MODEL_FLAGS__/$AGENT_MODEL_FLAGS}"
 SPAWN_SCRIPT="${SPAWN_SCRIPT//__AGENT_INVOKE__/$AGENT_INVOKE}"
 SPAWN_SCRIPT="${SPAWN_SCRIPT//__TASK_B64__/$TASK_B64}"
+SPAWN_SCRIPT="${SPAWN_SCRIPT//__SWARM_PR_TARGET__/$SWARM_PR_TARGET}"
 
 # Execute spawn on target host
 execute_on_host "$SPAWN_SCRIPT"
