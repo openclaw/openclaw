@@ -457,7 +457,6 @@ describe("isSecureWebSocketUrl", () => {
       "ws://169.254.10.20:18789",
       "ws://[fc00::1]:18789",
       "ws://[fe80::1]:18789",
-      "ws://gateway.private.example:18789",
     ];
 
     for (const input of allowedWhenOptedIn) {
@@ -465,10 +464,16 @@ describe("isSecureWebSocketUrl", () => {
     }
   });
 
-  it("still rejects ws:// public IP literals when opt-in is enabled", () => {
-    const publicIpWsUrls = ["ws://1.1.1.1:18789", "ws://8.8.8.8:18789", "ws://203.0.113.10:18789"];
+  it("still rejects ws:// hostnames and public IP literals when opt-in is enabled", () => {
+    const rejectedWsUrls = [
+      "ws://remote.example.com:18789",
+      "ws://gateway.private.example:18789",
+      "ws://1.1.1.1:18789",
+      "ws://8.8.8.8:18789",
+      "ws://203.0.113.10:18789",
+    ];
 
-    for (const input of publicIpWsUrls) {
+    for (const input of rejectedWsUrls) {
       expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(false);
     }
   });
