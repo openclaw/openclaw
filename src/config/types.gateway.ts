@@ -199,9 +199,9 @@ export type GatewayReloadConfig = {
 
 export type GatewayRestartRecoveryConfig = {
   /**
-   * If true, when the gateway is restarted via the `gateway restart` command/tool
-   * (restart sentinel kind="restart"), attempt to resume in-flight agent runs
-   * that were accepted before the restart.
+   * If true, when gateway startup observes a restart sentinel (for example from
+   * `gateway restart`, `config patch`, or `config apply`), attempt to resume
+   * in-flight agent runs that were accepted before the restart.
    *
    * Default: false.
    */
