@@ -55,7 +55,7 @@ jobs:
       - name: Run root Dockerfile CLI smoke
         run: |
           docker build -t openclaw-dockerfile-smoke:local -f Dockerfile .
-          docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version'
+          docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version && which rg && rg --version && which terraform && terraform version -json >/dev/null'
 
       - name: Run installer docker tests
         env:

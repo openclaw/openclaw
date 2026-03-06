@@ -23,12 +23,25 @@ WORKDIR /app
 RUN chown node:node /app
 
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
-RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES && \
-      apt-get clean && \
-      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
-    fi
+ARG TERRAFORM_VERSION=1.14.5
+ARG TARGETARCH
+RUN set -eux; \
+    apt-get update; \
+    default_packages="ripgrep unzip"; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $default_packages $OPENCLAW_DOCKER_APT_PACKAGES; \
+    arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    case "$arch" in \
+      amd64) terraform_arch="amd64" ;; \
+      arm64) terraform_arch="arm64" ;; \
+      *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/terraform.zip "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${terraform_arch}.zip"; \
+    unzip -p /tmp/terraform.zip terraform >/usr/local/bin/terraform; \
+    chmod +x /usr/local/bin/terraform; \
+    rg --version >/dev/null; \
+    terraform version -json >/dev/null; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/terraform.zip
 
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY --chown=node:node ui/package.json ./ui/package.json
