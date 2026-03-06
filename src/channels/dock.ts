@@ -26,6 +26,8 @@ import {
   resolveGoogleChatGroupToolPolicy,
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
+  resolveSignalGroupRequireMention,
+  resolveSignalGroupToolPolicy,
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
   resolveTelegramGroupRequireMention,
@@ -519,6 +521,10 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           .filter(Boolean),
       resolveDefaultTo: ({ cfg, accountId }) =>
         resolveSignalAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+    },
+    groups: {
+      resolveRequireMention: resolveSignalGroupRequireMention,
+      resolveToolPolicy: resolveSignalGroupToolPolicy,
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>

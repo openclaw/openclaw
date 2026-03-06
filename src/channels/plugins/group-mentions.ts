@@ -125,7 +125,8 @@ type ChannelGroupPolicyChannel =
   | "whatsapp"
   | "imessage"
   | "googlechat"
-  | "bluebubbles";
+  | "bluebubbles"
+  | "signal";
 
 function resolveSlackChannelPolicyEntry(
   params: GroupMentionParams,
@@ -321,4 +322,14 @@ export function resolveBlueBubblesGroupToolPolicy(
   params: GroupMentionParams,
 ): GroupToolPolicyConfig | undefined {
   return resolveChannelToolPolicyForSender(params, "bluebubbles");
+}
+
+export function resolveSignalGroupRequireMention(params: GroupMentionParams): boolean {
+  return resolveChannelRequireMention(params, "signal");
+}
+
+export function resolveSignalGroupToolPolicy(
+  params: GroupMentionParams,
+): GroupToolPolicyConfig | undefined {
+  return resolveChannelToolPolicyForSender(params, "signal");
 }
