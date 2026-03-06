@@ -817,6 +817,7 @@ export async function compactEmbeddedPiSessionDirect(
         await flushPendingToolResultsAfterIdle({
           agent: session?.agent,
           sessionManager,
+          clearPendingOnTimeout: true,
         });
         session.dispose();
       }

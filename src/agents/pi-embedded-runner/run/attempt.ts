@@ -1338,6 +1338,7 @@ export async function runEmbeddedAttempt(
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,
           sessionManager,
+          clearPendingOnTimeout: true,
         });
         activeSession.dispose();
         throw err;
@@ -1904,6 +1905,7 @@ export async function runEmbeddedAttempt(
       await flushPendingToolResultsAfterIdle({
         agent: session?.agent,
         sessionManager,
+        clearPendingOnTimeout: true,
       });
       session?.dispose();
       releaseWsSession(params.sessionId);
