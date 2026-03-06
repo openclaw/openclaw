@@ -128,4 +128,50 @@ describe("sendMessageSignal receipts", () => {
     expect(result.messageId).toBe("unknown");
     expect(result.receipt.platformMessageIds).toStrictEqual([]);
   });
+
+  it("sends quote-author for group replies when quoteAuthor is available", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567892 });
+
+    await sendMessageSignal("group:test-group", "hello", {
+      cfg: SIGNAL_TEST_CFG,
+      textMode: "plain",
+      replyTo: "1700000000000",
+      quoteAuthor: "uuid:sender-1",
+    });
+
+    const params = signalRpcRequestMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(signalRpcRequestMock).toHaveBeenCalledWith("send", expect.any(Object), expect.any(Object));
+    expect(params.groupId).toBe("test-group");
+    expect(params["quote-timestamp"]).toBe(1700000000000);
+    expect(params["quote-author"]).toBe("uuid:sender-1");
+  });
+
+  it("ignores replyTo values with trailing non-numeric characters", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567893 });
+
+    await sendMessageSignal("+15551230000", "hello", {
+      cfg: SIGNAL_TEST_CFG,
+      textMode: "plain",
+      replyTo: "1700000000000abc",
+      quoteAuthor: "uuid:sender-1",
+    });
+
+    const params = signalRpcRequestMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(params["quote-timestamp"]).toBeUndefined();
+    expect(params["quote-author"]).toBeUndefined();
+  });
+
+  it("skips group quote metadata when quoteAuthor is unavailable", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567894 });
+
+    await sendMessageSignal("group:test-group", "hello", {
+      cfg: SIGNAL_TEST_CFG,
+      textMode: "plain",
+      replyTo: "1700000000000",
+    });
+
+    const params = signalRpcRequestMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(params["quote-timestamp"]).toBeUndefined();
+    expect(params["quote-author"]).toBeUndefined();
+  });
 });

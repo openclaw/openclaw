@@ -7,6 +7,7 @@ import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { ReplyToOverride } from "./reply-policy.js";
 
 export type OutboundMessageSendOverrides = ReplyToOverride & {
+  quoteAuthor?: string | null;
   threadId?: string | number | null;
   audioAsVoice?: boolean;
   forceDocument?: boolean;
