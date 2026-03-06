@@ -38,7 +38,8 @@ jobs:
           stale-pr-label: stale
           exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale
           exempt-pr-labels: maintainer,no-stale
-          operations-per-run: 10000
+          operations-per-run: 2000
+          ascending: true
           exempt-all-assignees: true
           remove-stale-when-updated: true
           stale-issue-message: |
