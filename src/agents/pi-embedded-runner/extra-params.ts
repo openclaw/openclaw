@@ -963,6 +963,58 @@ function createZaiToolStreamWrapper(
   };
 }
 
+const ANTHROPIC_EFFORT_VALUES = new Set(["low", "medium", "high", "max"]);
+
+/**
+ * Resolve a user-configured `effort` override from extraParams.
+ * Valid values: "low" | "medium" | "high" | "max" (Anthropic output_config.effort).
+ */
+function resolveEffortOverride(
+  extraParams: Record<string, unknown> | undefined,
+): string | undefined {
+  const effort = extraParams?.effort;
+  if (typeof effort === "string" && ANTHROPIC_EFFORT_VALUES.has(effort)) {
+    return effort;
+  }
+  return undefined;
+}
+
+/**
+ * Create a streamFn wrapper that overrides `output_config.effort` in the
+ * Anthropic API payload when the user explicitly configures `params.effort`.
+ *
+ * The pi-ai SDK maps ThinkingLevel to effort internally (e.g. "medium" → effort "medium"),
+ * but users may want a different effort level (e.g. "adaptive" thinking with effort "max").
+ * This wrapper overrides the SDK's default mapping with the user-configured value.
+ */
+function createAnthropicEffortOverrideWrapper(
+  baseStreamFn: StreamFn | undefined,
+  effort: string,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          // Override output_config.effort when the payload uses adaptive thinking
+          if (payloadObj.thinking && typeof payloadObj.thinking === "object") {
+            const existingConfig = payloadObj.output_config;
+            if (existingConfig && typeof existingConfig === "object") {
+              (existingConfig as Record<string, unknown>).effort = effort;
+            } else {
+              payloadObj.output_config = { effort };
+            }
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -1003,6 +1055,17 @@ export function applyExtraParamsToAgent(
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
+  }
+
+  // Apply user-configured effort override for Anthropic adaptive thinking.
+  // pi-ai maps ThinkingLevel to effort internally; this lets users override
+  // e.g. "adaptive" thinking with effort "max" via params.effort.
+  const effortOverride = resolveEffortOverride(merged);
+  if (effortOverride && (provider === "anthropic" || provider === "amazon-bedrock")) {
+    log.debug(
+      `applying effort override "${effortOverride}" for ${provider}/${modelId}`,
+    );
+    agent.streamFn = createAnthropicEffortOverrideWrapper(agent.streamFn, effortOverride);
   }
 
   const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
