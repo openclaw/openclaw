@@ -441,8 +441,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
-      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+      /** Search provider ("brave", "perplexity", "grok", "gemini", "kimi", or "tavily"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "tavily";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */
@@ -484,6 +484,13 @@ export type ToolsConfig = {
         baseUrl?: string;
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
+      };
+      /** Tavily-specific configuration (used when provider="tavily"). */
+      tavily?: {
+        /** Tavily API key (defaults to TAVILY_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** Search depth: "basic" (default), "advanced", "fast", or "ultra-fast". */
+        searchDepth?: "basic" | "advanced" | "fast" | "ultra-fast";
       };
     };
     fetch?: {
