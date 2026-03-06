@@ -140,7 +140,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       }
     } catch (err) {
       console.error(
-        `[dev-mode] Failed to activate dev-mode: ${err instanceof Error ? err.message : err}`,
+        `[dev-mode] Failed to activate dev-mode: ${err instanceof Error ? err.message : String(err)}`,
       );
       console.error("[dev-mode] Config may be broken. Run 'openclaw doctor' to diagnose.");
     }

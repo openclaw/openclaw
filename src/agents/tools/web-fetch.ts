@@ -114,7 +114,9 @@ function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
 }
 
 function resolveFetchMaxResponseBytes(fetch?: WebFetchConfig): number {
-  if (isDevMode()) return 50_000_000; // 50MB in dev mode
+  if (isDevMode()) {
+    return 50_000_000; // 50MB in dev mode
+  }
   const raw =
     fetch && "maxResponseBytes" in fetch && typeof fetch.maxResponseBytes === "number"
       ? fetch.maxResponseBytes

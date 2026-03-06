@@ -950,7 +950,7 @@ export async function startGatewayServer(
       }
     } catch (err) {
       console.error(
-        `[dev-mode] Hub server auto-start failed: ${err instanceof Error ? err.message : err}`,
+        `[dev-mode] Hub server auto-start failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

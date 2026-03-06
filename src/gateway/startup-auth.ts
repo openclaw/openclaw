@@ -320,7 +320,9 @@ export function assertHooksTokenSeparateFromGatewayAuth(params: {
   cfg: OpenClawConfig;
   auth: ResolvedGatewayAuth;
 }): void {
-  if (isDevMode()) return;
+  if (isDevMode()) {
+    return;
+  }
   if (params.cfg.hooks?.enabled !== true) {
     return;
   }

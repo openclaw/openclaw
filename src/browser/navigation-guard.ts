@@ -38,7 +38,9 @@ export async function assertBrowserNavigationAllowed(
     lookupFn?: LookupFn;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
-  if (isDevMode()) return;
+  if (isDevMode()) {
+    return;
+  }
 
   const rawUrl = String(opts.url ?? "").trim();
   if (!rawUrl) {

@@ -59,7 +59,9 @@ function buildContextPruningFactory(params: {
 }
 
 function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
-  if (isDevMode()) return "default";
+  if (isDevMode()) {
+    return "default";
+  }
   return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 

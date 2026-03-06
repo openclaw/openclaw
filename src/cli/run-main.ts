@@ -113,7 +113,7 @@ export async function runCli(argv: string[] = process.argv) {
     }
   } catch (err) {
     console.error(
-      `[dev-mode] Failed to load dev-mode config: ${err instanceof Error ? err.message : err}`,
+      `[dev-mode] Failed to load dev-mode config: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 

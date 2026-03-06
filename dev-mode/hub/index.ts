@@ -48,7 +48,9 @@ function httpRequest(
       req.destroy();
       reject(new Error("Hub request timed out"));
     });
-    if (body) req.write(body);
+    if (body) {
+      req.write(body);
+    }
     req.end();
   });
 }
@@ -159,7 +161,7 @@ export default {
       async execute(_toolCallId: string, args: Record<string, unknown>) {
         const body = JSON.stringify({ response: args.response ?? "" });
         try {
-          const res = await httpRequest(`${baseUrl}/done/${args.id}`, "POST", body);
+          const res = await httpRequest(`${baseUrl}/done/${String(args.id)}`, "POST", body);
           return JSON.parse(res.data);
         } catch (err: unknown) {
           return { error: `Hub unreachable: ${(err as Error).message}. Is server.py running?` };

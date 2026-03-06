@@ -81,7 +81,9 @@ export function sanitizeHostExecEnv(params?: {
     // Pass all env vars through in dev mode
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(params?.baseEnv ?? process.env)) {
-      if (typeof value === "string") env[key] = value;
+      if (typeof value === "string") {
+        env[key] = value;
+      }
     }
     if (params?.overrides) {
       Object.assign(env, params.overrides);
