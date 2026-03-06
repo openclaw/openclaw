@@ -73,12 +73,20 @@ function hasRateLimitTpmHint(raw: string): boolean {
 function resolveContextOverflowCandidate(errorMessage: string): {
   text: string;
   type?: string;
+  code?: string;
 } {
   const parsed = parseApiErrorInfo(errorMessage);
-  const candidate = parsed?.message?.trim();
+  const candidateParts = [
+    parsed?.httpCode?.trim(),
+    parsed?.type?.trim(),
+    parsed?.code?.trim(),
+    parsed?.message?.trim(),
+  ].filter((value): value is string => Boolean(value && value.length > 0));
+  const candidate = candidateParts.join(" ").trim();
   return {
     text: candidate && candidate.length > 0 ? candidate : errorMessage,
     type: parsed?.type,
+    code: parsed?.code,
   };
 }
 
@@ -100,7 +108,10 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     return false;
   }
   const candidate = resolveContextOverflowCandidate(errorMessage);
-  if (isExplicitContextOverflowType(candidate.type)) {
+  if (
+    isExplicitContextOverflowType(candidate.type) ||
+    isExplicitContextOverflowType(candidate.code)
+  ) {
     return true;
   }
 
@@ -418,6 +429,7 @@ export function isRawApiErrorPayload(raw?: string): boolean {
 export type ApiErrorInfo = {
   httpCode?: string;
   type?: string;
+  code?: string;
   message?: string;
   requestId?: string;
 };
@@ -456,14 +468,18 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   const topMessage = typeof payload.message === "string" ? payload.message : undefined;
 
   let errType: string | undefined;
+  let errCode: string | undefined;
   let errMessage: string | undefined;
   if (payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)) {
     const err = payload.error as Record<string, unknown>;
     if (typeof err.type === "string") {
       errType = err.type;
     }
-    if (typeof err.code === "string" && !errType) {
-      errType = err.code;
+    if (typeof err.code === "string") {
+      errCode = err.code;
+      if (!errType) {
+        errType = err.code;
+      }
     }
     if (typeof err.message === "string") {
       errMessage = err.message;
@@ -473,6 +489,7 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   return {
     httpCode,
     type: errType ?? topType,
+    code: errCode,
     message: errMessage ?? topMessage,
     requestId,
   };

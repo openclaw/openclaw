@@ -246,6 +246,16 @@ describe("isContextOverflowError", () => {
     }
   });
 
+  it("matches overflow signals carried only in error.code or HTTP-prefixed payloads", () => {
+    const samples = [
+      '{"type":"error","error":{"type":"invalid_request_error","code":"request_too_large","message":"Invalid request"}}',
+      '413 {"type":"error","error":{"type":"invalid_request_error","message":"Request Entity Too Large"}}',
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
   it("matches Kimi 'model token limit' context overflow errors", () => {
     const samples = [
       "Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
