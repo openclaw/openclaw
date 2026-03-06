@@ -241,6 +241,7 @@ describe("models-config", () => {
           mode: "merge",
           providers: {
             custom: {
+              baseUrl: "",
               api: "openai-responses" as const,
               models: [
                 {
