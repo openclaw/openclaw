@@ -256,6 +256,7 @@ function resolveSafeAvatarFile(filePath: string): { path: string; fd: number } |
 function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
+  rejectHardlinks: boolean,
 ): { path: string; fd: number } | null {
   const opened = openBoundaryFileSync({
     absolutePath: filePath,
@@ -263,7 +264,7 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
-    rejectHardlinks: false,
+    rejectHardlinks,
   });
   if (!opened.ok) {
     if (opened.reason === "io") {
@@ -420,7 +421,7 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const safeFile = resolveSafeControlUiFile(rootReal, filePath);
+  const safeFile = resolveSafeControlUiFile(rootReal, filePath, rootState?.kind === "resolved");
   if (safeFile) {
     try {
       if (respondHeadForFile(req, res, safeFile.path)) {
@@ -449,7 +450,7 @@ export function handleControlUiHttpRequest(
 
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
-  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath);
+  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rootState?.kind === "resolved");
   if (safeIndex) {
     try {
       if (respondHeadForFile(req, res, safeIndex.path)) {
