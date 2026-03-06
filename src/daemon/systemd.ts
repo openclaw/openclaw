@@ -67,11 +67,17 @@ export type { SystemdUserLingerStatus };
 export async function readSystemdServiceExecStart(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
+  // Check which unit file actually exists to avoid scope mismatch
+  const installedScope = await resolveInstalledScope(env);
   let scope: "--user" | "--system";
-  try {
-    scope = await assertSystemdAvailable(env);
-  } catch {
-    return null;
+  if (installedScope) {
+    scope = installedScope;
+  } else {
+    try {
+      scope = await assertSystemdAvailable(env);
+    } catch {
+      return null;
+    }
   }
   const unitPath = resolveSystemdUnitPath(env, scope);
   try {
@@ -316,6 +322,35 @@ async function isSystemdSystemServiceAvailable(): Promise<boolean> {
   return true;
 }
 
+/**
+ * Resolve the scope based on which unit file actually exists on disk.
+ * This avoids silent mismatches when user systemd becomes available after
+ * the service was installed with --system scope.
+ */
+async function resolveInstalledScope(
+  env: GatewayServiceEnv,
+): Promise<"--user" | "--system" | null> {
+  const systemPath = resolveSystemdUnitPath(env, "--system");
+  const userPath = resolveSystemdUnitPath(env, "--user");
+  const [systemExists, userExists] = await Promise.all([
+    fs.access(systemPath).then(
+      () => true,
+      () => false,
+    ),
+    fs.access(userPath).then(
+      () => true,
+      () => false,
+    ),
+  ]);
+  if (userExists) {
+    return "--user";
+  }
+  if (systemExists) {
+    return "--system";
+  }
+  return null;
+}
+
 async function assertSystemdAvailable(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<"--user" | "--system"> {
@@ -414,7 +449,9 @@ export async function uninstallSystemdService({
   env,
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
-  const scope = await assertSystemdAvailable(env);
+  // Check which unit file actually exists to avoid scope mismatch
+  const installedScope = await resolveInstalledScope(env);
+  const scope = installedScope ?? (await assertSystemdAvailable(env));
   const systemctlArgs = scope === "--user" ? ["--user"] : ["--system"];
   const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
   const unitName = `${serviceName}.service`;
@@ -436,7 +473,9 @@ async function runSystemdServiceAction(params: {
   label: string;
 }) {
   const env = params.env ?? process.env;
-  const scope = await assertSystemdAvailable(env);
+  // Check which unit file actually exists to avoid scope mismatch
+  const installedScope = await resolveInstalledScope(env);
+  const scope = installedScope ?? (await assertSystemdAvailable(env));
   const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   let res: { stdout: string; stderr: string; code: number };
@@ -476,19 +515,26 @@ export async function restartSystemdService({
 }
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
+  const env = args.env ?? {};
+  // Check which unit file actually exists to avoid scope mismatch
+  const installedScope = await resolveInstalledScope(env);
   let scope: "--user" | "--system";
-  try {
-    scope = await assertSystemdAvailable(args.env ?? {});
-  } catch {
-    return false;
+  if (installedScope) {
+    scope = installedScope;
+  } else {
+    try {
+      scope = await assertSystemdAvailable(env);
+    } catch {
+      return false;
+    }
   }
-  const serviceName = resolveSystemdServiceName(args.env ?? {});
+  const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   let res: { stdout: string; stderr: string; code: number };
   if (scope === "--system") {
     res = await execSystemctl(["--system", "is-enabled", unitName]);
   } else {
-    res = await execSystemctlUser(args.env ?? {}, ["is-enabled", unitName]);
+    res = await execSystemctlUser(env, ["is-enabled", unitName]);
   }
   if (res.code === 0) {
     return true;
@@ -503,14 +549,20 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
 export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime> {
+  // Check which unit file actually exists to avoid scope mismatch
+  const installedScope = await resolveInstalledScope(env);
   let scope: "--user" | "--system";
-  try {
-    scope = await assertSystemdAvailable(env);
-  } catch (err) {
-    return {
-      status: "unknown",
-      detail: err instanceof Error ? err.message : String(err),
-    };
+  if (installedScope) {
+    scope = installedScope;
+  } else {
+    try {
+      scope = await assertSystemdAvailable(env);
+    } catch (err) {
+      return {
+        status: "unknown",
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
   const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
