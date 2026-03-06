@@ -236,6 +236,9 @@ describe("/session idle and /session max-age", () => {
     hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock.mockReturnValue([
       {
         targetSessionKey: "agent:main:subagent:child",
+        boundAt: Date.now(),
+        lastActivityAt: Date.now(),
+        idleTimeoutMs: 2 * 60 * 60 * 1000,
       },
     ]);
 
@@ -252,6 +255,38 @@ describe("/session idle and /session max-age", () => {
     });
     expect(text).toContain("Idle timeout set to 2h");
     expect(text).toContain("2026-02-20T02:00:00.000Z");
+  });
+
+  it("reports Telegram max-age expiry from the original bind time", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
+
+    const boundAt = Date.parse("2026-02-19T22:00:00.000Z");
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createTelegramBinding({ boundAt }),
+    );
+    hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock.mockReturnValue([
+      {
+        targetSessionKey: "agent:main:subagent:child",
+        boundAt,
+        lastActivityAt: Date.now(),
+        maxAgeMs: 3 * 60 * 60 * 1000,
+      },
+    ]);
+
+    const result = await handleSessionCommand(
+      createTelegramCommandParams("/session max-age 3h"),
+      true,
+    );
+    const text = result?.reply?.text ?? "";
+
+    expect(hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:subagent:child",
+      accountId: "default",
+      maxAgeMs: 3 * 60 * 60 * 1000,
+    });
+    expect(text).toContain("Max age set to 3h");
+    expect(text).toContain("2026-02-20T01:00:00.000Z");
   });
 
   it("disables max age when set to off", async () => {

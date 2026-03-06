@@ -62,6 +62,7 @@ export type TelegramThreadBindingManager = {
 
 const MANAGERS_BY_ACCOUNT_ID = new Map<string, TelegramThreadBindingManager>();
 const BINDINGS_BY_ACCOUNT_CONVERSATION = new Map<string, TelegramThreadBindingRecord>();
+const PERSIST_BY_ACCOUNT_ID = new Map<string, boolean>();
 
 function normalizeDurationMs(raw: unknown, fallback: number): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
@@ -80,6 +81,10 @@ function normalizeConversationId(raw: unknown): string | undefined {
 
 function resolveBindingKey(params: { accountId: string; conversationId: string }): string {
   return `${params.accountId}:${params.conversationId}`;
+}
+
+function shouldPersistTelegramBindingMutations(accountId: string): boolean {
+  return PERSIST_BY_ACCOUNT_ID.get(accountId) ?? true;
 }
 
 function toSessionBindingTargetKind(raw: TelegramBindingTargetKind): BindingTargetKind {
@@ -382,6 +387,7 @@ export function createTelegramThreadBindingManager(
   }
 
   const persist = params.persist ?? true;
+  PERSIST_BY_ACCOUNT_ID.set(accountId, persist);
   const idleTimeoutMs = normalizeDurationMs(
     params.idleTimeoutMs,
     DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
@@ -494,6 +500,7 @@ export function createTelegramThreadBindingManager(
       const existingManager = MANAGERS_BY_ACCOUNT_ID.get(accountId);
       if (existingManager === manager) {
         MANAGERS_BY_ACCOUNT_ID.delete(accountId);
+        PERSIST_BY_ACCOUNT_ID.delete(accountId);
       }
     },
   };
@@ -685,7 +692,7 @@ export function setTelegramThreadBindingIdleTimeoutBySessionKey(params: {
   if (updated.length > 0) {
     void persistBindingsToDisk({
       accountId: manager.accountId,
-      persist: true,
+      persist: shouldPersistTelegramBindingMutations(manager.accountId),
     });
   }
   return updated;
@@ -719,7 +726,7 @@ export function setTelegramThreadBindingMaxAgeBySessionKey(params: {
   if (updated.length > 0) {
     void persistBindingsToDisk({
       accountId: manager.accountId,
-      persist: true,
+      persist: shouldPersistTelegramBindingMutations(manager.accountId),
     });
   }
   return updated;
@@ -732,5 +739,6 @@ export const __testing = {
     }
     MANAGERS_BY_ACCOUNT_ID.clear();
     BINDINGS_BY_ACCOUNT_CONVERSATION.clear();
+    PERSIST_BY_ACCOUNT_ID.clear();
   },
 };

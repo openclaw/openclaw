@@ -1,4 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveStateDir } from "../config/paths.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import {
   __testing,
@@ -8,12 +12,19 @@ import {
 } from "./thread-bindings.js";
 
 describe("telegram thread bindings", () => {
+  let stateDirOverride: string | undefined;
+
   beforeEach(() => {
     __testing.resetTelegramThreadBindingsForTests();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    if (stateDirOverride) {
+      delete process.env.OPENCLAW_STATE_DIR;
+      fs.rmSync(stateDirOverride, { recursive: true, force: true });
+      stateDirOverride = undefined;
+    }
   });
 
   it("registers a telegram binding adapter and binds current conversations", async () => {
@@ -110,5 +121,46 @@ describe("telegram thread bindings", () => {
     expect(manager.listBySessionKey("agent:main:subagent:child-1")[0]?.maxAgeMs).toBe(
       6 * 60 * 60 * 1000,
     );
+  });
+
+  it("does not persist lifecycle updates when manager persistence is disabled", async () => {
+    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
+    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
+
+    createTelegramThreadBindingManager({
+      accountId: "no-persist",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:subagent:child-2",
+      targetKind: "subagent",
+      conversation: {
+        channel: "telegram",
+        accountId: "no-persist",
+        conversationId: "-100200300:topic:88",
+      },
+    });
+
+    setTelegramThreadBindingIdleTimeoutBySessionKey({
+      accountId: "no-persist",
+      targetSessionKey: "agent:main:subagent:child-2",
+      idleTimeoutMs: 60 * 60 * 1000,
+    });
+    setTelegramThreadBindingMaxAgeBySessionKey({
+      accountId: "no-persist",
+      targetSessionKey: "agent:main:subagent:child-2",
+      maxAgeMs: 2 * 60 * 60 * 1000,
+    });
+
+    const statePath = path.join(
+      resolveStateDir(process.env, os.homedir),
+      "telegram",
+      "thread-bindings-no-persist.json",
+    );
+    expect(fs.existsSync(statePath)).toBe(false);
   });
 });

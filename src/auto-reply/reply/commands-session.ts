@@ -85,6 +85,47 @@ function resolveTelegramBindingBoundBy(binding: SessionBindingRecord): string {
   return typeof raw === "string" ? raw.trim() : "";
 }
 
+type UpdatedLifecycleBinding = {
+  boundAt: number;
+  lastActivityAt: number;
+  idleTimeoutMs?: number;
+  maxAgeMs?: number;
+};
+
+function resolveUpdatedBindingExpiry(params: {
+  action: typeof SESSION_ACTION_IDLE | typeof SESSION_ACTION_MAX_AGE;
+  bindings: UpdatedLifecycleBinding[];
+}): number | undefined {
+  const expiries = params.bindings
+    .map((binding) => {
+      if (params.action === SESSION_ACTION_IDLE) {
+        const idleTimeoutMs =
+          typeof binding.idleTimeoutMs === "number" && Number.isFinite(binding.idleTimeoutMs)
+            ? Math.max(0, Math.floor(binding.idleTimeoutMs))
+            : 0;
+        if (idleTimeoutMs <= 0) {
+          return undefined;
+        }
+        return Math.max(binding.lastActivityAt, binding.boundAt) + idleTimeoutMs;
+      }
+
+      const maxAgeMs =
+        typeof binding.maxAgeMs === "number" && Number.isFinite(binding.maxAgeMs)
+          ? Math.max(0, Math.floor(binding.maxAgeMs))
+          : 0;
+      if (maxAgeMs <= 0) {
+        return undefined;
+      }
+      return binding.boundAt + maxAgeMs;
+    })
+    .filter((expiresAt): expiresAt is number => typeof expiresAt === "number");
+
+  if (expiries.length === 0) {
+    return undefined;
+  }
+  return Math.min(...expiries);
+}
+
 export const handleActivationCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -482,8 +523,10 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const now = Date.now();
-  const nextExpiry = durationMs > 0 ? now + durationMs : undefined;
+  const nextExpiry = resolveUpdatedBindingExpiry({
+    action,
+    bindings: updatedBindings,
+  });
   const expiryLabel =
     typeof nextExpiry === "number" && Number.isFinite(nextExpiry)
       ? formatSessionExpiry(nextExpiry)
