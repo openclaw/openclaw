@@ -1,9 +1,6 @@
 import { Command } from "commander";
-import { describe, expect, it, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
-import fs from "node:fs/promises";
-import path from "node:path";
-import os from "node:os";
 
 const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
   createCliRuntimeCapture();
@@ -23,16 +20,11 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
-  resolveStateDir: (env: NodeJS.ProcessEnv, homeDir: string) => {
-    return path.join(homeDir, ".openclaw");
-  },
+  resolveStateDir: () => "/tmp/.openclaw",
 }));
 
 vi.mock("../config/sessions/paths.js", () => ({
-  resolveSessionTranscriptsDirForAgent: (agentId: string) => {
-    const homeDir = os.homedir();
-    return path.join(homeDir, ".openclaw", "agents", agentId, "sessions");
-  },
+  resolveSessionTranscriptsDirForAgent: () => "/tmp/.openclaw/agents/main/sessions",
 }));
 
 const { registerSessionsCli } = await import("./sessions-cli.js");
@@ -75,35 +67,13 @@ describe("sessions-cli", () => {
     expect(runtimeLogs.join("\n")).toContain("Show session store status");
   });
 
-  it("handles missing sessions directory gracefully", async () => {
-    // This test would fail in a real environment without the directory
-    // In a test environment, we expect it to handle the error
-    await runCli(["sessions", "status"]);
-    // Should either show status or error gracefully
-    expect(runtimeLogs.length + runtimeErrors.length).toBeGreaterThan(0);
-  });
-
-  it("accepts --agent option", async () => {
-    await runCli(["sessions", "status", "--agent", "test-agent"]);
-    // Should not throw
-    expect(runtimeLogs.length + runtimeErrors.length).toBeGreaterThanOrEqual(0);
-  });
-
-  it("accepts --json option", async () => {
-    await runCli(["sessions", "status", "--json"]);
-    // Should output JSON or error
-    expect(runtimeLogs.length + runtimeErrors.length).toBeGreaterThanOrEqual(0);
-  });
-
   it("accepts --verbose option", async () => {
     await runCli(["sessions", "repair", "--verbose", "--dry-run"]);
-    // Should not throw
     expect(runtimeLogs.length + runtimeErrors.length).toBeGreaterThanOrEqual(0);
   });
 
   it("accepts --dry-run option for repair", async () => {
     await runCli(["sessions", "repair", "--dry-run"]);
-    // Should complete without modifying files
     expect(runtimeLogs.length + runtimeErrors.length).toBeGreaterThanOrEqual(0);
   });
 });

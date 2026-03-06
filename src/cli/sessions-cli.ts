@@ -11,14 +11,12 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
-import os from "node:os";
-import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatHelpExamples } from "./help-format.js";
-import { colorize, theme } from "../terminal/theme.js";
+import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 
 type SessionsCommandOptions = {
@@ -379,7 +377,6 @@ export function registerSessionsCli(program: Command): void {
       const options = sessionsCmd.opts<SessionsCommandOptions>();
       const cfg = loadConfig();
       const agentId = options.agent ?? resolveDefaultAgentId(cfg);
-      const stateDir = resolveStateDir(process.env, os.homedir());
       const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
 
       if (options.verbose) {
@@ -424,7 +421,6 @@ export function registerSessionsCli(program: Command): void {
       const options = sessionsCmd.opts<SessionsCommandOptions>();
       const cfg = loadConfig();
       const agentId = options.agent ?? resolveDefaultAgentId(cfg);
-      const stateDir = resolveStateDir(process.env, os.homedir());
       const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
 
       try {
