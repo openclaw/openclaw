@@ -186,6 +186,16 @@ export async function resolveMatrixAuth(params?: {
   }
 
   // Login with password using HTTP API.
+  // The homeserver URL is operator-configured, so exempt its hostname from
+  // private-network SSRF checks.  Without this, Docker-internal hostnames
+  // (e.g. http://matrix:8888) that resolve to private IPs are blocked.
+  const homeserverHostname = (() => {
+    try {
+      return new URL(resolved.homeserver).hostname;
+    } catch {
+      return undefined;
+    }
+  })();
   const { response: loginResponse, release: releaseLoginResponse } = await fetchWithSsrFGuard({
     url: `${resolved.homeserver}/_matrix/client/v3/login`,
     init: {
@@ -198,6 +208,7 @@ export async function resolveMatrixAuth(params?: {
         initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
       }),
     },
+    policy: homeserverHostname ? { allowedHostnames: [homeserverHostname] } : undefined,
     auditContext: "matrix.login",
   });
   const login = await (async () => {
