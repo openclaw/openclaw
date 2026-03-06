@@ -756,7 +756,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         summarizationInstructions,
       );
 
-      const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
+      const maxHistoryShare = runtime?.historyLimit ?? 0.7;
 
       const tokensBefore =
         typeof preparation.tokensBefore === "number" && Number.isFinite(preparation.tokensBefore)
@@ -776,7 +776,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           const pruned = pruneHistoryForContextShare({
             messages: messagesToSummarize,
             maxContextTokens: contextWindowTokens,
-            maxHistoryShare,
+            historyLimit: maxHistoryShare,
             parts: 2,
           });
           if (pruned.droppedChunks > 0) {

@@ -7,7 +7,10 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
+import {
+  resolveImmutableBootstrapPath,
+  resolveWorkspaceTemplateDir,
+} from "./workspace-templates.js";
 
 export function resolveDefaultAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
@@ -29,6 +32,8 @@ export const DEFAULT_IDENTITY_FILENAME = "IDENTITY.md";
 export const DEFAULT_USER_FILENAME = "USER.md";
 export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
+export const DEFAULT_WORKSPACE_RULES_FILENAME = "WORKSPACE_RULES.md";
+export const DEFAULT_OPERATING_PROCEDURES_FILENAME = "OPERATING_PROCEDURES.md";
 export const DEFAULT_MEMORY_FILENAME = "MEMORY.md";
 export const DEFAULT_MEMORY_ALT_FILENAME = "memory.md";
 const WORKSPACE_STATE_DIRNAME = ".openclaw";
@@ -137,6 +142,8 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_USER_FILENAME
   | typeof DEFAULT_HEARTBEAT_FILENAME
   | typeof DEFAULT_BOOTSTRAP_FILENAME
+  | typeof DEFAULT_WORKSPACE_RULES_FILENAME
+  | typeof DEFAULT_OPERATING_PROCEDURES_FILENAME
   | typeof DEFAULT_MEMORY_FILENAME
   | typeof DEFAULT_MEMORY_ALT_FILENAME;
 
@@ -536,6 +543,17 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
+    // Docker immutable dir: check if this file lives in OPENCLAW_IMMUTABLE_DIR first.
+    const immutablePath = await resolveImmutableBootstrapPath(entry.name);
+    if (immutablePath) {
+      try {
+        const content = await fs.readFile(immutablePath, "utf-8");
+        result.push({ name: entry.name, path: immutablePath, content, missing: false });
+      } catch {
+        result.push({ name: entry.name, path: entry.filePath, missing: true });
+      }
+      continue;
+    }
     const loaded = await readWorkspaceFileWithGuards({
       filePath: entry.filePath,
       workspaceDir: resolvedDir,

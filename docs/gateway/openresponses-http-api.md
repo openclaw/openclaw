@@ -117,6 +117,10 @@ Accepted but **currently ignored**:
 - `previous_response_id`
 - `truncation`
 
+## Model response format (structured output)
+
+OpenClaw does **not** expect the backing model to use strict structured output (e.g. JSON-only or a single schema). The agent uses normal chat completions: streaming text and optional tool/function calls. Do **not** enable response formats that force the model to output only JSON (e.g. `response_format: { type: "json_object" }` or equivalent in LM Studio); that would break tool use and streaming. Use the model’s default chat behavior.
+
 ## Items (input)
 
 ### `message`

@@ -10,6 +10,10 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { loadSessionStore } from "../../../config/sessions/store.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { getMemorySearchManager } from "../../../memory/index.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
@@ -61,6 +65,7 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
+import type { EmbeddedContextFile } from "../../pi-embedded-helpers/types.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
@@ -680,6 +685,162 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+// --- RAG / Postgres DB recall helpers ---
+
+type RecallActorContext = {
+  actorId?: string;
+  actorType?: "human" | "agent";
+  chatType?: string;
+};
+
+function resolveRecallActorContext(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+}): RecallActorContext {
+  const sessionKey = params.sessionKey?.trim();
+  if (!params.config || !params.agentId || !sessionKey) {
+    return {};
+  }
+  const storePath = resolveStorePath(params.config.session?.store, {
+    agentId: params.agentId,
+  });
+  const store = loadSessionStore(storePath);
+  const entry = store[sessionKey];
+  if (!entry) {
+    return {};
+  }
+  const channel =
+    entry.origin?.provider?.trim() || entry.channel?.trim() || entry.lastChannel?.trim();
+  const rawUserId =
+    entry.origin?.from?.trim() || entry.deliveryContext?.to?.trim() || entry.lastTo?.trim();
+  const actorId =
+    channel && rawUserId && !rawUserId.includes(":") ? `${channel}:${rawUserId}` : rawUserId;
+  return {
+    actorId: actorId || undefined,
+    actorType: actorId ? "human" : undefined,
+    chatType: entry.chatType,
+  };
+}
+
+function resolveRecallWindow(contextFiles: EmbeddedContextFile[]): {
+  updatedAfter?: number;
+  updatedBefore?: number;
+} {
+  let updatedAfter: number | undefined;
+  let updatedBefore: number | undefined;
+  const memoryDateRegex = /memory\/(\d{4}-\d{2}-\d{2})\.md$/i;
+  for (const file of contextFiles) {
+    const normalized = file.path.replace(/\\/g, "/");
+    const match = normalized.match(memoryDateRegex);
+    if (!match) {
+      continue;
+    }
+    const date = new Date(`${match[1]}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime())) {
+      continue;
+    }
+    const start = date.getTime();
+    const end = start + 24 * 60 * 60 * 1000 - 1;
+    updatedAfter = updatedAfter ? Math.min(updatedAfter, start) : start;
+    updatedBefore = updatedBefore ? Math.max(updatedBefore, end) : end;
+  }
+  if (updatedAfter || updatedBefore) {
+    return { updatedAfter, updatedBefore };
+  }
+  const hasMemoryMd = contextFiles.some((file) =>
+    file.path.toLowerCase().replace(/\\/g, "/").endsWith("/memory.md"),
+  );
+  if (hasMemoryMd) {
+    return { updatedAfter: Date.now() - 30 * 24 * 60 * 60 * 1000 };
+  }
+  return {};
+}
+
+const dbRecallLog = createSubsystemLogger("db-recall");
+
+export async function buildDbRecallContext(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  query: string;
+  contextFiles: EmbeddedContextFile[];
+}): Promise<EmbeddedContextFile | null> {
+  const cleanedQuery = params.query.trim();
+  if (!cleanedQuery || !params.config || !params.agentId) {
+    return null;
+  }
+  const { manager } = await getMemorySearchManager({
+    cfg: params.config,
+    agentId: params.agentId,
+  });
+  if (!manager) {
+    return null;
+  }
+  const actorContext = resolveRecallActorContext({
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const isGroupChat = actorContext.chatType && actorContext.chatType !== "direct";
+  const sessionScope = isGroupChat
+    ? "session"
+    : actorContext.actorId
+      ? "actor"
+      : "session";
+  const { updatedAfter, updatedBefore } = resolveRecallWindow(params.contextFiles);
+  dbRecallLog.debug(
+    `buildDbRecallContext: sessionKey=${params.sessionKey} chatType=${actorContext.chatType ?? "unknown"} ` +
+      `isGroupChat=${isGroupChat} sessionScope=${sessionScope} actorId=${actorContext.actorId ?? "none"}`,
+  );
+  const results = await manager.search(cleanedQuery, {
+    mode: "hybrid",
+    maxResults: 8,
+    minScore: 0.15,
+    sessionKey: params.sessionKey,
+    sessionScope,
+    actorId: actorContext.actorId,
+    actorType: actorContext.actorType,
+    updatedAfter,
+    updatedBefore,
+  });
+  if (results && results.length > 0) {
+    const sources = new Set(results.map((r) => r.source));
+    dbRecallLog.debug(
+      `buildDbRecallContext: found ${results.length} results from sources: ${Array.from(sources).join(", ")} ` +
+        `sessionKey=${params.sessionKey}`,
+    );
+  }
+  if (!results || results.length === 0) {
+    return null;
+  }
+  const lines = [
+    "# 🔍 DB Recall Context (Postgres Memory Search)",
+    "",
+    "This context was automatically retrieved from Postgres using hybrid vector/keyword search.",
+    "Use memory_search and memory_recall tools for additional targeted queries.",
+    "",
+    `Query: ${cleanedQuery}`,
+    updatedAfter || updatedBefore
+      ? `Window: ${updatedAfter ?? "?"} - ${updatedBefore ?? "?"} (ms)`
+      : "Window: none",
+    "",
+  ];
+  for (const entry of results) {
+    lines.push(
+      `- ${entry.path}:${entry.startLine}-${entry.endLine} (${entry.source}) score=${entry.score.toFixed(3)}`,
+      `  ${entry.snippet.trim()}`,
+      "",
+    );
+  }
+  return {
+    path: "memory/DB_RECALL.md",
+    content: lines.join("\n").trim(),
+  };
+}
+
+// --- end RAG helpers ---
+
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -743,12 +904,39 @@ export async function runEmbeddedAttempt(
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
       });
+    const { defaultAgentId: _defaultAgentIdForRecall, sessionAgentId: recallSessionAgentId } =
+      resolveSessionAgentIds({
+        sessionKey: params.sessionKey,
+        config: params.config,
+        agentId: params.agentId,
+      });
+    // Warm postgres memory on run start so memory_search/recall have fresh data.
+    if (params.config) {
+      void getMemorySearchManager({
+        cfg: params.config,
+        agentId: recallSessionAgentId,
+      }).then((r) => r.manager?.warmSession?.());
+    }
+    const recallContext = await buildDbRecallContext({
+      config: params.config,
+      agentId: recallSessionAgentId,
+      sessionKey: params.sessionKey ?? params.sessionId,
+      query: params.prompt,
+      contextFiles: contextFiles,
+    }).catch((err) => {
+      log.warn(`db recall failed: ${String(err)}`);
+      return null;
+    });
+    const augmentedContextFiles = recallContext
+      ? [recallContext, ...contextFiles]
+      : contextFiles;
+
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({
         bootstrapFiles: hookAdjustedBootstrapFiles,
-        injectedFiles: contextFiles,
+        injectedFiles: augmentedContextFiles,
       }),
       bootstrapMaxChars,
       bootstrapTotalMaxChars,
@@ -954,7 +1142,7 @@ export async function runEmbeddedAttempt(
       userTimezone,
       userTime,
       userTimeFormat,
-      contextFiles,
+      contextFiles: augmentedContextFiles,
       bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
     });
@@ -982,7 +1170,7 @@ export async function runEmbeddedAttempt(
       })(),
       systemPrompt: appendPrompt,
       bootstrapFiles: hookAdjustedBootstrapFiles,
-      injectedFiles: contextFiles,
+      injectedFiles: augmentedContextFiles,
       skillsPrompt,
       tools,
     });
@@ -1828,6 +2016,26 @@ export async function runEmbeddedAttempt(
         }
         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
+        // Sync session transcripts to Postgres after run so memory_search/recall have fresh data.
+        if (params.config) {
+          void getMemorySearchManager({
+            cfg: params.config,
+            agentId: recallSessionAgentId,
+          })
+            .then((r) => {
+              if (r.manager?.warmSession) {
+                log.debug(
+                  `post-run memory sync: triggering warmSession for agent=${recallSessionAgentId}`,
+                );
+                void r.manager.warmSession().catch((err) => {
+                  log.warn(`post-run memory sync failed: ${String(err)}`);
+                });
+              }
+            })
+            .catch((err) => {
+              log.warn(`post-run memory sync manager lookup failed: ${String(err)}`);
+            });
+        }
       }
 
       const lastAssistant = messagesSnapshot

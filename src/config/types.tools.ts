@@ -356,10 +356,20 @@ export type MemorySearchConfig = {
   };
   /** Index storage configuration. */
   store?: {
-    driver?: "sqlite";
+    driver?: "sqlite" | "postgres";
     path?: string;
+    postgres?: {
+      connectionString?: string;
+      host?: string;
+      port?: number;
+      user?: string;
+      password?: string;
+      database?: string;
+      ssl?: boolean;
+      schema?: string;
+    };
     vector?: {
-      /** Enable sqlite-vec extension for vector search (default: true). */
+      /** Enable vector search (sqlite-vec or pgvector). */
       enabled?: boolean;
       /** Optional override path to sqlite-vec extension (.dylib/.so/.dll). */
       extensionPath?: string;
@@ -419,6 +429,8 @@ export type MemorySearchConfig = {
       };
     };
   };
+  /** Recent window for context building (default: 10). Number of most recent messages to include alongside RAG results. */
+  recentWindowMessages?: number;
   /** Index cache behavior. */
   cache?: {
     /** Cache chunk embeddings in SQLite (default: true). */

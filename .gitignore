@@ -86,6 +86,10 @@ USER.md
 .tgz
 .idea
 
+# Note: Base templates in docs/reference/templates/ are committed (generic upstream templates)
+# Personal customizations are stored in the parent repo's workspace-templates/ directory
+# and mounted into the container, taking precedence over base templates
+
 # local tooling
 .serena/
 

@@ -385,7 +385,12 @@
     "undici": "^7.22.0",
     "ws": "^8.19.0",
     "yaml": "^2.8.2",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "pg": "^8.18.0",
+    "@larksuiteoapi/node-sdk": "^1.58.0",
+    "hono": "4.11.7",
+    "proper-lockfile": "^4.1.2",
+    "signal-utils": "^0.21.1"
   },
   "devDependencies": {
     "@grammyjs/types": "^3.25.0",
@@ -406,7 +411,11 @@
     "tsdown": "0.21.0-beta.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.0.18",
+    "@types/pg": "^8.15.2",
+    "@types/proper-lockfile": "^4.1.4",
+    "ollama": "^0.6.3",
+    "rolldown": "1.0.0-rc.3"
   },
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",

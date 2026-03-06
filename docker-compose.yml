@@ -9,6 +9,10 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      # Read SOUL/IDENTITY/USER/TOOLS/WORKSPACE_RULES from image (chmod 444 in Dockerfile); app and allowlist code are read-only.
+      OPENCLAW_IMMUTABLE_DIR: /openclaw-immutable
+      OPENCLAW_GITHUB_REPO: ${OPENCLAW_GITHUB_REPO:-}
+      GH_TOKEN: ${GH_TOKEN:-}
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
@@ -20,6 +24,10 @@ services:
       # - /var/run/docker.sock:/var/run/docker.sock
     # group_add:
     #   - "${DOCKER_GID:-999}"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
@@ -65,6 +73,9 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      OPENCLAW_IMMUTABLE_DIR: /openclaw-immutable
+      OPENCLAW_GITHUB_REPO: ${OPENCLAW_GITHUB_REPO:-}
+      GH_TOKEN: ${GH_TOKEN:-}
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace

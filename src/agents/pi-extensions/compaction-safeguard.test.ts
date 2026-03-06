@@ -339,9 +339,9 @@ describe("isOversizedForSummary", () => {
 describe("compaction-safeguard runtime registry", () => {
   it("stores and retrieves config by session manager identity", () => {
     const sm = {};
-    setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.3 });
+    setCompactionSafeguardRuntime(sm, { historyLimit: 0.3 });
     const runtime = getCompactionSafeguardRuntime(sm);
-    expect(runtime).toEqual({ maxHistoryShare: 0.3 });
+    expect(runtime).toEqual({ historyLimit: 0.3 });
   });
 
   it("returns null for unknown session manager", () => {
@@ -351,26 +351,26 @@ describe("compaction-safeguard runtime registry", () => {
 
   it("clears entry when value is null", () => {
     const sm = {};
-    setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.7 });
+    setCompactionSafeguardRuntime(sm, { historyLimit: 0.7 });
     expect(getCompactionSafeguardRuntime(sm)).not.toBeNull();
     setCompactionSafeguardRuntime(sm, null);
     expect(getCompactionSafeguardRuntime(sm)).toBeNull();
   });
 
   it("ignores non-object session managers", () => {
-    setCompactionSafeguardRuntime(null, { maxHistoryShare: 0.5 });
+    setCompactionSafeguardRuntime(null, { historyLimit: 0.5 });
     expect(getCompactionSafeguardRuntime(null)).toBeNull();
-    setCompactionSafeguardRuntime(undefined, { maxHistoryShare: 0.5 });
+    setCompactionSafeguardRuntime(undefined, { historyLimit: 0.5 });
     expect(getCompactionSafeguardRuntime(undefined)).toBeNull();
   });
 
   it("isolates different session managers", () => {
     const sm1 = {};
     const sm2 = {};
-    setCompactionSafeguardRuntime(sm1, { maxHistoryShare: 0.3 });
-    setCompactionSafeguardRuntime(sm2, { maxHistoryShare: 0.8 });
-    expect(getCompactionSafeguardRuntime(sm1)).toEqual({ maxHistoryShare: 0.3 });
-    expect(getCompactionSafeguardRuntime(sm2)).toEqual({ maxHistoryShare: 0.8 });
+    setCompactionSafeguardRuntime(sm1, { historyLimit: 0.3 });
+    setCompactionSafeguardRuntime(sm2, { historyLimit: 0.8 });
+    expect(getCompactionSafeguardRuntime(sm1)).toEqual({ historyLimit: 0.3 });
+    expect(getCompactionSafeguardRuntime(sm2)).toEqual({ historyLimit: 0.8 });
   });
 
   it("stores and retrieves model from runtime (fallback for compact.ts workflow)", () => {

@@ -389,7 +389,7 @@ OpenClaw loads custom pi extensions for specialized behavior:
 
 ```typescript
 if (resolveCompactionMode(params.cfg) === "safeguard") {
-  setCompactionSafeguardRuntime(params.sessionManager, { maxHistoryShare });
+  setCompactionSafeguardRuntime(params.sessionManager, { historyLimit });
   paths.push(resolvePiExtensionPath("compaction-safeguard"));
 }
 ```

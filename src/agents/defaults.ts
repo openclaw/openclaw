@@ -1,6 +1,5 @@
 // Defaults for agent metadata when upstream does not supply them.
-// Model id uses pi-ai's built-in Anthropic catalog.
-export const DEFAULT_PROVIDER = "anthropic";
-export const DEFAULT_MODEL = "claude-opus-4-6";
-// Conservative fallback used when model metadata is unavailable.
-export const DEFAULT_CONTEXT_TOKENS = 200_000;
+export const DEFAULT_PROVIDER = "lm-studio";
+export const DEFAULT_MODEL = "glm-4.7-flash-mlx";
+// Context window: align with LM Studio GLM-4.7 (e.g. 180k); overridable via config/model.
+export const DEFAULT_CONTEXT_TOKENS = 180_000;

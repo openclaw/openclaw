@@ -3,6 +3,39 @@ import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { pathExists } from "../utils.js";
 
+/** Filenames that may be read from OPENCLAW_IMMUTABLE_DIR in Docker (image has them chmod 444). */
+export const IMMUTABLE_TEMPLATE_FILENAMES: readonly string[] = [
+  "SOUL.md",
+  "IDENTITY.md",
+  "USER.md",
+  "TOOLS.md",
+  "WORKSPACE_RULES.md",
+];
+
+const IMMUTABLE_SET = new Set(IMMUTABLE_TEMPLATE_FILENAMES);
+
+function getImmutableDir(): string | undefined {
+  const raw = process.env.OPENCLAW_IMMUTABLE_DIR?.trim();
+  return raw || undefined;
+}
+
+/** If OPENCLAW_IMMUTABLE_DIR is set and the file exists there, return that path; else null. */
+export async function resolveImmutableBootstrapPath(
+  fileName: string,
+): Promise<string | null> {
+  const dir = getImmutableDir();
+  if (!dir || !IMMUTABLE_SET.has(fileName)) {
+    return null;
+  }
+  const candidate = path.join(dir, fileName);
+  try {
+    await fs.access(candidate);
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
 const FALLBACK_TEMPLATE_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../docs/reference/templates",
