@@ -108,3 +108,11 @@ export type MatrixFormattedContent = MessageEventContent & {
   format?: string;
   formatted_body?: string;
 };
+
+export type MatrixEditOpts = {
+  client?: import("@vector-im/matrix-bot-sdk").MatrixClient;
+  accountId?: string;
+  timeoutMs?: number;
+  /** Optional HTML for m.new_content.formatted_body */
+  formattedText?: string;
+};

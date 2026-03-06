@@ -14,13 +14,19 @@ import {
 } from "openclaw/plugin-sdk/matrix";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { fetchEventSummary } from "../actions/summary.js";
+import { createMatrixDraftStream } from "../draft-stream.js";
 import {
   formatPollAsText,
   isPollStartType,
   parsePollStartContent,
   type PollStartContent,
 } from "../poll-types.js";
-import { reactMatrixMessage, sendMessageMatrix, sendTypingMatrix } from "../send.js";
+import {
+  editMessageMatrix,
+  reactMatrixMessage,
+  sendMessageMatrix,
+  sendTypingMatrix,
+} from "../send.js";
 import { enforceMatrixDirectMessageAccess, resolveMatrixAccessState } from "./access-policy.js";
 import {
   normalizeMatrixAllowList,
@@ -107,6 +113,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   });
 
   return async (roomId: string, event: MatrixRawEvent) => {
+    let draftStream: ReturnType<typeof createMatrixDraftStream> | null = null;
+    let draftFinalized = false;
     try {
       const eventType = event.type;
       if (eventType === EventType.RoomMessageEncrypted) {
@@ -631,12 +639,63 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
         },
       });
+      const matrixCfg = cfg.channels?.matrix;
+      const streamingEnabled = matrixCfg?.streaming === "partial";
+      const streamThrottleMs = matrixCfg?.streamThrottleMs ?? 800;
+      draftStream = streamingEnabled
+        ? createMatrixDraftStream({
+            roomId,
+            accountId: route.accountId ?? undefined,
+            threadId: threadTarget ?? null,
+            replyToId: threadTarget ? undefined : messageId,
+            throttleMs: streamThrottleMs,
+            log: logVerboseMessage,
+            warn: logVerboseMessage,
+          })
+        : null;
+      draftFinalized = false;
+
       const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
           ...prefixOptions,
           humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
           typingCallbacks,
           deliver: async (payload) => {
+            const finalText = typeof payload.text === "string" ? payload.text.trim() : "";
+            const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+            // Drain any in-flight draft sends before reading getEventId() — the first
+            // send may still be in-flight, making eventId null even though a message
+            // will land shortly. Without this, we'd skip the in-place edit and fall
+            // through to deliverMatrixReplies, then the late draft send arrives after.
+            if (draftStream && !draftFinalized) {
+              await draftStream.stop();
+            }
+            const streamEventId = draftStream?.getEventId();
+            // Finalize the draft stream in-place: edit the existing message to the
+            // final text (no cursor) instead of sending a duplicate new message.
+            if (
+              draftStream &&
+              finalText &&
+              !hasMedia &&
+              !payload.isError &&
+              streamEventId &&
+              !draftFinalized
+            ) {
+              try {
+                await editMessageMatrix(roomId, streamEventId, finalText, {
+                  client,
+                  accountId: route.accountId ?? undefined,
+                });
+                draftFinalized = true;
+                draftStream.forceNewMessage();
+                didSendReply = true;
+                return;
+              } catch (err) {
+                logVerboseMessage(
+                  `matrix: draft finalize edit failed: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
+            }
             await deliverMatrixReplies({
               replies: [payload],
               roomId,
@@ -648,6 +707,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               accountId: route.accountId,
               tableMode,
             });
+            // Mark draft as handled so the outer finalize() doesn't send a stray
+            // duplicate when deliver fell through for media, error, or missing draft.
+            if (draftStream) {
+              draftFinalized = true;
+              draftStream.forceNewMessage();
+            }
             didSendReply = true;
           },
           onError: (err, info) => {
@@ -669,6 +734,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               ...replyOptions,
               skillFilter: roomConfig?.skills,
               onModelSelected,
+              onPartialReply: draftStream
+                ? (payload: { text?: string }) => {
+                    if (payload.text) draftStream.update(payload.text);
+                  }
+                : undefined,
             },
           }),
       });
@@ -689,6 +759,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
     } catch (err) {
       runtime.error?.(`matrix handler failed: ${String(err)}`);
+    } finally {
+      // Always clean up the draft stream cursor, even if the agent errored or
+      // timed out mid-response. Without this, a thrown exception in
+      // withReplyDispatcher/dispatchReplyFromConfig skips the finalize and
+      // leaves the cursor character visible in the message.
+      if (draftStream && !draftFinalized && draftStream.getEventId()) {
+        try {
+          await draftStream.finalize();
+        } catch (err) {
+          logVerboseMessage(
+            `matrix: draft stream finalize cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
     }
   };
 }

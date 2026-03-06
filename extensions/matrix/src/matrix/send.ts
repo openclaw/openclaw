@@ -5,6 +5,7 @@ import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import { enqueueSend } from "./send-queue.js";
 import { resolveMatrixClient, resolveMediaMaxBytes } from "./send/client.js";
 import {
+  applyMatrixFormatting,
   buildReplyRelation,
   buildTextContent,
   buildThreadRelation,
@@ -22,6 +23,7 @@ import {
   EventType,
   MsgType,
   RelationType,
+  type MatrixEditOpts,
   type MatrixOutboundContent,
   type MatrixSendOpts,
   type MatrixSendResult,
@@ -31,7 +33,7 @@ import {
 const MATRIX_TEXT_LIMIT = 4000;
 const getCore = () => getMatrixRuntime();
 
-export type { MatrixSendOpts, MatrixSendResult } from "./send/types.js";
+export type { MatrixSendOpts, MatrixSendResult, MatrixEditOpts } from "./send/types.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
 
 export async function sendMessageMatrix(
@@ -262,6 +264,73 @@ export async function reactMatrixMessage(
   } finally {
     if (stopOnDone) {
       resolved.stop();
+    }
+  }
+}
+
+export async function editMessageMatrix(
+  roomId: string,
+  eventId: string,
+  text: string,
+  opts: MatrixEditOpts = {},
+): Promise<MatrixSendResult> {
+  const { client, stopOnDone } = await resolveMatrixClient({
+    client: opts.client,
+    timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
+  });
+  try {
+    const resolvedRoom = await resolveMatrixRoomId(client, roomId);
+    const newContent: Record<string, unknown> = {
+      msgtype: MsgType.Text,
+      body: text,
+    };
+    if (opts.formattedText) {
+      newContent.format = "org.matrix.custom.html";
+      newContent.formatted_body = opts.formattedText;
+    } else {
+      applyMatrixFormatting(newContent, text);
+    }
+    const editContent: Record<string, unknown> = {
+      msgtype: MsgType.Text,
+      body: `* ${text}`,
+      "m.new_content": newContent,
+      "m.relates_to": {
+        rel_type: RelationType.Replace,
+        event_id: eventId,
+      },
+    };
+    if (opts.formattedText) {
+      editContent.format = "org.matrix.custom.html";
+      editContent.formatted_body = `* ${opts.formattedText}`;
+    } else if (newContent.formatted_body) {
+      editContent.format = "org.matrix.custom.html";
+      editContent.formatted_body = `* ${newContent.formatted_body}`;
+    }
+    let resultEventId: unknown;
+    const maxRetries = 3;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        resultEventId = await client.sendEvent(resolvedRoom, EventType.RoomMessage, editContent);
+        break;
+      } catch (err) {
+        const isRateLimit = err instanceof Error && err.message.includes("M_LIMIT_EXCEEDED");
+        if (!isRateLimit || attempt === maxRetries) {
+          throw err;
+        }
+        // Respect retry_after_ms from Synapse, default to 2s
+        const retryMs =
+          (err as { body?: { retry_after_ms?: number } }).body?.retry_after_ms ?? 2000;
+        await new Promise((r) => setTimeout(r, retryMs));
+      }
+    }
+    return {
+      messageId: (resultEventId as string) ?? "unknown",
+      roomId: resolvedRoom,
+    };
+  } finally {
+    if (stopOnDone) {
+      client.stop();
     }
   }
 }
