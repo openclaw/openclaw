@@ -15,6 +15,7 @@ const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as cons
 // Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
+const PARALLEL_TOOL_CALLS_APIS = new Set(["openai-completions", "openai-responses"]);
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -353,6 +354,21 @@ function resolveOpenAIServiceTier(
     log.warn(`ignoring invalid OpenAI service tier param: ${rawSummary}`);
   }
   return normalized;
+}
+
+function resolveParallelToolCalls(
+  extraParams: Record<string, unknown> | undefined,
+): boolean | undefined {
+  const raw = extraParams?.parallel_tool_calls ?? extraParams?.parallelToolCalls;
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (typeof raw !== "boolean") {
+    const rawSummary = typeof raw === "string" ? raw : typeof raw;
+    log.warn(`ignoring invalid parallel tool calls param: ${rawSummary}`);
+    return undefined;
+  }
+  return raw;
 }
 
 function createOpenAIServiceTierWrapper(
@@ -1033,6 +1049,28 @@ function createZaiToolStreamWrapper(
   };
 }
 
+function createParallelToolCallsWrapper(
+  baseStreamFn: StreamFn | undefined,
+  parallelToolCalls: boolean,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!PARALLEL_TOOL_CALLS_APIS.has(model.api)) {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          (payload as Record<string, unknown>).parallel_tool_calls = parallelToolCalls;
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -1137,6 +1175,12 @@ export function applyExtraParamsToAgent(
       log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
     }
+  }
+
+  const parallelToolCalls = resolveParallelToolCalls(merged);
+  if (parallelToolCalls !== undefined) {
+    log.debug(`applying parallel_tool_calls=${parallelToolCalls} for ${provider}/${modelId}`);
+    agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, parallelToolCalls);
   }
 
   // Guard Google payloads against invalid negative thinking budgets emitted by

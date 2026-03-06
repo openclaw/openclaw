@@ -190,6 +190,29 @@ describe("applyExtraParamsToAgent", () => {
     return payload;
   }
 
+  function runParallelToolCallsPayloadMutationCase(params: {
+    applyProvider: string;
+    applyModelId: string;
+    model: Model<"openai-responses"> | Model<"openai-completions"> | Model<"anthropic-messages">;
+    cfg?: Record<string, unknown>;
+  }) {
+    const payload: Record<string, unknown> = {};
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    applyExtraParamsToAgent(
+      agent,
+      params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
+      params.applyProvider,
+      params.applyModelId,
+    );
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(params.model, context, {});
+    return payload;
+  }
+
   function runAnthropicHeaderCase(params: {
     cfg: Record<string, unknown>;
     modelId: string;
@@ -1556,4 +1579,128 @@ describe("applyExtraParamsToAgent", () => {
       expect(run().store).toBe(false);
     },
   );
+
+  it("injects parallel_tool_calls=false for openai-completions payloads", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "nvidia",
+      applyModelId: "moonshotai/kimi-k2.5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "nvidia/moonshotai/kimi-k2.5": {
+                params: {
+                  parallel_tool_calls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "nvidia",
+        id: "moonshotai/kimi-k2.5",
+      } as Model<"openai-completions">,
+    });
+    expect(payload.parallel_tool_calls).toBe(false);
+  });
+
+  it("supports parallelToolCalls camelCase config alias", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5": {
+                params: {
+                  parallelToolCalls: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://proxy.example.com/v1",
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload.parallel_tool_calls).toBe(true);
+  });
+
+  it("does not inject parallel_tool_calls for non OpenAI-compatible APIs", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-opus-4-6",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: {
+                  parallel_tool_calls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-opus-4-6",
+      } as Model<"anthropic-messages">,
+    });
+    expect(payload).not.toHaveProperty("parallel_tool_calls");
+  });
+
+  it("warns and ignores invalid parallel tool call values", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const payload = runParallelToolCallsPayloadMutationCase({
+        applyProvider: "nvidia",
+        applyModelId: "moonshotai/kimi-k2.5",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "nvidia/moonshotai/kimi-k2.5": {
+                  params: {
+                    parallelToolCalls: "nope",
+                  },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "openai-completions",
+          provider: "nvidia",
+          id: "moonshotai/kimi-k2.5",
+        } as Model<"openai-completions">,
+      });
+      expect(payload).not.toHaveProperty("parallel_tool_calls");
+      expect(warnSpy).toHaveBeenCalledWith("ignoring invalid parallel tool calls param: nope");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("leaves payload untouched when parallel tool calls are not configured", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "nvidia",
+      applyModelId: "moonshotai/kimi-k2.5",
+      model: {
+        api: "openai-completions",
+        provider: "nvidia",
+        id: "moonshotai/kimi-k2.5",
+      } as Model<"openai-completions">,
+    });
+    expect(payload).not.toHaveProperty("parallel_tool_calls");
+  });
 });
