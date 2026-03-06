@@ -122,17 +122,29 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(`(declare-fun allowlist_allows (Tool) Bool) ; matches allow entries`);
   w(``);
 
-  // 5. Effective deny (after explicitAllow pruning)
+  // 5. Configured deny entries (tools.subagents.tools.deny)
   w(`; --------------------------------------------------------------------------`);
-  w(`; 5. Effective Subagent Deny`);
+  w(`; 5. Configured deny list (tools.subagents.tools.deny)`);
   w(`; --------------------------------------------------------------------------`);
-  w(`; A tool is effectively denied iff it's in the base deny AND NOT in`);
-  w(`; explicit_allow. This models the deny list pruning in`);
-  w(`; resolveSubagentToolPolicy (baseDeny.filter(t => !explicitAllow.has(t))).`);
+  w(`; Configurable deny entries augment the deny list AFTER the explicitAllow`);
+  w(`; pruning and are not overridable by explicitAllow. We model them`);
+  w(`; symbolically via configured_deny.`);
+  w(``);
+  w(`(declare-fun configured_deny (Tool) Bool)`);
+  w(``);
+
+  // 6. Effective deny (after explicitAllow pruning)
+  w(`; --------------------------------------------------------------------------`);
+  w(`; 6. Effective Subagent Deny`);
+  w(`; --------------------------------------------------------------------------`);
+  w(`; A tool is effectively denied if it survives the explicitAllow pruning of`);
+  w(`; the base deny list OR matches configured_deny. This mirrors runtime logic:`);
+  w(`;   deny = baseDeny.filter(!explicitAllow) ++ configured.deny.`);
   w(``);
   w(`(define-fun subagent_effective_deny ((t Tool)) Bool`);
-  w(`  (and (subagent_base_deny t)`);
-  w(`       (not (explicit_allow t))))`);
+  w(`  (or (configured_deny t)`);
+  w(`      (and (subagent_base_deny t)`);
+  w(`           (not (explicit_allow t)))))`);
   w(``);
   w(`; A tool passes the subagent gate iff it's NOT effectively denied AND,`);
   w(`; when an allowlist is active, it matches allowlist_allows. This mirrors`);
@@ -144,9 +156,9 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(`           (and (= t apply_patch_) (allowlist_allows exec_)))))`);
   w(``);
 
-  // 6. Full policy
+  // 7. Full policy
   w(`; --------------------------------------------------------------------------`);
-  w(`; 6. Full Subagent Policy`);
+  w(`; 7. Full Subagent Policy`);
   w(`; --------------------------------------------------------------------------`);
   w(`; For the full model, compose with pipeline.smt2:`);
   w(`;   subagent_accessible(t) = pipeline_allows(t) ∧ passes_subagent_gate(t)`);

@@ -136,26 +136,31 @@ function verifyWithZ3(outputDir: string): boolean {
     success = false;
   }
 
-  // Run property checks if available
+  // Run property checks (required in --verify mode)
   const runAll = path.join(outputDir, "properties", "run-all.sh");
-  if (fs.existsSync(runAll)) {
+  if (!fs.existsSync(runAll)) {
     console.log();
-    console.log("  Running property verification...");
-    const propResult = spawnSync("bash", [runAll], {
-      encoding: "utf-8",
-      cwd: path.join(outputDir, "properties"),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    if (propResult.stdout) {
-      console.log(propResult.stdout);
+    console.log(
+      "  Property runner not found: properties/run-all.sh is required when --verify is set.",
+    );
+    return false;
+  }
+  console.log();
+  console.log("  Running property verification...");
+  const propResult = spawnSync("bash", [runAll], {
+    encoding: "utf-8",
+    cwd: path.join(outputDir, "properties"),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (propResult.stdout) {
+    console.log(propResult.stdout);
+  }
+  if (propResult.status !== 0) {
+    console.log(`  Property verification had errors:`);
+    if (propResult.stderr) {
+      console.log(propResult.stderr);
     }
-    if (propResult.status !== 0) {
-      console.log(`  Property verification had errors:`);
-      if (propResult.stderr) {
-        console.log(propResult.stderr);
-      }
-      success = false;
-    }
+    success = false;
   }
   return success;
 }
