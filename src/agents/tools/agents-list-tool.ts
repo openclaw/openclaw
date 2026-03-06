@@ -46,7 +46,12 @@ export function createAgentsListTool(opts?: {
           DEFAULT_AGENT_ID,
       );
 
-      const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+      // Distinguish between "not configured" (undefined) and "explicitly empty" ([]).
+      // When allowAgents is not configured, fall back to all configured agents so
+      // that the tool matches the behavior of `openclaw agents list` in the CLI.
+      const rawAllowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents;
+      const allowAgentsConfigured = Array.isArray(rawAllowAgents);
+      const allowAgents = rawAllowAgents ?? [];
       const allowAny = allowAgents.some((value) => value.trim() === "*");
       const allowSet = new Set(
         allowAgents
@@ -67,7 +72,9 @@ export function createAgentsListTool(opts?: {
 
       const allowed = new Set<string>();
       allowed.add(requesterAgentId);
-      if (allowAny) {
+      if (allowAny || !allowAgentsConfigured) {
+        // allowAny: explicit "*" wildcard; !allowAgentsConfigured: no allowlist set,
+        // so show all configured agents (matches `openclaw agents list` CLI behavior).
         for (const id of configuredIds) {
           allowed.add(id);
         }
