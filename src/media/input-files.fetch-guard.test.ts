@@ -99,7 +99,9 @@ describe("HEIC input image normalization", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps declared MIME for non-HEIC images without sniffing", async () => {
+  it("keeps declared MIME for non-HEIC images after validation", async () => {
+    detectMimeMock.mockResolvedValueOnce("image/png");
+
     const image = await extractImageContentFromSource(
       {
         type: "base64",
@@ -115,13 +117,66 @@ describe("HEIC input image normalization", () => {
       },
     );
 
-    expect(detectMimeMock).not.toHaveBeenCalled();
+    expect(detectMimeMock).toHaveBeenCalledTimes(1);
     expect(convertHeicToJpegMock).not.toHaveBeenCalled();
     expect(image).toEqual({
       type: "image",
       data: Buffer.from("png-like").toString("base64"),
       mimeType: "image/png",
     });
+  });
+
+  it("rejects spoofed base64 images when detected bytes are not an image", async () => {
+    detectMimeMock.mockResolvedValueOnce("application/pdf");
+
+    await expect(
+      extractImageContentFromSource(
+        {
+          type: "base64",
+          data: Buffer.from("%PDF-1.4\n").toString("base64"),
+          mediaType: "image/png",
+        },
+        {
+          allowUrl: false,
+          allowedMimes: new Set(["image/png", "image/jpeg"]),
+          maxBytes: 1024 * 1024,
+          maxRedirects: 0,
+          timeoutMs: 1,
+        },
+      ),
+    ).rejects.toThrow("Unsupported image MIME type: application/pdf");
+    expect(convertHeicToJpegMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects spoofed URL images when detected bytes are not an image", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(Buffer.from("%PDF-1.4\n"), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+      release,
+      finalUrl: "https://example.com/photo.png",
+    });
+    detectMimeMock.mockResolvedValueOnce("application/pdf");
+
+    await expect(
+      extractImageContentFromSource(
+        {
+          type: "url",
+          url: "https://example.com/photo.png",
+        },
+        {
+          allowUrl: true,
+          allowedMimes: new Set(["image/png", "image/jpeg"]),
+          maxBytes: 1024 * 1024,
+          maxRedirects: 0,
+          timeoutMs: 1000,
+        },
+      ),
+    ).rejects.toThrow("Unsupported image MIME type: application/pdf");
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(convertHeicToJpegMock).not.toHaveBeenCalled();
   });
 });
 

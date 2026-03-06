@@ -234,6 +234,7 @@ Docs: https://docs.openclaw.ai
 - Plugin runtime/events: expose `runtime.events.onAgentEvent` and `runtime.events.onSessionTranscriptUpdate` for extension-side subscriptions, and isolate transcript-listener failures so one faulty listener cannot break the entire update fanout. (#16044) Thanks @scifantastic.
 - CLI/Banner taglines: add `cli.banner.taglineMode` (`random` | `default` | `off`) to control funny tagline behavior in startup output, with docs + FAQ guidance and regression tests for config override behavior.
 - Agents/compaction safeguard quality-audit rollout: keep summary quality audits disabled by default unless `agents.defaults.compaction.qualityGuard` is explicitly enabled, and add config plumbing for bounded retry control. (#25556) thanks @rodrigouroz.
+- Gateway/input_image MIME validation: sniff uploaded image bytes before MIME allowlist enforcement again so declared image types cannot mask concrete non-image payloads, while keeping HEIC/HEIF normalization behavior scoped to actual HEIC inputs. Thanks @vincentkoc.
 
 ### Breaking
 
