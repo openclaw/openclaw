@@ -202,7 +202,11 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
     if (
       params.isGroup &&
       chatIdStr &&
-      isSenderAllowed({ allow: params.effectiveGroupAllow, senderId: chatIdStr, senderUsername: "" })
+      isSenderAllowed({
+        allow: params.effectiveGroupAllow,
+        senderId: chatIdStr,
+        senderUsername: "",
+      })
     ) {
       return { allowed: true, groupPolicy };
     }
