@@ -212,7 +212,7 @@ class HubHandler(BaseHTTPRequestHandler):
                 db_mark_done(notif_id, response)
                 log(f"Marked #{notif_id} as done")
                 self.send_json({"ok": True})
-            except:
+except ValueError:
                 self.send_json({"error": "Invalid ID"}, 400)
 
         else:
