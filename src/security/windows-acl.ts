@@ -42,12 +42,13 @@ const TRUSTED_BASE = new Set([
 const WORLD_SUFFIXES = ["\\users", "\\authenticated users"];
 const TRUSTED_SUFFIXES = ["\\administrators", "\\system", "\\système"];
 
-const SID_RE = /^s-\d+-\d+(-\d+)+$/i;
+const SID_RE = /^\*?s-\d+-\d+(-\d+)+$/i;
 const TRUSTED_SIDS = new Set([
   "s-1-5-18",
   "s-1-5-32-544",
   "s-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
 ]);
+const WORLD_SIDS = new Set(["s-1-1-0", "s-1-5-11", "s-1-5-32-545"]);
 const STATUS_PREFIXES = [
   "successfully processed",
   "processed",
@@ -56,6 +57,10 @@ const STATUS_PREFIXES = [
 ];
 
 const normalize = (value: string) => value.trim().toLowerCase();
+const normalizeSid = (value: string) => {
+  const normalized = normalize(value);
+  return normalized.startsWith("*") ? normalized.slice(1) : normalized;
+};
 
 export function resolveWindowsUserPrincipal(env?: NodeJS.ProcessEnv): string | null {
   const username = env?.USERNAME?.trim() || os.userInfo().username?.trim();
@@ -77,7 +82,7 @@ function buildTrustedPrincipals(env?: NodeJS.ProcessEnv): Set<string> {
       trusted.add(normalize(userOnly));
     }
   }
-  const userSid = normalize(env?.USERSID ?? "");
+  const userSid = normalizeSid(env?.USERSID ?? "");
   if (userSid && SID_RE.test(userSid)) {
     trusted.add(userSid);
   }
@@ -91,7 +96,14 @@ function classifyPrincipal(
   const normalized = normalize(principal);
 
   if (SID_RE.test(normalized)) {
-    return TRUSTED_SIDS.has(normalized) || trustedPrincipals.has(normalized) ? "trusted" : "group";
+    const sid = normalizeSid(normalized);
+    if (TRUSTED_SIDS.has(sid) || trustedPrincipals.has(sid)) {
+      return "trusted";
+    }
+    if (WORLD_SIDS.has(sid)) {
+      return "world";
+    }
+    return "group";
   }
 
   if (
@@ -249,7 +261,7 @@ export async function inspectWindowsAcl(
 ): Promise<WindowsAclSummary> {
   const exec = opts?.exec ?? runExec;
   try {
-    const { stdout, stderr } = await exec("icacls", [targetPath]);
+    const { stdout, stderr } = await exec("icacls", [targetPath, "/sid"]);
     const output = `${stdout}\n${stderr}`.trim();
     const entries = parseIcaclsOutput(output, targetPath);
     const { trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, opts?.env);

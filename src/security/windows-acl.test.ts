@@ -244,11 +244,19 @@ Successfully processed 1 files`;
       expectTrustedOnly([aclEntry({ principal: "S-1-5-18" })]);
     });
 
+    it("classifies *-prefixed SYSTEM SID as trusted", () => {
+      expectTrustedOnly([aclEntry({ principal: "*S-1-5-18" })]);
+    });
+
     it("classifies BUILTIN\\Administrators SID (S-1-5-32-544) as trusted", () => {
       const entries: WindowsAclEntry[] = [aclEntry({ principal: "S-1-5-32-544" })];
       const summary = summarizeWindowsAcl(entries);
       expect(summary.trusted).toHaveLength(1);
       expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
+    it("classifies *-prefixed BUILTIN\\Administrators SID as trusted", () => {
+      expectTrustedOnly([aclEntry({ principal: "*S-1-5-32-544" })]);
     });
 
     it("classifies caller SID from USERSID env var as trusted", () => {
@@ -279,6 +287,34 @@ Successfully processed 1 files`;
       expect(summary.untrustedGroup).toHaveLength(1);
       expect(summary.untrustedWorld).toHaveLength(0);
       expect(summary.trusted).toHaveLength(0);
+    });
+
+    it("classifies Everyone SID as world", () => {
+      const summary = summarizeWindowsAcl([
+        aclEntry({
+          principal: "*S-1-1-0",
+          rights: ["R"],
+          rawRights: "(R)",
+          canRead: true,
+          canWrite: false,
+        }),
+      ]);
+      expect(summary.untrustedWorld).toHaveLength(1);
+      expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
+    it("classifies BUILTIN\\Users SID as world", () => {
+      const summary = summarizeWindowsAcl([
+        aclEntry({
+          principal: "*S-1-5-32-545",
+          rights: ["R"],
+          rawRights: "(R)",
+          canRead: true,
+          canWrite: false,
+        }),
+      ]);
+      expect(summary.untrustedWorld).toHaveLength(1);
+      expect(summary.untrustedGroup).toHaveLength(0);
     });
 
     it("full scenario: SYSTEM SID + owner SID only → no findings", () => {
@@ -319,7 +355,7 @@ Successfully processed 1 files`;
         exec: mockExec,
       });
       expectInspectSuccess(result, 2);
-      expect(mockExec).toHaveBeenCalledWith("icacls", ["C:\\test\\file.txt"]);
+      expect(mockExec).toHaveBeenCalledWith("icacls", ["C:\\test\\file.txt", "/sid"]);
     });
 
     it("returns error state on exec failure", async () => {
@@ -335,14 +371,32 @@ Successfully processed 1 files`;
 
     it("combines stdout and stderr for parsing", async () => {
       const mockExec = vi.fn().mockResolvedValue({
-        stdout: "C:\\test\\file.txt BUILTIN\\Administrators:(F)",
-        stderr: "C:\\test\\file.txt NT AUTHORITY\\SYSTEM:(F)",
+        stdout: "C:\\test\\file.txt *S-1-5-32-544:(F)",
+        stderr: "C:\\test\\file.txt *S-1-5-18:(F)",
       });
 
       const result = await inspectWindowsAcl("C:\\test\\file.txt", {
         exec: mockExec,
       });
       expectInspectSuccess(result, 2);
+    });
+
+    it("treats /sid output as trusted-only when entries are SYSTEM + owner SID", async () => {
+      const ownerSid = "S-1-5-21-1824257776-4070701511-781240313-1001";
+      const mockExec = vi.fn().mockResolvedValue({
+        stdout: `C:\\test\\file.txt *S-1-5-18:(F)\n                  *${ownerSid}:(F)`,
+        stderr: "",
+      });
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+        env: { USERSID: ownerSid },
+      });
+
+      expectInspectSuccess(result, 2);
+      expect(result.trusted).toHaveLength(2);
+      expect(result.untrustedWorld).toHaveLength(0);
+      expect(result.untrustedGroup).toHaveLength(0);
     });
   });
 
