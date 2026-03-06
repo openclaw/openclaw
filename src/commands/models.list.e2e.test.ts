@@ -87,6 +87,15 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
   resolveModel: () => {
     throw new Error("resolveModel should not be called from models.list tests");
   },
+  resolveModelWithRegistry: ({
+    provider,
+    modelId,
+    modelRegistry,
+  }: {
+    provider: string;
+    modelId: string;
+    modelRegistry: { find: (provider: string, modelId: string) => unknown };
+  }) => modelRegistry.find(provider, modelId),
 }));
 
 function makeRuntime() {
