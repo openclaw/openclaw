@@ -26,8 +26,11 @@ describe("discord native skill commands", () => {
         bundledSkillsDir: path.join(workspaceDir, ".bundled"),
       });
 
+      expect(commands).toHaveLength(1);
+      const skillCommand = commands[0];
+
       const command = createDiscordNativeCommand({
-        command: commands[0],
+        command: skillCommand,
         cfg: {
           agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
           channels: { discord: { dm: { enabled: true, policy: "open" } } },
