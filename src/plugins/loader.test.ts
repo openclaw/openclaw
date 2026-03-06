@@ -1163,6 +1163,86 @@ describe("loadOpenClawPlugins", () => {
     );
   });
 
+  it("loads sqlite3 via native module resolution path", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const pluginDir = makeTempDir();
+    const pluginId = "sqlite-native-resolution-check";
+    const entry = path.join(pluginDir, "index.js");
+    const nodeModulesDir = path.join(pluginDir, "node_modules");
+    const sqliteDir = path.join(nodeModulesDir, "sqlite3");
+    const bindingsDir = path.join(nodeModulesDir, "bindings");
+    fs.mkdirSync(sqliteDir, { recursive: true });
+    fs.mkdirSync(bindingsDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: pluginId,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(bindingsDir, "index.js"),
+      `
+const path = require("node:path");
+module.exports = function resolveBinding(name) {
+  const caller = module.parent && module.parent.filename ? module.parent.filename : "";
+  return path.join(path.dirname(caller), "build", "Release", name);
+};
+      `.trim(),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(sqliteDir, "index.js"),
+      `
+const path = require("node:path");
+const bindingPath = require("bindings")("node_sqlite3.node");
+const expectedSuffix = path.join("sqlite3", "build", "Release", "node_sqlite3.node");
+if (!bindingPath.endsWith(expectedSuffix)) {
+  throw new Error("sqlite binding resolved from unexpected base: " + bindingPath);
+}
+module.exports = { bindingPath };
+      `.trim(),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      entry,
+      `
+const sqlite3 = require("sqlite3");
+module.exports = {
+  id: "${pluginId}",
+  register(api) {
+    api.registerGatewayMethod("${pluginId}.ping", ({ respond }) =>
+      respond(true, { ok: true, bindingPath: sqlite3.bindingPath }),
+    );
+  },
+};
+      `.trim(),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: pluginDir,
+      config: {
+        plugins: {
+          load: { paths: [entry] },
+          allow: [pluginId],
+        },
+      },
+    });
+
+    const plugin = registry.plugins.find((item) => item.id === pluginId);
+    expect(plugin?.status).toBe("loaded");
+    expect(plugin?.error).toBeUndefined();
+    expect(registry.gatewayHandlers[`${pluginId}.ping`]).toBeDefined();
+  });
+
   it("preserves runtime reflection semantics when runtime is lazily initialized", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

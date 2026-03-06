@@ -45,6 +45,7 @@ export type PluginLoadOptions = {
 const registryCache = new Map<string, PluginRegistry>();
 
 const defaultLogger = () => createSubsystemLogger("plugins");
+const jitiNativeModules = ["typescript", "sqlite3", "better-sqlite3", "bindings"] as const;
 
 const resolvePluginSdkAliasFile = (params: {
   srcFile: string;
@@ -574,6 +575,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     };
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
+      // Keep native modules on Node's require path so packages like sqlite3 resolve
+      // binary bindings relative to their own install location, not jiti internals.
+      nativeModules: [...jitiNativeModules],
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
       ...(Object.keys(aliasMap).length > 0
         ? {
