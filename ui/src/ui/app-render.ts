@@ -639,7 +639,14 @@ export function renderApp(state: AppViewState) {
                     void state.loadCron();
                   }
                 },
-                onLoadFiles: (agentId) => loadAgentFiles(state, agentId),
+                onLoadFiles: async (agentId) => {
+                  await loadAgentFiles(state, agentId);
+                  if (state.agentFileActive && resolvedAgentId) {
+                    await loadAgentFileContent(state, resolvedAgentId, state.agentFileActive, {
+                      force: true,
+                    });
+                  }
+                },
                 onSelectFile: (name) => {
                   state.agentFileActive = name;
                   if (!resolvedAgentId) {
