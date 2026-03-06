@@ -2,7 +2,7 @@ import type {
   AllowlistMatch,
   ChannelGroupContext,
   GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/feishu";
 import { normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
 
@@ -56,6 +56,7 @@ export function resolveFeishuGroupConfig(params: {
   groupId?: string | null;
 }): FeishuGroupConfig | undefined {
   const groups = params.cfg?.groups ?? {};
+  const wildcard = groups["*"];
   const groupId = params.groupId?.trim();
   if (!groupId) {
     return undefined;
@@ -68,7 +69,10 @@ export function resolveFeishuGroupConfig(params: {
 
   const lowered = groupId.toLowerCase();
   const matchKey = Object.keys(groups).find((key) => key.toLowerCase() === lowered);
-  return matchKey ? groups[matchKey] : undefined;
+  if (matchKey) {
+    return groups[matchKey];
+  }
+  return wildcard;
 }
 
 export function resolveFeishuGroupToolPolicy(
@@ -88,7 +92,7 @@ export function resolveFeishuGroupToolPolicy(
 }
 
 export function isFeishuGroupAllowed(params: {
-  groupPolicy: "open" | "allowlist" | "disabled";
+  groupPolicy: "open" | "allowlist" | "disabled" | "allowall";
   allowFrom: Array<string | number>;
   senderId: string;
   senderIds?: Array<string | null | undefined>;
@@ -98,7 +102,7 @@ export function isFeishuGroupAllowed(params: {
   if (groupPolicy === "disabled") {
     return false;
   }
-  if (groupPolicy === "open") {
+  if (groupPolicy === "open" || groupPolicy === "allowall") {
     return true;
   }
   return resolveFeishuAllowlistMatch(params).allowed;
