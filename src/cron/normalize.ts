@@ -22,11 +22,12 @@ function coerceSchedule(schedule: UnknownRecord) {
   const kind = typeof schedule.kind === "string" ? schedule.kind : undefined;
   const atMsRaw = schedule.atMs;
   const atRaw = schedule.at;
+  const tzRaw = typeof schedule.tz === "string" ? schedule.tz.trim() || undefined : undefined;
   const parsedAtMs =
     typeof atMsRaw === "string"
-      ? parseAbsoluteTimeMs(atMsRaw)
+      ? parseAbsoluteTimeMs(atMsRaw, tzRaw)
       : typeof atRaw === "string"
-        ? parseAbsoluteTimeMs(atRaw)
+        ? parseAbsoluteTimeMs(atRaw, tzRaw)
         : null;
 
   if (!kind) {
@@ -49,6 +50,9 @@ function coerceSchedule(schedule: UnknownRecord) {
 
   if ("at" in next) {
     delete next.at;
+  }
+  if (next.kind === "at" && "tz" in next) {
+    delete next.tz;
   }
 
   return next;

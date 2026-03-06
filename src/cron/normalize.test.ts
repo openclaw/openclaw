@@ -110,4 +110,51 @@ describe("normalizeCronJobCreate", () => {
     expect(schedule.kind).toBe("at");
     expect(schedule.atMs).toBe(Date.parse("2026-01-12T18:00:00Z"));
   });
+
+  it("coerces schedule.at with tz to atMs (IANA timezone)", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "at with tz",
+      enabled: true,
+      schedule: {
+        kind: "at",
+        at: "2026-02-01 23:00:00",
+        tz: "Asia/Shanghai",
+      },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("at");
+    expect(schedule.atMs).toBe(Date.parse("2026-02-01T15:00:00.000Z"));
+    expect("at" in schedule).toBe(false);
+    expect("tz" in schedule).toBe(false);
+  });
+
+  it("strips at and tz when kind is inferred from at+tz (no explicit kind)", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "inferred at",
+      enabled: true,
+      schedule: {
+        at: "2026-02-01 23:00:00",
+        tz: "Asia/Shanghai",
+      },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("at");
+    expect(schedule.atMs).toBe(Date.parse("2026-02-01T15:00:00.000Z"));
+    expect("at" in schedule).toBe(false);
+    expect("tz" in schedule).toBe(false);
+  });
 });

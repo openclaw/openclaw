@@ -179,8 +179,10 @@ JOB SCHEMA (for add action):
 }
 
 SCHEDULE TYPES (schedule.kind):
-- "at": One-shot at absolute time
-  { "kind": "at", "atMs": <unix-ms-timestamp> }
+- "at": One-shot at absolute time. Prefer human-readable "at" (with optional "tz") so the model does not compute Unix timestamps:
+  { "kind": "at", "at": "2026-02-01T23:00:00+08:00" }
+  { "kind": "at", "at": "2026-02-01 23:00:00", "tz": "Asia/Shanghai" }
+  Legacy: { "kind": "at", "atMs": <unix-ms-timestamp> }
 - "every": Recurring interval
   { "kind": "every", "everyMs": <interval-ms>, "anchorMs": <optional-start-ms> }
 - "cron": Cron expression
