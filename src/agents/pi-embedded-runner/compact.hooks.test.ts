@@ -358,7 +358,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
   it("treats no-op compact results as not compacted", async () => {
     const piAgent = await import("@mariozechner/pi-coding-agent");
     const createAgentSession = vi.mocked(piAgent.createAgentSession);
-    createAgentSession.mockImplementationOnce(async () => {
+    createAgentSession.mockImplementationOnce((async () => {
       const session = {
         sessionId: "session-1",
         messages: [
@@ -379,8 +379,14 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         })),
         dispose: vi.fn(),
       };
-      return { session };
-    });
+      return {
+        session,
+        extensionsResult: {
+          successfulExtensions: [],
+          failedExtensions: [],
+        },
+      };
+    }) as never);
 
     const result = await compactEmbeddedPiSessionDirect({
       sessionId: "session-1",
