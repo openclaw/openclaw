@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { captureEnv } from "../test-utils/env.js";
-import { saveMediaSource, setMediaStoreNetworkDepsForTest } from "./store.js";
+import { MEDIA_MAX_BYTES, saveMediaSource, setMediaStoreNetworkDepsForTest } from "./store.js";
 
 const HOME = path.join(os.tmpdir(), "openclaw-home-redirect");
 const mockRequest = vi.fn();
@@ -23,7 +23,7 @@ function createMockHttpExchange() {
       return req;
     },
     end: () => undefined,
-    destroy: () => res.destroy(),
+    destroy: (err?: Error) => res.destroy(err),
   } as const;
   return { req, res };
 }
@@ -110,5 +110,26 @@ describe("media store redirects", () => {
       "Redirect loop or missing Location header",
     );
     expect(mockRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("cleans temp files when oversized downloads fail", async () => {
+    mockRequest.mockImplementationOnce((_url, _opts, cb) => {
+      const { req, res } = createMockHttpExchange();
+      res.statusCode = 200;
+      res.headers = { "content-type": "application/octet-stream" };
+      setImmediate(() => {
+        cb(res as unknown);
+        res.write(Buffer.alloc(MEDIA_MAX_BYTES + 1_024, 1));
+        res.end();
+      });
+      return req;
+    });
+
+    await expect(saveMediaSource("https://example.com/oversized")).rejects.toThrow(
+      "Media exceeds 5MB limit",
+    );
+    const mediaDir = path.join(HOME, "media");
+    const entries = await fs.readdir(mediaDir);
+    expect(entries.some((entry) => entry.endsWith(".tmp"))).toBe(false);
   });
 });
