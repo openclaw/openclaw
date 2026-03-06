@@ -110,6 +110,7 @@ import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import { clearAfterLlmCallGate, setAfterLlmCallGate } from "./after-llm-call-gate.js";
 import {
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
@@ -1281,17 +1282,141 @@ export async function runEmbeddedAttempt(
         channelId: params.messageChannel ?? params.messageProvider ?? undefined,
       };
 
-      // Subscribe for LLM hook events (iteration tracking for before_llm_call).
+      // Subscribe for LLM hook events (iteration tracking + after_llm_call).
+      //
+      // IMPORTANT: after_llm_call gate is "best-effort" for async hooks.
+      // The gate is populated in a .then() microtask after runAfterLlmCall
+      // resolves. If the hook does async work (e.g. network policy lookup),
+      // tool dispatch may begin before the gate is set. For sync/fast hooks,
+      // the microtask resolves before tool execution in practice.
+      // This is an inherent limitation of the subscription-based architecture;
+      // fully synchronous gating would require restructuring pi-agent-core's
+      // event loop to await hooks between message_end and tool dispatch.
       const hookIterationRefEarly = { current: 0 };
       let hookTurnIteration = 0;
-      const hookEventUnsub = hookRunner?.hasHooks("before_llm_call")
-        ? activeSession.subscribe((event) => {
-            if (event.type === "turn_start") {
-              hookTurnIteration++;
-              hookIterationRefEarly.current = hookTurnIteration;
-            }
-          })
-        : undefined;
+      let hookMessageEndSeq = 0;
+      let hookRunDisposed = false;
+      const hookEventUnsub =
+        hookRunner?.hasHooks("after_llm_call") || hookRunner?.hasHooks("before_llm_call")
+          ? activeSession.subscribe((event) => {
+              if (event.type === "turn_start") {
+                hookTurnIteration++;
+                hookIterationRefEarly.current = hookTurnIteration;
+                // Clear stale gate decisions from the previous turn
+                if (params.sessionId && hookRunner.hasHooks("after_llm_call")) {
+                  clearAfterLlmCallGate(params.sessionId);
+                }
+              }
+              if (event.type === "message_end" && hookRunner.hasHooks("after_llm_call")) {
+                const msg = event.message;
+                // Only fire for assistant messages — message_end also fires for
+                // user/system messages. Firing on non-assistant messages would
+                // clear the gate (via the "no result" path) and drop any
+                // previously computed allowlist/block for this turn.
+                const msgRole =
+                  msg && typeof msg === "object" && "role" in msg
+                    ? (msg as { role: string }).role
+                    : undefined;
+                if (msgRole !== "assistant") {
+                  return;
+                }
+                // Capture iteration and sequence at event time — both are mutable
+                // and may change before the async .then() fires.
+                const eventIteration = hookTurnIteration;
+                const eventSeq = ++hookMessageEndSeq;
+                const toolCalls: Array<{
+                  id: string;
+                  name: string;
+                  arguments: Record<string, unknown>;
+                }> = [];
+                if (
+                  msg &&
+                  typeof msg === "object" &&
+                  "content" in msg &&
+                  Array.isArray((msg as unknown as Record<string, unknown>).content)
+                ) {
+                  for (const part of (msg as unknown as { content: Array<Record<string, unknown>> })
+                    .content) {
+                    if (part && isToolCallBlockType(part.type)) {
+                      toolCalls.push({
+                        id: (part.id as string) ?? "",
+                        name: (part.name as string) ?? "",
+                        arguments: (part.arguments as Record<string, unknown>) ?? {},
+                      });
+                    }
+                  }
+                }
+                // Await the hook result and store block/filter decisions in
+                // the gate ref so before_tool_call can enforce them.
+                hookRunner
+                  .runAfterLlmCall(
+                    {
+                      response: msg,
+                      toolCalls,
+                      iteration: eventIteration,
+                      model: params.modelId,
+                    },
+                    hookCtx,
+                  )
+                  .then((result) => {
+                    if (!params.sessionId || hookRunDisposed) {
+                      return;
+                    }
+                    // Guard against stale results FIRST: if the iteration has
+                    // advanced since this event fired, a new turn has started
+                    // and this gate decision (including "no result" clears) is
+                    // no longer relevant. Without this, a slow turn-N handler
+                    // resolving with no result could erase turn-N+1's gate.
+                    if (eventIteration !== hookTurnIteration) {
+                      log.debug(
+                        `after_llm_call: discarding stale gate (event=${eventIteration}, current=${hookTurnIteration})`,
+                      );
+                      return;
+                    }
+                    // Intra-turn staleness: within the same turn, multiple
+                    // message_end events share the same iteration. A slow handler
+                    // from an earlier message_end could resolve after a later one
+                    // already set the gate. The monotonic sequence counter ensures
+                    // only the latest message_end's result is applied.
+                    if (eventSeq !== hookMessageEndSeq) {
+                      log.debug(
+                        `after_llm_call: discarding stale intra-turn gate (seq=${eventSeq}, current=${hookMessageEndSeq})`,
+                      );
+                      return;
+                    }
+                    // If hook returned no filter/block, clear any stale gate from
+                    // a previous message_end in the same turn (multi-step tool loops).
+                    if (!result || (!result.block && !result.toolCalls)) {
+                      clearAfterLlmCallGate(params.sessionId);
+                      return;
+                    }
+                    const allowedIds = result.toolCalls
+                      ? new Set(result.toolCalls.map((tc: { id: string }) => tc.id))
+                      : undefined;
+                    setAfterLlmCallGate(params.sessionId, {
+                      blocked: result.block ?? false,
+                      blockReason: result.blockReason,
+                      allowedToolCallIds: allowedIds,
+                      iteration: eventIteration,
+                    });
+                  })
+                  .catch((err) => {
+                    log.warn(`after_llm_call hook: ${String(err)}`);
+                    // Clear any stale gate so a failed hook doesn't leave
+                    // a previous turn's gate blocking tool calls — but only
+                    // if this is still the latest message_end event.
+                    if (
+                      params.sessionId &&
+                      !hookRunDisposed &&
+                      eventSeq === hookMessageEndSeq &&
+                      eventIteration === hookTurnIteration
+                    ) {
+                      clearAfterLlmCallGate(params.sessionId);
+                    }
+                  });
+              }
+            })
+          : undefined;
 
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
@@ -1688,7 +1813,14 @@ export async function runEmbeddedAttempt(
           );
         }
         try {
+          // Mark run as disposed BEFORE clearing gate — prevents late-resolving
+          // after_llm_call hooks from repopulating the gate after cleanup.
+          hookRunDisposed = true;
           hookEventUnsub?.();
+          // Clean up after_llm_call gate to prevent stale decisions leaking
+          if (params.sessionId) {
+            clearAfterLlmCallGate(params.sessionId);
+          }
           unsubscribe();
         } catch (err) {
           // unsubscribe() should never throw; if it does, it indicates a serious bug.

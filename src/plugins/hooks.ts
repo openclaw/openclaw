@@ -28,6 +28,8 @@ import type {
   PluginHookGatewayStopEvent,
   PluginHookBeforeLlmCallEvent,
   PluginHookBeforeLlmCallResult,
+  PluginHookAfterLlmCallEvent,
+  PluginHookAfterLlmCallResult,
   PluginHookBeforeResponseEmitEvent,
   PluginHookBeforeResponseEmitResult,
   PluginHookMessageContext,
@@ -100,6 +102,8 @@ export type {
   // LLM call & response emit hooks
   PluginHookBeforeLlmCallEvent,
   PluginHookBeforeLlmCallResult,
+  PluginHookAfterLlmCallEvent,
+  PluginHookAfterLlmCallResult,
   PluginHookBeforeResponseEmitEvent,
   PluginHookBeforeResponseEmitResult,
 };
@@ -746,6 +750,34 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run after_llm_call hook.
+   * Fires after receiving the LLM response. Plugins can block all tool
+   * execution or filter individual tool calls. Decisions are stored in a
+   * mutable ref and enforced by before_tool_call.
+   * Runs sequentially, merging results across handlers.
+   */
+  async function runAfterLlmCall(
+    event: PluginHookAfterLlmCallEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookAfterLlmCallResult | undefined> {
+    return runModifyingHook<"after_llm_call", PluginHookAfterLlmCallResult>(
+      "after_llm_call",
+      event,
+      ctx,
+      (acc, next) => ({
+        block: next.block || acc?.block,
+        blockReason: acc?.blockReason ?? next.blockReason,
+        // Intersection latch: if both handlers filter tool calls, only keep
+        // calls present in both lists. Prevents widening the allowlist.
+        toolCalls:
+          acc?.toolCalls !== undefined && next.toolCalls !== undefined
+            ? next.toolCalls.filter((tc) => acc.toolCalls!.some((a) => a.id === tc.id))
+            : (next.toolCalls ?? acc?.toolCalls),
+      }),
+    );
+  }
+
+  /**
    * Run before_response_emit hook.
    * Fires when the agent's final response is ready, before delivery.
    * Allows plugins to modify content or block emission.
@@ -834,6 +866,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runGatewayStop,
     // LLM call & response emit hooks
     runBeforeLlmCall,
+    runAfterLlmCall,
     runBeforeResponseEmit,
     // Utility
     hasHooks,

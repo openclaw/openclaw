@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 /**
  * Unit tests for LLM call and response emit hooks:
- * before_llm_call, before_response_emit.
+ * before_llm_call, after_llm_call, before_response_emit.
  *
  * See hooks.context-loop.test.ts for context_assembled and loop_iteration tests.
  */
@@ -11,6 +11,7 @@ import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeLlmCallEvent,
+  PluginHookAfterLlmCallEvent,
   PluginHookBeforeResponseEmitEvent,
   PluginHookRegistration,
 } from "./types.js";
@@ -170,6 +171,124 @@ describe("before_llm_call hook", () => {
   it("skips when no handlers registered (returns undefined)", async () => {
     const runner = createHookRunner(makeRegistry([]));
     const result = await runner.runBeforeLlmCall(baseEvent, agentCtx);
+    expect(result).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// after_llm_call (modifying, sequential)
+// ---------------------------------------------------------------------------
+
+describe("after_llm_call hook", () => {
+  const baseEvent: PluginHookAfterLlmCallEvent = {
+    response: fakeMsg("assistant", "Hello!"),
+    toolCalls: [{ id: "tc-1", name: "read", arguments: { path: "/tmp/x" } }],
+    iteration: 1,
+    model: "gpt-4",
+    latencyMs: 250,
+    tokenUsage: { input: 50, output: 20 },
+  };
+
+  it("fires handler with correct event shape", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const runner = createHookRunner(
+      makeRegistry([{ pluginId: "p1", hookName: "after_llm_call", handler, source: "test" }]),
+    );
+
+    await runner.runAfterLlmCall(baseEvent, agentCtx);
+
+    expect(handler).toHaveBeenCalledOnce();
+    const [event] = handler.mock.calls[0];
+    expect(event).toMatchObject({
+      response: baseEvent.response,
+      toolCalls: baseEvent.toolCalls,
+      iteration: 1,
+      model: "gpt-4",
+      latencyMs: 250,
+      tokenUsage: { input: 50, output: 20 },
+    });
+  });
+
+  it("runs multiple handlers sequentially and merges results", async () => {
+    const h1 = vi.fn().mockResolvedValue({ block: false, toolCalls: [baseEvent.toolCalls[0]] });
+    const h2 = vi.fn().mockResolvedValue({ block: true, blockReason: "tainted context" });
+    const runner = createHookRunner(
+      makeRegistry([
+        { pluginId: "p1", hookName: "after_llm_call", handler: h1, source: "test" },
+        { pluginId: "p2", hookName: "after_llm_call", handler: h2, source: "test" },
+      ]),
+    );
+
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    expect(h1).toHaveBeenCalledOnce();
+    expect(h2).toHaveBeenCalledOnce();
+    // h1 doesn't block, h2 sets block: true (not a latch override — h1 never blocked)
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toBe("tainted context");
+  });
+
+  it("block is a one-way latch — later handler cannot unblock", async () => {
+    const h1 = vi.fn().mockResolvedValue({ block: true, blockReason: "security policy" });
+    const h2 = vi.fn().mockResolvedValue({ block: false });
+    const runner = createHookRunner(
+      makeRegistry([
+        { pluginId: "security", hookName: "after_llm_call", handler: h1, source: "test" },
+        { pluginId: "permissive", hookName: "after_llm_call", handler: h2, source: "test" },
+      ]),
+    );
+
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    // Once blocked, stays blocked — security plugin's decision cannot be overridden
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toBe("security policy");
+  });
+
+  it("toolCalls use intersection — later handler cannot widen allowlist", async () => {
+    const h1 = vi.fn().mockResolvedValue({
+      toolCalls: [{ id: "tc-1", name: "safe_read", arguments: {} }],
+    });
+    const h2 = vi.fn().mockResolvedValue({
+      toolCalls: [
+        { id: "tc-1", name: "safe_read", arguments: {} },
+        { id: "tc-2", name: "exec", arguments: {} },
+      ],
+    });
+    const runner = createHookRunner(
+      makeRegistry([
+        { pluginId: "security", hookName: "after_llm_call", handler: h1, source: "test" },
+        { pluginId: "permissive", hookName: "after_llm_call", handler: h2, source: "test" },
+      ]),
+    );
+
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    // Intersection: only tc-1 is in both lists
+    expect(result?.toolCalls).toHaveLength(1);
+    expect(result?.toolCalls?.[0].id).toBe("tc-1");
+  });
+
+  it("returns tool call filter from handler", async () => {
+    const filtered = [{ id: "tc-1", name: "read", arguments: { path: "/tmp/x" } }];
+    const handler = vi.fn().mockResolvedValue({ toolCalls: filtered });
+    const runner = createHookRunner(
+      makeRegistry([{ pluginId: "p1", hookName: "after_llm_call", handler, source: "test" }]),
+    );
+
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    expect(result?.toolCalls).toEqual(filtered);
+  });
+
+  it("returns undefined when no handlers registered", async () => {
+    const runner = createHookRunner(makeRegistry([]));
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when handlers return void", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const runner = createHookRunner(
+      makeRegistry([{ pluginId: "p1", hookName: "after_llm_call", handler, source: "test" }]),
+    );
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
     expect(result).toBeUndefined();
   });
 });

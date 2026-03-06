@@ -23,14 +23,6 @@ const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
-let beforeToolCallRuntimePromise: Promise<
-  typeof import("./pi-tools.before-tool-call.runtime.js")
-> | null = null;
-
-function loadBeforeToolCallRuntime() {
-  beforeToolCallRuntimePromise ??= import("./pi-tools.before-tool-call.runtime.js");
-  return beforeToolCallRuntimePromise;
-}
 
 function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
@@ -70,7 +62,8 @@ async function recordLoopOutcome(args: {
     return;
   }
   try {
-    const { getDiagnosticSessionState, recordToolCallOutcome } = await loadBeforeToolCallRuntime();
+    const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");
+    const { recordToolCallOutcome } = await import("./tool-loop-detection.js");
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx?.agentId,
@@ -97,9 +90,22 @@ export async function runBeforeToolCallHook(args: {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
 
+  // Check after_llm_call gate — if the hook blocked this turn's tool execution
+  // or filtered this specific tool call, block before we even run other checks.
+  if (args.ctx?.sessionId) {
+    const { checkAfterLlmCallGate } =
+      await import("./pi-embedded-runner/run/after-llm-call-gate.js");
+    const gateResult = checkAfterLlmCallGate(args.ctx.sessionId, args.toolCallId);
+    if (gateResult.blocked) {
+      return { blocked: true, reason: gateResult.reason ?? "Blocked by after_llm_call hook" };
+    }
+  }
+
   if (args.ctx?.sessionKey) {
-    const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
-      await loadBeforeToolCallRuntime();
+    const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");
+    const { logToolLoopAction } = await import("../logging/diagnostic.js");
+    const { detectToolCallLoop, recordToolCall } = await import("./tool-loop-detection.js");
+
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx?.agentId,
