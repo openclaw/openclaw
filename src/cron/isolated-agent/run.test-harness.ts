@@ -40,6 +40,9 @@ export const getCliSessionIdMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
 export const logWarnMock = createMock();
+export const countActiveDescendantRunsMock = createMock();
+export const listDescendantRunsForRequesterMock = createMock();
+export const pickLastNonEmptyTextFromPayloadsMock = createMock();
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: resolveAgentConfigMock,
@@ -108,6 +111,11 @@ vi.mock("../../agents/usage.js", () => ({
 
 vi.mock("../../agents/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock("../../agents/subagent-registry.js", () => ({
+  countActiveDescendantRuns: countActiveDescendantRunsMock,
+  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
 }));
 
 vi.mock("../../agents/cli-runner.js", () => ({
@@ -184,7 +192,7 @@ vi.mock("./delivery-target.js", () => ({
 vi.mock("./helpers.js", () => ({
   isHeartbeatOnlyResponse: vi.fn().mockReturnValue(false),
   pickLastDeliverablePayload: vi.fn().mockReturnValue(undefined),
-  pickLastNonEmptyTextFromPayloads: vi.fn().mockReturnValue("test output"),
+  pickLastNonEmptyTextFromPayloads: pickLastNonEmptyTextFromPayloadsMock,
   pickSummaryFromOutput: vi.fn().mockReturnValue("summary"),
   pickSummaryFromPayloads: vi.fn().mockReturnValue("summary"),
   resolveHeartbeatAckMaxChars: vi.fn().mockReturnValue(100),
@@ -271,6 +279,13 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
 
   resolveCronSessionMock.mockReset();
   resolveCronSessionMock.mockReturnValue(makeCronSession());
+
+  countActiveDescendantRunsMock.mockReset();
+  countActiveDescendantRunsMock.mockReturnValue(0);
+  listDescendantRunsForRequesterMock.mockReset();
+  listDescendantRunsForRequesterMock.mockReturnValue([]);
+  pickLastNonEmptyTextFromPayloadsMock.mockReset();
+  pickLastNonEmptyTextFromPayloadsMock.mockReturnValue("test output");
 
   logWarnMock.mockReset();
 }

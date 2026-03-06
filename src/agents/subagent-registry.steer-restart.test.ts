@@ -384,6 +384,64 @@ describe("subagent registry steer restarts", () => {
     );
   });
 
+  it("clears frozen completion fields when replacing after steer restart", () => {
+    registerRun({
+      runId: "run-frozen-old",
+      childSessionKey: "agent:main:subagent:frozen",
+      task: "frozen result reset",
+    });
+
+    const previous = listMainRuns()[0];
+    expect(previous?.runId).toBe("run-frozen-old");
+    if (previous) {
+      previous.frozenResultText = "stale frozen completion";
+      previous.frozenResultCapturedAt = Date.now();
+      previous.cleanupCompletedAt = Date.now();
+      previous.cleanupHandled = true;
+    }
+
+    const run = replaceRunAfterSteer({
+      previousRunId: "run-frozen-old",
+      nextRunId: "run-frozen-new",
+      fallback: previous,
+    });
+
+    expect(run.frozenResultText).toBeUndefined();
+    expect(run.frozenResultCapturedAt).toBeUndefined();
+    expect(run.cleanupCompletedAt).toBeUndefined();
+    expect(run.cleanupHandled).toBe(false);
+  });
+
+  it("preserves frozen completion as fallback when replacing for wake continuation", () => {
+    registerRun({
+      runId: "run-wake-old",
+      childSessionKey: "agent:main:subagent:wake",
+      task: "wake result fallback",
+    });
+
+    const previous = listMainRuns()[0];
+    expect(previous?.runId).toBe("run-wake-old");
+    if (previous) {
+      previous.frozenResultText = "final summary before wake";
+      previous.frozenResultCapturedAt = 1234;
+    }
+
+    const replaced = mod.replaceSubagentRunAfterSteer({
+      previousRunId: "run-wake-old",
+      nextRunId: "run-wake-new",
+      fallback: previous,
+      preserveFrozenResultFallback: true,
+    });
+    expect(replaced).toBe(true);
+
+    const run = listMainRuns().find((entry) => entry.runId === "run-wake-new");
+    expect(run).toMatchObject({
+      frozenResultText: undefined,
+      fallbackFrozenResultText: "final summary before wake",
+      fallbackFrozenResultCapturedAt: 1234,
+    });
+  });
+
   it("restores announce for a finished run when steer replacement dispatch fails", async () => {
     registerRun({
       runId: "run-failed-restart",
