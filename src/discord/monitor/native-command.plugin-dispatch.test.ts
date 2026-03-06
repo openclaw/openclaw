@@ -301,6 +301,80 @@ describe("Discord native plugin command dispatch", () => {
     expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).not.toHaveBeenCalled();
   });
 
+  it("falls back to the routed slash and channel session keys when no bound session exists", async () => {
+    const guildId = "1459246755253325866";
+    const channelId = "1478836151241412759";
+    const cfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      bindings: [
+        {
+          agentId: "qwen",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "channel", id: channelId },
+            guildId,
+          },
+        },
+      ],
+      channels: {
+        discord: {
+          guilds: {
+            [guildId]: {
+              channels: {
+                [channelId]: { allow: true, requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const commandSpec: NativeCommandSpec = {
+      name: "status",
+      description: "Status",
+      acceptsArgs: false,
+    };
+    const command = createDiscordNativeCommand({
+      command: commandSpec,
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+    const interaction = createInteraction({
+      channelType: ChannelType.GuildText,
+      channelId,
+      guildId,
+      guildName: "Ops",
+    });
+
+    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+    const dispatchSpy = vi
+      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
+      .mockResolvedValue({
+        counts: {
+          final: 1,
+          block: 0,
+          tool: 0,
+        },
+      } as never);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
+      ctx?: { SessionKey?: string; CommandTargetSessionKey?: string };
+    };
+    expect(dispatchCall.ctx?.SessionKey).toBe("agent:qwen:discord:slash:owner");
+    expect(dispatchCall.ctx?.CommandTargetSessionKey).toBe(
+      "agent:qwen:discord:channel:1478836151241412759",
+    );
+  });
+
   it("routes Discord DM native slash commands through configured ACP bindings", async () => {
     const channelId = "dm-1";
     const boundSessionKey = "agent:codex:acp:binding:discord:default:dmfeedface";
