@@ -1200,6 +1200,7 @@ export async function runEmbeddedAttempt(
         params.streamParams,
         params.thinkLevel,
         sessionAgentId,
+        typeof params.model?.api === "string" ? params.model.api : undefined,
       );
 
       if (cacheTrace) {
