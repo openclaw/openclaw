@@ -199,6 +199,25 @@ describe("resolveModel", () => {
     expect(result.model?.baseUrl).toBe("http://localhost:9000");
     expect(result.model?.provider).toBe("custom");
     expect(result.model?.id).toBe("missing-model");
+    expect(result.model?.api).toBe("openai-completions");
+  });
+
+  it("defaults inline provider models without api to openai-completions", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [makeModel("custom-model")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("custom", "custom-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.api).toBe("openai-completions");
   });
 
   it("includes provider headers in provider fallback model", () => {

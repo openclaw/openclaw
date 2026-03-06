@@ -22,6 +22,8 @@ type InlineProviderConfig = {
   headers?: Record<string, string>;
 };
 
+const DEFAULT_CUSTOM_PROVIDER_API: ModelDefinitionConfig["api"] = "openai-completions";
+
 export { buildModelAliasLines };
 
 function resolveConfiguredProviderConfig(
@@ -126,7 +128,10 @@ export function resolveModelWithRegistry(params: {
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
   if (inlineMatch) {
-    return normalizeModelCompat(inlineMatch as Model<Api>);
+    return normalizeModelCompat({
+      ...inlineMatch,
+      api: inlineMatch.api ?? providerConfig?.api ?? DEFAULT_CUSTOM_PROVIDER_API,
+    } as Model<Api>);
   }
 
   // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
@@ -165,7 +170,7 @@ export function resolveModelWithRegistry(params: {
     return normalizeModelCompat({
       id: modelId,
       name: modelId,
-      api: providerConfig?.api ?? "openai-responses",
+      api: providerConfig?.api ?? DEFAULT_CUSTOM_PROVIDER_API,
       provider,
       baseUrl: providerConfig?.baseUrl,
       reasoning: configuredModel?.reasoning ?? false,
