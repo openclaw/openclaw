@@ -241,6 +241,14 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
   return texts.length > 0 ? texts.join("\n") : undefined;
 }
 
+function isDeliveryMirrorMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const msg = message as Record<string, unknown>;
+  return msg.provider === "openclaw" && msg.model === "delivery-mirror";
+}
+
 function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -253,6 +261,12 @@ function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
     // Drop assistant messages whose entire visible text is the silent reply token.
     const text = extractAssistantTextForSilentCheck(res.message);
     if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+      changed = true;
+      continue;
+    }
+    // Filter out delivery-mirror transcript entries so webchat doesn't show
+    // duplicate assistant messages (one real + one mirror). See #38061.
+    if (isDeliveryMirrorMessage(res.message)) {
       changed = true;
       continue;
     }
