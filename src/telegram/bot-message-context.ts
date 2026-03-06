@@ -262,9 +262,27 @@ export const buildTelegramMessageContext = async ({
   route = configuredRoute.route;
   const requiresExplicitAccountBinding = (candidate: ResolvedAgentRoute): boolean =>
     candidate.accountId !== DEFAULT_ACCOUNT_ID && candidate.matchedBy === "default";
-  // Fail closed for named Telegram accounts when route resolution falls back to
-  // default-agent routing. This prevents cross-account DM/session contamination.
-  if (requiresExplicitAccountBinding(route)) {
+  // Keep named account traffic isolated without forcing a binding for DM-only setups.
+  // This restores non-default DM delivery while still avoiding cross-account main-session reuse.
+  if (requiresExplicitAccountBinding(route) && !isGroup) {
+    route = {
+      ...route,
+      sessionKey: buildAgentSessionKey({
+        agentId: route.agentId,
+        channel: "telegram",
+        accountId: route.accountId,
+        peer: { kind: "direct", id: peerId },
+        dmScope: "per-account-channel-peer",
+        identityLinks: freshCfg.session?.identityLinks,
+      }).toLowerCase(),
+      mainSessionKey: buildAgentMainSessionKey({
+        agentId: route.agentId,
+      }).toLowerCase(),
+    };
+  } else if (requiresExplicitAccountBinding(route)) {
+    // Fail closed for named Telegram group/forum traffic when route resolution falls back
+    // to default-agent routing. Group sessions are still channel-scoped and require
+    // explicit operator intent for non-default accounts.
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",

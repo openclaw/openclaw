@@ -813,7 +813,7 @@ describe("createTelegramBot", () => {
     expect(payload.SessionKey).toBe("agent:opie:main");
   });
 
-  it("drops non-default account DMs without explicit bindings", async () => {
+  it("isolates non-default account DMs when explicit bindings are missing", async () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -837,6 +837,42 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
         message_id: 42,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0]?.[0];
+    expect(payload?.AccountId).toBe("opie");
+    expect(payload?.SessionKey).toBe("agent:main:telegram:opie:direct:999");
+  });
+
+  it("drops non-default account group traffic without explicit bindings", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+          accounts: {
+            opie: {
+              botToken: "tok-opie",
+            },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok", accountId: "opie" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: -1001234567890, type: "group", title: "Ops" },
+        from: { id: 999, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+        message_id: 43,
       },
       me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
