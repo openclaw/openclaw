@@ -19,6 +19,7 @@ import {
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
+import { triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -29,7 +30,6 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { triggerInternalHook } from "../hooks/internal-hooks.js";
 
 export type GatewayCronState = {
   cron: CronService;
@@ -358,7 +358,7 @@ export function buildGatewayCronService(params: {
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {
       params.broadcast("cron", evt, { dropIfSlow: true });
-      
+
       // Trigger internal hook for cron events
       void triggerInternalHook({
         type: "cron",
@@ -384,7 +384,7 @@ export function buildGatewayCronService(params: {
         timestamp: new Date(),
         messages: [],
       });
-      
+
       if (evt.action === "finished") {
         const webhookToken = trimToOptionalString(params.cfg.cron?.webhookToken);
         const legacyWebhook = trimToOptionalString(params.cfg.cron?.webhook);
