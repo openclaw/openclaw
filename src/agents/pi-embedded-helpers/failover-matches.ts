@@ -90,6 +90,19 @@ const ERROR_PATTERNS = {
     "invalid request format",
     /tool call id was.*must be/i,
   ],
+  serverError: [
+    "an error occurred while processing",
+    "internal server error",
+    "internal_error",
+    "server_error",
+    "service temporarily unavailable",
+    "service_unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "upstream error",
+    "upstream connect error",
+    "connection reset",
+  ],
 } as const;
 
 const BILLING_ERROR_HEAD_RE =
@@ -157,4 +170,8 @@ export function isAuthErrorMessage(raw: string): boolean {
 
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
+}
+
+export function isServerErrorMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.serverError);
 }
