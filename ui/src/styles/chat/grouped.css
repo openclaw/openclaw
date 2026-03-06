@@ -54,6 +54,23 @@
   opacity: 0.7;
 }
 
+/* Source label on message bubble (e.g. Dashboard, 飞书) */
+.chat-group-source {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.85;
+  margin-left: 4px;
+}
+
+/* Visual distinction by source */
+.chat-group--source-dashboard .chat-group-source {
+  color: var(--muted);
+}
+
+.chat-group--source-feishu .chat-group-source {
+  color: var(--color-accent, #6366f1);
+}
+
 /* Chat divider (e.g., compaction marker) */
 .chat-divider {
   display: flex;
