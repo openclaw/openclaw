@@ -40,6 +40,7 @@ import {
   type SessionSuspicionState,
   type SessionMemoryWriteResult,
 } from "./types.js";
+import { notifyAlerting } from "./alerting/service.js";
 import { runPreFilter } from "./validation.js";
 
 const log = createSubsystemLogger("memory/session-sanitization");
@@ -98,13 +99,25 @@ function shouldEmitForVerbosity(event: string, verbosity: AuditVerbosity): boole
   return VERBOSITY_RANK[verbosity] >= VERBOSITY_RANK[minRequired];
 }
 
-/** Append an audit entry only if the configured verbosity level permits it. */
+/** Append an audit entry only if the configured verbosity level permits it.
+ *  When alertDeps is provided, the alerting engine is notified after the write.
+ */
 async function gatedAudit(
   params: { agentId: string; sessionId: string; entry: SessionMemoryAuditEntry },
   verbosity: AuditVerbosity,
+  alertDeps?: { cfg: OpenClawConfig; now: number },
 ): Promise<void> {
   if (!shouldEmitForVerbosity(params.entry.event, verbosity)) return;
   await appendSessionMemoryAuditEntry(params);
+  if (alertDeps) {
+    notifyAlerting({
+      entry: params.entry,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      cfg: alertDeps.cfg,
+      now: alertDeps.now,
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,6 +216,7 @@ async function emitFrequencyEscalation(params: {
   now: number;
   source: "transcript" | "mcp";
   verbosity?: AuditVerbosity;
+  cfg?: OpenClawConfig;
 }): Promise<void> {
   if (params.tier === "none") return;
   const eventMap = {
@@ -223,6 +237,7 @@ async function emitFrequencyEscalation(params: {
       },
     },
     params.verbosity ?? "standard",
+    params.cfg ? { cfg: params.cfg, now: params.now } : undefined,
   );
   if (params.tier === "tier3") {
     log.warn("frequency tracking: Tier 3 threshold reached — session marked terminated", {
@@ -1174,6 +1189,8 @@ export async function processMcpToolResult(params: {
   const sanitizationCfg = resolveSessionSanitizationConfig(params.cfg);
   const validationCfg = resolveSessionSanitizationValidationConfig(params.cfg);
   const auditVerbosity = validationCfg.audit.verbosity;
+  // Alerting context threaded through all gatedAudit calls in this function
+  const alertDeps = { cfg: params.cfg, now };
 
   // Trusted list fast path.
   if (
@@ -1194,6 +1211,7 @@ export async function processMcpToolResult(params: {
         },
       },
       auditVerbosity,
+      alertDeps,
     );
     return {
       trusted: true,
@@ -1282,6 +1300,7 @@ export async function processMcpToolResult(params: {
         },
       },
       auditVerbosity,
+      alertDeps,
     );
   }
 
@@ -1303,6 +1322,7 @@ export async function processMcpToolResult(params: {
         },
       },
       auditVerbosity,
+      alertDeps,
     );
   }
 
@@ -1325,6 +1345,7 @@ export async function processMcpToolResult(params: {
         },
       },
       auditVerbosity,
+      alertDeps,
     );
   }
 
@@ -1363,6 +1384,7 @@ export async function processMcpToolResult(params: {
           now,
           source: "mcp",
           verbosity: auditVerbosity,
+          cfg: params.cfg,
         });
       }
     }
@@ -1406,6 +1428,7 @@ export async function processMcpToolResult(params: {
         },
       },
       auditVerbosity,
+      alertDeps,
     );
     return buildBlockedResult(
       mcpPreFilter.allFlags,
@@ -1454,6 +1477,7 @@ export async function processMcpToolResult(params: {
         },
       },
       auditVerbosity,
+      alertDeps,
     );
     return buildBlockedResult(tier1.blockFlags, tier1.contextNote, 1);
   }
@@ -1559,6 +1583,7 @@ export async function processMcpToolResult(params: {
         },
       },
       auditVerbosity,
+      alertDeps,
     );
     return buildBlockedResult(["sanitization sub-agent failed"], "blocked: sub-agent error", 2);
   }
@@ -1595,6 +1620,7 @@ export async function processMcpToolResult(params: {
         },
       },
       auditVerbosity,
+      alertDeps,
     );
     return buildBlockedResult(child.flags, child.contextNote, 2);
   }
@@ -1634,6 +1660,7 @@ export async function processMcpToolResult(params: {
         },
       },
       auditVerbosity,
+      alertDeps,
     );
   }
 
@@ -1650,6 +1677,7 @@ export async function processMcpToolResult(params: {
       },
     },
     auditVerbosity,
+    alertDeps,
   );
 
   // Audit retention sweep — fire-and-forget, runs after every successful pass
