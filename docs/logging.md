@@ -105,6 +105,8 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
   "logging": {
     "level": "info",
     "file": "/tmp/openclaw/openclaw-YYYY-MM-DD.log",
+    "maxFileBytes": 524288000,
+    "maxBackups": 5,
     "consoleLevel": "info",
     "consoleStyle": "pretty",
     "redactSensitive": "tools",
@@ -112,6 +114,49 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
   }
 }
 ```
+
+### Log rotation
+
+OpenClaw rotates log files automatically when a file exceeds `maxFileBytes`.
+Rotated files are renamed with a numbered suffix (`file.1`, `file.2`, …) and the
+active log continues from a fresh file.
+
+**Configuration options:**
+
+| Key            | Type    | Default              | Description                                                                                               |
+| -------------- | ------- | -------------------- | --------------------------------------------------------------------------------------------------------- |
+| `maxFileBytes` | integer | `524288000` (500 MB) | File size threshold in bytes that triggers rotation.                                                      |
+| `maxBackups`   | integer | `5`                  | Number of rotated backups to keep. Set to `0` to disable rotation (writes are suppressed at cap instead). |
+
+**Example — keep 3 backups of 100 MB each:**
+
+```json
+{
+  "logging": {
+    "maxFileBytes": 104857600,
+    "maxBackups": 3
+  }
+}
+```
+
+**Rotation behavior:**
+
+1. When the next log line would push the file over `maxFileBytes`, OpenClaw renames the current file to `<file>.1`.
+2. Any existing `<file>.1` becomes `<file>.2`, and so on up to `<file>.<maxBackups>`.
+3. The oldest backup (`<file>.<maxBackups>`) is deleted to enforce the retention limit.
+4. A rotation notice is written to the new active log at the start of the file.
+
+**Retention:**
+
+Only `maxBackups` rotated files are kept at any time. If `maxBackups` is `0`,
+rotation is disabled — once the file reaches `maxFileBytes`, further writes are
+suppressed and a single warning is printed to stderr.
+
+**Troubleshooting rotation:**
+
+- **Rotation not happening?** Check that `maxBackups` is greater than `0` and `maxFileBytes` is set to a reasonable value.
+- **Too many backup files?** Lower `maxBackups` — the oldest files are removed automatically on the next rotation.
+- **Disk space still growing?** Verify the `file` path in config matches where the Gateway is actually writing. Use `openclaw logs` to confirm the active log path.
 
 ### Log levels
 
