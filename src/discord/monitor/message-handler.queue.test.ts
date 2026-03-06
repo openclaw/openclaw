@@ -4,6 +4,7 @@ import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const preflightDiscordMessageMock = vi.hoisted(() => vi.fn());
 const processDiscordMessageMock = vi.hoisted(() => vi.fn());
+const eventualReplyDeliveredMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./message-handler.preflight.js", () => ({
   preflightDiscordMessage: preflightDiscordMessageMock,
@@ -26,6 +27,7 @@ function createDeferred<T = void>() {
 function createHandlerParams(overrides?: {
   setStatus?: (patch: Record<string, unknown>) => void;
   abortSignal?: AbortSignal;
+  workerRunTimeoutMs?: number;
 }) {
   const cfg: OpenClawConfig = {
     channels: {
@@ -64,6 +66,7 @@ function createHandlerParams(overrides?: {
     threadBindings: createNoopThreadBindingManager("default"),
     setStatus: overrides?.setStatus,
     abortSignal: overrides?.abortSignal,
+    workerRunTimeoutMs: overrides?.workerRunTimeoutMs,
   };
 }
 
@@ -83,6 +86,19 @@ function createMessageData(messageId: string, channelId = "ch-1") {
 
 function createPreflightContext(channelId = "ch-1") {
   return {
+    data: {
+      channel_id: channelId,
+      message: {
+        id: `msg-${channelId}`,
+        channel_id: channelId,
+        attachments: [],
+      },
+    },
+    message: {
+      id: `msg-${channelId}`,
+      channel_id: channelId,
+      attachments: [],
+    },
     route: {
       sessionKey: `agent:main:discord:channel:${channelId}`,
     },
@@ -165,6 +181,98 @@ describe("createDiscordMessageHandler queue behavior", () => {
         }),
       );
     });
+  });
+
+  it("applies explicit inbound worker timeout to queued runs so stalled runs do not block the queue", async () => {
+    vi.useFakeTimers();
+    try {
+      preflightDiscordMessageMock.mockReset();
+      processDiscordMessageMock.mockReset();
+
+      processDiscordMessageMock
+        .mockImplementationOnce(async (ctx: { abortSignal?: AbortSignal }) => {
+          await new Promise<void>((resolve) => {
+            if (ctx.abortSignal?.aborted) {
+              resolve();
+              return;
+            }
+            ctx.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        })
+        .mockImplementationOnce(async () => undefined);
+      preflightDiscordMessageMock.mockImplementation(
+        async (params: { data: { channel_id: string } }) =>
+          createPreflightContext(params.data.channel_id),
+      );
+
+      const params = createHandlerParams({ workerRunTimeoutMs: 50 });
+      const handler = createDiscordMessageHandler(params);
+
+      await expect(
+        handler(createMessageData("m-1") as never, {} as never),
+      ).resolves.toBeUndefined();
+      await expect(
+        handler(createMessageData("m-2") as never, {} as never),
+      ).resolves.toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(60);
+      await vi.waitFor(() => {
+        expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+      });
+
+      const firstCtx = processDiscordMessageMock.mock.calls[0]?.[0] as
+        | { abortSignal?: AbortSignal }
+        | undefined;
+      expect(firstCtx?.abortSignal?.aborted).toBe(true);
+      expect(params.runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("discord inbound worker timed out after"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not time out queued runs when the inbound worker timeout is disabled", async () => {
+    vi.useFakeTimers();
+    try {
+      preflightDiscordMessageMock.mockReset();
+      processDiscordMessageMock.mockReset();
+      eventualReplyDeliveredMock.mockReset();
+
+      processDiscordMessageMock.mockImplementationOnce(
+        async (ctx: { abortSignal?: AbortSignal }) => {
+          await new Promise<void>((resolve) => {
+            setTimeout(() => {
+              if (!ctx.abortSignal?.aborted) {
+                eventualReplyDeliveredMock();
+              }
+              resolve();
+            }, 80);
+          });
+        },
+      );
+      preflightDiscordMessageMock.mockImplementation(
+        async (params: { data: { channel_id: string } }) =>
+          createPreflightContext(params.data.channel_id),
+      );
+
+      const params = createHandlerParams({ workerRunTimeoutMs: 0 });
+      const handler = createDiscordMessageHandler(params);
+
+      await expect(
+        handler(createMessageData("m-1") as never, {} as never),
+      ).resolves.toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(80);
+      await Promise.resolve();
+
+      expect(eventualReplyDeliveredMock).toHaveBeenCalledTimes(1);
+      expect(params.runtime.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("discord inbound worker timed out after"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refreshes run activity while active runs are in progress", async () => {
