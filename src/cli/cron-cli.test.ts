@@ -8,7 +8,7 @@ const defaultGatewayMock = async (
   _opts: unknown,
   params?: unknown,
   _timeoutMs?: number,
-) => {
+): Promise<unknown> => {
   if (method === "cron.status") {
     return { enabled: true };
   }
@@ -246,6 +246,48 @@ describe("cron cli", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it("omits human-readable cron state fields when timestamps are missing", async () => {
+    const runtimeLog = await getRuntimeLogSpy();
+    runtimeLog.mockClear();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.update") {
+          return {
+            id: "job-1",
+            name: "No timestamps yet",
+            enabled: true,
+            createdAtMs: 1772162768988,
+            updatedAtMs: 1772794372339,
+            schedule: { kind: "every", everyMs: 86_400_000, anchorMs: 1772668800000 },
+            sessionTarget: "main",
+            wakeMode: "now",
+            payload: { kind: "systemEvent", text: "something something" },
+            state: {
+              lastRunStatus: "ok",
+            },
+            params,
+          };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--name", "Updated"], { from: "user" });
+
+    const rendered = JSON.parse(String(runtimeLog.mock.calls.at(-1)?.[0] ?? "{}")) as {
+      state?: Record<string, unknown>;
+    };
+
+    expect(rendered.state).not.toHaveProperty("nextRunAtIso");
+    expect(rendered.state).not.toHaveProperty("nextRunIn");
+    expect(rendered.state).not.toHaveProperty("lastRunAtIso");
+    expect(rendered.state).not.toHaveProperty("lastRunAgo");
   });
 
   it.each([

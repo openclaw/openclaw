@@ -149,6 +149,13 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   return delta >= 0 ? `in ${label}` : `${label} ago`;
 };
 
+const formatRelativeForDisplay = (ms: number | null | undefined, nowMs: number) => {
+  if (!ms) {
+    return undefined;
+  }
+  return formatRelative(ms, nowMs);
+};
+
 const formatSchedule = (schedule: CronSchedule) => {
   if (schedule.kind === "at") {
     return `at ${formatIsoMinute(schedule.at)}`;
@@ -294,9 +301,9 @@ export function formatCronJobForDisplay(value: unknown, nowMs = Date.now()): unk
     state: {
       ...job.state,
       nextRunAtIso: formatJsonDateTime(job.state.nextRunAtMs),
-      nextRunIn: job.enabled ? formatRelative(job.state.nextRunAtMs, nowMs) : undefined,
+      nextRunIn: job.enabled ? formatRelativeForDisplay(job.state.nextRunAtMs, nowMs) : undefined,
       lastRunAtIso: formatJsonDateTime(job.state.lastRunAtMs),
-      lastRunAgo: formatRelative(job.state.lastRunAtMs, nowMs),
+      lastRunAgo: formatRelativeForDisplay(job.state.lastRunAtMs, nowMs),
     },
   };
 }
