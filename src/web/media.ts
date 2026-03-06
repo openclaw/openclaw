@@ -78,6 +78,28 @@ export function getDefaultLocalRoots(): readonly string[] {
   return getDefaultMediaLocalRoots();
 }
 
+async function resolveRelativeMediaPath(
+  mediaPath: string,
+  localRoots: readonly string[] | "any" | undefined,
+): Promise<string> {
+  if (path.isAbsolute(mediaPath) || localRoots === "any") {
+    return mediaPath;
+  }
+
+  const roots = localRoots ?? getDefaultLocalRoots();
+  for (const root of roots) {
+    const candidate = path.resolve(root, mediaPath);
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Keep scanning allowed roots until one exists.
+    }
+  }
+
+  return mediaPath;
+}
+
 async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
@@ -341,6 +363,8 @@ async function loadWebMediaInternal(
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
   }
+
+  mediaUrl = await resolveRelativeMediaPath(mediaUrl, localRoots);
 
   if ((sandboxValidated || localRoots === "any") && !readFileOverride) {
     throw new LocalMediaAccessError(

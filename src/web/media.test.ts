@@ -361,6 +361,27 @@ describe("local media root guard", () => {
     expect(result.kind).toBe("image");
   });
 
+  it("resolves relative local paths against explicit roots", async () => {
+    const nestedRoot = await fs.mkdtemp(path.join(fixtureRoot, "relative-root-"));
+    const imagesDir = path.join(nestedRoot, "images");
+    const imageFile = path.join(imagesDir, "sample.png");
+
+    try {
+      await fs.mkdir(imagesDir, { recursive: true });
+      await fs.writeFile(imageFile, tinyPngBuffer);
+
+      const result = await loadWebMediaRaw("images/sample.png", {
+        maxBytes: 1024 * 1024,
+        localRoots: [nestedRoot],
+      });
+
+      expect(result.kind).toBe("image");
+      expect(result.buffer.equals(tinyPngBuffer)).toBe(true);
+    } finally {
+      await fs.rm(nestedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("accepts win32 dev=0 stat mismatch for local file loads", async () => {
     const actualLstat = await fs.lstat(tinyPngFile);
     const actualStat = await fs.stat(tinyPngFile);
