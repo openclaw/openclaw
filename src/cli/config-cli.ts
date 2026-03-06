@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
+import { splitConfigPath } from "../config/config-paths.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
@@ -27,55 +28,14 @@ function isIndexSegment(raw: string): boolean {
 }
 
 function parsePath(raw: string): PathSegment[] {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return [];
-  }
-  const parts: string[] = [];
-  let current = "";
-  let i = 0;
-  while (i < trimmed.length) {
-    const ch = trimmed[i];
-    if (ch === "\\") {
-      const next = trimmed[i + 1];
-      if (next) {
-        current += next;
-      }
-      i += 2;
-      continue;
+  const parsed = splitConfigPath(raw);
+  if (!parsed.ok) {
+    if (!raw.trim()) {
+      return [];
     }
-    if (ch === ".") {
-      if (current) {
-        parts.push(current);
-      }
-      current = "";
-      i += 1;
-      continue;
-    }
-    if (ch === "[") {
-      if (current) {
-        parts.push(current);
-      }
-      current = "";
-      const close = trimmed.indexOf("]", i);
-      if (close === -1) {
-        throw new Error(`Invalid path (missing "]"): ${raw}`);
-      }
-      const inside = trimmed.slice(i + 1, close).trim();
-      if (!inside) {
-        throw new Error(`Invalid path (empty "[]"): ${raw}`);
-      }
-      parts.push(inside);
-      i = close + 1;
-      continue;
-    }
-    current += ch;
-    i += 1;
+    throw new Error(parsed.error);
   }
-  if (current) {
-    parts.push(current);
-  }
-  return parts.map((part) => part.trim()).filter(Boolean);
+  return parsed.path;
 }
 
 function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {

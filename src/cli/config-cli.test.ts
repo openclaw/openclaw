@@ -200,6 +200,27 @@ describe("config cli", () => {
         apiKey: "ollama-local",
       });
     });
+
+    it("supports bracket notation for provider ids that contain periods", async () => {
+      const resolved: OpenClawConfig = {
+        models: { providers: {} },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        'models.providers["llama.cpp"].baseUrl',
+        '"http://localhost:8080"',
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.models?.providers?.["llama.cpp"]).toEqual({
+        baseUrl: "http://localhost:8080",
+      });
+      expect(written.models?.providers).not.toHaveProperty("llama");
+    });
   });
 
   describe("config get", () => {

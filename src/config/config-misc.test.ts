@@ -3,6 +3,7 @@ import {
   getConfigValueAtPath,
   parseConfigPath,
   setConfigValueAtPath,
+  splitConfigPath,
   unsetConfigValueAtPath,
 } from "./config-paths.js";
 import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
@@ -318,11 +319,36 @@ describe("config paths", () => {
   it("rejects empty and blocked paths", () => {
     expect(parseConfigPath("")).toEqual({
       ok: false,
-      error: "Invalid path. Use dot notation (e.g. foo.bar).",
+      error: 'Invalid path. Use dot or bracket notation (e.g. foo.bar or foo["bar.baz"]).',
     });
     expect(parseConfigPath("__proto__.polluted").ok).toBe(false);
     expect(parseConfigPath("constructor.polluted").ok).toBe(false);
     expect(parseConfigPath("prototype.polluted").ok).toBe(false);
+  });
+
+  it("supports quoted bracket segments for keys that contain periods", () => {
+    expect(parseConfigPath('models.providers["llama.cpp"].baseUrl')).toEqual({
+      ok: true,
+      path: ["models", "providers", "llama.cpp", "baseUrl"],
+    });
+    expect(parseConfigPath("models.providers['vllm.ai'].baseUrl")).toEqual({
+      ok: true,
+      path: ["models", "providers", "vllm.ai", "baseUrl"],
+    });
+  });
+
+  it("preserves escaped dot segments for CLI-compatible paths", () => {
+    expect(splitConfigPath(String.raw`models.providers.llama\.cpp.baseUrl`)).toEqual({
+      ok: true,
+      path: ["models", "providers", "llama.cpp", "baseUrl"],
+    });
+  });
+
+  it("rejects blocked keys inside bracket notation", () => {
+    expect(parseConfigPath('models.providers["__proto__"].baseUrl')).toEqual({
+      ok: false,
+      error: "Invalid path segment.",
+    });
   });
 
   it("sets, gets, and unsets nested values", () => {

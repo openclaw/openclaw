@@ -3,25 +3,184 @@ import { isBlockedObjectKey } from "./prototype-keys.js";
 
 type PathNode = Record<string, unknown>;
 
+const INVALID_PATH_ERROR =
+  'Invalid path. Use dot or bracket notation (e.g. foo.bar or foo["bar.baz"]).';
+
+type ParsedPathResult =
+  | {
+      ok: true;
+      path: string[];
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+function parseQuotedBracketSegment(
+  raw: string,
+  start: number,
+): ParsedPathResult & { next?: number } {
+  let cursor = start;
+  while (cursor < raw.length && /\s/.test(raw[cursor])) {
+    cursor += 1;
+  }
+  if (cursor >= raw.length) {
+    return { ok: false, error: INVALID_PATH_ERROR };
+  }
+
+  const quote = raw[cursor];
+  if (quote !== `"` && quote !== `'`) {
+    const close = raw.indexOf("]", cursor);
+    if (close === -1) {
+      return { ok: false, error: INVALID_PATH_ERROR };
+    }
+    const value = raw.slice(cursor, close).trim();
+    if (!value) {
+      return { ok: false, error: INVALID_PATH_ERROR };
+    }
+    return { ok: true, path: [value], next: close + 1 };
+  }
+
+  cursor += 1;
+  let value = "";
+  while (cursor < raw.length) {
+    const ch = raw[cursor];
+    if (ch === "\\") {
+      const next = raw[cursor + 1];
+      if (!next) {
+        return { ok: false, error: INVALID_PATH_ERROR };
+      }
+      value += next;
+      cursor += 2;
+      continue;
+    }
+    if (ch === quote) {
+      cursor += 1;
+      while (cursor < raw.length && /\s/.test(raw[cursor])) {
+        cursor += 1;
+      }
+      if (raw[cursor] !== "]") {
+        return { ok: false, error: INVALID_PATH_ERROR };
+      }
+      if (!value.trim()) {
+        return { ok: false, error: INVALID_PATH_ERROR };
+      }
+      return { ok: true, path: [value], next: cursor + 1 };
+    }
+    value += ch;
+    cursor += 1;
+  }
+  return { ok: false, error: INVALID_PATH_ERROR };
+}
+
+export function splitConfigPath(raw: string): ParsedPathResult {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return {
+      ok: false,
+      error: INVALID_PATH_ERROR,
+    };
+  }
+
+  const parts: string[] = [];
+  let current = "";
+  let cursor = 0;
+  let expectSegment = true;
+
+  const pushCurrent = (): boolean => {
+    const segment = current.trim();
+    current = "";
+    if (!segment) {
+      return false;
+    }
+    parts.push(segment);
+    return true;
+  };
+
+  while (cursor < trimmed.length) {
+    const ch = trimmed[cursor];
+
+    if (/\s/.test(ch) && !current) {
+      cursor += 1;
+      continue;
+    }
+
+    if (ch === "\\") {
+      const next = trimmed[cursor + 1];
+      if (!next) {
+        return { ok: false, error: INVALID_PATH_ERROR };
+      }
+      current += next;
+      expectSegment = false;
+      cursor += 2;
+      continue;
+    }
+
+    if (ch === ".") {
+      if (current) {
+        if (!pushCurrent()) {
+          return { ok: false, error: INVALID_PATH_ERROR };
+        }
+        expectSegment = true;
+        cursor += 1;
+        continue;
+      }
+      if (!expectSegment) {
+        expectSegment = true;
+        cursor += 1;
+        continue;
+      }
+      return { ok: false, error: INVALID_PATH_ERROR };
+    }
+
+    if (ch === "[") {
+      if (current && !pushCurrent()) {
+        return { ok: false, error: INVALID_PATH_ERROR };
+      }
+      const bracket = parseQuotedBracketSegment(trimmed, cursor + 1);
+      if (!bracket.ok || bracket.next == null) {
+        return bracket;
+      }
+      parts.push(bracket.path[0]);
+      expectSegment = false;
+      cursor = bracket.next;
+      continue;
+    }
+
+    if (!current && !expectSegment) {
+      return { ok: false, error: INVALID_PATH_ERROR };
+    }
+
+    current += ch;
+    expectSegment = false;
+    cursor += 1;
+  }
+
+  if (current) {
+    if (!pushCurrent()) {
+      return { ok: false, error: INVALID_PATH_ERROR };
+    }
+  } else if (expectSegment) {
+    return { ok: false, error: INVALID_PATH_ERROR };
+  }
+
+  if (parts.length === 0) {
+    return { ok: false, error: INVALID_PATH_ERROR };
+  }
+
+  return { ok: true, path: parts };
+}
+
 export function parseConfigPath(raw: string): {
   ok: boolean;
   path?: string[];
   error?: string;
 } {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return {
-      ok: false,
-      error: "Invalid path. Use dot notation (e.g. foo.bar).",
-    };
+  const parsed = splitConfigPath(raw);
+  if (!parsed.ok) {
+    return parsed;
   }
-  const parts = trimmed.split(".").map((part) => part.trim());
-  if (parts.some((part) => !part)) {
-    return {
-      ok: false,
-      error: "Invalid path. Use dot notation (e.g. foo.bar).",
-    };
-  }
+  const parts = parsed.path;
   if (parts.some((part) => isBlockedObjectKey(part))) {
     return { ok: false, error: "Invalid path segment." };
   }
