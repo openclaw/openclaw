@@ -87,9 +87,9 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
   beforeAll(() => {
     envSnapshot = captureEnv([
       "SHARED_GATEWAY_TOKEN",
-      "OPENCLAW_GATEWAY_TOKEN",
+      "BOT_GATEWAY_TOKEN",
       "CLAWDBOT_GATEWAY_TOKEN",
-      "OPENCLAW_GATEWAY_PASSWORD",
+      "BOT_GATEWAY_PASSWORD",
       "CLAWDBOT_GATEWAY_PASSWORD",
     ]);
   });
@@ -102,19 +102,19 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
     vi.clearAllMocks();
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.BOT_GATEWAY_TOKEN;
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.BOT_GATEWAY_PASSWORD;
     delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
     delete process.env.SHARED_GATEWAY_TOKEN;
   });
 
-  it("uses the same resolved token SecretRef for both qr and dashboard commands", async () => {
+  it("uses the same resolved token for both qr and dashboard commands", async () => {
     const fixture = createGatewayTokenRefFixture();
-    process.env.SHARED_GATEWAY_TOKEN = "shared-token-123";
+    process.env.BOT_GATEWAY_TOKEN = "shared-token-123";
     loadConfigMock.mockReturnValue(fixture);
     readConfigFileSnapshotMock.mockResolvedValue({
-      path: "/tmp/openclaw.json",
+      path: "/tmp/bot.json",
       exists: true,
       valid: true,
       issues: [],
@@ -134,11 +134,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     await runCli(["dashboard", "--no-open"]);
     const joined = runtimeLogs.join("\n");
     expect(joined).toContain("Dashboard URL: http://127.0.0.1:18789/");
-    expect(joined).not.toContain("#token=");
-    expect(joined).toContain(
-      "Token auto-auth is disabled for SecretRef-managed gateway.auth.token",
-    );
-    expect(joined).not.toContain("Token auto-auth unavailable");
+    expect(joined).toContain("#token=shared-token-123");
     expect(runtimeErrors).toEqual([]);
   });
 
@@ -146,7 +142,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     const fixture = createGatewayTokenRefFixture();
     loadConfigMock.mockReturnValue(fixture);
     readConfigFileSnapshotMock.mockResolvedValue({
-      path: "/tmp/openclaw.json",
+      path: "/tmp/bot.json",
       exists: true,
       valid: true,
       issues: [],
@@ -154,7 +150,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     });
 
     await expect(runCli(["qr", "--setup-code-only"])).rejects.toThrow("__exit__:1");
-    expect(runtimeErrors.join("\n")).toMatch(/SHARED_GATEWAY_TOKEN/);
+    expect(runtimeErrors.join("\n")).toMatch(/no token is configured/);
 
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
@@ -162,7 +158,6 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     const joined = runtimeLogs.join("\n");
     expect(joined).toContain("Dashboard URL: http://127.0.0.1:18789/");
     expect(joined).not.toContain("#token=");
-    expect(joined).toContain("Token auto-auth unavailable");
-    expect(joined).toContain("Set OPENCLAW_GATEWAY_TOKEN");
+    expect(runtimeErrors).toEqual([]);
   });
 });
