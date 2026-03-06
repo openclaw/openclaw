@@ -45,7 +45,7 @@ async function deliverNextcloudTalkReply(params: {
 
   await sendMessageNextcloudTalk(roomToken, combined, {
     accountId,
-    replyTo: payload.replyToId,
+    replyTo: payload.replyToId ?? undefined,
   });
   statusSink?.({ lastOutboundAt: Date.now() });
 }

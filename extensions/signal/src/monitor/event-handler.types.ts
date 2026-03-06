@@ -8,6 +8,7 @@ import type {
 } from "../../../../src/config/types.js";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import type { SignalSender } from "../identity.js";
+import type { SignalReplyDeliveryState } from "./reply-delivery.js";
 
 export type SignalEnvelope = {
   sourceNumber?: string | null;
@@ -28,6 +29,37 @@ export type SignalMention = {
   length?: number | null;
 };
 
+export type SignalTextStyle = {
+  start?: number | null;
+  length?: number | null;
+  style?: string | null;
+};
+
+export type SignalQuotedAttachment = {
+  contentType?: string | null;
+  filename?: string | null;
+  thumbnail?: SignalAttachment | null;
+};
+
+export type SignalQuote = {
+  id?: number | string | null; // signal-cli quote timestamp
+  author?: string | null; // deprecated legacy identifier from signal-cli
+  authorNumber?: string | null; // preferred E.164 author when available
+  authorUuid?: string | null; // preferred UUID author when available
+  text?: string | null;
+  mentions?: Array<SignalMention | null> | null;
+  attachments?: Array<SignalQuotedAttachment | null> | null;
+  textStyles?: Array<SignalTextStyle | null> | null;
+};
+
+export type SignalReplyTarget = {
+  id?: string; // message id of quoted message
+  author?: string; // who wrote the quoted message
+  body: string; // quoted text content
+  kind: "quote"; // always quote for Signal
+  mentions?: Array<SignalMention>; // mentions in quoted text
+};
+
 export type SignalDataMessage = {
   timestamp?: number;
   message?: string | null;
@@ -37,7 +69,7 @@ export type SignalDataMessage = {
     groupId?: string | null;
     groupName?: string | null;
   } | null;
-  quote?: { text?: string | null } | null;
+  quote?: SignalQuote | null;
   reaction?: SignalReactionMessage | null;
 };
 
@@ -109,6 +141,9 @@ export type SignalEventHandlerDeps = {
     runtime: RuntimeEnv;
     maxBytes: number;
     textLimit: number;
+    inheritedReplyToId?: string;
+    replyDeliveryState?: SignalReplyDeliveryState;
+    resolveQuoteAuthor?: (replyToId: string) => string | undefined;
   }) => Promise<void>;
   resolveSignalReactionTargets: (reaction: SignalReactionMessage) => SignalReactionTarget[];
   isSignalReactionMessage: (

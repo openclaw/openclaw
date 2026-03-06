@@ -31,9 +31,12 @@ function resolveReplyThreadingForPayload(params: {
   const implicitReplyToId = params.implicitReplyToId?.trim() || undefined;
   const currentMessageId = params.currentMessageId?.trim() || undefined;
 
+  const hasExplicitReplyToId = params.payload.replyToId !== undefined;
+
   // 1) Apply implicit reply threading first (replyToMode will strip later if needed).
+  // Treat replyToId=null as an explicit "do not reply" signal (do not override).
   let resolved: ReplyPayload =
-    params.payload.replyToId || params.payload.replyToCurrent === false || !implicitReplyToId
+    hasExplicitReplyToId || params.payload.replyToCurrent === false || !implicitReplyToId
       ? params.payload
       : { ...params.payload, replyToId: implicitReplyToId };
 
@@ -54,7 +57,7 @@ function resolveReplyThreadingForPayload(params: {
 
   // 3) If replyToCurrent was set out-of-band (e.g. tags already stripped upstream),
   // ensure replyToId is set to the current message id when available.
-  if (resolved.replyToCurrent && !resolved.replyToId && currentMessageId) {
+  if (resolved.replyToCurrent && resolved.replyToId === undefined && currentMessageId) {
     resolved = {
       ...resolved,
       replyToId: currentMessageId,

@@ -18,6 +18,8 @@ export type SignalSendOpts = {
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
+  replyTo?: string;
+  quoteAuthor?: string;
 };
 
 export type SignalSendResult = {
@@ -180,6 +182,31 @@ export async function sendMessageSignal(
     throw new Error("Signal recipient is required");
   }
   Object.assign(params, targetParams);
+
+  // Add quote parameters for reply functionality
+  const rawReplyTo = opts.replyTo?.trim();
+  if (rawReplyTo) {
+    // Only accept pure decimal strings to avoid Number() accepting "1e3" or "0x10"
+    if (!/^\d+$/.test(rawReplyTo)) {
+      // Invalid replyTo format, skip quoting but allow message to send
+    } else {
+      const quoteTs = Number(rawReplyTo);
+      const quoteAuthor = opts.quoteAuthor?.trim() || undefined;
+      const isGroup = target.type === "group";
+      if (Number.isInteger(quoteTs) && quoteTs > 0) {
+        // In group chats, signal-cli requires quote-author. If we can't resolve it,
+        // skip quoting entirely to avoid hard send failures.
+        if (!isGroup || quoteAuthor) {
+          params["quote-timestamp"] = quoteTs;
+          if (quoteAuthor) {
+            params["quote-author"] = quoteAuthor;
+          }
+        }
+      }
+      // Note: Invalid replyTo values (non-numeric, negative) are silently ignored
+      // This prevents signal-cli errors while allowing the message to still send
+    }
+  }
 
   const result = await signalRpcRequest<{ timestamp?: number }>("send", params, {
     baseUrl,

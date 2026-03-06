@@ -876,6 +876,55 @@ describe("deliverOutboundPayloads", () => {
     expect(sendWhatsApp).not.toHaveBeenCalled();
   });
 
+  it("does not re-apply Signal reply metadata after partial chunk failure in bestEffort mode", async () => {
+    const sendSignal = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "s1", timestamp: 1 })
+      .mockRejectedValueOnce(new Error("chunk fail"))
+      .mockResolvedValueOnce({ messageId: "s3", timestamp: 3 });
+    const onError = vi.fn();
+    const cfg: OpenClawConfig = {
+      channels: { signal: { textChunkLimit: 2 } },
+    };
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "signal",
+      to: "+1555",
+      payloads: [{ text: "abcd" }, { text: "ef" }],
+      replyToId: "orig-msg-id",
+      quoteAuthor: "Tester",
+      deps: { sendSignal },
+      bestEffort: true,
+      onError,
+    });
+
+    expect(sendSignal).toHaveBeenCalledTimes(3);
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      expect.any(String),
+      expect.objectContaining({ replyTo: "orig-msg-id", quoteAuthor: "Tester" }),
+    );
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      2,
+      "+1555",
+      expect.any(String),
+      expect.objectContaining({ replyTo: undefined, quoteAuthor: undefined }),
+    );
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      3,
+      "+1555",
+      expect.any(String),
+      expect.objectContaining({ replyTo: undefined, quoteAuthor: undefined }),
+    );
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(results).toEqual([
+      { channel: "signal", messageId: "s1", timestamp: 1 },
+      { channel: "signal", messageId: "s3", timestamp: 3 },
+    ]);
+  });
+
   it("passes normalized payload to onError", async () => {
     const sendWhatsApp = vi.fn().mockRejectedValue(new Error("boom"));
     const onError = vi.fn();

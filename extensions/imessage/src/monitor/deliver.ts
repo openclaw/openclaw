@@ -43,7 +43,7 @@ export async function deliverReplies(params: {
           maxBytes,
           client,
           accountId,
-          replyToId: payload.replyToId,
+          replyToId: payload.replyToId ?? undefined,
         });
         sentMessageCache?.remember(scope, { text: chunk, messageId: sent.messageId });
       }
@@ -57,7 +57,7 @@ export async function deliverReplies(params: {
           maxBytes,
           client,
           accountId,
-          replyToId: payload.replyToId,
+          replyToId: payload.replyToId ?? undefined,
         });
         sentMessageCache?.remember(scope, {
           text: caption || undefined,

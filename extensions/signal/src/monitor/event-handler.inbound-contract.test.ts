@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildInboundUserContextPrefix } from "../../../../src/auto-reply/reply/inbound-meta.js";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
 import { createSignalEventHandler } from "./event-handler.js";
@@ -204,6 +205,138 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(capture.ctx?.MediaPaths).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
     expect(capture.ctx?.MediaUrls).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
     expect(capture.ctx?.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
+  });
+
+  it("surfaces quoted reply context in the agent-visible metadata block", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "thanks",
+          quote: {
+            id: 1700000000000,
+            authorNumber: "+15550003333",
+            text: "￼ sent the details",
+            mentions: [{ number: "+15550004444", start: 0, length: 1 }],
+          },
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.ReplyToId).toBe("1700000000000");
+    expect(capture.ctx?.ReplyToSender).toBe("+15550003333");
+    expect(capture.ctx?.ReplyToBody).toBe("@+15550004444 sent the details");
+    expect(capture.ctx?.ReplyToIsQuote).toBe(true);
+    expect(String(capture.ctx?.Body ?? "")).toContain("[Quoting +15550003333 id:1700000000000]");
+
+    const userContext = buildInboundUserContextPrefix(capture.ctx!);
+    expect(userContext).toContain("Replied message (untrusted, for context):");
+    expect(userContext).toContain('"sender_label": "+15550003333"');
+    expect(userContext).toContain('"body": "@+15550004444 sent the details"');
+  });
+
+  it("keeps quote-only messages when the user sends no new text", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "",
+          quote: {
+            id: 1700000000000,
+            text: "original context",
+          },
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.RawBody).toBe("");
+    expect(capture.ctx?.ReplyToBody).toBe("original context");
+    expect(String(capture.ctx?.Body ?? "")).toContain('"original context"');
+  });
+
+  it("uses quoted attachment metadata for media-only quoted replies", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "nice one",
+          quote: {
+            id: 1700000000000,
+            attachments: [{ contentType: "image/jpeg", filename: "photo.jpg" }],
+          },
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.ReplyToId).toBe("1700000000000");
+    expect(capture.ctx?.ReplyToBody).toBe("<media:image>");
+    expect(String(capture.ctx?.Body ?? "")).toContain('"<media:image>"');
+  });
+
+  it("ignores invalid quote ids while preserving the quoted body context", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "reply",
+          quote: {
+            id: "1700000000000abc",
+            text: "quoted context",
+          },
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.ReplyToId).toBeUndefined();
+    expect(capture.ctx?.ReplyToBody).toBe("quoted context");
+    expect(String(capture.ctx?.Body ?? "")).not.toContain("id:1700000000000abc");
   });
 
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {
