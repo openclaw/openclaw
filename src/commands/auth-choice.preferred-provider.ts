@@ -45,6 +45,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "volcengine-api-key": "volcengine",
   "byteplus-api-key": "byteplus",
   "minimax-portal": "minimax-portal",
+  "ernie-api-key": "ernie",
   "qianfan-api-key": "qianfan",
   "custom-api-key": "custom",
 };

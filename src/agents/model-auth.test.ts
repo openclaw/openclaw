@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { requireApiKey, resolveAwsSdkEnvVarName, resolveModelAuthMode } from "./model-auth.js";
 
@@ -115,5 +115,31 @@ describe("requireApiKey", () => {
         "openai",
       ),
     ).toThrow('No API key resolved for provider "openai"');
+  });
+});
+
+describe("resolveApiKeyForProvider", () => {
+  it("resolves ERNIE API key from env", async () => {
+    const previous = process.env.ERNIE_API_KEY;
+
+    try {
+      process.env.ERNIE_API_KEY = "ernie-test-key";
+
+      vi.resetModules();
+      const { resolveApiKeyForProvider } = await import("./model-auth.js");
+
+      const resolved = await resolveApiKeyForProvider({
+        provider: "ernie",
+        store: { version: 1, profiles: {} },
+      });
+      expect(resolved.apiKey).toBe("ernie-test-key");
+      expect(resolved.source).toContain("ERNIE_API_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.ERNIE_API_KEY;
+      } else {
+        process.env.ERNIE_API_KEY = previous;
+      }
+    }
   });
 });

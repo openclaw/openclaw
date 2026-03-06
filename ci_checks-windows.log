@@ -1,0 +1,100 @@
+ ✓ src/browser/server.post-tabs-open-profile-unknown-returns-404.test.ts (9 tests) 145ms
+ ✓ src/commands/onboard-auth.test.ts (26 tests) 16ms
+ ✓ src/commands/channels.adds-non-default-telegram-account.test.ts (16 tests) 12ms
+stdout | src/browser/server.skips-default-maxchars-explicitly-set-zero.test.ts > browser control server > skips default maxChars when explicitly set to zero
+[browser/server] Browser control listening on http://127.0.0.1:50195/
+stdout | src/browser/server.skips-default-maxchars-explicitly-set-zero.test.ts > browser control server > validates agent inputs (agent routes)
+[browser/server] Browser control listening on http://127.0.0.1:50198/
+stdout | src/browser/server.skips-default-maxchars-explicitly-set-zero.test.ts > browser control server > covers common error branches
+[browser/server] Browser control listening on http://127.0.0.1:50201/
+ERROR: The system was unable to find the specified registry key or value.
+ERROR: The system was unable to find the specified registry key or value.
+stdout | src/browser/server.skips-default-maxchars-explicitly-set-zero.test.ts > browser control server > opens tabs via CDP createTarget path
+[browser/server] Browser control listening on http://127.0.0.1:50208/
+ ✓ src/browser/server.skips-default-maxchars-explicitly-set-zero.test.ts (5 tests) 161ms
+stderr | src/agents/pi-tools-agent-config.test.ts > Agent-specific tool filtering > should apply provider-specific tool profile overrides
+[tools] tools.profile (coding) allowlist contains unknown entries (group:memory). These entries won't match any tool unless the plugin is enabled.
+ ✓ src/agents/pi-tools-agent-config.test.ts (15 tests) 164ms
+ ✓ src/config/sessions.test.ts (26 tests) 160ms
+stdout | src/telegram/bot.create-telegram-bot.installs-grammy-throttler.test.ts > createTelegramBot > installs grammY throttler
+[telegram] autoSelectFamily=false (default-node22)
+ ✓ src/telegram/bot.create-telegram-bot.installs-grammy-throttler.test.ts (10 tests) 762ms
+ ✓ src/infra/provider-usage.test.ts (10 tests) 20ms
+stdout | src/telegram/bot.create-telegram-bot.accepts-group-messages-mentionpatterns-match-without-botusername.test.ts > createTelegramBot > accepts group messages when mentionPatterns match (without @botUsername)
+[telegram] autoSelectFamily=false (default-node22)
+ ✓ src/telegram/bot.create-telegram-bot.accepts-group-messages-mentionpatterns-match-without-botusername.test.ts (8 tests) 647ms
+ ✓ src/agents/pi-embedded-utils.test.ts (35 tests) 9ms
+ ✓ src/commands/agent.test.ts (16 tests) 1541ms
+ ✓ src/auto-reply/chunk.test.ts (44 tests) 12ms
+ ✓ src/agents/bash-tools.test.ts (17 tests) 2305ms
+     ✓ backgrounds after yield and can be polled  365ms
+     ✓ uses default timeout when timeout is omitted  1094ms
+stdout | src/imessage/monitor.skips-group-messages-without-mention-by-default.test.ts > monitorIMessageProvider > allows group messages when imessage groups default disables mention gating
+imessage: delivered reply to chat_id:123
+stdout | src/imessage/monitor.skips-group-messages-without-mention-by-default.test.ts > monitorIMessageProvider > allows group messages when requireMention is true but no mentionPatterns exist
+imessage: delivered reply to chat_id:777
+stdout | src/imessage/monitor.skips-group-messages-without-mention-by-default.test.ts > monitorIMessageProvider > treats configured chat_id as a group session even when is_group is false
+imessage: delivered reply to chat_id:2
+stdout | src/imessage/monitor.skips-group-messages-without-mention-by-default.test.ts > monitorIMessageProvider > prefixes final replies with responsePrefix
+imessage: delivered reply to imessage:+15550001111
+stdout | src/imessage/monitor.skips-group-messages-without-mention-by-default.test.ts > monitorIMessageProvider > delivers group replies when mentioned
+imessage: delivered reply to chat_id:42
+stdout | src/imessage/monitor.skips-group-messages-without-mention-by-default.test.ts > monitorIMessageProvider > prefixes group message bodies with sender
+imessage: delivered reply to chat_id:99
+stdout | src/imessage/monitor.skips-group-messages-without-mention-by-default.test.ts > monitorIMessageProvider > includes reply context when imessage reply metadata is present
+imessage: delivered reply to imessage:+15550001111
+ ✓ src/imessage/monitor.skips-group-messages-without-mention-by-default.test.ts (12 tests) 61ms
+ ✓ src/commands/doctor-state-migrations.test.ts (14 tests) 48ms
+ ✓ src/commands/doctor.runs-legacy-state-migrations-yes-mode-without.test.ts (3 tests) 823ms
+     ✓ runs legacy state migrations in yes mode without prompting  802ms
+ ✓ src/auto-reply/reply/route-reply.test.ts (16 tests) 22ms
+   Start at  10:13:08
+   Duration  50.37s (transform 5.28s, setup 22.85s, import 21.47s, tests 1.91s, environment 3ms)
+ RUN  v4.0.18 C:/runner/_work/openclaw/openclaw
+ ✓ src/gateway/session-utils.test.ts (27 tests) 11ms
+ ✓ src/gateway/tools-invoke-http.test.ts (9 tests) 50477ms
+     ✓ invokes a tool and returns {ok:true,result}  46182ms
+ ✓ src/gateway/client.test.ts (2 tests) 1792ms
+     ✓ closes on missing ticks  1778ms
+ ✓ src/gateway/chat-attachments.test.ts (12 tests) 24ms
+ ✓ src/gateway/hooks-mapping.test.ts (7 tests) 9ms
+stdout | src/gateway/server.nodes.late-invoke.test.ts
+[gmail-watcher] gmail watcher stopped
+ ✓ src/gateway/server.nodes.late-invoke.test.ts (2 tests) 46699ms
+ ✓ src/gateway/server-node-events.test.ts (3 tests) 5ms
+ ✓ src/gateway/sessions-patch.test.ts (5 tests) 5ms
+ ✓ src/gateway/boot.test.ts (3 tests) 9ms
+ ✓ src/gateway/ws-log.test.ts (4 tests) 5ms
+ ✓ src/gateway/server-broadcast.test.ts (1 test) 4ms
+ ✓ src/gateway/server-discovery.test.ts (3 tests) 4ms
+ ✓ src/gateway/server-plugins.test.ts (1 test) 5ms
+ ✓ src/gateway/server-chat.agent-events.test.ts (1 test) 5ms
+ ✓ src/gateway/server-node-subscriptions.test.ts (2 tests) 4ms
+ ✓ src/gateway/assistant-identity.test.ts (3 tests) 4ms
+ ✓ src/gateway/net.test.ts (3 tests) 4ms
+ Test Files  17 passed (17)
+      Tests  88 passed (88)
+   Start at  10:13:59
+   Duration  114.68s (transform 4.28s, setup 10.23s, import 3.57s, tests 99.06s, environment 1ms)
+ RUN  v4.0.18 C:/runner/_work/openclaw/openclaw
+ ✓ src/gateway/session-utils.fs.test.ts (26 tests) 20ms
+ ✓ src/gateway/call.test.ts (15 tests) 15ms
+ ✓ src/gateway/server-methods/exec-approval.test.ts (8 tests) 9ms
+ ✓ src/gateway/server-methods/agent.test.ts (3 tests) 11ms
+ ✓ src/gateway/server-methods/send.test.ts (5 tests) 10ms
+ ✓ src/gateway/server-methods/agent-timestamp.test.ts (15 tests) 20ms
+ ✓ src/gateway/hooks.test.ts (5 tests) 6ms
+ ✓ src/gateway/config-reload.test.ts (8 tests) 6ms
+ ✓ src/gateway/server/plugins-http.test.ts (4 tests) 6ms
+ ✓ src/gateway/auth.test.ts (7 tests) 5ms
+ ✓ src/gateway/control-ui.test.ts (7 tests) 4ms
+ ✓ src/gateway/protocol/index.test.ts (6 tests) 4ms
+ ✓ src/gateway/server-methods/logs.test.ts (1 test) 8ms
+ ✓ src/gateway/chat-sanitize.test.ts (4 tests) 4ms
+ ✓ src/gateway/server-utils.test.ts (4 tests) 4ms
+ ✓ src/gateway/client.maxpayload.test.ts (1 test) 96ms
+ ✓ src/gateway/server-chat-registry.test.ts (1 test) 3ms
+ Test Files  17 passed (17)
+      Tests  120 passed (120)
+   Start at  10:15:54
+   Duration  17.26s (transform 3.22s, setup 9.96s, import 5.33s, tests 230ms, environment 2ms)

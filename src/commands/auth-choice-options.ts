@@ -144,6 +144,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["xiaomi-api-key"],
   },
   {
+    value: "ernie",
+    label: "ERNIE (Baidu Wenxin)",
+    hint: "API key",
+    choices: ["ernie-api-key"],
+  },
+  {
     value: "synthetic",
     label: "Synthetic",
     hint: "Anthropic-compatible (multi-model)",
@@ -193,6 +199,7 @@ const PROVIDER_AUTH_CHOICE_OPTION_HINTS: Partial<Record<AuthChoice, string>> = {
   "venice-api-key": "Privacy-focused inference (uncensored models)",
   "together-api-key": "Access to Llama, DeepSeek, Qwen, and more open models",
   "huggingface-api-key": "Inference Providers — OpenAI-compatible chat",
+  "ernie-api-key": "Qianfan API for ERNIE-4.5",
 };
 
 const PROVIDER_AUTH_CHOICE_OPTION_LABELS: Partial<Record<AuthChoice, string>> = {
@@ -200,6 +207,7 @@ const PROVIDER_AUTH_CHOICE_OPTION_LABELS: Partial<Record<AuthChoice, string>> = 
   "moonshot-api-key-cn": "Kimi API key (.cn)",
   "kimi-code-api-key": "Kimi Code API key (subscription)",
   "cloudflare-ai-gateway-api-key": "Cloudflare AI Gateway",
+  "ernie-api-key": "ERNIE API key (Baidu Wenxin)",
 };
 
 function buildProviderAuthChoiceOptions(): AuthChoiceOption[] {

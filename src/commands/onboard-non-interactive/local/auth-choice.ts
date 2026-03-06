@@ -13,6 +13,7 @@ import { applyPrimaryModel } from "../../model-picker.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
+  applyErnieConfig,
   applyKilocodeConfig,
   applyQianfanConfig,
   applyKimiCodeConfig,
@@ -35,6 +36,7 @@ import {
   applyZaiConfig,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
+  setErnieApiKey,
   setByteplusApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
@@ -360,6 +362,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyXiaomiConfig(nextConfig);
+  }
+
+  if (authChoice === "ernie-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "ernie",
+      cfg: baseConfig,
+      flagValue: opts.ernieApiKey,
+      flagName: "--ernie-api-key",
+      envVar: "ERNIE_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setErnieApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "ernie:default",
+      provider: "ernie",
+      mode: "api_key",
+    });
+    return applyErnieConfig(nextConfig);
   }
 
   if (authChoice === "xai-api-key") {

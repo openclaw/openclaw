@@ -108,6 +108,10 @@
       "destination": "/providers/qianfan"
     },
     {
+      "source": "/ernie",
+      "destination": "/providers/ernie"
+    },
+    {
       "source": "/mattermost",
       "destination": "/channels/mattermost"
     },
@@ -1116,6 +1120,7 @@
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/synthetic",
+                  "providers/ernie",
                   "providers/together",
                   "providers/vercel-ai-gateway",
                   "providers/venice",

@@ -146,6 +146,30 @@ export function buildMoonshotModelDefinition(): ModelDefinitionConfig {
   };
 }
 
+export const ERNIE_BASE_URL = "https://qianfan.baidubce.com/v2";
+export const ERNIE_DEFAULT_MODEL_ID = "ernie-5.0-thinking-preview";
+export const ERNIE_DEFAULT_MODEL_REF = `ernie/${ERNIE_DEFAULT_MODEL_ID}`;
+export const ERNIE_DEFAULT_CONTEXT_WINDOW = 128000;
+export const ERNIE_DEFAULT_MAX_TOKENS = 65536;
+export const ERNIE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+export function buildErnieModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: ERNIE_DEFAULT_MODEL_ID,
+    name: "ERNIE 5.0",
+    reasoning: true,
+    input: ["text"],
+    cost: ERNIE_DEFAULT_COST,
+    contextWindow: ERNIE_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: ERNIE_DEFAULT_MAX_TOKENS,
+  };
+}
+
 export const MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
 export const MISTRAL_DEFAULT_MODEL_ID = "mistral-large-latest";
 export const MISTRAL_DEFAULT_MODEL_REF = `mistral/${MISTRAL_DEFAULT_MODEL_ID}`;

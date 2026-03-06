@@ -447,6 +447,18 @@ export async function setTogetherApiKey(
   });
 }
 
+export async function setErnieApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "ernie:default",
+    credential: {
+      type: "api_key",
+      provider: "ernie",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setHuggingfaceApiKey(
   key: SecretInput,
   agentDir?: string,

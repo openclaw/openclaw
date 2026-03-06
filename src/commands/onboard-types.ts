@@ -44,6 +44,7 @@ export type AuthChoice =
   | "github-copilot"
   | "copilot-proxy"
   | "qwen-portal"
+  | "ernie-api-key"
   | "xai-api-key"
   | "mistral-api-key"
   | "volcengine-api-key"
@@ -66,6 +67,7 @@ export type AuthChoiceGroupId =
   | "moonshot"
   | "zai"
   | "xiaomi"
+  | "ernie"
   | "opencode-zen"
   | "minimax"
   | "synthetic"
@@ -131,6 +133,7 @@ export type OnboardOptions = {
   togetherApiKey?: string;
   huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
+  ernieApiKey?: string;
   xaiApiKey?: string;
   volcengineApiKey?: string;
   byteplusApiKey?: string;
