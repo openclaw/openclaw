@@ -1624,6 +1624,57 @@ describe("QmdMemoryManager", () => {
     }
   });
 
+  it("retries mcporter search with bare command on Windows EINVAL cmd-shim failures", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      cfg = {
+        ...cfg,
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+            paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+            mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+          },
+        },
+      } as OpenClawConfig;
+
+      let sawRetry = false;
+      spawnMock.mockImplementation((cmd: string, args: string[]) => {
+        if (args[0] === "call" && typeof cmd === "string" && cmd.toLowerCase().endsWith(".cmd")) {
+          const child = createMockChild({ autoClose: false });
+          queueMicrotask(() => {
+            const err = Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+            child.emit("error", err);
+          });
+          return child;
+        }
+        if (args[0] === "call" && cmd === "mcporter") {
+          sawRetry = true;
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+          return child;
+        }
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      });
+
+      const { manager } = await createManager();
+      await expect(
+        manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+      ).resolves.toEqual([]);
+      expect(sawRetry).toBe(true);
+      expect(logWarnMock).toHaveBeenCalledWith(
+        expect.stringContaining("retrying with bare mcporter"),
+      );
+      await manager.close();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("passes manager-scoped XDG env to mcporter commands", async () => {
     cfg = {
       ...cfg,

@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory/QMD mcporter Windows spawn hardening: when `mcporter.cmd` launch fails with `spawn EINVAL`, retry via bare `mcporter` shell resolution so QMD recall can continue instead of falling back to builtin memory search. (#27402) Thanks @i0ivi0i.
 - Tools/web_search Brave language-code validation: align `search_lang` handling with Brave-supported codes (including `zh-hans`, `zh-hant`, `en-gb`, and `pt-br`), map common alias inputs (`zh`, `ja`) to valid Brave values, and reject unsupported codes before upstream requests to prevent 422 failures. (#37260) Thanks @heyanming.
 - Models/openai-completions streaming compatibility: force `compat.supportsUsageInStreaming=false` for non-native OpenAI-compatible endpoints during model normalization, preventing usage-only stream chunks from triggering `choices[0]` parser crashes in provider streams. (#8714) Thanks @nonanon1.
 - Tools/xAI native web-search collision guard: drop OpenClaw `web_search` from tool registration when routing to xAI/Grok model providers (including OpenRouter `x-ai/*`) to avoid duplicate tool-name request failures against provider-native `web_search`. (#14749) Thanks @realsamrat.
