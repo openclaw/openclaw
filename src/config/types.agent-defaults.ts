@@ -132,6 +132,13 @@ export type AgentDefaultsConfig = {
   models?: Record<string, AgentModelEntryConfig>;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
+  /**
+   * Optional security boundary for CLI path overrides (--workspace, --config-dir).
+   * When set, both must resolve under this directory. Recommended for deployments
+   * where paths arrive via RPC (e.g. MagicForm channel plugin).
+   * Example: "/data"
+   */
+  workspaceBaseDir?: string;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */

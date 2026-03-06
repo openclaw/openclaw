@@ -80,6 +80,16 @@ export type AgentCommandOpts = {
   inputProvenance?: InputProvenance;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
+  /** Override workspace directory for this invocation. */
+  workspaceOverride?: string;
+  /** Directory containing bootstrap .md config files (AGENTS.md, IDENTITY.md, SOUL.md, etc.). */
+  configDirOverride?: string;
+  /** Tool profile override. */
+  toolsProfileOverride?: string;
+  /** Tool allowlist override. */
+  toolsAllowOverride?: string[];
+  /** Tool denylist override. */
+  toolsDenyOverride?: string[];
 };
 
 export type AgentCommandIngressOpts = Omit<AgentCommandOpts, "senderIsOwner"> & {

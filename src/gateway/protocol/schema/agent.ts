@@ -110,6 +110,11 @@ export const AgentParamsSchema = Type.Object(
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(Type.String()),
+    workspace: Type.Optional(Type.String()),
+    configDir: Type.Optional(Type.String()),
+    toolsProfile: Type.Optional(Type.String()),
+    toolsAllow: Type.Optional(Type.Array(Type.String())),
+    toolsDeny: Type.Optional(Type.Array(Type.String())),
   },
   { additionalProperties: false },
 );

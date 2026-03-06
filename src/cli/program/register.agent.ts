@@ -47,6 +47,14 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
       "--timeout <seconds>",
       "Override agent command timeout (seconds, default 600 or config value)",
     )
+    .option("--workspace <dir>", "Override agent workspace directory (agent-generated files)")
+    .option(
+      "--config-dir <dir>",
+      "Directory containing bootstrap .md files (AGENTS.md, IDENTITY.md, SOUL.md, etc.)",
+    )
+    .option("--tools-profile <profile>", "Tool profile: minimal | coding | messaging | full")
+    .option("--tools-allow <tools>", "Comma-separated tool allowlist (overrides profile)")
+    .option("--tools-deny <tools>", "Comma-separated tool denylist")
     .addHelpText(
       "after",
       () =>

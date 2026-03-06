@@ -51,6 +51,11 @@ export type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
+  workspace?: string;
+  configDir?: string;
+  toolsProfile?: string;
+  toolsAllow?: string;
+  toolsDeny?: string;
 };
 
 function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout?: string }) {
@@ -146,6 +151,11 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
           lane: opts.lane,
           extraSystemPrompt: opts.extraSystemPrompt,
           idempotencyKey,
+          workspace: opts.workspace,
+          configDir: opts.configDir,
+          toolsProfile: opts.toolsProfile,
+          toolsAllow: opts.toolsAllow?.split(",").map((s) => s.trim()).filter(Boolean),
+          toolsDeny: opts.toolsDeny?.split(",").map((s) => s.trim()).filter(Boolean),
         },
         expectFinal: true,
         timeoutMs: gatewayTimeoutMs,
@@ -182,6 +192,11 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
+    workspaceOverride: opts.workspace,
+    configDirOverride: opts.configDir,
+    toolsProfileOverride: opts.toolsProfile,
+    toolsAllowOverride: opts.toolsAllow?.split(",").map((s) => s.trim()).filter(Boolean),
+    toolsDenyOverride: opts.toolsDeny?.split(",").map((s) => s.trim()).filter(Boolean),
   };
   if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);

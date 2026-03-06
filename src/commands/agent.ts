@@ -1,3 +1,5 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
@@ -443,13 +445,99 @@ async function agentCommandInternal(
     agentId: sessionAgentId,
     sessionKey,
   });
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  // agents.defaults.workspaceBaseDir — optional security boundary for all CLI path
+  // overrides (--workspace, --config-dir). When set, both must resolve under this
+  // directory. Recommended for deployments where paths arrive via RPC (e.g. MagicForm
+  // channel plugin). Example: "workspaceBaseDir": "/data"
+  const workspaceBaseDir = cfg.agents?.defaults?.workspaceBaseDir?.trim();
+
+  const workspaceDirRaw = opts.workspaceOverride?.trim()
+    || resolveAgentWorkspaceDir(cfg, sessionAgentId);
+
+  // When workspaceBaseDir is configured, --workspace and --config-dir must resolve under it
+  if (opts.workspaceOverride?.trim() && workspaceBaseDir) {
+    const resolved = path.resolve(opts.workspaceOverride.trim());
+    const base = path.resolve(workspaceBaseDir);
+    if (!resolved.startsWith(base + path.sep) && resolved !== base) {
+      throw new Error(
+        `--workspace must be under workspaceBaseDir (${base}), got: ${resolved}`,
+      );
+    }
+  }
+
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
+
+  // Copy bootstrap .md files from --config-dir into workspace (overwriting defaults)
+  if (opts.configDirOverride) {
+    const configDir = path.resolve(opts.configDirOverride.trim());
+
+    if (workspaceBaseDir) {
+      const base = path.resolve(workspaceBaseDir);
+      if (!configDir.startsWith(base + path.sep) && configDir !== base) {
+        throw new Error(
+          `--config-dir must be under workspaceBaseDir (${base}), got: ${configDir}`,
+        );
+      }
+    }
+
+    try {
+      await fs.access(configDir);
+    } catch {
+      throw new Error(`--config-dir path does not exist: ${configDir}`);
+    }
+    const bootstrapFileNames = [
+      "AGENTS.md", "IDENTITY.md", "SOUL.md", "TOOLS.md",
+      "USER.md", "HEARTBEAT.md", "BOOTSTRAP.md",
+    ];
+    let copiedCount = 0;
+    for (const filename of bootstrapFileNames) {
+      const srcPath = path.join(configDir, filename);
+      try {
+        const content = await fs.readFile(srcPath, "utf-8");
+        await fs.writeFile(path.join(workspaceDir, filename), content, "utf-8");
+        copiedCount++;
+      } catch (err: any) {
+        if (err.code !== "ENOENT") throw err;
+      }
+    }
+    if (copiedCount === 0) {
+      log.warn(`--config-dir ${configDir} contains no bootstrap .md files`);
+    }
+  }
+
+  // Apply --tools-* overrides to config
+  const VALID_TOOL_PROFILES = ["minimal", "coding", "messaging", "full"];
+  if (opts.toolsProfileOverride && !VALID_TOOL_PROFILES.includes(opts.toolsProfileOverride)) {
+    throw new Error(
+      `Invalid --tools-profile "${opts.toolsProfileOverride}". Use one of: ${VALID_TOOL_PROFILES.join(", ")}`,
+    );
+  }
+
+  if (opts.toolsProfileOverride || opts.toolsAllowOverride || opts.toolsDenyOverride) {
+    const agentEntry = cfg.agents?.list?.find(
+      (a: any) => normalizeAgentId(a.id) === sessionAgentId,
+    );
+    const toolsOverride: Record<string, unknown> = { ...(agentEntry?.tools ?? {}) };
+    if (opts.toolsProfileOverride) toolsOverride.profile = opts.toolsProfileOverride;
+    if (opts.toolsAllowOverride) toolsOverride.allow = opts.toolsAllowOverride;
+    if (opts.toolsDenyOverride) toolsOverride.deny = opts.toolsDenyOverride;
+
+    if (agentEntry) {
+      agentEntry.tools = toolsOverride as any;
+    } else {
+      cfg.agents = cfg.agents ?? {};
+      cfg.agents.list = cfg.agents.list ?? [];
+      cfg.agents.list.push({
+        id: sessionAgentId,
+        tools: toolsOverride,
+      } as any);
+    }
+  }
   let sessionEntry = resolvedSessionEntry;
   const runId = opts.runId?.trim() || sessionId;
   const acpManager = getAcpSessionManager();

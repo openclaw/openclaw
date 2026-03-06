@@ -211,6 +211,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       label?: string;
       spawnedBy?: string;
       inputProvenance?: InputProvenance;
+      workspace?: string;
+      configDir?: string;
+      toolsProfile?: string;
+      toolsAllow?: string[];
+      toolsDeny?: string[];
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const cfg = loadConfig();
@@ -646,6 +651,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         internalEvents: request.internalEvents,
         inputProvenance,
         senderIsOwner,
+        workspaceOverride: request.workspace?.trim() || undefined,
+        configDirOverride: request.configDir?.trim() || undefined,
+        toolsProfileOverride: request.toolsProfile?.trim() || undefined,
+        toolsAllowOverride: request.toolsAllow,
+        toolsDenyOverride: request.toolsDeny,
       },
       defaultRuntime,
       context.deps,
