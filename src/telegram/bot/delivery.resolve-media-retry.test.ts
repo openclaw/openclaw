@@ -178,16 +178,15 @@ describe("resolveMedia getFile retry", () => {
   });
 
   it.each(["voice", "photo", "video"] as const)(
-    "returns null for %s when getFile exhausts retries so message is not dropped",
+    "throws for %s when getFile exhausts retries",
     async (mediaField) => {
       const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
 
       const promise = resolveMedia(makeCtx(mediaField, getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
       await flushRetryTimers();
-      const result = await promise;
 
+      await expect(promise).rejects.toThrow("telegram getFile failed");
       expect(getFile).toHaveBeenCalledTimes(3);
-      expect(result).toBeNull();
     },
   );
 
@@ -202,19 +201,19 @@ describe("resolveMedia getFile retry", () => {
     expect(getFile).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry 'file is too big' error (400 Bad Request) and returns null", async () => {
+  it("does not retry 'file is too big' error (400 Bad Request) and throws", async () => {
     // Simulate Telegram Bot API error when file exceeds 20MB limit.
     const fileTooBigError = createFileTooBigError();
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 
-    const result = await resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
-
     // Should NOT retry - "file is too big" is a permanent error, not transient.
+    await expect(
+      resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN),
+    ).rejects.toThrow("Telegram file exceeds 20MB limit");
     expect(getFile).toHaveBeenCalledTimes(1);
-    expect(result).toBeNull();
   });
 
-  it("does not retry 'file is too big' GrammyError instances and returns null", async () => {
+  it("does not retry 'file is too big' GrammyError instances and throws", async () => {
     const fileTooBigError = new GrammyError(
       "Call to 'getFile' failed!",
       { ok: false, error_code: 400, description: "Bad Request: file is too big" },
@@ -223,23 +222,20 @@ describe("resolveMedia getFile retry", () => {
     );
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 
-    const result = await resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
-
+    await expect(
+      resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN),
+    ).rejects.toThrow("Telegram file exceeds 20MB limit");
     expect(getFile).toHaveBeenCalledTimes(1);
-    expect(result).toBeNull();
   });
 
-  it.each(["audio", "voice"] as const)(
-    "returns null for %s when file is too big",
-    async (mediaField) => {
-      const getFile = vi.fn().mockRejectedValue(createFileTooBigError());
+  it.each(["audio", "voice"] as const)("throws for %s when file is too big", async (mediaField) => {
+    const getFile = vi.fn().mockRejectedValue(createFileTooBigError());
 
-      const result = await resolveMedia(makeCtx(mediaField, getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
-
-      expect(getFile).toHaveBeenCalledTimes(1);
-      expect(result).toBeNull();
-    },
-  );
+    await expect(
+      resolveMedia(makeCtx(mediaField, getFile), MAX_MEDIA_BYTES, BOT_TOKEN),
+    ).rejects.toThrow("Telegram file exceeds 20MB limit");
+    expect(getFile).toHaveBeenCalledTimes(1);
+  });
 
   it("throws when getFile returns no file_path", async () => {
     const getFile = vi.fn().mockResolvedValue({});

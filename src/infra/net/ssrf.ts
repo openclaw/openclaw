@@ -341,10 +341,24 @@ export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<v
   if (!dispatcher) {
     return;
   }
-  const candidate = dispatcher as { close?: () => Promise<void> | void; destroy?: () => void };
+  const candidate = dispatcher as {
+    close?: () => Promise<void> | void;
+    destroy?: () => void;
+  };
   try {
     if (typeof candidate.close === "function") {
-      await candidate.close();
+      // close() waits for in-flight responses to drain; if a body stream is
+      // unconsumed (e.g. the caller threw before reading) it can hang forever.
+      // Race against a short timer and fall back to destroy().
+      const closed = candidate.close();
+      if (closed && typeof closed.then === "function") {
+        const timeout = new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 3_000));
+        const result = await Promise.race([closed.then(() => "ok" as const), timeout]);
+        if (result === "timeout" && typeof candidate.destroy === "function") {
+          candidate.destroy();
+        }
+        return;
+      }
       return;
     }
     if (typeof candidate.destroy === "function") {
