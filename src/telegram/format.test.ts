@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtml } from "./format.js";
+import { markdownToTelegramHtml, markdownToTelegramHtmlChunks } from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
   it("handles core markdown-to-telegram conversions", () => {
@@ -111,5 +111,42 @@ describe("markdownToTelegramHtml", () => {
     const res = markdownToTelegramHtml("||secret|| trailing ||");
     expect(res).toContain("<tg-spoiler>secret</tg-spoiler>");
     expect(res).toContain("trailing ||");
+  });
+});
+
+describe("markdownToTelegramHtmlChunks word-boundary splitting", () => {
+  it("splits at word boundaries instead of mid-word", () => {
+    // "Regulatory overhang lifts beta for UK banks" should never produce "b\ne\nta"
+    const text = "Regulatory overhang lifts beta for UK banks and more text padding here";
+    // Use a small limit so splitting is forced
+    const chunks = markdownToTelegramHtmlChunks(text, 35);
+    expect(chunks.length).toBeGreaterThan(1);
+    // Reassemble all chunks — every word from the original text must appear
+    // intact in exactly one chunk (no word should be split across chunks).
+    const words = text.split(/\s+/);
+    const joined = chunks.join(" ");
+    for (const word of words) {
+      expect(joined).toContain(word);
+    }
+    // Specifically verify "beta" is never split across chunks
+    for (const chunk of chunks) {
+      expect(chunk).not.toMatch(/\bbet$/);
+      expect(chunk).not.toMatch(/^a\b/);
+    }
+  });
+
+  it("handles text with no spaces (falls back to hard split)", () => {
+    const text = "abcdefghijklmnopqrstuvwxyz";
+    const chunks = markdownToTelegramHtmlChunks(text, 10);
+    expect(chunks.length).toBeGreaterThan(1);
+    // Should still produce all characters
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("does not split when text fits within limit", () => {
+    const text = "short message";
+    const chunks = markdownToTelegramHtmlChunks(text, 100);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toBe(text);
   });
 });
