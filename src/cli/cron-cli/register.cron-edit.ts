@@ -10,6 +10,7 @@ import {
   parseCronStaggerMs,
   parseDurationMs,
   warnIfCronSchedulerDisabled,
+  withHumanReadableCronState,
 } from "./shared.js";
 
 const assignIf = (
@@ -338,7 +339,7 @@ export function registerCronEditCommand(cron: Command) {
             id,
             patch,
           });
-          defaultRuntime.log(JSON.stringify(res, null, 2));
+          defaultRuntime.log(JSON.stringify(withHumanReadableCronState(res), null, 2));
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
           defaultRuntime.error(danger(String(err)));

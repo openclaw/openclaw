@@ -149,6 +149,47 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   return delta >= 0 ? `in ${label}` : `${label} ago`;
 };
 
+const formatDateTimeUtc = (ms: number | null | undefined): string | undefined => {
+  if (!ms || !Number.isFinite(ms)) {
+    return undefined;
+  }
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) {
+    return undefined;
+  }
+  const iso = d.toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 19)}Z`;
+};
+
+export function withHumanReadableCronState<T extends { state?: Record<string, unknown> }>(
+  job: T,
+  nowMs = Date.now(),
+): T {
+  if (!job?.state) {
+    return job;
+  }
+
+  const state = { ...job.state } as Record<string, unknown>;
+  const nextRunAtMs =
+    typeof state.nextRunAtMs === "number" && Number.isFinite(state.nextRunAtMs)
+      ? state.nextRunAtMs
+      : undefined;
+  const lastRunAtMs =
+    typeof state.lastRunAtMs === "number" && Number.isFinite(state.lastRunAtMs)
+      ? state.lastRunAtMs
+      : undefined;
+
+  state.nextRunAtDateTime = formatDateTimeUtc(nextRunAtMs);
+  state.lastRunAtDateTime = formatDateTimeUtc(lastRunAtMs);
+  state.nextRunInRemainingTime = nextRunAtMs ? formatRelative(nextRunAtMs, nowMs) : undefined;
+  state.lastRunElapsedTime = lastRunAtMs ? formatRelative(lastRunAtMs, nowMs) : undefined;
+
+  return {
+    ...job,
+    state,
+  };
+}
+
 const formatSchedule = (schedule: CronSchedule) => {
   if (schedule.kind === "at") {
     return `at ${formatIsoMinute(schedule.at)}`;
