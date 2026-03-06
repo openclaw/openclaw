@@ -657,7 +657,7 @@ export const OpenClawSchema = z
           .object({
             timing: z
               .object({
-                staleEventThresholdMs: z.number().int().min(0).optional(),
+                staleEventThresholdMs: z.number().int().min(1).optional(),
                 monitorStartupGraceMs: z.number().int().min(0).optional(),
                 channelConnectGraceMs: z.number().int().min(0).optional(),
               })
