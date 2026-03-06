@@ -461,7 +461,7 @@ export async function runCronIsolatedAgentTurn(params: {
     );
 
     const runPrompt = async (promptText: string) => {
-        const fallbackResult = await runWithModelFallback({
+      const fallbackResult = await runWithModelFallback({
         cfg: cfgWithAgentDefaults,
         provider,
         model,
