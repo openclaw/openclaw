@@ -15,17 +15,74 @@ export function parseConfigPath(raw: string): {
       error: "Invalid path. Use dot notation (e.g. foo.bar).",
     };
   }
-  const parts = trimmed.split(".").map((part) => part.trim());
-  if (parts.some((part) => !part)) {
+
+  // Parse path with support for bracket notation: foo["bar.baz"] or foo['bar.baz'] or foo[key]
+  // Strategy: Tokenize by bracket groups first, then split remaining by dots
+  const parts: string[] = [];
+  let remaining = trimmed;
+
+  // Keep extracting bracket-notation segments until none left
+  while (remaining.length > 0) {
+    // Check if we start with a bracket group: ["..."] or ['...'] or [...]
+    const bracketMatch = remaining.match(/^\[("([^"]+)"|'([^']+)'|([^\]]+))\]/);
+
+    if (bracketMatch) {
+      // Extract the key from inside brackets
+      const key = bracketMatch[2] || bracketMatch[3] || bracketMatch[4];
+      if (key !== undefined) {
+        parts.push(key);
+      }
+      // Move past the bracket group
+      remaining = remaining.slice(bracketMatch[0].length);
+
+      // If there's a dot after, skip it
+      if (remaining.startsWith(".")) {
+        remaining = remaining.slice(1);
+      }
+    } else {
+      // No bracket at start - find next dot or bracket
+      const dotIndex = remaining.indexOf(".");
+      const bracketIndex = remaining.indexOf("[");
+
+      if (dotIndex === -1 && bracketIndex === -1) {
+        // No more separators - rest is a key
+        if (remaining) {
+          parts.push(remaining);
+        }
+        break;
+      } else if (bracketIndex !== -1 && (dotIndex === -1 || bracketIndex < dotIndex)) {
+        // Next bracket comes before dot - extract up to bracket
+        const key = remaining.slice(0, bracketIndex);
+        if (key) {
+          parts.push(key);
+        }
+        remaining = remaining.slice(bracketIndex);
+      } else if (dotIndex !== -1 && (bracketIndex === -1 || dotIndex < bracketIndex)) {
+        // Next dot comes before bracket - extract up to dot
+        const key = remaining.slice(0, dotIndex);
+        if (key) {
+          parts.push(key);
+        }
+        remaining = remaining.slice(dotIndex + 1);
+      }
+    }
+  }
+
+  if (parts.length === 0) {
     return {
       ok: false,
       error: "Invalid path. Use dot notation (e.g. foo.bar).",
     };
   }
-  if (parts.some((part) => isBlockedObjectKey(part))) {
+
+  // Filter empty parts
+  const filteredParts = parts.filter((p) => p !== "");
+
+  if (filteredParts.some((part) => isBlockedObjectKey(part))) {
     return { ok: false, error: "Invalid path segment." };
   }
-  return { ok: true, path: parts };
+
+  return { ok: true, path: filteredParts };
 }
 
 export function setConfigValueAtPath(root: PathNode, path: string[], value: unknown): void {
