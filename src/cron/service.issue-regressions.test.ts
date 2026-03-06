@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import * as schedule from "./schedule.js";
 import {
-  createAbortAwareIsolatedRunner,
   createDefaultIsolatedRunner,
   createDueIsolatedJob,
   createIsolatedRegressionJob,
@@ -944,10 +943,11 @@ describe("Cron issue regressions", () => {
     expect(job?.state.lastError).toBeUndefined();
   });
 
-  it("aborts isolated runs when cron timeout fires", async () => {
+  it("does not pre-abort isolated fallback work when payload timeoutSeconds elapses (#37505)", async () => {
     vi.useRealTimers();
     const store = makeStorePath();
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+    const waitPastInnerTimeoutMs = Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 20;
     const cronJob = createIsolatedRegressionJob({
       id: "abort-on-timeout",
       name: "abort timeout",
@@ -959,7 +959,7 @@ describe("Cron issue regressions", () => {
     await writeCronJobs(store.storePath, [cronJob]);
 
     let now = scheduledAt;
-    const abortAwareRunner = createAbortAwareIsolatedRunner();
+    const attemptAbortStates: boolean[] = [];
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: store.storePath,
@@ -967,26 +967,32 @@ describe("Cron issue regressions", () => {
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async (params) => {
-        const result = await abortAwareRunner.runIsolatedAgentJob(params);
-        now += 5;
-        return result;
+      runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+        await new Promise((resolve) => setTimeout(resolve, waitPastInnerTimeoutMs));
+        attemptAbortStates.push(abortSignal?.aborted === true);
+        if (abortSignal?.aborted) {
+          return { status: "error" as const, error: String(abortSignal.reason) };
+        }
+        // Simulate a fallback provider attempt starting after the first attempt timed out.
+        attemptAbortStates.push(abortSignal?.aborted === true);
+        now += waitPastInnerTimeoutMs;
+        return { status: "ok" as const, summary: "fallback recovered" };
       }),
     });
 
     await onTimer(state);
 
-    expect(abortAwareRunner.getObservedAbortSignal()).toBeDefined();
-    expect(abortAwareRunner.getObservedAbortSignal()?.aborted).toBe(true);
+    expect(attemptAbortStates).toEqual([false, false]);
     const job = state.store?.jobs.find((entry) => entry.id === "abort-on-timeout");
-    expect(job?.state.lastStatus).toBe("error");
-    expect(job?.state.lastError).toContain("timed out");
+    expect(job?.state.lastStatus).toBe("ok");
+    expect(job?.state.lastError).toBeUndefined();
   });
 
-  it("suppresses isolated follow-up side effects after timeout", async () => {
+  it("keeps isolated follow-up side effects after payload timeoutSeconds elapses", async () => {
     vi.useRealTimers();
     const store = makeStorePath();
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+    const waitPastInnerTimeoutMs = Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 20;
     const enqueueSystemEvent = vi.fn();
 
     const cronJob = createIsolatedRegressionJob({
@@ -1007,24 +1013,14 @@ describe("Cron issue regressions", () => {
       nowMs: () => now,
       enqueueSystemEvent,
       requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async (params) => {
-        const abortSignal = params.abortSignal;
-        await new Promise<void>((resolve, reject) => {
-          const onAbort = () => {
-            abortSignal?.removeEventListener("abort", onAbort);
-            now += 100;
-            reject(new Error("aborted"));
-          };
-          abortSignal?.addEventListener("abort", onAbort, { once: true });
-        });
+      runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+        await new Promise((resolve) => setTimeout(resolve, waitPastInnerTimeoutMs));
+        now += waitPastInnerTimeoutMs;
         return {
           status: "ok" as const,
           summary: "late-summary",
           delivered: false,
-          error:
-            abortSignal?.aborted && typeof abortSignal.reason === "string"
-              ? abortSignal.reason
-              : undefined,
+          error: abortSignal?.aborted ? String(abortSignal.reason) : undefined,
         };
       }),
     });
@@ -1032,20 +1028,31 @@ describe("Cron issue regressions", () => {
     await onTimer(state);
 
     const jobAfterTimeout = state.store?.jobs.find((j) => j.id === "timeout-side-effects");
-    expect(jobAfterTimeout?.state.lastStatus).toBe("error");
-    expect(jobAfterTimeout?.state.lastError).toContain("timed out");
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(jobAfterTimeout?.state.lastStatus).toBe("ok");
+    expect(jobAfterTimeout?.state.lastError).toBeUndefined();
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Cron: late-summary",
+      expect.objectContaining({ contextKey: "cron:timeout-side-effects" }),
+    );
   });
 
-  it("applies timeoutSeconds to manual cron.run isolated executions", async () => {
+  it("does not apply timeoutSeconds to manual cron.run isolated outer timeouts", async () => {
     vi.useRealTimers();
     const store = makeStorePath();
-    const abortAwareRunner = createAbortAwareIsolatedRunner();
+    const waitPastInnerTimeoutMs = Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 20;
+    let observedAbort = false;
 
     const cron = await startCronForStore({
       storePath: store.storePath,
       cronEnabled: false,
-      runIsolatedAgentJob: abortAwareRunner.runIsolatedAgentJob,
+      runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+        await new Promise((resolve) => setTimeout(resolve, waitPastInnerTimeoutMs));
+        observedAbort = abortSignal?.aborted === true;
+        if (abortSignal?.aborted) {
+          return { status: "error" as const, error: String(abortSignal.reason) };
+        }
+        return { status: "ok" as const, summary: "done" };
+      }),
     });
 
     const job = await cron.add({
@@ -1060,23 +1067,23 @@ describe("Cron issue regressions", () => {
 
     const result = await cron.run(job.id, "force");
     expect(result).toEqual({ ok: true, ran: true });
-    expect(abortAwareRunner.getObservedAbortSignal()).toBeDefined();
-    expect(abortAwareRunner.getObservedAbortSignal()?.aborted).toBe(true);
+    expect(observedAbort).toBe(false);
 
     const updated = (await cron.list({ includeDisabled: true })).find(
       (entry) => entry.id === job.id,
     );
-    expect(updated?.state.lastStatus).toBe("error");
-    expect(updated?.state.lastError).toContain("timed out");
+    expect(updated?.state.lastStatus).toBe("ok");
+    expect(updated?.state.lastError).toBeUndefined();
     expect(updated?.state.runningAtMs).toBeUndefined();
 
     cron.stop();
   });
 
-  it("applies timeoutSeconds to startup catch-up isolated executions", async () => {
+  it("does not apply timeoutSeconds to startup catch-up isolated outer timeouts", async () => {
     vi.useRealTimers();
     const store = makeStorePath();
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+    const waitPastInnerTimeoutMs = Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 20;
     const cronJob = createIsolatedRegressionJob({
       id: "startup-timeout",
       name: "startup timeout",
@@ -1088,7 +1095,7 @@ describe("Cron issue regressions", () => {
     await writeCronJobs(store.storePath, [cronJob]);
 
     let now = scheduledAt;
-    const abortAwareRunner = createAbortAwareIsolatedRunner();
+    let observedAbort = false;
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: store.storePath,
@@ -1096,20 +1103,23 @@ describe("Cron issue regressions", () => {
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async (params) => {
-        const result = await abortAwareRunner.runIsolatedAgentJob(params);
-        now += 5;
-        return result;
+      runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+        await new Promise((resolve) => setTimeout(resolve, waitPastInnerTimeoutMs));
+        observedAbort = abortSignal?.aborted === true;
+        now += waitPastInnerTimeoutMs;
+        if (abortSignal?.aborted) {
+          return { status: "error" as const, error: String(abortSignal.reason) };
+        }
+        return { status: "ok" as const, summary: "done" };
       }),
     });
 
     await runMissedJobs(state);
 
-    expect(abortAwareRunner.getObservedAbortSignal()).toBeDefined();
-    expect(abortAwareRunner.getObservedAbortSignal()?.aborted).toBe(true);
+    expect(observedAbort).toBe(false);
     const job = state.store?.jobs.find((entry) => entry.id === "startup-timeout");
-    expect(job?.state.lastStatus).toBe("error");
-    expect(job?.state.lastError).toContain("timed out");
+    expect(job?.state.lastStatus).toBe("ok");
+    expect(job?.state.lastError).toBeUndefined();
   });
 
   it("respects abort signals while retrying main-session wake-now heartbeat runs", async () => {
@@ -1348,22 +1358,18 @@ describe("Cron issue regressions", () => {
     expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
   });
 
-  // Regression: isolated cron runs must not abort at 1/3 of configured timeoutSeconds.
-  // The bug (issue #29774) caused the CLI-provider resume watchdog (ratio 0.3, maxMs 180 s)
-  // to be applied on fresh sessions because a persisted cliSessionId was passed to
-  // runCliAgent even when isNewSession=true.  At the service level this manifests as a
-  // job abort that fires much sooner than the configured outer timeout.
-  it("outer cron timeout fires at configured timeoutSeconds, not at 1/3 (#29774)", async () => {
+  // Regression: cron isolated runs must not reuse payload.timeoutSeconds as both
+  // the inner agent-attempt timeout and the outer cron watchdog.
+  it("keeps the outer cron watchdog independent from payload timeoutSeconds (#37505)", async () => {
     vi.useRealTimers();
     const store = makeStorePath();
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
 
-    // Keep this short for suite speed while still separating expected timeout
-    // from the 1/3-regression timeout.
     const timeoutSeconds = 0.01;
+    const waitPastInnerTimeoutMs = Math.ceil(timeoutSeconds * 1_000) + 20;
     const cronJob = createIsolatedRegressionJob({
-      id: "timeout-fraction-29774",
-      name: "timeout fraction regression",
+      id: "timeout-fallback-37505",
+      name: "timeout fallback regression",
       scheduledAt,
       schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
       payload: { kind: "agentTurn", message: "work", timeoutSeconds },
@@ -1372,9 +1378,8 @@ describe("Cron issue regressions", () => {
     await writeCronJobs(store.storePath, [cronJob]);
 
     let now = scheduledAt;
-    const wallStart = Date.now();
-    let abortWallMs: number | undefined;
-    let started = false;
+    let fallbackAttemptStarted = false;
+    let fallbackAttemptSawAbort = false;
 
     const state = createCronServiceState({
       cronEnabled: true,
@@ -1384,43 +1389,25 @@ describe("Cron issue regressions", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
-        started = true;
-        await new Promise<void>((resolve) => {
-          if (!abortSignal) {
-            resolve();
-            return;
-          }
-          if (abortSignal.aborted) {
-            abortWallMs = Date.now();
-            resolve();
-            return;
-          }
-          abortSignal.addEventListener(
-            "abort",
-            () => {
-              abortWallMs = Date.now();
-              resolve();
-            },
-            { once: true },
-          );
-        });
-        now += 5;
-        return { status: "ok" as const, summary: "done" };
+        await new Promise((resolve) => setTimeout(resolve, waitPastInnerTimeoutMs));
+        fallbackAttemptStarted = true;
+        fallbackAttemptSawAbort = abortSignal?.aborted === true;
+        now += waitPastInnerTimeoutMs;
+        if (abortSignal?.aborted) {
+          return { status: "error" as const, error: String(abortSignal.reason) };
+        }
+        return { status: "ok" as const, summary: "fallback completed" };
       }),
     });
 
     await onTimer(state);
 
-    expect(started).toBe(true);
+    expect(fallbackAttemptStarted).toBe(true);
+    expect(fallbackAttemptSawAbort).toBe(false);
 
-    // The abort must not fire at the old ~1/3 regression value.
-    // Keep the lower bound conservative for loaded CI runners.
-    const elapsedMs = (abortWallMs ?? Date.now()) - wallStart;
-    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutSeconds * 1000 * 0.55);
-
-    const job = state.store?.jobs.find((entry) => entry.id === "timeout-fraction-29774");
-    expect(job?.state.lastStatus).toBe("error");
-    expect(job?.state.lastError).toContain("timed out");
+    const job = state.store?.jobs.find((entry) => entry.id === "timeout-fallback-37505");
+    expect(job?.state.lastStatus).toBe("ok");
+    expect(job?.state.lastError).toBeUndefined();
   });
 
   it("keeps state updates when cron next-run computation throws after a successful run (#30905)", () => {

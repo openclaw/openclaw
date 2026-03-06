@@ -14,12 +14,11 @@ export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
 export const AGENT_TURN_SAFETY_TIMEOUT_MS = 60 * 60_000; // 60 minutes
 
 export function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
-  const configuredTimeoutMs =
-    job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
-      ? Math.floor(job.payload.timeoutSeconds * 1_000)
-      : undefined;
-  if (configuredTimeoutMs === undefined) {
-    return job.payload.kind === "agentTurn" ? AGENT_TURN_SAFETY_TIMEOUT_MS : DEFAULT_JOB_TIMEOUT_MS;
+  if (job.payload.kind === "agentTurn") {
+    // payload.timeoutSeconds is enforced inside the isolated agent run.
+    // Keep the outer cron watchdog as an independent safety ceiling so it
+    // does not pre-abort provider fallback attempts via the shared signal.
+    return AGENT_TURN_SAFETY_TIMEOUT_MS;
   }
-  return configuredTimeoutMs <= 0 ? undefined : configuredTimeoutMs;
+  return DEFAULT_JOB_TIMEOUT_MS;
 }
