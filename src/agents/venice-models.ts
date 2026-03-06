@@ -483,12 +483,12 @@ export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefi
 interface VeniceModelSpec {
   name: string;
   privacy: "private" | "anonymized";
-  availableContextTokens: number;
+  availableContextTokens?: number;
   maxCompletionTokens?: number;
-  capabilities: {
-    supportsReasoning: boolean;
-    supportsVision: boolean;
-    supportsFunctionCalling: boolean;
+  capabilities?: {
+    supportsReasoning?: boolean;
+    supportsVision?: boolean;
+    supportsFunctionCalling?: boolean;
   };
 }
 
@@ -588,7 +588,7 @@ function resolveApiMaxCompletionTokens(params: {
 }
 
 function resolveApiSupportsTools(apiModel: VeniceModel): boolean | undefined {
-  const supportsFunctionCalling = apiModel.model_spec.capabilities.supportsFunctionCalling;
+  const supportsFunctionCalling = apiModel.model_spec.capabilities?.supportsFunctionCalling;
   return typeof supportsFunctionCalling === "boolean" ? supportsFunctionCalling : undefined;
 }
 
@@ -671,12 +671,12 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
       } else {
         // Create definition for newly discovered models not in catalog
         const isReasoning =
-          apiModel.model_spec.capabilities.supportsReasoning ||
+          apiModel.model_spec.capabilities?.supportsReasoning ||
           apiModel.id.toLowerCase().includes("thinking") ||
           apiModel.id.toLowerCase().includes("reason") ||
           apiModel.id.toLowerCase().includes("r1");
 
-        const hasVision = apiModel.model_spec.capabilities.supportsVision;
+        const hasVision = apiModel.model_spec.capabilities?.supportsVision === true;
 
         models.push({
           id: apiModel.id,

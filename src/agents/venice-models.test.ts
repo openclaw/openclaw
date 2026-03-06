@@ -243,6 +243,49 @@ describe("venice-models", () => {
     expect(newModel?.maxTokens).toBe(128000);
   });
 
+  it("ignores missing capabilities on partial metadata instead of aborting discovery", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "llama-3.3-70b",
+                model_spec: {
+                  name: "llama-3.3-70b",
+                  privacy: "private",
+                  availableContextTokens: 131072,
+                  maxCompletionTokens: 2048,
+                },
+              },
+              {
+                id: "new-model-partial",
+                model_spec: {
+                  name: "new-model-partial",
+                  privacy: "private",
+                  maxCompletionTokens: 2048,
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const knownModel = models.find((m) => m.id === "llama-3.3-70b");
+    const partialModel = models.find((m) => m.id === "new-model-partial");
+    expect(models).not.toHaveLength(VENICE_MODEL_CATALOG.length);
+    expect(knownModel?.maxTokens).toBe(2048);
+    expect(partialModel?.contextWindow).toBe(128000);
+    expect(partialModel?.maxTokens).toBe(2048);
+    expect(partialModel?.compat?.supportsTools).toBeUndefined();
+  });
+
   it("falls back to static catalog after retry budget is exhausted", async () => {
     const fetchMock = vi.fn(async () => {
       throw Object.assign(new TypeError("fetch failed"), {
