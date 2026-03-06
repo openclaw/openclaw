@@ -199,6 +199,7 @@ export async function updateNpmInstalledPlugins(params: {
   logger?: PluginUpdateLogger;
   pluginIds?: string[];
   skipIds?: Set<string>;
+  specOverrides?: Record<string, string>;
   dryRun?: boolean;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateSummary> {
@@ -247,6 +248,8 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
+    const spec = params.specOverrides?.[pluginId] ?? record.spec;
+
     let installPath: string;
     try {
       installPath = record.installPath ?? resolvePluginInstallDir(pluginId);
@@ -264,7 +267,7 @@ export async function updateNpmInstalledPlugins(params: {
       let probe: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
       try {
         probe = await installPluginFromNpmSpec({
-          spec: record.spec,
+          spec,
           mode: "update",
           dryRun: true,
           expectedPluginId: pluginId,
@@ -291,7 +294,7 @@ export async function updateNpmInstalledPlugins(params: {
           status: "error",
           message: formatNpmInstallFailure({
             pluginId,
-            spec: record.spec,
+            spec,
             phase: "check",
             result: probe,
           }),
@@ -324,7 +327,7 @@ export async function updateNpmInstalledPlugins(params: {
     let result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
     try {
       result = await installPluginFromNpmSpec({
-        spec: record.spec,
+        spec,
         mode: "update",
         expectedPluginId: pluginId,
         expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
@@ -350,7 +353,7 @@ export async function updateNpmInstalledPlugins(params: {
         status: "error",
         message: formatNpmInstallFailure({
           pluginId,
-          spec: record.spec,
+          spec,
           phase: "update",
           result: result,
         }),
@@ -362,7 +365,7 @@ export async function updateNpmInstalledPlugins(params: {
     next = recordPluginInstall(next, {
       pluginId,
       source: "npm",
-      spec: record.spec,
+      spec,
       installPath: result.targetDir,
       version: nextVersion,
       ...buildNpmResolutionInstallFields(result.npmResolution),

@@ -735,7 +735,23 @@ export function registerPluginsCli(program: Command) {
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       const cfg = loadConfig();
       const installs = cfg.plugins?.installs ?? {};
-      const targets = opts.all ? Object.keys(installs) : id ? [id] : [];
+
+      let pluginId = id;
+      let specOverrides: Record<string, string> | undefined;
+      if (id) {
+        // Parse name@version — last '@' at pos > 0 is the version separator
+        // (handles scoped packages like @openclaw/foo@1.0.0)
+        const lastAt = id.lastIndexOf("@");
+        if (lastAt > 0) {
+          const maybeName = id.slice(0, lastAt);
+          if (maybeName in installs) {
+            pluginId = maybeName;
+            specOverrides = { [maybeName]: id };
+          }
+        }
+      }
+
+      const targets = opts.all ? Object.keys(installs) : pluginId ? [pluginId] : [];
 
       if (targets.length === 0) {
         if (opts.all) {
@@ -749,6 +765,7 @@ export function registerPluginsCli(program: Command) {
       const result = await updateNpmInstalledPlugins({
         config: cfg,
         pluginIds: targets,
+        specOverrides,
         dryRun: opts.dryRun,
         logger: {
           info: (msg) => defaultRuntime.log(msg),
