@@ -29,8 +29,10 @@ import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveThreadSessionKeys,
+} from "../../../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
