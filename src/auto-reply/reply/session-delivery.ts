@@ -50,16 +50,19 @@ export function resolveLastChannelRaw(params: {
   sessionKey?: string;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
-  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL && isMainSessionKey(params.sessionKey)) {
-    return params.originatingChannelRaw;
-  }
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   let resolved = params.originatingChannelRaw || params.persistedLastChannel;
   // Internal/non-deliverable sources should not overwrite previously known
   // external delivery routes (or explicit channel hints from the session key).
+  // Exception: when main session receives an internal channel message, update
+  // to internal to prevent replies from leaking to stale external routes.
   if (!isExternalRoutingChannel(originatingChannel)) {
-    if (isExternalRoutingChannel(persistedChannel)) {
+    if (originatingChannel === INTERNAL_MESSAGE_CHANNEL && isMainSessionKey(params.sessionKey)) {
+      // For main session, allow internal channels to update lastChannel so replies
+      // route back to the internal surface (TUI/WebChat) instead of stale external routes.
+      resolved = params.originatingChannelRaw;
+    } else if (isExternalRoutingChannel(persistedChannel)) {
       resolved = persistedChannel;
     } else if (isExternalRoutingChannel(sessionKeyChannelHint)) {
       resolved = sessionKeyChannelHint;
@@ -77,16 +80,20 @@ export function resolveLastToRaw(params: {
   sessionKey?: string;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
-  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL && isMainSessionKey(params.sessionKey)) {
-    return params.originatingToRaw || params.toRaw;
-  }
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
 
   // When the turn originates from an internal/non-deliverable source, do not
   // replace an established external destination with internal routing ids
   // (e.g., session/webchat ids).
+  // Exception: when main session receives an internal channel message, clear
+  // lastTo to prevent replies from routing to stale external destinations.
   if (!isExternalRoutingChannel(originatingChannel)) {
+    if (originatingChannel === INTERNAL_MESSAGE_CHANNEL && isMainSessionKey(params.sessionKey)) {
+      // For main session, allow internal channels to clear lastTo so replies
+      // route back to the internal surface (TUI/WebChat) instead of external targets.
+      return params.originatingToRaw || params.toRaw;
+    }
     const hasExternalFallback =
       isExternalRoutingChannel(persistedChannel) || isExternalRoutingChannel(sessionKeyChannelHint);
     if (hasExternalFallback && params.persistedLastTo) {

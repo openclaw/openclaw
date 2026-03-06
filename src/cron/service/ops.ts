@@ -22,6 +22,10 @@ import {
   wake,
 } from "./timer.js";
 
+function isFiniteTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
 type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
 type CronSortDir = "asc" | "desc";
@@ -113,7 +117,43 @@ export async function start(state: CronServiceState) {
 
   await locked(state, async () => {
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    // After running missed jobs, recompute next runs to ensure all enabled jobs
+    // have correct nextRunAtMs. This also fixes stale nextRunAtMs values that
+    // might have been set before the gateway shutdown.
     recomputeNextRuns(state);
+    // Additional startup pass: detect and fix stale nextRunAtMs values that
+    // might cause jobs to skip scheduled runs (issue #34530).
+    // If a job's nextRunAtMs is more than a day in the future relative to its
+    // lastRunAtMs, it might have been set incorrectly. Recompute to ensure correct
+    // scheduling based on the current time.
+    const now = state.deps.nowMs();
+    for (const job of state.store?.jobs ?? []) {
+      if (!job.enabled) {
+        continue;
+      }
+      const nextRun = job.state.nextRunAtMs;
+      if (!isFiniteTimestamp(nextRun)) {
+        continue;
+      }
+      const lastRun = job.state.lastRunAtMs;
+      if (!isFiniteTimestamp(lastRun)) {
+        continue;
+      }
+      // If nextRunAtMs is more than a day ahead of lastRunAtMs, it might be stale.
+      // For example, if the gateway was down for multiple days, nextRunAtMs
+      // might have been set to a time that's already passed, but the job hasn't
+      // run yet. Recomputing ensures the job runs at the next valid slot.
+      if (nextRun - lastRun > 24 * 60 * 60 * 1000) {
+        const updated = computeJobNextRunAtMs(job, now);
+        if (isFiniteTimestamp(updated) && updated !== nextRun) {
+          job.state.nextRunAtMs = updated;
+          state.deps.log.info(
+            { jobId: job.id, oldNextRun: nextRun, newNextRun: updated },
+            "cron: corrected stale nextRunAtMs after restart",
+          );
+        }
+      }
+    }
     await persist(state);
     armTimer(state);
     state.deps.log.info(
