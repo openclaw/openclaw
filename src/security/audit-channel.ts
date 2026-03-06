@@ -1,4 +1,7 @@
-import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
+import {
+  hasConfiguredUnavailableCredentialStatus,
+  hasResolvedCredentialValue,
+} from "../channels/account-snapshot-fields.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
@@ -137,22 +140,6 @@ export async function collectChannelSecurityFindings(params: {
     value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : null;
-
-  const hasResolvedCredentialValue = (account: unknown): boolean => {
-    const record = asAccountRecord(account);
-    if (!record) {
-      return false;
-    }
-    return (
-      ["token", "botToken", "appToken", "userToken"].some((key) => {
-        const value = record[key];
-        return typeof value === "string" && value.trim().length > 0;
-      }) ||
-      ["tokenStatus", "botTokenStatus", "appTokenStatus", "userTokenStatus"].some(
-        (key) => record[key] === "available",
-      )
-    );
-  };
 
   const resolveChannelAuditAccount = async (
     plugin: (typeof params.plugins)[number],
