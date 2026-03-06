@@ -121,6 +121,112 @@ describe("createSlackMessageHandler app_mention race handling", () => {
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
   });
 
+  it("allows app_mention while message handling is still in-flight, then keeps later duplicates deduped", async () => {
+    let resolveMessagePrepare: ((value: unknown) => void) | undefined;
+    const messagePrepare = new Promise<unknown>((resolve) => {
+      resolveMessagePrepare = resolve;
+    });
+    prepareSlackMessageMock.mockImplementation(async ({ opts }) => {
+      if (opts.source === "message") {
+        return messagePrepare;
+      }
+      return { ctxPayload: {} };
+    });
+
+    const handler = createSlackMessageHandler({
+      ctx: {
+        cfg: {},
+        accountId: "default",
+        app: { client: {} },
+        runtime: {},
+        markMessageSeen: createMarkMessageSeen(),
+      } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+
+    const messagePending = handler(
+      { type: "message", channel: "C1", ts: "1700000000.000150", text: "hello" } as never,
+      { source: "message" },
+    );
+    await Promise.resolve();
+
+    await handler(
+      {
+        type: "app_mention",
+        channel: "C1",
+        ts: "1700000000.000150",
+        text: "<@U_BOT> hello",
+      } as never,
+      { source: "app_mention", wasMentioned: true },
+    );
+
+    resolveMessagePrepare?.(null);
+    await messagePending;
+
+    await handler(
+      {
+        type: "app_mention",
+        channel: "C1",
+        ts: "1700000000.000150",
+        text: "<@U_BOT> hello",
+      } as never,
+      { source: "app_mention", wasMentioned: true },
+    );
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(2);
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses message dispatch when app_mention already dispatched during in-flight race", async () => {
+    let resolveMessagePrepare: ((value: unknown) => void) | undefined;
+    const messagePrepare = new Promise<unknown>((resolve) => {
+      resolveMessagePrepare = resolve;
+    });
+    prepareSlackMessageMock.mockImplementation(async ({ opts }) => {
+      if (opts.source === "message") {
+        return messagePrepare;
+      }
+      return { ctxPayload: {} };
+    });
+
+    const handler = createSlackMessageHandler({
+      ctx: {
+        cfg: {},
+        accountId: "default",
+        app: { client: {} },
+        runtime: {},
+        markMessageSeen: createMarkMessageSeen(),
+      } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+
+    const messagePending = handler(
+      { type: "message", channel: "C1", ts: "1700000000.000175", text: "hello" } as never,
+      { source: "message" },
+    );
+    await Promise.resolve();
+
+    await handler(
+      {
+        type: "app_mention",
+        channel: "C1",
+        ts: "1700000000.000175",
+        text: "<@U_BOT> hello",
+      } as never,
+      { source: "app_mention", wasMentioned: true },
+    );
+
+    resolveMessagePrepare?.({ ctxPayload: {} });
+    await messagePending;
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(2);
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps app_mention deduped when message event already dispatched", async () => {
     prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
 
