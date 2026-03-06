@@ -504,7 +504,7 @@ export const OpenClawSchema = z
                 voiceAliases: z.record(z.string(), z.string()).optional(),
                 modelId: z.string().optional(),
                 outputFormat: z.string().optional(),
-                apiKey: z.string().optional().register(sensitive),
+                apiKey: SecretInputSchema.optional().register(sensitive),
               })
               .catchall(z.unknown()),
           )
@@ -513,7 +513,7 @@ export const OpenClawSchema = z
         voiceAliases: z.record(z.string(), z.string()).optional(),
         modelId: z.string().optional(),
         outputFormat: z.string().optional(),
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         interruptOnSpeech: z.boolean().optional(),
       })
       .strict()

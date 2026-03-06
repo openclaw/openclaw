@@ -177,4 +177,49 @@ describe("config secret refs schema", () => {
       ).toBe(true);
     }
   });
+
+  it("accepts tools web search apiKey refs", () => {
+    const result = validateConfigObjectRaw({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
+            provider: "perplexity",
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts tools web search provider-specific apiKey refs", () => {
+    const result = validateConfigObjectRaw({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "perplexity",
+            perplexity: {
+              apiKey: { source: "env", provider: "default", id: "PERPLEXITY_API_KEY" },
+              model: "llama-3.1-sonar-small-128k-online",
+            },
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
 });
