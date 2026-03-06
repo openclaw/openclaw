@@ -373,7 +373,9 @@ export async function updateNpmInstalledPlugins(params: {
       spec: record.spec,
       installPath: result.targetDir,
       version: nextVersion,
-      ...buildNpmResolutionInstallFields(result.npmResolution),
+      // When using a one-time spec override, keep the existing resolution/integrity
+      // metadata so it stays consistent with record.spec for future updates.
+      ...(hasSpecOverride ? {} : buildNpmResolutionInstallFields(result.npmResolution)),
     });
     changed = true;
 
