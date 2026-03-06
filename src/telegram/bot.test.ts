@@ -1571,6 +1571,39 @@ describe("createTelegramBot", () => {
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("skips reaction in own mode for channel with cold cache (conservative — not a private DM)", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    wasSentByBot.mockReturnValue(null); // cache miss
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", reactionNotifications: "own" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 505 },
+      messageReaction: {
+        chat: { id: -1001234, type: "channel" },
+        message_id: 99,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "🎉" }],
+      },
+    });
+
+    // Channels are not private DMs — cache miss should conservatively skip,
+    // not forward optimistically.
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
   it("skips reaction from bot users", async () => {
     onSpy.mockClear();
     enqueueSystemEventSpy.mockClear();
