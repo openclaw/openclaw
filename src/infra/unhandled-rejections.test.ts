@@ -122,6 +122,22 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns true for wrapped fetch-failed from third-party libraries (#37375)", () => {
+    // @buape/carbon's GatewayPlugin wraps the original TypeError("fetch failed")
+    // into a plain Error without { cause }, stripping the error chain.
+    // The snippet match on "fetch failed" catches these wrapped messages.
+    const error = new Error("Failed to get gateway information from Discord: fetch failed");
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for wrapped fetch-failed with preserved cause chain", () => {
+    const cause = new TypeError("fetch failed");
+    const error = new Error("Failed to get gateway information from Discord: fetch failed", {
+      cause,
+    });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns false for regular errors without network codes", () => {
     expect(isTransientNetworkError(new Error("Something went wrong"))).toBe(false);
     expect(isTransientNetworkError(new TypeError("Cannot read property"))).toBe(false);
