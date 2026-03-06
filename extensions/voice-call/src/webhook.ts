@@ -539,12 +539,6 @@ export class VoiceCallWebhookServer {
       if (result.text) {
         console.log(`[voice-call] AI response: "${result.text}"`);
         await this.manager.speak(callId, result.text);
-
-        // Restart filler after speaking (in case next turn also needs tools)
-        // Only if we aren't ending the call
-        if (!result.endCall && streamSid) {
-          this.silenceFiller?.start(streamSid);
-        }
       }
 
       if (result.endCall) {
