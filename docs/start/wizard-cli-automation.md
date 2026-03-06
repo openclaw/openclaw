@@ -173,7 +173,8 @@ openclaw onboard --non-interactive \
 ## Add another agent
 
 Use `openclaw agents add <name>` to create a separate agent with its own workspace,
-sessions, and auth profiles. Running without `--workspace` launches the wizard.
+sessions, and auth profiles. Passing `--workspace` pre-fills the wizard; add
+`--non-interactive` to skip prompts entirely.
 
 ```bash
 openclaw agents add work \
@@ -193,6 +194,7 @@ What it sets:
 Notes:
 
 - Default workspaces follow `~/.openclaw/workspace-<agentId>`.
+- `--workspace` can seed the wizard without forcing automation mode.
 - Add `bindings` to route inbound messages (the wizard can do this).
 - Non-interactive flags: `--model`, `--agent-dir`, `--bind`, `--non-interactive`.
 

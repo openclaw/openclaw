@@ -218,7 +218,7 @@ export async function agentsAddCommand(
     const workspaceDefault = resolveAgentWorkspaceDir(cfg, agentId);
     const workspaceInput = await prompter.text({
       message: "Workspace directory",
-      initialValue: workspaceDefault,
+      initialValue: workspaceFlag || workspaceDefault,
       validate: (value) => (value?.trim() ? undefined : "Required"),
     });
     const workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || workspaceDefault);

@@ -170,7 +170,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
   agents
     .command("add [name]")
     .description("Add a new isolated agent")
-    .option("--workspace <dir>", "Workspace directory for the new agent")
+    .option(
+      "--workspace <dir>",
+      "Workspace directory for the new agent (prefills the wizard or is required with --non-interactive)",
+    )
     .option("--model <id>", "Model id for this agent")
     .option("--agent-dir <dir>", "Agent state directory for this agent")
     .option("--bind <channel[:accountId]>", "Route channel binding (repeatable)", collectOption, [])
@@ -179,7 +182,6 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .action(async (name, opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const hasFlags = hasExplicitOptions(command, [
-          "workspace",
           "model",
           "agentDir",
           "bind",

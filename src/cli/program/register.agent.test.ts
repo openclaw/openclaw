@@ -113,6 +113,18 @@ describe("registerAgentCommands", () => {
       { hasFlags: false },
     );
 
+    await runCli(["agents", "add", "workspace-prefill", "--workspace", "/tmp/ws"]);
+    expect(agentsAddCommandMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        name: "workspace-prefill",
+        workspace: "/tmp/ws",
+        bind: [],
+      }),
+      runtime,
+      { hasFlags: false },
+    );
+
     await runCli([
       "agents",
       "add",
@@ -127,7 +139,7 @@ describe("registerAgentCommands", () => {
       "--json",
     ]);
     expect(agentsAddCommandMock).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.objectContaining({
         name: "beta",
         workspace: "/tmp/ws",
