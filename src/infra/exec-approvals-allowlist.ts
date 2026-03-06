@@ -222,10 +222,36 @@ function evaluateSegments(
       candidatePath && segment.resolution
         ? { ...segment.resolution, resolvedPath: candidatePath }
         : segment.resolution;
-    const match = matchAllowlist(params.allowlist, candidateResolution);
+    let match = matchAllowlist(params.allowlist, candidateResolution);
     if (match) {
       matches.push(match);
     }
+    
+    // P1 Fix: For shell wrapper + script mode, also check the script path
+    // Example: bash script.sh → check both /usr/bin/bash AND /path/to/script.sh
+    if (!match && isShellWrapperSegment(segment)) {
+      const scriptPath = extractShellScriptPath(segment.argv);
+      if (scriptPath) {
+        const scriptResolution = resolveCommandResolutionFromArgv(
+          [scriptPath],
+          params.cwd,
+          process.env,
+        );
+        const scriptCandidatePath = resolveAllowlistCandidatePath(scriptResolution, params.cwd);
+        if (scriptCandidatePath) {
+          const scriptCandidateResolution = {
+            ...scriptResolution,
+            resolvedPath: scriptCandidatePath,
+          };
+          const scriptMatch = matchAllowlist(params.allowlist, scriptCandidateResolution);
+          if (scriptMatch) {
+            match = scriptMatch;
+            matches.push(scriptMatch);
+          }
+        }
+      }
+    }
+    
     const safe = isSafeBinUsage({
       argv: effectiveArgv,
       resolution: segment.resolution,
