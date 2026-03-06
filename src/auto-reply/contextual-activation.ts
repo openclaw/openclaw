@@ -26,11 +26,68 @@ export type GroupHistoryMessage = {
   timestamp?: number;
 };
 
+// ---------------------------------------------------------------------------
+// Decision history — per-group record of recent decisions fed back into prompt
+// ---------------------------------------------------------------------------
+
+type DecisionRecord = {
+  timestamp: number;
+  mode: "peeking" | "engaged";
+  decision: "join" | "stay" | "disengage" | "skip";
+  reason: string;
+  model: string;
+  durationMs: number;
+};
+
+const MAX_DECISION_HISTORY = 8;
+
+/** Per-group decision history. Keyed by groupHistoryKey. */
+const decisionHistories = new Map<string, DecisionRecord[]>();
+
+function recordDecision(groupKey: string, record: DecisionRecord) {
+  let history = decisionHistories.get(groupKey);
+  if (!history) {
+    history = [];
+    decisionHistories.set(groupKey, history);
+  }
+  history.push(record);
+  if (history.length > MAX_DECISION_HISTORY) {
+    history.splice(0, history.length - MAX_DECISION_HISTORY);
+  }
+}
+
+function formatDecisionHistory(groupKey: string): string {
+  const history = decisionHistories.get(groupKey);
+  if (!history || history.length === 0) {
+    return "(no previous decisions)";
+  }
+  return history
+    .map((r) => {
+      const time = new Date(r.timestamp).toLocaleTimeString();
+      const tag =
+        r.decision === "join"
+          ? "JOINED conversation"
+          : r.decision === "stay"
+            ? "CONTINUED participating"
+            : r.decision === "disengage"
+              ? "DISENGAGED (went silent)"
+              : "SKIPPED (stayed silent)";
+      return `[${time}] ${tag} — ${r.reason}`;
+    })
+    .join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Engagement state — per-group peeking/engaged tracking
+// ---------------------------------------------------------------------------
+
 /** Per-group engagement state, tracked in memory. */
 export type EngagementState = {
   mode: "peeking" | "engaged";
   /** Timestamp (ms) when the bot last participated (sent a reply or entered engaged mode). */
   lastActivityAt: number;
+  /** How many consecutive times the model said NO in peeking mode. */
+  consecutiveSkips: number;
 };
 
 /** In-memory store for per-group engagement states. Keyed by groupHistoryKey. */
@@ -39,54 +96,55 @@ export const engagementStates = new Map<string, EngagementState>();
 const DEFAULT_CONTEXT_MESSAGES = 15;
 const DEFAULT_ENGAGED_TIMEOUT_S = 300;
 
-const DEFAULT_PEEKING_PROMPT = `You are a group chat participation advisor for an AI assistant.
+// ---------------------------------------------------------------------------
+// Prompts — richer than v1, include decision history and behavioral guidelines
+// ---------------------------------------------------------------------------
 
-Given the recent group chat messages below, decide whether the AI assistant should join the conversation.
+const DEFAULT_PEEKING_PROMPT = `You are a group chat participation advisor for an AI assistant named {botName}.
 
-The assistant's name is: {botName}
+You are monitoring a group chat. The assistant is currently SILENT (just observing). Your job is to decide whether the assistant should JOIN the conversation.
 
-Respond YES if:
-- Someone is asking a question the assistant could answer
-- The topic is relevant to the assistant's capabilities
-- Someone is directly or indirectly addressing the assistant
-- The conversation would benefit from the assistant's input
-- Someone seems to need help
+**Decision Guidelines:**
+1. Consider which messages are directed at the assistant vs. between other people
+2. If someone seems annoyed by the assistant, lean towards NO
+3. If someone is asking a follow-up or the topic is unresolved, lean towards YES
+4. Don't join just because the topic is interesting — only if the assistant can add value
+5. Casual greetings, memes, stickers, and brief acknowledgments are usually NOT worth joining for
+6. If multiple people are having a focused discussion, don't interrupt unless asked
 
-Respond NO if:
-- It's casual small talk between humans
-- The topic is purely personal between group members
-- The conversation is off-topic or irrelevant
-- Adding a response would be intrusive or unwanted
-- The group is just sharing memes, reactions, or brief acknowledgments
+**Output format:**
+Respond with a JSON object (no markdown fencing):
+{"decision":"YES","reason":"brief reason"}
+or
+{"decision":"NO","reason":"brief reason"}`;
 
-Respond with exactly one word: YES or NO`;
+const DEFAULT_DISENGAGE_PROMPT = `You are a group chat participation advisor for an AI assistant named {botName}.
 
-const DEFAULT_DISENGAGE_PROMPT = `You are a group chat participation advisor for an AI assistant that is currently participating in a conversation.
+The assistant is currently PARTICIPATING in this conversation. Your job is to decide whether the assistant should CONTINUE or DISENGAGE (go back to silently observing).
 
-The assistant's name is: {botName}
+**Decision Guidelines:**
+1. If the topic has naturally concluded or shifted away, DISENGAGE
+2. If someone asked the assistant a follow-up question, CONTINUE
+3. If the assistant has already given sufficient input and further replies would feel excessive, DISENGAGE
+4. If the group has gone quiet (no new messages for a while), DISENGAGE
+5. Don't overstay — it's better to leave a bit early than to be the last one talking
+6. If people are now chatting among themselves without involving the assistant, DISENGAGE
 
-Given the recent group chat messages below, decide whether the AI assistant should CONTINUE participating or DISENGAGE (go back to silently observing).
-
-Respond CONTINUE if:
-- The current topic is still ongoing and the assistant's input is still relevant
-- Someone asked a follow-up question or responded to the assistant
-- The conversation still benefits from the assistant's presence
-- There are unanswered questions the assistant could help with
-
-Respond DISENGAGE if:
-- The topic has naturally concluded or moved on
-- The conversation has shifted to casual/personal chat between humans
-- The assistant has already provided sufficient input and further replies would be excessive
-- The group has gone quiet or the energy has died down
-- Continuing to respond would feel intrusive or robotic
-
-Respond with exactly one word: CONTINUE or DISENGAGE`;
+**Output format:**
+Respond with a JSON object (no markdown fencing):
+{"decision":"CONTINUE","reason":"brief reason"}
+or
+{"decision":"DISENGAGE","reason":"brief reason"}`;
 
 export type ContextualActivationResult = {
   shouldProcess: boolean;
   engagementChanged?: boolean;
   error?: string;
 };
+
+// ---------------------------------------------------------------------------
+// Provider resolution helpers
+// ---------------------------------------------------------------------------
 
 function resolveApiKeyForProvider(cfg: OpenClawConfig, provider: string): string | undefined {
   const configKey = getCustomProviderApiKey(cfg, provider);
@@ -124,43 +182,75 @@ function resolveBaseUrl(cfg: OpenClawConfig, provider: string): string | undefin
   return defaultBaseUrls[normalized];
 }
 
+// ---------------------------------------------------------------------------
+// Message formatting — with message IDs like MaiBot (m001, m002...)
+// ---------------------------------------------------------------------------
+
 function formatMessagesForDecision(messages: GroupHistoryMessage[], limit: number): string {
   const recent = messages.slice(-limit);
   if (recent.length === 0) {
     return "(no recent messages)";
   }
   return recent
-    .map((m) => {
+    .map((m, i) => {
+      const id = `m${String(i + 1).padStart(3, "0")}`;
       const time = m.timestamp ? new Date(m.timestamp).toLocaleTimeString() : "";
-      const prefix = time ? `[${time}] ` : "";
-      return `${prefix}${m.sender}: ${m.body}`;
+      const prefix = time ? `[${id}] [${time}]` : `[${id}]`;
+      return `${prefix} ${m.sender}: ${m.body}`;
     })
     .join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// LLM call with fallback chain
+// ---------------------------------------------------------------------------
+
+type ModelCallResult = {
+  content: string;
+  model: string;
+  durationMs: number;
+  error?: string;
+};
 
 async function callSingleModel(params: {
   cfg: OpenClawConfig;
   modelRaw: string;
   systemPrompt: string;
   userPrompt: string;
-}): Promise<{ content: string; error?: string }> {
+}): Promise<ModelCallResult> {
+  const start = Date.now();
   const resolved = resolveModelRefFromString({
     raw: params.modelRaw,
     defaultProvider: "openrouter",
   });
   if (!resolved) {
-    return { content: "", error: `Invalid model ref: ${params.modelRaw}` };
+    return {
+      content: "",
+      model: params.modelRaw,
+      durationMs: Date.now() - start,
+      error: `Invalid model ref: ${params.modelRaw}`,
+    };
   }
   const { ref } = resolved;
 
   const apiKey = resolveApiKeyForProvider(params.cfg, ref.provider);
   if (!apiKey) {
-    return { content: "", error: `No API key found for provider: ${ref.provider}` };
+    return {
+      content: "",
+      model: params.modelRaw,
+      durationMs: Date.now() - start,
+      error: `No API key found for provider: ${ref.provider}`,
+    };
   }
 
   const baseUrl = resolveBaseUrl(params.cfg, ref.provider);
   if (!baseUrl) {
-    return { content: "", error: `No base URL for provider: ${ref.provider}` };
+    return {
+      content: "",
+      model: params.modelRaw,
+      durationMs: Date.now() - start,
+      error: `No base URL for provider: ${ref.provider}`,
+    };
   }
 
   try {
@@ -177,7 +267,7 @@ async function callSingleModel(params: {
           { role: "system", content: params.systemPrompt },
           { role: "user", content: params.userPrompt },
         ],
-        max_tokens: 10,
+        max_tokens: 100,
         temperature: 0.1,
       }),
       signal: AbortSignal.timeout(5000),
@@ -187,6 +277,8 @@ async function callSingleModel(params: {
       const text = await response.text().catch(() => "");
       return {
         content: "",
+        model: params.modelRaw,
+        durationMs: Date.now() - start,
         error: `${params.modelRaw} HTTP ${response.status}: ${text.slice(0, 200)}`,
       };
     }
@@ -194,10 +286,19 @@ async function callSingleModel(params: {
     const data = (await response.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
     };
-    return { content: data.choices?.[0]?.message?.content?.trim().toUpperCase() ?? "" };
+    return {
+      content: data.choices?.[0]?.message?.content?.trim() ?? "",
+      model: params.modelRaw,
+      durationMs: Date.now() - start,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { content: "", error: `${params.modelRaw}: ${message}` };
+    return {
+      content: "",
+      model: params.modelRaw,
+      durationMs: Date.now() - start,
+      error: `${params.modelRaw}: ${message}`,
+    };
   }
 }
 
@@ -206,7 +307,7 @@ async function callDecisionModel(params: {
   config: ContextualActivationConfig;
   systemPrompt: string;
   userPrompt: string;
-}): Promise<{ content: string; error?: string }> {
+}): Promise<ModelCallResult> {
   const models = [params.config.model, ...(params.config.fallbacks ?? [])];
   const errors: string[] = [];
 
@@ -224,15 +325,65 @@ async function callDecisionModel(params: {
     errors.push(result.error);
   }
 
-  return { content: "", error: `All models failed: ${errors.join("; ")}` };
+  return {
+    content: "",
+    model: models[0],
+    durationMs: 0,
+    error: `All models failed: ${errors.join("; ")}`,
+  };
 }
+
+// ---------------------------------------------------------------------------
+// Parse structured decision response
+// ---------------------------------------------------------------------------
+
+type ParsedDecision = { decision: string; reason: string };
+
+function parseDecisionResponse(raw: string): ParsedDecision {
+  // Try JSON parse first
+  try {
+    const cleaned = raw
+      .replace(/```json\s*/g, "")
+      .replace(/```\s*/g, "")
+      .trim();
+    const parsed = JSON.parse(cleaned) as { decision?: string; reason?: string };
+    if (parsed.decision) {
+      return {
+        decision: parsed.decision.toUpperCase(),
+        reason: parsed.reason ?? "",
+      };
+    }
+  } catch {
+    // Fall through to text parsing
+  }
+
+  // Fallback: look for YES/NO/CONTINUE/DISENGAGE in the text
+  const upper = raw.toUpperCase();
+  if (upper.includes("YES")) {
+    return { decision: "YES", reason: raw };
+  }
+  if (upper.includes("DISENGAGE")) {
+    return { decision: "DISENGAGE", reason: raw };
+  }
+  if (upper.includes("CONTINUE")) {
+    return { decision: "CONTINUE", reason: raw };
+  }
+  if (upper.includes("NO")) {
+    return { decision: "NO", reason: raw };
+  }
+  return { decision: "NO", reason: raw };
+}
+
+// ---------------------------------------------------------------------------
+// Engagement state helpers
+// ---------------------------------------------------------------------------
 
 function getEngagement(groupKey: string): EngagementState {
   const existing = engagementStates.get(groupKey);
   if (existing) {
     return existing;
   }
-  const state: EngagementState = { mode: "peeking", lastActivityAt: 0 };
+  const state: EngagementState = { mode: "peeking", lastActivityAt: 0, consecutiveSkips: 0 };
   engagementStates.set(groupKey, state);
   return state;
 }
@@ -245,6 +396,16 @@ function checkEngagedTimeout(state: EngagementState, timeoutS: number): boolean 
   return elapsed > timeoutS * 1000;
 }
 
+/** Compute effective baseRate with consecutive-skip decay. */
+function effectiveBaseRate(baseRate: number, consecutiveSkips: number): number {
+  if (consecutiveSkips <= 0) {
+    return baseRate;
+  }
+  // Decay: after 5 consecutive skips, effective rate is ~50% of baseRate
+  // after 10, ~33%. Asymptotically approaches 0 but never reaches it.
+  return baseRate / (1 + consecutiveSkips * 0.1);
+}
+
 /** Mark the bot as having just participated — call this after sending a reply. */
 export function touchEngagement(groupKey: string) {
   const state = engagementStates.get(groupKey);
@@ -252,6 +413,10 @@ export function touchEngagement(groupKey: string) {
     state.lastActivityAt = Date.now();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
 
 export async function shouldParticipateInGroup(params: {
   cfg: OpenClawConfig;
@@ -274,11 +439,20 @@ export async function shouldParticipateInGroup(params: {
       `[contextual-activation] ${groupKey}: engaged timeout (${engagedTimeout}s), returning to peeking`,
     );
     state.mode = "peeking";
+    recordDecision(groupKey, {
+      timestamp: Date.now(),
+      mode: "engaged",
+      decision: "disengage",
+      reason: `timeout after ${engagedTimeout}s`,
+      model: "timeout",
+      durationMs: 0,
+    });
   }
 
   const allMessages = [...recentMessages, currentMessage];
   const chatContent = formatMessagesForDecision(allMessages, contextLimit);
   const botLabel = botName ?? "AI Assistant";
+  const historyBlock = formatDecisionHistory(groupKey);
 
   if (state.mode === "engaged") {
     // --- ENGAGED MODE: ask if we should disengage ---
@@ -286,23 +460,58 @@ export async function shouldParticipateInGroup(params: {
       /\{botName\}/g,
       botLabel,
     );
-    const userPrompt = `Recent group chat messages:\n\n${chatContent}\n\nShould the assistant continue participating or disengage?`;
+    const userPrompt = [
+      "**Recent group chat messages:**",
+      chatContent,
+      "",
+      "**Your previous decisions in this group:**",
+      historyBlock,
+      "",
+      "Should the assistant continue participating or disengage?",
+    ].join("\n");
 
     const result = await callDecisionModel({ cfg, config, systemPrompt, userPrompt });
     if (result.error) {
-      logVerbose(`[contextual-activation] ${groupKey}: disengage check error: ${result.error}`);
+      logVerbose(
+        `[contextual-activation] ${groupKey}: disengage check error: ${result.error} (${result.durationMs}ms)`,
+      );
       // On error, stay engaged (fail-open for ongoing conversations)
       return { shouldProcess: true };
     }
 
-    if (result.content.startsWith("DISENGAGE")) {
-      logVerbose(`[contextual-activation] ${groupKey}: model decided to disengage`);
+    const parsed = parseDecisionResponse(result.content);
+
+    if (parsed.decision === "DISENGAGE") {
+      const reason = parsed.reason || "model decided to disengage";
+      logVerbose(
+        `[contextual-activation] ${groupKey}: DISENGAGE (${result.model}, ${result.durationMs}ms) — ${reason}`,
+      );
+      recordDecision(groupKey, {
+        timestamp: Date.now(),
+        mode: "engaged",
+        decision: "disengage",
+        reason,
+        model: result.model,
+        durationMs: result.durationMs,
+      });
       state.mode = "peeking";
       state.lastActivityAt = 0;
+      state.consecutiveSkips = 0;
       return { shouldProcess: false, engagementChanged: true };
     }
 
-    logVerbose(`[contextual-activation] ${groupKey}: model decided to continue (engaged)`);
+    const reason = parsed.reason || "continuing";
+    logVerbose(
+      `[contextual-activation] ${groupKey}: CONTINUE (${result.model}, ${result.durationMs}ms) — ${reason}`,
+    );
+    recordDecision(groupKey, {
+      timestamp: Date.now(),
+      mode: "engaged",
+      decision: "stay",
+      reason,
+      model: result.model,
+      durationMs: result.durationMs,
+    });
     state.lastActivityAt = Date.now();
     return { shouldProcess: true };
   }
@@ -314,27 +523,64 @@ export async function shouldParticipateInGroup(params: {
     return { shouldProcess: false };
   }
 
-  // Probabilistic pre-filter: skip calling the model some of the time
-  if (baseRate < 1 && Math.random() > baseRate) {
+  // Probabilistic pre-filter with consecutive-skip decay
+  const rate = effectiveBaseRate(baseRate, state.consecutiveSkips);
+  if (rate < 1 && Math.random() > rate) {
     return { shouldProcess: false };
   }
 
   const systemPrompt = (config.prompt ?? DEFAULT_PEEKING_PROMPT).replace(/\{botName\}/g, botLabel);
-  const userPrompt = `Recent group chat messages:\n\n${chatContent}\n\nShould the assistant participate?`;
+  const userPrompt = [
+    "**Recent group chat messages:**",
+    chatContent,
+    "",
+    "**Your previous decisions in this group:**",
+    historyBlock,
+    "",
+    "Should the assistant participate?",
+  ].join("\n");
 
   const result = await callDecisionModel({ cfg, config, systemPrompt, userPrompt });
   if (result.error) {
-    logVerbose(`[contextual-activation] ${groupKey}: peeking check error: ${result.error}`);
+    logVerbose(
+      `[contextual-activation] ${groupKey}: peeking error: ${result.error} (${result.durationMs}ms)`,
+    );
     return { shouldProcess: false, error: result.error };
   }
 
-  if (result.content.startsWith("YES")) {
-    logVerbose(`[contextual-activation] ${groupKey}: model decided to join -> engaged`);
+  const parsed = parseDecisionResponse(result.content);
+
+  if (parsed.decision === "YES") {
+    const reason = parsed.reason || "model decided to join";
+    logVerbose(
+      `[contextual-activation] ${groupKey}: JOIN -> engaged (${result.model}, ${result.durationMs}ms) — ${reason}`,
+    );
+    recordDecision(groupKey, {
+      timestamp: Date.now(),
+      mode: "peeking",
+      decision: "join",
+      reason,
+      model: result.model,
+      durationMs: result.durationMs,
+    });
     state.mode = "engaged";
     state.lastActivityAt = Date.now();
+    state.consecutiveSkips = 0;
     return { shouldProcess: true, engagementChanged: true };
   }
 
-  logVerbose(`[contextual-activation] ${groupKey}: model decided not to join (peeking)`);
+  const reason = parsed.reason || "not relevant";
+  state.consecutiveSkips++;
+  logVerbose(
+    `[contextual-activation] ${groupKey}: SKIP #${state.consecutiveSkips} (${result.model}, ${result.durationMs}ms, effectiveRate=${rate.toFixed(2)}) — ${reason}`,
+  );
+  recordDecision(groupKey, {
+    timestamp: Date.now(),
+    mode: "peeking",
+    decision: "skip",
+    reason,
+    model: result.model,
+    durationMs: result.durationMs,
+  });
   return { shouldProcess: false };
 }
