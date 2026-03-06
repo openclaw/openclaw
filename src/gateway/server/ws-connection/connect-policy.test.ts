@@ -171,7 +171,7 @@ describe("ws connect policy", () => {
     ).toBe("allow");
   });
 
-  test("pairing bypass requires control-ui bypass + shared auth (or trusted-proxy auth)", () => {
+  test("pairing bypass requires control-ui bypass (or trusted-proxy auth)", () => {
     const bypass = resolveControlUiAuthPolicy({
       isControlUi: true,
       controlUiConfig: { dangerouslyDisableDeviceAuth: true },
@@ -183,9 +183,30 @@ describe("ws connect policy", () => {
       deviceRaw: null,
     });
     expect(shouldSkipControlUiPairing(bypass, true, false)).toBe(true);
-    expect(shouldSkipControlUiPairing(bypass, false, false)).toBe(false);
+    expect(shouldSkipControlUiPairing(bypass, false, false)).toBe(true);
     expect(shouldSkipControlUiPairing(strict, true, false)).toBe(false);
     expect(shouldSkipControlUiPairing(strict, false, true)).toBe(true);
+  });
+
+  test("dangerouslyDisableDeviceAuth bypasses device identity when authOk", () => {
+    const bypassPolicy = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
+      deviceRaw: null,
+    });
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: bypassPolicy,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: true,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
   });
 
   test("trusted-proxy control-ui bypass only applies to operator + trusted-proxy auth", () => {

@@ -40,7 +40,7 @@ export function shouldSkipControlUiPairing(
   if (trustedProxyAuthOk) {
     return true;
   }
-  return policy.allowBypass && sharedAuthOk;
+  return policy.allowBypass;
 }
 
 export function isTrustedProxyControlUiOperatorAuth(params: {
@@ -80,6 +80,9 @@ export function evaluateMissingDeviceIdentity(params: {
     return { kind: "allow" };
   }
   if (params.isControlUi && params.trustedProxyAuthOk) {
+    return { kind: "allow" };
+  }
+  if (params.isControlUi && params.controlUiAuthPolicy.allowBypass && params.authOk) {
     return { kind: "allow" };
   }
   if (params.isControlUi && !params.controlUiAuthPolicy.allowBypass) {
