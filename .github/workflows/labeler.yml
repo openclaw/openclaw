@@ -54,83 +54,124 @@ jobs:
 
             const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
             const labelColor = "b76e79";
+            const isRateLimitError = (error) =>
+              error?.status === 403 &&
+              (`${error?.message ?? ""}`.includes("API rate limit exceeded") ||
+                `${error?.response?.headers?.["x-ratelimit-remaining"] ?? ""}` === "0");
 
-            for (const label of sizeLabels) {
+            async function ensureLabelExists(name) {
               try {
                 await github.rest.issues.getLabel({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  name: label,
+                  name,
                 });
+                return true;
               } catch (error) {
+                if (isRateLimitError(error)) {
+                  core.warning(`Skipping size labeling because rate limit was exceeded while checking "${name}".`);
+                  return false;
+                }
                 if (error?.status !== 404) {
                   throw error;
                 }
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: label,
-                  color: labelColor,
-                });
+                try {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name,
+                    color: labelColor,
+                  });
+                  return true;
+                } catch (createError) {
+                  if (createError?.status === 422) {
+                    return true;
+                  }
+                  if (isRateLimitError(createError)) {
+                    core.warning(`Skipping size labeling because rate limit was exceeded while creating "${name}".`);
+                    return false;
+                  }
+                  throw createError;
+                }
               }
             }
 
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: pullRequest.number,
-              per_page: 100,
-            });
-
-            const excludedLockfiles = new Set(["pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lockb"]);
-            const totalChangedLines = files.reduce((total, file) => {
-              const path = file.filename ?? "";
-              if (path === "docs.acp.md" || path.startsWith("docs/") || excludedLockfiles.has(path)) {
-                return total;
+            try {
+              let canApplySizeLabels = true;
+              for (const label of sizeLabels) {
+                const ensured = await ensureLabelExists(label);
+                if (!ensured) {
+                  canApplySizeLabels = false;
+                  break;
+                }
               }
-              return total + (file.additions ?? 0) + (file.deletions ?? 0);
-            }, 0);
-
-            let targetSizeLabel = "size: XL";
-            if (totalChangedLines < 50) {
-              targetSizeLabel = "size: XS";
-            } else if (totalChangedLines < 200) {
-              targetSizeLabel = "size: S";
-            } else if (totalChangedLines < 500) {
-              targetSizeLabel = "size: M";
-            } else if (totalChangedLines < 1000) {
-              targetSizeLabel = "size: L";
-            }
-
-            const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pullRequest.number,
-              per_page: 100,
-            });
-
-            for (const label of currentLabels) {
-              const name = label.name ?? "";
-              if (!sizeLabels.includes(name)) {
-                continue;
+              if (!canApplySizeLabels) {
+                return;
               }
-              if (name === targetSizeLabel) {
-                continue;
+
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pullRequest.number,
+                per_page: 100,
+              });
+
+              const excludedLockfiles = new Set(["pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lockb"]);
+              const totalChangedLines = files.reduce((total, file) => {
+                const path = file.filename ?? "";
+                if (path === "docs.acp.md" || path.startsWith("docs/") || excludedLockfiles.has(path)) {
+                  return total;
+                }
+                return total + (file.additions ?? 0) + (file.deletions ?? 0);
+              }, 0);
+
+              let targetSizeLabel = "size: XL";
+              if (totalChangedLines < 50) {
+                targetSizeLabel = "size: XS";
+              } else if (totalChangedLines < 200) {
+                targetSizeLabel = "size: S";
+              } else if (totalChangedLines < 500) {
+                targetSizeLabel = "size: M";
+              } else if (totalChangedLines < 1000) {
+                targetSizeLabel = "size: L";
               }
-              await github.rest.issues.removeLabel({
+
+              const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: pullRequest.number,
-                name,
+                per_page: 100,
               });
-            }
 
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pullRequest.number,
-              labels: [targetSizeLabel],
-            });
+              for (const label of currentLabels) {
+                const name = label.name ?? "";
+                if (!sizeLabels.includes(name)) {
+                  continue;
+                }
+                if (name === targetSizeLabel) {
+                  continue;
+                }
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  name,
+                });
+              }
+
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                labels: [targetSizeLabel],
+              });
+            } catch (error) {
+              if (isRateLimitError(error)) {
+                core.warning("Skipping size labeling because API rate limit was exceeded.");
+                return;
+              }
+              throw error;
+            }
       - name: Apply maintainer or trusted-contributor label
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
@@ -245,29 +286,58 @@ jobs:
             const experiencedLabel = "experienced-contributor";
             const trustedThreshold = 4;
             const experiencedThreshold = 10;
+            const isRateLimitError = (error) =>
+              error?.status === 403 &&
+              (`${error?.message ?? ""}`.includes("API rate limit exceeded") ||
+                `${error?.response?.headers?.["x-ratelimit-remaining"] ?? ""}` === "0");
 
             const contributorCache = new Map();
 
-            async function ensureSizeLabels() {
-              for (const label of sizeLabels) {
+            async function ensureLabelExists(name) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner,
+                  repo,
+                  name,
+                });
+                return true;
+              } catch (error) {
+                if (isRateLimitError(error)) {
+                  core.warning(`Rate limit exceeded while checking "${name}".`);
+                  return false;
+                }
+                if (error?.status !== 404) {
+                  throw error;
+                }
                 try {
-                  await github.rest.issues.getLabel({
-                    owner,
-                    repo,
-                    name: label,
-                  });
-                } catch (error) {
-                  if (error?.status !== 404) {
-                    throw error;
-                  }
                   await github.rest.issues.createLabel({
                     owner,
                     repo,
-                    name: label,
+                    name,
                     color: labelColor,
                   });
+                  return true;
+                } catch (createError) {
+                  if (createError?.status === 422) {
+                    return true;
+                  }
+                  if (isRateLimitError(createError)) {
+                    core.warning(`Rate limit exceeded while creating "${name}".`);
+                    return false;
+                  }
+                  throw createError;
                 }
               }
+            }
+
+            async function ensureSizeLabels() {
+              for (const label of sizeLabels) {
+                const ensured = await ensureLabelExists(label);
+                if (!ensured) {
+                  return false;
+                }
+              }
+              return true;
             }
 
             async function resolveContributorLabel(login) {
@@ -400,7 +470,7 @@ jobs:
               labelNames.add(label);
             }
 
-            await ensureSizeLabels();
+            const canApplySizeLabels = await ensureSizeLabels();
 
             let page = 1;
             let processed = 0;
@@ -436,7 +506,9 @@ jobs:
                   currentLabels.map((label) => label.name).filter((name) => typeof name === "string"),
                 );
 
-                await applySizeLabel(pullRequest, currentLabels, labelNames);
+                if (canApplySizeLabels) {
+                  await applySizeLabel(pullRequest, currentLabels, labelNames);
+                }
                 await applyContributorLabel(pullRequest, labelNames);
 
                 processed += 1;
