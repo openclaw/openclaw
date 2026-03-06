@@ -58,6 +58,7 @@ describe("model-selection", () => {
       expect(normalizeProviderId("z-ai")).toBe("zai");
       expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode");
       expect(normalizeProviderId("qwen")).toBe("qwen-portal");
+      expect(normalizeProviderId("chatgpt")).toBe("openai-codex");
       expect(normalizeProviderId("kimi-code")).toBe("kimi-coding");
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
