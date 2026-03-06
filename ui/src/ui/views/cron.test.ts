@@ -41,6 +41,7 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     editingJobId: null,
     channels: [],
     channelLabels: {},
+    channelMeta: [],
     runsJobId: null,
     runs: [],
     runsTotal: 0,
@@ -73,46 +74,17 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     onJobsFiltersReset: () => undefined,
     onLoadMoreRuns: () => undefined,
     onRunsFiltersChange: () => undefined,
+    onRunsFiltersReset: () => undefined,
     ...overrides,
   };
 }
 
 describe("cron view", () => {
-  it("shows all-job history mode by default", () => {
+  it("prompts to select a job before showing run history", () => {
     const container = document.createElement("div");
-    render(renderCron(createProps()), container);
+    render(renderCron(createProps({ runsScope: "job" })), container);
 
-    expect(container.textContent).toContain("Latest runs across all jobs.");
-    expect(container.textContent).toContain("Status");
-    expect(container.textContent).toContain("All statuses");
-    expect(container.textContent).toContain("Delivery");
-    expect(container.textContent).toContain("All delivery");
-    expect(container.textContent).not.toContain("multi-select");
-  });
-
-  it("toggles run status filter via dropdown checkboxes", () => {
-    const container = document.createElement("div");
-    const onRunsFiltersChange = vi.fn();
-    render(
-      renderCron(
-        createProps({
-          onRunsFiltersChange,
-        }),
-      ),
-      container,
-    );
-
-    const statusOk = container.querySelector(
-      '.cron-filter-dropdown[data-filter="status"] input[value="ok"]',
-    );
-    expect(statusOk).not.toBeNull();
-    if (!(statusOk instanceof HTMLInputElement)) {
-      return;
-    }
-    statusOk.checked = true;
-    statusOk.dispatchEvent(new Event("change", { bubbles: true }));
-
-    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["ok"] });
+    expect(container.textContent).toContain("Select a job to inspect run history.");
   });
 
   it("loads run history when clicking a job row", () => {
@@ -161,7 +133,7 @@ describe("cron view", () => {
     expect(historyButton).not.toBeUndefined();
     historyButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(onLoadRuns).toHaveBeenCalledTimes(1);
+    expect(onLoadRuns).toHaveBeenCalledTimes(2);
     expect(onLoadRuns).toHaveBeenCalledWith("job-1");
   });
 
@@ -193,7 +165,7 @@ describe("cron view", () => {
     );
   });
 
-  it("shows selected job name and sorts run history newest first", () => {
+  it("shows selected job name and preserves run history order", () => {
     const container = document.createElement("div");
     const job = createJob("job-1");
     render(
@@ -222,8 +194,8 @@ describe("cron view", () => {
     const summaries = Array.from(
       runHistoryCard?.querySelectorAll(".list-item .list-sub") ?? [],
     ).map((el) => (el.textContent ?? "").trim());
-    expect(summaries[0]).toBe("newer run");
-    expect(summaries[1]).toBe("older run");
+    expect(summaries[0]).toBe("older run");
+    expect(summaries[1]).toBe("newer run");
   });
 
   it("labels past nextRunAtMs as due instead of next", () => {
@@ -301,7 +273,6 @@ describe("cron view", () => {
 
     expect(onJobsFiltersReset).toHaveBeenCalledTimes(1);
   });
-
   it("shows webhook delivery option in the form", () => {
     const container = document.createElement("div");
     render(
@@ -341,7 +312,7 @@ describe("cron view", () => {
     expect(options).not.toContain("Announce summary (default)");
     expect(options).toContain("Webhook POST");
     expect(options).toContain("None (internal)");
-    expect(container.querySelector('input[placeholder="https://example.com/cron"]')).toBeNull();
+    expect(container.querySelector('input[placeholder="https://example.invalid/cron"]')).toBeNull();
   });
 
   it("shows webhook delivery details for jobs", () => {

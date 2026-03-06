@@ -45,6 +45,9 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onSend: () => undefined,
     onQueueRemove: () => undefined,
     onNewSession: () => undefined,
+    agentsList: null,
+    currentAgentId: "main",
+    onAgentChange: () => undefined,
     ...overrides,
   };
 }
@@ -188,40 +191,38 @@ describe("chat view", () => {
       renderChat(
         createProps({
           canAbort: true,
+          sending: true,
           onAbort,
         }),
       ),
       container,
     );
 
-    const stopButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Stop",
-    );
-    expect(stopButton).not.toBeUndefined();
+    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
+    expect(stopButton).not.toBeNull();
     stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onAbort).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("New session");
   });
 
-  it("shows a new session button when aborting is unavailable", () => {
+  it("shows send button when aborting is unavailable", () => {
     const container = document.createElement("div");
-    const onNewSession = vi.fn();
+    const onSend = vi.fn();
     render(
       renderChat(
         createProps({
           canAbort: false,
-          onNewSession,
+          draft: "hello",
+          onSend,
         }),
       ),
       container,
     );
 
-    const newSessionButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "New session",
-    );
-    expect(newSessionButton).not.toBeUndefined();
-    newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onNewSession).toHaveBeenCalledTimes(1);
-    expect(container.textContent).not.toContain("Stop");
+    const sendButton = container.querySelector<HTMLButtonElement>('button[title="Send"]');
+    expect(sendButton).not.toBeNull();
+    sendButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('button[title="Stop"]')).toBeNull();
   });
 });

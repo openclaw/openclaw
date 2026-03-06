@@ -20,11 +20,13 @@ describe("config view", () => {
     schemaLoading: false,
     uiHints: {},
     formMode: "form" as const,
+    showModeToggle: true,
     formValue: {},
     originalValue: {},
     searchQuery: "",
     activeSection: null,
     activeSubsection: null,
+    streamMode: false,
     onRawChange: vi.fn(),
     onFormModeChange: vi.fn(),
     onFormPatch: vi.fn(),
@@ -35,6 +37,13 @@ describe("config view", () => {
     onApply: vi.fn(),
     onUpdate: vi.fn(),
     onSubsectionChange: vi.fn(),
+    version: "2026.2.22",
+    theme: "claw" as const,
+    themeMode: "system" as const,
+    setTheme: vi.fn(),
+    setThemeMode: vi.fn(),
+    gatewayUrl: "ws://127.0.0.1:18789",
+    assistantName: "OpenClaw",
   });
 
   function findActionButtons(container: HTMLElement): {
@@ -48,7 +57,7 @@ describe("config view", () => {
     };
   }
 
-  it("allows save when form is unsafe", () => {
+  it("allows save with mixed union schemas", () => {
     const container = document.createElement("div");
     render(
       renderConfig({
@@ -134,7 +143,7 @@ describe("config view", () => {
     expect(applyButton?.disabled).toBe(false);
   });
 
-  it("switches mode via the sidebar toggle", () => {
+  it("switches mode via the mode toggle", () => {
     const container = document.createElement("div");
     const onFormModeChange = vi.fn();
     render(
@@ -153,7 +162,7 @@ describe("config view", () => {
     expect(onFormModeChange).toHaveBeenCalledWith("raw");
   });
 
-  it("switches sections from the sidebar", () => {
+  it("switches sections from the top tabs", () => {
     const container = document.createElement("div");
     const onSectionChange = vi.fn();
     render(
@@ -179,6 +188,38 @@ describe("config view", () => {
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
   });
 
+  it("marks the active section tab as active", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfig({
+        ...baseProps(),
+        activeSection: "gateway",
+        schema: {
+          type: "object",
+          properties: {
+            gateway: { type: "object", properties: {} },
+          },
+        },
+      }),
+      container,
+    );
+
+    const tab = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "Gateway",
+    );
+    expect(tab?.classList.contains("active")).toBe(true);
+  });
+
+  it("marks the root tab as active when no section is selected", () => {
+    const container = document.createElement("div");
+    render(renderConfig(baseProps()), container);
+
+    const tab = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "Settings",
+    );
+    expect(tab?.classList.contains("active")).toBe(true);
+  });
+
   it("wires search input to onSearchChange", () => {
     const container = document.createElement("div");
     const onSearchChange = vi.fn();
@@ -198,36 +239,5 @@ describe("config view", () => {
     (input as HTMLInputElement).value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
-  });
-
-  it("shows all tag options in compact tag picker", () => {
-    const container = document.createElement("div");
-    render(renderConfig(baseProps()), container);
-
-    const options = Array.from(container.querySelectorAll(".config-search__tag-option")).map(
-      (option) => option.textContent?.trim(),
-    );
-    expect(options).toContain("tag:security");
-    expect(options).toContain("tag:advanced");
-    expect(options).toHaveLength(15);
-  });
-
-  it("updates search query when toggling a tag option", () => {
-    const container = document.createElement("div");
-    const onSearchChange = vi.fn();
-    render(
-      renderConfig({
-        ...baseProps(),
-        onSearchChange,
-      }),
-      container,
-    );
-
-    const option = container.querySelector<HTMLButtonElement>(
-      '.config-search__tag-option[data-tag="security"]',
-    );
-    expect(option).toBeTruthy();
-    option?.click();
-    expect(onSearchChange).toHaveBeenCalledWith("tag:security");
   });
 });

@@ -18,6 +18,7 @@ describe("control UI routing", () => {
   it("hydrates the tab from the location", async () => {
     const app = mountApp("/sessions");
     await app.updateComplete;
+    await nextFrame();
 
     expect(app.tab).toBe("sessions");
     expect(window.location.pathname).toBe("/sessions");
@@ -26,6 +27,7 @@ describe("control UI routing", () => {
   it("respects /ui base paths", async () => {
     const app = mountApp("/ui/cron");
     await app.updateComplete;
+    await nextFrame();
 
     expect(app.basePath).toBe("/ui");
     expect(app.tab).toBe("cron");
@@ -35,6 +37,7 @@ describe("control UI routing", () => {
   it("infers nested base paths", async () => {
     const app = mountApp("/apps/openclaw/cron");
     await app.updateComplete;
+    await nextFrame();
 
     expect(app.basePath).toBe("/apps/openclaw");
     expect(app.tab).toBe("cron");
@@ -45,6 +48,7 @@ describe("control UI routing", () => {
     window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = "/openclaw";
     const app = mountApp("/openclaw/sessions");
     await app.updateComplete;
+    await nextFrame();
 
     expect(app.basePath).toBe("/openclaw");
     expect(app.tab).toBe("sessions");
@@ -54,12 +58,14 @@ describe("control UI routing", () => {
   it("updates the URL when clicking nav items", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
+    await nextFrame();
 
     const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
     expect(link).not.toBeNull();
     link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
+    await nextFrame();
     expect(app.tab).toBe("channels");
     expect(window.location.pathname).toBe("/channels");
   });
@@ -67,12 +73,14 @@ describe("control UI routing", () => {
   it("resets to the main session when opening chat from sidebar navigation", async () => {
     const app = mountApp("/sessions?session=agent:main:subagent:task-123");
     await app.updateComplete;
+    await nextFrame();
 
     const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/chat"]');
     expect(link).not.toBeNull();
     link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
+    await nextFrame();
     expect(app.tab).toBe("chat");
     expect(app.sessionKey).toBe("main");
     expect(window.location.pathname).toBe("/chat");
@@ -82,6 +90,7 @@ describe("control UI routing", () => {
   it("keeps chat and nav usable on narrow viewports", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
+    await nextFrame();
 
     expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
 
@@ -110,6 +119,7 @@ describe("control UI routing", () => {
   it("auto-scrolls chat history to the latest message", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
+    await nextFrame();
 
     const initialContainer: HTMLElement | null = app.querySelector(".chat-thread");
     expect(initialContainer).not.toBeNull();
@@ -149,6 +159,7 @@ describe("control UI routing", () => {
   it("hydrates token from URL params and strips it", async () => {
     const app = mountApp("/ui/overview?token=abc123");
     await app.updateComplete;
+    await nextFrame();
 
     expect(app.settings.token).toBe("abc123");
     expect(window.location.pathname).toBe("/ui/overview");
@@ -158,6 +169,7 @@ describe("control UI routing", () => {
   it("strips password URL params without importing them", async () => {
     const app = mountApp("/ui/overview?password=sekret");
     await app.updateComplete;
+    await nextFrame();
 
     expect(app.password).toBe("");
     expect(window.location.pathname).toBe("/ui/overview");
@@ -171,6 +183,7 @@ describe("control UI routing", () => {
     );
     const app = mountApp("/ui/overview?token=abc123");
     await app.updateComplete;
+    await nextFrame();
 
     expect(app.settings.token).toBe("abc123");
     expect(window.location.pathname).toBe("/ui/overview");
@@ -180,6 +193,7 @@ describe("control UI routing", () => {
   it("hydrates token from URL hash and strips it", async () => {
     const app = mountApp("/ui/overview#token=abc123");
     await app.updateComplete;
+    await nextFrame();
 
     expect(app.settings.token).toBe("abc123");
     expect(window.location.pathname).toBe("/ui/overview");

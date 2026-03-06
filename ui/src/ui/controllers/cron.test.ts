@@ -1022,6 +1022,7 @@ describe("cron controller", () => {
     });
     const state = createState({
       client: { request } as unknown as CronState["client"],
+      cronRunsScope: "job",
     });
 
     await loadCronRuns(state, "job-1");

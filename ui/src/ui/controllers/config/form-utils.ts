@@ -9,12 +9,24 @@ export function serializeConfigForm(form: Record<string, unknown>): string {
   return `${JSON.stringify(form, null, 2).trimEnd()}\n`;
 }
 
+// Block prototype pollution via user-controlled map keys
+const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+function isForbiddenKey(key: string | number): boolean {
+  return typeof key === "string" && FORBIDDEN_KEYS.has(key);
+}
+
 export function setPathValue(
   obj: Record<string, unknown> | unknown[],
   path: Array<string | number>,
   value: unknown,
 ) {
   if (path.length === 0) {
+    return;
+  }
+  // Reject paths containing forbidden keys to prevent prototype pollution
+  if (path.some(isForbiddenKey)) {
+    console.warn("[setPathValue] Rejected forbidden key in path:", path);
     return;
   }
   let current: Record<string, unknown> | unknown[] = obj;
@@ -57,6 +69,11 @@ export function removePathValue(
   path: Array<string | number>,
 ) {
   if (path.length === 0) {
+    return;
+  }
+  // Reject paths containing forbidden keys to prevent prototype pollution
+  if (path.some(isForbiddenKey)) {
+    console.warn("[removePathValue] Rejected forbidden key in path:", path);
     return;
   }
   let current: Record<string, unknown> | unknown[] = obj;

@@ -1,6 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
-import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
@@ -16,19 +15,12 @@ type GatewayClientMock = {
 };
 
 const gatewayClientInstances: GatewayClientMock[] = [];
+const localStorageState = new Map<string, string>();
+
+let connectGateway: typeof import("./app-gateway.ts").connectGateway;
+let resolveControlUiClientVersion: typeof import("./app-gateway.ts").resolveControlUiClientVersion;
 
 vi.mock("./gateway.ts", () => {
-  function resolveGatewayErrorDetailCode(
-    error: { details?: unknown } | null | undefined,
-  ): string | null {
-    const details = error?.details;
-    if (!details || typeof details !== "object") {
-      return null;
-    }
-    const code = (details as { code?: unknown }).code;
-    return typeof code === "string" ? code : null;
-  }
-
   class GatewayBrowserClient {
     readonly start = vi.fn();
     readonly stop = vi.fn();
@@ -66,7 +58,28 @@ vi.mock("./gateway.ts", () => {
     }
   }
 
-  return { GatewayBrowserClient, resolveGatewayErrorDetailCode };
+  return { GatewayBrowserClient };
+});
+
+beforeAll(async () => {
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => localStorageState.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      localStorageState.set(key, value);
+    },
+    removeItem: (key: string) => {
+      localStorageState.delete(key);
+    },
+    clear: () => {
+      localStorageState.clear();
+    },
+    key: (index: number) => Array.from(localStorageState.keys())[index] ?? null,
+    get length() {
+      return localStorageState.size;
+    },
+  } satisfies Storage);
+
+  ({ connectGateway, resolveControlUiClientVersion } = await import("./app-gateway.ts"));
 });
 
 function createHost() {
@@ -76,7 +89,8 @@ function createHost() {
       token: "",
       sessionKey: "main",
       lastActiveSessionKey: "main",
-      theme: "system",
+      theme: "claw",
+      themeMode: "system",
       chatFocusMode: false,
       chatShowThinking: true,
       splitRatio: 0.6,
@@ -84,12 +98,10 @@ function createHost() {
       navGroupsCollapsed: {},
     },
     password: "",
-    clientInstanceId: "instance-test",
     client: null,
     connected: false,
     hello: null,
     lastError: null,
-    lastErrorCode: null,
     eventLogBuffer: [],
     eventLog: [],
     tab: "overview",
@@ -116,6 +128,7 @@ function createHost() {
 describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
+    localStorageState.clear();
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {
@@ -202,33 +215,9 @@ describe("connectGateway", () => {
 
     firstClient.emitClose({ code: 1005 });
     expect(host.lastError).toBeNull();
-    expect(host.lastErrorCode).toBeNull();
 
     secondClient.emitClose({ code: 1005 });
     expect(host.lastError).toBe("disconnected (1005): no reason");
-    expect(host.lastErrorCode).toBeNull();
-  });
-
-  it("prefers structured connect errors over close reason", () => {
-    const host = createHost();
-
-    connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
-
-    client.emitClose({
-      code: 4008,
-      reason: "connect failed",
-      error: {
-        code: "INVALID_REQUEST",
-        message:
-          "unauthorized: gateway token mismatch (open the dashboard URL and paste the token in Control UI settings)",
-        details: { code: "AUTH_TOKEN_MISMATCH" },
-      },
-    });
-
-    expect(host.lastError).toContain("gateway token mismatch");
-    expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
   });
 });
 

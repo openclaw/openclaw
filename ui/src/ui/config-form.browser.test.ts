@@ -296,12 +296,12 @@ describe("config form renderer", () => {
         },
         unsupportedPaths: analysis.unsupportedPaths,
         value: {},
-        searchQuery: "mode tag:security",
+        searchQuery: "missing tag:security",
         onPatch,
       }),
       noMatchContainer,
     );
-    expect(noMatchContainer.textContent).toContain('No settings match "mode tag:security"');
+    expect(noMatchContainer.textContent).toContain('No settings match "missing tag:security"');
   });
 
   it("supports SecretInput unions in additionalProperties maps", () => {
@@ -381,7 +381,7 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["models", "providers", "openai", "apiKey"], "new-key");
   });
 
-  it("flags unsupported unions", () => {
+  it("flags mixed unions as unsupported", () => {
     const schema = {
       type: "object",
       properties: {
@@ -431,14 +431,20 @@ describe("config form renderer", () => {
     const schema = {
       type: "object",
       properties: {
-        accounts: {
+        extra: {
           type: "object",
           additionalProperties: true,
         },
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).not.toContain("accounts");
+    expect(analysis.unsupportedPaths).not.toContain("extra");
+    const extraSchema = (
+      analysis.schema as Record<string, unknown> & {
+        properties: Record<string, Record<string, unknown>>;
+      }
+    ).properties.extra;
+    expect(extraSchema.additionalProperties).toEqual({});
 
     const onPatch = vi.fn();
     const container = document.createElement("div");
@@ -447,7 +453,7 @@ describe("config form renderer", () => {
         schema: analysis.schema,
         uiHints: {},
         unsupportedPaths: analysis.unsupportedPaths,
-        value: { accounts: { default: { enabled: true } } },
+        value: { extra: { default: { enabled: true } } },
         onPatch,
       }),
       container,
@@ -456,6 +462,6 @@ describe("config form renderer", () => {
     const removeButton = container.querySelector(".cfg-map__item-remove");
     expect(removeButton).not.toBeNull();
     removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["accounts"], {});
+    expect(onPatch).toHaveBeenCalledWith(["extra"], {});
   });
 });

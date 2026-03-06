@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setTabFromRoute } from "./app-settings.ts";
+import {
+  hasMissingSkillDependencies,
+  hasOperatorReadAccess,
+  setTabFromRoute,
+} from "./app-settings.ts";
 import type { Tab } from "./navigation.ts";
 
 type SettingsHost = Parameters<typeof setTabFromRoute>[0] & {
@@ -13,14 +17,17 @@ const createHost = (tab: Tab): SettingsHost => ({
     token: "",
     sessionKey: "main",
     lastActiveSessionKey: "main",
-    theme: "system",
+    theme: "claw",
+    themeMode: "system",
     chatFocusMode: false,
     chatShowThinking: true,
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},
+    navWidth: 220,
   },
-  theme: "system",
+  theme: "claw",
+  themeMode: "system",
   themeResolved: "dark",
   applySessionKey: "main",
   sessionKey: "main",
@@ -31,8 +38,6 @@ const createHost = (tab: Tab): SettingsHost => ({
   eventLog: [],
   eventLogBuffer: [],
   basePath: "",
-  themeMedia: null,
-  themeMediaHandler: null,
   logsPollInterval: null,
   debugPollInterval: null,
 });
@@ -66,5 +71,55 @@ describe("setTabFromRoute", () => {
 
     setTabFromRoute(host, "chat");
     expect(host.debugPollInterval).toBeNull();
+  });
+});
+
+describe("hasOperatorReadAccess", () => {
+  it("accepts operator.read/operator.write/operator.admin as read-capable", () => {
+    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.read"] })).toBe(true);
+    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.write"] })).toBe(true);
+    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.admin"] })).toBe(true);
+  });
+
+  it("returns false when read-compatible scope is missing", () => {
+    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.pairing"] })).toBe(false);
+    expect(hasOperatorReadAccess({ role: "operator" })).toBe(false);
+    expect(hasOperatorReadAccess(null)).toBe(false);
+  });
+});
+
+describe("hasMissingSkillDependencies", () => {
+  it("returns false when all requirement buckets are empty", () => {
+    expect(
+      hasMissingSkillDependencies({
+        bins: [],
+        anyBins: [],
+        env: [],
+        config: [],
+        os: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when any requirement bucket has entries", () => {
+    expect(
+      hasMissingSkillDependencies({
+        bins: ["op"],
+        anyBins: [],
+        env: [],
+        config: [],
+        os: [],
+      }),
+    ).toBe(true);
+
+    expect(
+      hasMissingSkillDependencies({
+        bins: [],
+        anyBins: ["op", "gopass"],
+        env: [],
+        config: [],
+        os: [],
+      }),
+    ).toBe(true);
   });
 });
