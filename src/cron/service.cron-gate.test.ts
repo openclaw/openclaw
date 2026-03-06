@@ -48,7 +48,7 @@ async function withIsolatedAgentCron(
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
-    runIsolatedAgentJob,
+    runIsolatedAgentJob: runIsolatedAgentJob as never,
     onEvent: finished.onEvent,
   });
   await run({ cron, finished });
