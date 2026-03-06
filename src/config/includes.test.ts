@@ -630,7 +630,7 @@ describe("security: path traversal protection (CWE-22)", () => {
           "{ logging: { redactSensitive: 'tools' } }\n",
           "utf-8",
         );
-        await fs.symlink(realRoot, linkRoot);
+        await fs.symlink(realRoot, linkRoot, process.platform === "win32" ? "junction" : undefined);
 
         const result = resolveConfigIncludes(
           { $include: "./includes/extra.json5" },

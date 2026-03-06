@@ -2,6 +2,7 @@
  * Test: before_compaction & after_compaction hook wiring
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 
 const hookMocks = vi.hoisted(() => ({
@@ -153,7 +154,7 @@ describe("compaction hook wiring", () => {
     });
   });
 
-  it("clears stale assistant usage after final compaction", () => {
+  it("resets stale assistant usage after final compaction", () => {
     const messages = [
       { role: "user", content: "hello" },
       {
@@ -187,8 +188,8 @@ describe("compaction hook wiring", () => {
 
     const assistantOne = messages[1] as { usage?: unknown };
     const assistantTwo = messages[2] as { usage?: unknown };
-    expect(assistantOne.usage).toBeUndefined();
-    expect(assistantTwo.usage).toBeUndefined();
+    expect(assistantOne.usage).toEqual(makeZeroUsageSnapshot());
+    expect(assistantTwo.usage).toEqual(makeZeroUsageSnapshot());
   });
 
   it("does not clear assistant usage while compaction is retrying", () => {

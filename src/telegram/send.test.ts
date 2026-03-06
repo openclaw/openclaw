@@ -872,6 +872,16 @@ describe("sendMessageTelegram", () => {
         expectedMethod: "sendVoice" as const,
         expectedOptions: { caption: "caption", parse_mode: "HTML" },
       },
+      {
+        name: "normalizes parameterized audio MIME with mixed casing",
+        chatId: "123",
+        text: "caption",
+        mediaUrl: "https://example.com/note",
+        contentType: " Audio/Ogg; codecs=opus ",
+        fileName: "note.ogg",
+        expectedMethod: "sendAudio" as const,
+        expectedOptions: { caption: "caption", parse_mode: "HTML" },
+      },
     ];
 
     for (const testCase of cases) {
@@ -1138,6 +1148,69 @@ describe("sendMessageTelegram", () => {
       parse_mode: "HTML",
     });
     expect(res.messageId).toBe("59");
+  });
+
+  it("defaults outbound media uploads to 100MB", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 60,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, "photo", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "https://example.com/photo.jpg",
+      expect.objectContaining({ maxBytes: 100 * 1024 * 1024 }),
+    );
+  });
+
+  it("uses configured telegram mediaMaxMb for outbound uploads", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 61,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          mediaMaxMb: 42,
+        },
+      },
+    });
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, "photo", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "https://example.com/photo.jpg",
+      expect.objectContaining({ maxBytes: 42 * 1024 * 1024 }),
+    );
   });
 });
 

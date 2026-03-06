@@ -38,6 +38,9 @@ npm run dev      # or: python main.py
 - **Mariano Belinky** - iOS app, Security
   - GitHub: [@mbelinky](https://github.com/mbelinky) · X: [@belimad](https://x.com/belimad)
 
+- **Nimrod Gutman** - iOS app, macOS app and crustacean features
+  - GitHub: [@ngutman](https://github.com/ngutman) · X: [@theguti](https://x.com/theguti)
+
 - **Vincent Koc** - Agents, Telemetry, Hooks, Security
   - GitHub: [@vincentkoc](https://github.com/vincentkoc) · X: [@vincent_koc](https://x.com/vincent_koc)
 
@@ -59,6 +62,11 @@ npm run dev      # or: python main.py
 - **Josh Avant** - Core, CLI, Gateway, Security, Agents
   - GitHub: [@joshavant](https://github.com/joshavant) · X: [@joshavant](https://x.com/joshavant)
 
+- **Jonathan Taylor** - ACP subsystem, Gateway features/bugs, Gog/Mog/Sog CLI's, SEDMAT
+  - Github [@visionik](https://github.com/visionik) · X: [@visionik](https://x.com/visionik)
+- **Josh Lehman** - Compaction, Tlon/Urbit subsystem
+  - Github [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
@@ -72,6 +80,7 @@ npm run dev      # or: python main.py
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
+- **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 
 ## Control UI Decorators
 

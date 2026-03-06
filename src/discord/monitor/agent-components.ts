@@ -34,14 +34,15 @@ import type { DiscordAccountConfig } from "../../config/types.discord.js";
 import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug, logError } from "../../logger.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
-import {
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-} from "../../pairing/pairing-store.js";
+import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
-import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
+import {
+  readStoreAllowFromForDmPolicy,
+  resolvePinnedMainDmOwnerFromAllowlist,
+} from "../../security/dm-policy-shared.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import {
   createDiscordFormModal,
@@ -61,6 +62,7 @@ import {
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
+  resolveDiscordOwnerAccess,
   resolveDiscordOwnerAllowFrom,
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
@@ -409,20 +411,42 @@ export function buildAgentSelectCustomId(componentId: string): string {
 
 /**
  * Parse agent component data from Carbon's parsed ComponentData
- * Carbon parses "key:componentId=xxx" into { componentId: "xxx" }
+ * Supports both legacy { componentId } and Components v2 { cid } payloads.
  */
+function readParsedComponentId(data: ComponentData): unknown {
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  return "cid" in data
+    ? (data as Record<string, unknown>).cid
+    : (data as Record<string, unknown>).componentId;
+}
+
 function parseAgentComponentData(data: ComponentData): {
   componentId: string;
 } | null {
-  if (!data || typeof data !== "object") {
-    return null;
-  }
+  const raw = readParsedComponentId(data);
+
+  const decodeSafe = (value: string): string => {
+    // `cid` values may be raw (not URI-encoded). Guard against malformed % sequences.
+    // Only attempt decoding when it looks like it contains percent-encoding.
+    if (!value.includes("%")) {
+      return value;
+    }
+    // If it has a % but not a valid %XX sequence, skip decode.
+    if (!/%[0-9A-Fa-f]{2}/.test(value)) {
+      return value;
+    }
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  };
+
   const componentId =
-    typeof data.componentId === "string"
-      ? decodeURIComponent(data.componentId)
-      : typeof data.componentId === "number"
-        ? String(data.componentId)
-        : null;
+    typeof raw === "string" ? decodeSafe(raw) : typeof raw === "number" ? String(raw) : null;
+
   if (!componentId) {
     return null;
   }
@@ -474,8 +498,8 @@ async function ensureDmComponentAuthorized(params: {
 
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "discord",
+    accountId: ctx.accountId,
     dmPolicy,
-    readStore: (provider) => readChannelAllowFromStore(provider),
   });
   const effectiveAllowFrom = [...(ctx.allowFrom ?? []), ...storeAllowFrom];
   const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
@@ -498,6 +522,7 @@ async function ensureDmComponentAuthorized(params: {
     const { code, created } = await upsertChannelPairingRequest({
       channel: "discord",
       id: user.id,
+      accountId: ctx.accountId,
       meta: {
         tag: formatDiscordUserTag(user),
         name: user.username,
@@ -580,10 +605,7 @@ function parseDiscordComponentData(
   if (!data || typeof data !== "object") {
     return null;
   }
-  const rawComponentId =
-    "cid" in data
-      ? (data as { cid?: unknown }).cid
-      : (data as { componentId?: unknown }).componentId;
+  const rawComponentId = readParsedComponentId(data);
   const rawModalId =
     "mid" in data ? (data as { mid?: unknown }).mid : (data as { modalId?: unknown }).modalId;
   let componentId = normalizeComponentId(rawComponentId);
@@ -744,18 +766,15 @@ function resolveComponentCommandAuthorized(params: {
     return true;
   }
 
-  const ownerAllowList = normalizeDiscordAllowList(ctx.allowFrom, ["discord:", "user:", "pk:"]);
-  const ownerOk = ownerAllowList
-    ? resolveDiscordAllowListMatch({
-        allowList: ownerAllowList,
-        candidate: {
-          id: interactionCtx.user.id,
-          name: interactionCtx.user.username,
-          tag: formatDiscordUserTag(interactionCtx.user),
-        },
-        allowNameMatching: params.allowNameMatching,
-      }).allowed
-    : false;
+  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
+    allowFrom: ctx.allowFrom,
+    sender: {
+      id: interactionCtx.user.id,
+      name: interactionCtx.user.username,
+      tag: formatDiscordUserTag(interactionCtx.user),
+    },
+    allowNameMatching: params.allowNameMatching,
+  });
 
   const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
     channelConfig,
@@ -844,6 +863,17 @@ async function dispatchDiscordComponentEvent(params: {
     sender: { id: interactionCtx.user.id, name: interactionCtx.user.username, tag: senderTag },
     allowNameMatching,
   });
+  const pinnedMainDmOwner = interactionCtx.isDirectMessage
+    ? resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: ctx.cfg.session?.dmScope,
+        allowFrom: channelConfig?.users ?? guildInfo?.users,
+        normalizeEntry: (entry) => {
+          const normalized = normalizeDiscordAllowList([entry], ["discord:", "user:", "pk:"]);
+          const candidate = normalized?.ids.values().next().value;
+          return typeof candidate === "string" && /^\d+$/.test(candidate) ? candidate : undefined;
+        },
+      })
+    : null;
   const commandAuthorized = resolveComponentCommandAuthorized({
     ctx,
     interactionCtx,
@@ -912,6 +942,17 @@ async function dispatchDiscordComponentEvent(params: {
           channel: "discord",
           to: `user:${interactionCtx.userId}`,
           accountId,
+          mainDmOwnerPin: pinnedMainDmOwner
+            ? {
+                ownerRecipient: pinnedMainDmOwner,
+                senderRecipient: interactionCtx.userId,
+                onSkip: ({ ownerRecipient, senderRecipient }) => {
+                  logVerbose(
+                    `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                  );
+                },
+              }
+            : undefined,
         }
       : undefined,
     onRecordError: (err) => {
@@ -936,6 +977,7 @@ async function dispatchDiscordComponentEvent(params: {
     fallbackLimit: 2000,
   });
   const token = ctx.token ?? "";
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(ctx.cfg, agentId);
   const replyToMode =
     ctx.discordConfig?.replyToMode ?? ctx.cfg.channels?.discord?.replyToMode ?? "off";
   const replyReference = createReplyReferencePlanner({
@@ -965,6 +1007,7 @@ async function dispatchDiscordComponentEvent(params: {
           maxLinesPerMessage: ctx.discordConfig?.maxLinesPerMessage,
           tableMode,
           chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
+          mediaLocalRoots,
         });
         replyReference.markSent();
       },
@@ -1439,7 +1482,7 @@ export class AgentSelectMenu extends StringSelectMenu {
 
 class DiscordComponentButton extends Button {
   label = "component";
-  customId = "*";
+  customId = "__openclaw_discord_component_button_wildcard__";
   style = ButtonStyle.Primary;
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
@@ -1471,7 +1514,7 @@ class DiscordComponentButton extends Button {
 }
 
 class DiscordComponentStringSelect extends StringSelectMenu {
-  customId = "*";
+  customId = "__openclaw_discord_component_string_select_wildcard__";
   options: APIStringSelectComponent["options"] = [];
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
@@ -1494,7 +1537,7 @@ class DiscordComponentStringSelect extends StringSelectMenu {
 }
 
 class DiscordComponentUserSelect extends UserSelectMenu {
-  customId = "*";
+  customId = "__openclaw_discord_component_user_select_wildcard__";
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
 
@@ -1516,7 +1559,7 @@ class DiscordComponentUserSelect extends UserSelectMenu {
 }
 
 class DiscordComponentRoleSelect extends RoleSelectMenu {
-  customId = "*";
+  customId = "__openclaw_discord_component_role_select_wildcard__";
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
 
@@ -1538,7 +1581,7 @@ class DiscordComponentRoleSelect extends RoleSelectMenu {
 }
 
 class DiscordComponentMentionableSelect extends MentionableSelectMenu {
-  customId = "*";
+  customId = "__openclaw_discord_component_mentionable_select_wildcard__";
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
 
@@ -1560,7 +1603,7 @@ class DiscordComponentMentionableSelect extends MentionableSelectMenu {
 }
 
 class DiscordComponentChannelSelect extends ChannelSelectMenu {
-  customId = "*";
+  customId = "__openclaw_discord_component_channel_select_wildcard__";
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
 
@@ -1583,7 +1626,7 @@ class DiscordComponentChannelSelect extends ChannelSelectMenu {
 
 class DiscordComponentModal extends Modal {
   title = "OpenClaw form";
-  customId = "*";
+  customId = "__openclaw_discord_component_modal_wildcard__";
   components = [];
   customIdParser = parseDiscordModalCustomIdForCarbon;
   private ctx: AgentComponentContext;

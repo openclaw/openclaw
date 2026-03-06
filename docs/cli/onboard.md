@@ -23,8 +23,11 @@ Interactive onboarding wizard (local or remote Gateway setup).
 openclaw onboard
 openclaw onboard --flow quickstart
 openclaw onboard --flow manual
-openclaw onboard --mode remote --remote-url ws://gateway-host:18789
+openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
+
+For plaintext private-network `ws://` targets (trusted networks only), set
+`OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
 
 Non-interactive custom provider:
 
@@ -57,6 +60,28 @@ Non-interactive `ref` mode contract:
 - Set the provider env var in the onboarding process environment (for example `OPENAI_API_KEY`).
 - Do not pass inline key flags (for example `--openai-api-key`) unless that env var is also set.
 - If an inline key flag is passed without the required env var, onboarding fails fast with guidance.
+
+Gateway token options in non-interactive mode:
+
+- `--gateway-auth token --gateway-token <token>` stores a plaintext token.
+- `--gateway-auth token --gateway-token-ref-env <name>` stores `gateway.auth.token` as an env SecretRef.
+- `--gateway-token` and `--gateway-token-ref-env` are mutually exclusive.
+- `--gateway-token-ref-env` requires a non-empty env var in the onboarding process environment.
+- With `--install-daemon`, when token auth requires a token, SecretRef-managed gateway tokens are validated but not persisted as resolved plaintext in supervisor service environment metadata.
+- With `--install-daemon`, if token mode requires a token and the configured token SecretRef is unresolved, onboarding fails closed with remediation guidance.
+- With `--install-daemon`, if both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, onboarding blocks install until mode is set explicitly.
+
+Example:
+
+```bash
+export OPENCLAW_GATEWAY_TOKEN="your-token"
+openclaw onboard --non-interactive \
+  --mode local \
+  --auth-choice skip \
+  --gateway-auth token \
+  --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
+  --accept-risk
+```
 
 Interactive onboarding behavior with reference mode:
 
