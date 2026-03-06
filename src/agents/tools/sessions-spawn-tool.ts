@@ -64,6 +64,7 @@ export function createSessionsSpawnTool(opts?: {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  currentMessageId?: string | number;
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
@@ -183,6 +184,7 @@ export function createSessionsSpawnTool(opts?: {
           agentAccountId: opts?.agentAccountId,
           agentTo: opts?.agentTo,
           agentThreadId: opts?.agentThreadId,
+          currentMessageId: opts?.currentMessageId,
           agentGroupId: opts?.agentGroupId,
           agentGroupChannel: opts?.agentGroupChannel,
           agentGroupSpace: opts?.agentGroupSpace,

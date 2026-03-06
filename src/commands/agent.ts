@@ -301,6 +301,7 @@ function runAgentAttempt(params: {
     spawnedBy: params.spawnedBy,
     currentChannelId: params.runContext.currentChannelId,
     currentThreadTs: params.runContext.currentThreadTs,
+    currentMessageId: params.runContext.currentMessageId,
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
     senderIsOwner: params.opts.senderIsOwner,
