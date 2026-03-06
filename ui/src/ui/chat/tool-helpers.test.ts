@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import { formatToolOutputForSidebar, getTruncatedPreview, linkifyUrls } from "./tool-helpers.ts";
 
 describe("tool-helpers", () => {
   describe("formatToolOutputForSidebar", () => {
@@ -136,6 +136,93 @@ describe("tool-helpers", () => {
 
       expect(result.length).toBe(101); // 100 + ellipsis
       expect(result.endsWith("…")).toBe(true);
+    });
+  });
+
+  describe("linkifyUrls", () => {
+    it("escapes html characters", () => {
+      const input = "<div>&\"'</div>";
+      const result = linkifyUrls(input);
+      expect(result).toBe("&lt;div&gt;&amp;&quot;&#039;&lt;/div&gt;");
+    });
+
+    it("converts simple url to link", () => {
+      const input = "Check https://example.com";
+      const result = linkifyUrls(input);
+      expect(result).toBe(
+        'Check <a href="https://example.com" target="_blank" rel="noopener noreferrer" class="chat-link">https://example.com</a>',
+      );
+    });
+
+    it("converts url with path and query", () => {
+      const input = "http://test.com/path?q=1";
+      const result = linkifyUrls(input);
+      expect(result).toBe(
+        '<a href="http://test.com/path?q=1" target="_blank" rel="noopener noreferrer" class="chat-link">http://test.com/path?q=1</a>',
+      );
+    });
+
+    it("handles text with html and url", () => {
+      const input = "<b>Link:</b> https://example.com";
+      const result = linkifyUrls(input);
+      expect(result).toBe(
+        '&lt;b&gt;Link:&lt;/b&gt; <a href="https://example.com" target="_blank" rel="noopener noreferrer" class="chat-link">https://example.com</a>',
+      );
+    });
+
+    it("handles multiple urls", () => {
+      const input = "https://a.com and https://b.com";
+      const result = linkifyUrls(input);
+      expect(result).toBe(
+        '<a href="https://a.com" target="_blank" rel="noopener noreferrer" class="chat-link">https://a.com</a> and <a href="https://b.com" target="_blank" rel="noopener noreferrer" class="chat-link">https://b.com</a>',
+      );
+    });
+
+    it("does not match non-http urls", () => {
+      const input = "file:///tmp/test";
+      const result = linkifyUrls(input);
+      expect(result).toBe("file:///tmp/test");
+    });
+
+    it("excludes trailing punctuation from url", () => {
+      const cases = [
+        [
+          "(https://example.com)",
+          '(<a href="https://example.com" target="_blank" rel="noopener noreferrer" class="chat-link">https://example.com</a>)',
+        ],
+        [
+          "https://example.com.",
+          '<a href="https://example.com" target="_blank" rel="noopener noreferrer" class="chat-link">https://example.com</a>.',
+        ],
+        [
+          "https://example.com,",
+          '<a href="https://example.com" target="_blank" rel="noopener noreferrer" class="chat-link">https://example.com</a>,',
+        ],
+        [
+          "https://example.com!",
+          '<a href="https://example.com" target="_blank" rel="noopener noreferrer" class="chat-link">https://example.com</a>!',
+        ],
+        [
+          "End with https://example.com?",
+          'End with <a href="https://example.com" target="_blank" rel="noopener noreferrer" class="chat-link">https://example.com</a>?',
+        ],
+        [
+          "[Link](https://example.com)",
+          '[Link](<a href="https://example.com" target="_blank" rel="noopener noreferrer" class="chat-link">https://example.com</a>)',
+        ],
+      ];
+
+      cases.forEach(([input, expected]) => {
+        expect(linkifyUrls(input)).toBe(expected);
+      });
+    });
+
+    it("preserves newlines", () => {
+      const input = "Line 1\nhttps://example.com\nLine 3";
+      const result = linkifyUrls(input);
+      expect(result).toBe(
+        'Line 1\n<a href="https://example.com" target="_blank" rel="noopener noreferrer" class="chat-link">https://example.com</a>\nLine 3',
+      );
     });
   });
 });
