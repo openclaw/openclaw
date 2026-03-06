@@ -1,6 +1,7 @@
 import { logVerbose } from "../../globals.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload } from "../types.js";
+import { stripUnscheduledReminderNote } from "./agent-runner-reminder-guard.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyPayloadKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
@@ -35,6 +36,11 @@ export function normalizeReplyPayloadDirectives(params: {
     : undefined;
 
   let text = parsed ? parsed.text || undefined : params.payload.text || undefined;
+  // Strip internal unscheduled reminder note before delivery to users
+  if (text) {
+    const payloads = stripUnscheduledReminderNote([{ text, ...params.payload }]);
+    text = payloads[0].text;
+  }
   if (params.trimLeadingWhitespace && text) {
     text = text.trimStart() || undefined;
   }

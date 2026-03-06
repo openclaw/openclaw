@@ -4,6 +4,26 @@ import type { ReplyPayload } from "../types.js";
 export const UNSCHEDULED_REMINDER_NOTE =
   "Note: I did not schedule a reminder in this turn, so this will not trigger automatically.";
 
+/**
+ * Strips the unscheduled reminder note from payload text before delivery to users.
+ * Internal system annotations should never be user-visible.
+ */
+export function stripUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPayload[] {
+  return payloads.map((payload) => {
+    if (typeof payload.text !== "string") {
+      return payload;
+    }
+    const notePattern = `\n\n${UNSCHEDULED_REMINDER_NOTE}`;
+    if (payload.text.includes(notePattern)) {
+      return {
+        ...payload,
+        text: payload.text.replace(notePattern, ""),
+      };
+    }
+    return payload;
+  });
+}
+
 const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
   /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?(?:remember|remind|ping|follow up|follow-up|check back|circle back)\b/i,
   /\b(?:i\s*['’]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
