@@ -140,4 +140,50 @@ describe("phase hooks merger", () => {
       { kind: "appendSystemPrompt", text: "system B" },
     ]);
   });
+
+  it("before_prompt_build ignores malformed non-array actions during merge", async () => {
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "high",
+      () =>
+        ({
+          actions: { kind: "prependContext", text: "bad shape" },
+        }) as unknown as PluginHookBeforePromptBuildResult,
+      10,
+    );
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "low",
+      () => ({
+        actions: [{ kind: "appendSystemPrompt", text: "system B" }],
+      }),
+      1,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.actions).toEqual([{ kind: "appendSystemPrompt", text: "system B" }]);
+  });
+
+  it("before_prompt_build ignores non-string systemPrompt values during merge", async () => {
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "high",
+      () =>
+        ({
+          systemPrompt: { bad: true },
+        }) as unknown as PluginHookBeforePromptBuildResult,
+      10,
+    );
+    addTypedHook(registry, "before_prompt_build", "low", () => ({ systemPrompt: "system B" }), 1);
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.systemPrompt).toBe("system B");
+  });
 });
