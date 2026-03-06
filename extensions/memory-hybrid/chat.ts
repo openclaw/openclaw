@@ -75,33 +75,50 @@ export class ChatModel {
       parts: [{ text: m.content }],
     }));
 
-    const body: Record<string, unknown> = { contents };
+    // Try with JSON mode first, fall back to plain text if model doesn't support it
+    // (e.g. gemma-3-27b-it doesn't support responseMimeType: "application/json")
+    const useJsonMime = jsonMode;
 
-    if (jsonMode) {
-      body.generationConfig = {
-        responseMimeType: "application/json",
-        temperature: 0.1,
+    const doRequest = async (withJsonMime: boolean): Promise<string> => {
+      const body: Record<string, unknown> = { contents };
+
+      if (withJsonMime) {
+        body.generationConfig = {
+          responseMimeType: "application/json",
+          temperature: 0.1,
+        };
+      } else {
+        body.generationConfig = { temperature: 0.1 };
+      }
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+
+        // If JSON mode is not supported by this model, retry without it
+        if (withJsonMime && errorBody.includes("JSON mode is not enabled")) {
+          console.warn(
+            `[memory-hybrid][chat] Model ${this.model} doesn't support JSON mode, falling back to plain text`,
+          );
+          return doRequest(false);
+        }
+
+        throw new Error(`Google Chat API error (${response.status}): ${errorBody}`);
+      }
+
+      const data = (await response.json()) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
       };
-    } else {
-      body.generationConfig = { temperature: 0.1 };
-    }
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`Google Chat API error (${response.status}): ${errorBody}`);
-    }
-
-    const data = (await response.json()) as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
     };
 
-    return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    return doRequest(useJsonMime);
   }
 
   /**
