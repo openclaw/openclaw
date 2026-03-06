@@ -82,8 +82,6 @@ def test_normalize_output_format_normalizes_case_for_supported_values():
 
 def test_normalize_output_format_strips_whitespace_for_supported_values():
     assert normalize_output_format("gpt-image-1", " png ") == "png"
-
-
 def test_normalize_output_format_keeps_supported_values():
     assert normalize_output_format("gpt-image-1", "png") == "png"
     assert normalize_output_format("gpt-image-1", "jpeg") == "jpeg"
