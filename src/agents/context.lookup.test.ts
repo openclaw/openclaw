@@ -108,16 +108,17 @@ describe("lookupContextTokens", () => {
     }
   });
 
-  it("returns the larger window when the same bare model id is discovered under multiple providers", async () => {
+  it("returns the smaller window when the same bare model id is discovered under multiple providers", async () => {
     mockDiscoveryDeps([
-      { id: "gemini-3.1-pro-preview", contextWindow: 128_000 },
       { id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 },
+      { id: "gemini-3.1-pro-preview", contextWindow: 128_000 },
     ]);
 
     const { lookupContextTokens } = await import("./context.js");
     // Trigger async cache population.
     await new Promise((r) => setTimeout(r, 0));
-    expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(1_048_576);
+    // Conservative minimum: bare-id cache feeds runtime flush/compaction paths.
+    expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(128_000);
   });
 
   it("resolveContextTokensForModel uses provider-qualified key before bare model id", async () => {

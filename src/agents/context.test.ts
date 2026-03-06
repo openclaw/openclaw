@@ -8,7 +8,7 @@ import {
 import { createSessionManagerRuntimeRegistry } from "./pi-extensions/session-manager-runtime-registry.js";
 
 describe("applyDiscoveredContextWindows", () => {
-  it("keeps the largest context window when the same bare model id appears under multiple providers", () => {
+  it("keeps the smallest context window when the same bare model id appears under multiple providers", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
@@ -18,9 +18,11 @@ describe("applyDiscoveredContextWindows", () => {
       ],
     });
 
-    // Prefer the larger window: display under-reporting is more misleading than
-    // over-reporting, and runtime budgeting uses the active provider directly.
-    expect(cache.get("gemini-3.1-pro-preview")).toBe(1_048_576);
+    // Keep the conservative (minimum) value: this cache feeds runtime paths such
+    // as flush thresholds and session persistence, not just /status display.
+    // Callers with a known provider should use resolveContextTokensForModel which
+    // tries the provider-qualified key first.
+    expect(cache.get("gemini-3.1-pro-preview")).toBe(128_000);
   });
 
   it("stores provider-qualified entries independently", () => {

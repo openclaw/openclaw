@@ -42,10 +42,12 @@ export function applyDiscoveredContextWindows(params: {
     }
     const existing = params.cache.get(model.id);
     // When the same bare model id appears under multiple providers with different
-    // limits, prefer the larger window. This is a display-only cache; runtime
-    // context budgeting resolves the window from the active provider config
-    // directly, so under-reporting here only misleads /status output.
-    if (existing === undefined || contextWindow > existing) {
+    // limits, keep the smaller window. This cache feeds both display paths and
+    // runtime paths (flush thresholds, session context-token persistence), so
+    // overestimating the limit could delay compaction and cause context overflow.
+    // Callers that know the active provider should use resolveContextTokensForModel,
+    // which tries the provider-qualified key first and falls back here.
+    if (existing === undefined || contextWindow < existing) {
       params.cache.set(model.id, contextWindow);
     }
   }
