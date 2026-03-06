@@ -77,6 +77,12 @@ export async function runNonInteractiveOnboardingLocal(params: {
 
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
 
+  // Auto-configure channels when tokens are provided via CLI flags.
+  if (!opts.skipChannels) {
+    const { applyNonInteractiveChannelTokens } = await import("./local/channel-auto-setup.js");
+    nextConfig = applyNonInteractiveChannelTokens({ nextConfig, opts, runtime });
+  }
+
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
   logConfigUpdated(runtime);

@@ -151,6 +151,10 @@ export type OnboardOptions = {
   tailscaleResetOnExit?: boolean;
   installDaemon?: boolean;
   daemonRuntime?: GatewayDaemonRuntime;
+  /** Discord bot token — when provided, auto-configures the Discord channel. */
+  discordToken?: string;
+  /** Telegram bot token — when provided, auto-configures the Telegram channel. */
+  telegramToken?: string;
   skipChannels?: boolean;
   /** @deprecated Legacy alias for `skipChannels`. */
   skipProviders?: boolean;

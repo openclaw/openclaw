@@ -113,6 +113,8 @@ export function registerOnboardCommand(program: Command) {
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
     .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
+    .option("--discord-token <token>", "Discord bot token (auto-configures Discord channel)")
+    .option("--telegram-token <token>", "Telegram bot token (auto-configures Telegram channel)")
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
     .option("--skip-health", "Skip health check")
@@ -186,6 +188,8 @@ export function registerOnboardCommand(program: Command) {
           resetScope: opts.resetScope as ResetScope | undefined,
           installDaemon,
           daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
+          discordToken: opts.discordToken as string | undefined,
+          telegramToken: opts.telegramToken as string | undefined,
           skipChannels: Boolean(opts.skipChannels),
           skipSkills: Boolean(opts.skipSkills),
           skipHealth: Boolean(opts.skipHealth),
