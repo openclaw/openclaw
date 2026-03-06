@@ -6,6 +6,7 @@ import type {
   MarkdownConfig,
   OutboundRetryConfig,
   ReplyToMode,
+  SessionThreadBindingsConfig,
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
@@ -141,6 +142,8 @@ export type TelegramAccountConfig = {
   webhookPort?: number;
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
+  /** Telegram thread/conversation binding overrides. */
+  threadBindings?: SessionThreadBindingsConfig;
   /**
    * Controls which user reactions trigger notifications:
    * - "off" (default): ignore all reactions

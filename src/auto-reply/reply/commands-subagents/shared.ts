@@ -21,17 +21,31 @@ import {
   formatTokenUsageDisplay,
   truncateLine,
 } from "../../../shared/subagents-format.js";
+import {
+  isDiscordSurface,
+  isTelegramSurface,
+  resolveCommandSurfaceChannel,
+  resolveDiscordAccountId,
+  resolveChannelAccountId,
+} from "../channel-context.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
-import { isDiscordSurface, resolveDiscordAccountId } from "../discord-context.js";
 import {
   formatRunLabel,
   formatRunStatus,
   resolveSubagentTargetFromRuns,
   type SubagentTargetResolution,
 } from "../subagents-utils.js";
+import { resolveTelegramConversationId } from "../telegram-context.js";
 
 export { extractAssistantText, stripToolMessages };
-export { isDiscordSurface, resolveDiscordAccountId };
+export {
+  isDiscordSurface,
+  isTelegramSurface,
+  resolveCommandSurfaceChannel,
+  resolveDiscordAccountId,
+  resolveChannelAccountId,
+  resolveTelegramConversationId,
+};
 
 export const COMMAND = "/subagents";
 export const COMMAND_KILL = "/kill";

@@ -524,6 +524,13 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     This is currently scoped to forum topics in groups and supergroups.
 
+    **Thread-bound ACP spawn from chat**:
+
+    - `/acp spawn <agent> --thread here|auto` can bind the current Telegram topic to a new ACP session.
+    - Follow-up topic messages route to the bound ACP session directly (no `/acp steer` required).
+    - OpenClaw pins the spawn confirmation message in-topic after a successful bind.
+    - Requires `channels.telegram.threadBindings.spawnAcpSessions=true`.
+
     Template context includes:
 
     - `MessageThreadId`
