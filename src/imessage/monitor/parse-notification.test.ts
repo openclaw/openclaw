@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
+import { resolveIMessageInboundDecision } from "./inbound-processing.js";
 import { parseIMessageNotification } from "./parse-notification.js";
 
 describe("parseIMessageNotification", () => {
@@ -128,8 +130,10 @@ describe("parseIMessageNotification", () => {
   });
 });
 
-describe("parseIMessageNotification + inbound filtering integration", () => {
-  it("isFromMe message is correctly identified for drop", () => {
+describe("parseIMessageNotification + resolveIMessageInboundDecision integration", () => {
+  const cfg = {} as OpenClawConfig;
+
+  it("camelCase isFromMe payload is dropped as 'from me' by inbound filter", () => {
     const payload = {
       message: {
         id: 100,
@@ -138,8 +142,27 @@ describe("parseIMessageNotification + inbound filtering integration", () => {
         isFromMe: true,
       },
     };
-    const result = parseIMessageNotification(payload);
-    expect(result).not.toBeNull();
-    expect(result!.is_from_me).toBe(true);
+    const message = parseIMessageNotification(payload);
+    expect(message).not.toBeNull();
+
+    const decision = resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: message!,
+      opts: undefined,
+      messageText: message!.text ?? "",
+      bodyText: message!.text ?? "",
+      allowFrom: [],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      logVerbose: undefined,
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "from me" });
   });
 });
