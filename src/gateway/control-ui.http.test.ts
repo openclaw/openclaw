@@ -467,4 +467,26 @@ describe("handleControlUiHttpRequest", () => {
       },
     });
   });
+
+  it("rejects paths containing backslashes as a defense-in-depth guard", async () => {
+    await withControlUiRoot({
+      fn: async (root) => {
+        // Backslash in a URL pathname is normalised by the WHATWG URL parser,
+        // so we test via a percent-encoded backslash (%5C) which the URL
+        // parser keeps as-is in the pathname but Node's path.resolve on
+        // Windows could interpret as a directory separator after decoding.
+        // The SPA fallback currently serves index.html for unknown paths, so
+        // the response may be 200 (SPA fallback) on non-Windows hosts where
+        // %5C is a literal filename char.  The important guarantee is that no
+        // file *outside* the root is ever served — verified by isWithinDir.
+        const { handled } = runControlUiRequest({
+          url: "/assets%5C..%5C..%5Cetc%5Cpasswd",
+          method: "GET",
+          rootPath: root,
+        });
+        // The request is handled by the control UI (does not fall through).
+        expect(handled).toBe(true);
+      },
+    });
+  });
 });

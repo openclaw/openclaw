@@ -277,14 +277,21 @@ function isSafeRelativePath(relPath: string) {
   if (!relPath) {
     return false;
   }
+  // Reject backslashes early — they are not valid in URL paths and on Windows
+  // `path.posix.normalize` does not normalise them, which could allow traversal
+  // patterns like `..\\..\\ ` to slip through posix checks while being treated
+  // as directory separators by `path.resolve`.
+  if (relPath.includes("\\")) {
+    return false;
+  }
+  if (relPath.includes("\0")) {
+    return false;
+  }
   const normalized = path.posix.normalize(relPath);
   if (path.posix.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) {
     return false;
   }
   if (normalized.startsWith("../") || normalized === "..") {
-    return false;
-  }
-  if (normalized.includes("\0")) {
     return false;
   }
   return true;
