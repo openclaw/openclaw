@@ -43,6 +43,14 @@ function resolveSystemdServiceName(env: GatewayServiceEnv): string {
 }
 
 function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
+  if (useSystemdSystemService) {
+    return path.posix.join(
+      "/etc",
+      "systemd",
+      "system",
+      `${resolveSystemdServiceName(env)}.service`,
+    );
+  }
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
 }
 
@@ -202,16 +210,43 @@ export async function isSystemdUserServiceAvailable(): Promise<boolean> {
   return false;
 }
 
-async function assertSystemdAvailable() {
-  const res = await execSystemctl(["--user", "status"]);
+async function isSystemdSystemServiceAvailable(): Promise<boolean> {
+  const res = await execSystemctl(["--system", "status"]);
   if (res.code === 0) {
+    return true;
+  }
+  const detail = `${res.stderr} ${res.stdout}`.toLowerCase();
+  if (!detail) {
+    return false;
+  }
+  if (detail.includes("not found")) {
+    return false;
+  }
+  if (detail.includes("failed to connect")) {
+    return false;
+  }
+  return false;
+}
+
+let useSystemdSystemService = false;
+
+async function assertSystemdAvailable() {
+  const userAvailable = await isSystemdUserServiceAvailable();
+  if (userAvailable) {
+    useSystemdSystemService = false;
     return;
   }
+  const systemAvailable = await isSystemdSystemServiceAvailable();
+  if (systemAvailable) {
+    useSystemdSystemService = true;
+    return;
+  }
+  const res = await execSystemctl(["--user", "status"]);
   const detail = readSystemctlDetail(res);
   if (isSystemctlMissing(detail)) {
-    throw new Error("systemctl not available; systemd user services are required on Linux.");
+    throw new Error("systemctl not available; systemd services are required on Linux.");
   }
-  throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+  throw new Error(`systemctl unavailable: ${detail || "unknown error"}`.trim());
 }
 
 export async function installSystemdService({
@@ -225,7 +260,11 @@ export async function installSystemdService({
   await assertSystemdAvailable();
 
   const unitPath = resolveSystemdUnitPath(env);
-  await fs.mkdir(path.dirname(unitPath), { recursive: true });
+  const systemctlArgs = useSystemdSystemService ? ["--system"] : ["--user"];
+
+  if (!useSystemdSystemService) {
+    await fs.mkdir(path.dirname(unitPath), { recursive: true });
+  }
 
   // Preserve user customizations: back up existing unit file before overwriting.
   let backedUp = false;
@@ -249,17 +288,17 @@ export async function installSystemdService({
 
   const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
   const unitName = `${serviceName}.service`;
-  const reload = await execSystemctl(["--user", "daemon-reload"]);
+  const reload = await execSystemctl([...systemctlArgs, "daemon-reload"]);
   if (reload.code !== 0) {
     throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
   }
 
-  const enable = await execSystemctl(["--user", "enable", unitName]);
+  const enable = await execSystemctl([...systemctlArgs, "enable", unitName]);
   if (enable.code !== 0) {
     throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
   }
 
-  const restart = await execSystemctl(["--user", "restart", unitName]);
+  const restart = await execSystemctl([...systemctlArgs, "restart", unitName]);
   if (restart.code !== 0) {
     throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
   }
@@ -291,9 +330,10 @@ export async function uninstallSystemdService({
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
   await assertSystemdAvailable();
+  const systemctlArgs = useSystemdSystemService ? ["--system"] : ["--user"];
   const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
   const unitName = `${serviceName}.service`;
-  await execSystemctl(["--user", "disable", "--now", unitName]);
+  await execSystemctl([...systemctlArgs, "disable", "--now", unitName]);
 
   const unitPath = resolveSystemdUnitPath(env);
   try {
@@ -311,9 +351,10 @@ async function runSystemdServiceAction(params: {
   label: string;
 }) {
   await assertSystemdAvailable();
+  const systemctlArgs = useSystemdSystemService ? ["--system"] : ["--user"];
   const serviceName = resolveSystemdServiceName(params.env ?? {});
   const unitName = `${serviceName}.service`;
-  const res = await execSystemctl(["--user", params.action, unitName]);
+  const res = await execSystemctl([...systemctlArgs, params.action, unitName]);
   if (res.code !== 0) {
     throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
   }
@@ -345,9 +386,15 @@ export async function restartSystemdService({
 }
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
+  try {
+    await assertSystemdAvailable();
+  } catch {
+    return false;
+  }
+  const systemctlArgs = useSystemdSystemService ? ["--system"] : ["--user"];
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
-  const res = await execSystemctl(["--user", "is-enabled", unitName]);
+  const res = await execSystemctl([...systemctlArgs, "is-enabled", unitName]);
   if (res.code === 0) {
     return true;
   }
@@ -355,7 +402,7 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
     return false;
   }
-  throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
+  return false;
 }
 
 export async function readSystemdServiceRuntime(
@@ -369,10 +416,11 @@ export async function readSystemdServiceRuntime(
       detail: err instanceof Error ? err.message : String(err),
     };
   }
+  const systemctlArgs = useSystemdSystemService ? ["--system"] : ["--user"];
   const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl([
-    "--user",
+    ...systemctlArgs,
     "show",
     unitName,
     "--no-page",
