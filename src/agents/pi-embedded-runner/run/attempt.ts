@@ -2852,10 +2852,12 @@ export async function runEmbeddedAttempt(
           }
 
           // Fire context_assembled hook — gives plugins a snapshot of the full
-          // context before the first LLM call. Fires once per run (iteration: 1)
-          // because subsequent turns reuse the same session context with appended
-          // messages; use loop_iteration_start for per-turn tracking.
-          if (hookRunner?.hasHooks("context_assembled")) {
+          // context before the first LLM call. Fires once per run (iteration: 1).
+          // Guard: only on the first attempt within the outer run loop — retries
+          // (overflow compaction, auth retry) re-enter runEmbeddedAttempt but
+          // should not re-emit context_assembled with iteration: 1.
+          // Use loop_iteration_start for per-turn tracking within an attempt.
+          if (hookRunner?.hasHooks("context_assembled") && (params.attemptIndex ?? 0) === 0) {
             // Snapshot messages array to avoid mutation during async hook handling.
             // Named contextMessagesSnapshot to avoid shadowing the outer messagesSnapshot.
             const contextMessagesSnapshot = activeSession.messages.slice();
