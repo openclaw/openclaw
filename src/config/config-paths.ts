@@ -15,8 +15,70 @@ export function parseConfigPath(raw: string): {
       error: "Invalid path. Use dot notation (e.g. foo.bar).",
     };
   }
-  const parts = trimmed.split(".").map((part) => part.trim());
-  if (parts.some((part) => !part)) {
+
+  const parts: string[] = [];
+  let idx = 0;
+
+  while (idx < trimmed.length) {
+    const char = trimmed[idx];
+
+    if (char === ".") {
+      idx += 1;
+      if (idx >= trimmed.length) {
+        return {
+          ok: false,
+          error: "Invalid path. Use dot notation (e.g. foo.bar).",
+        };
+      }
+      continue;
+    }
+
+    if (char === "[") {
+      const quote = trimmed[idx + 1];
+      if (quote !== '"' && quote !== "'") {
+        return {
+          ok: false,
+          error: "Invalid path. Use dot notation (e.g. foo.bar).",
+        };
+      }
+      const closeQuoteIdx = trimmed.indexOf(quote, idx + 2);
+      const closeBracketIdx = closeQuoteIdx >= 0 ? trimmed.indexOf("]", closeQuoteIdx + 1) : -1;
+      if (closeQuoteIdx < 0 || closeBracketIdx !== closeQuoteIdx + 1) {
+        return {
+          ok: false,
+          error: "Invalid path. Use dot notation (e.g. foo.bar).",
+        };
+      }
+      const key = trimmed.slice(idx + 2, closeQuoteIdx).trim();
+      if (!key) {
+        return {
+          ok: false,
+          error: "Invalid path. Use dot notation (e.g. foo.bar).",
+        };
+      }
+      parts.push(key);
+      idx = closeBracketIdx + 1;
+      continue;
+    }
+
+    const nextDotIdx = trimmed.indexOf(".", idx);
+    const nextBracketIdx = trimmed.indexOf("[", idx);
+    const endIdx = [nextDotIdx, nextBracketIdx]
+      .filter((value) => value >= 0)
+      .reduce((min, value) => Math.min(min, value), trimmed.length);
+
+    const key = trimmed.slice(idx, endIdx).trim();
+    if (!key) {
+      return {
+        ok: false,
+        error: "Invalid path. Use dot notation (e.g. foo.bar).",
+      };
+    }
+    parts.push(key);
+    idx = endIdx;
+  }
+
+  if (parts.length === 0 || parts.some((part) => !part)) {
     return {
       ok: false,
       error: "Invalid path. Use dot notation (e.g. foo.bar).",

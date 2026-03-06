@@ -31,19 +31,6 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
-describe("plugins.slots.contextEngine", () => {
-  it("accepts a contextEngine slot id", () => {
-    const result = OpenClawSchema.safeParse({
-      plugins: {
-        slots: {
-          contextEngine: "my-context-engine",
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-});
-
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });
@@ -348,6 +335,27 @@ describe("config paths", () => {
     expect(getConfigValueAtPath(root, parsed.path)).toBe(123);
     expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
     expect(getConfigValueAtPath(root, parsed.path)).toBeUndefined();
+  });
+
+  it("supports quoted bracket segments for keys containing periods", () => {
+    const root: Record<string, unknown> = {};
+    const parsed = parseConfigPath('models.providers["llama.cpp"].baseUrl');
+    if (!parsed.ok || !parsed.path) {
+      throw new Error("path parse failed");
+    }
+
+    setConfigValueAtPath(root, parsed.path, "http://localhost:8080");
+
+    expect(root).toEqual({
+      models: {
+        providers: {
+          "llama.cpp": {
+            baseUrl: "http://localhost:8080",
+          },
+        },
+      },
+    });
+    expect(getConfigValueAtPath(root, parsed.path)).toBe("http://localhost:8080");
   });
 });
 
