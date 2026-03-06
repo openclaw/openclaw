@@ -52,7 +52,7 @@ async function listMembers(client: Lark.Client, token: string, type: string) {
     path: { token },
     params: { type: type as ListTokenType },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -84,7 +84,7 @@ async function addMember(
       perm: perm as PermType,
     },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -105,7 +105,7 @@ async function removeMember(
     path: { token, member_id: memberId },
     params: { type: type as CreateTokenType, member_type: memberType as MemberType },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 

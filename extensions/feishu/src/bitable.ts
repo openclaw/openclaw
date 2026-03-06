@@ -33,8 +33,8 @@ function ensureLarkSuccess<T>(
   api: string,
   context?: Record<string, unknown>,
 ): asserts res is LarkResponse<T> & { code: 0 } {
-  if (res.code !== 0) {
-    throw new LarkApiError(res.code ?? -1, res.msg ?? "unknown error", api, context);
+  if (res.code !== undefined && res.code !== 0) {
+    throw new LarkApiError(res.code, res.msg ?? "unknown error", api, context);
   }
 }
 
