@@ -49,8 +49,23 @@ type LaneState = {
   generation: number;
 };
 
-const lanes = new Map<string, LaneState>();
-let nextTaskId = 1;
+const LANES_KEY = "__openclaw_command_lanes__" as const;
+const TASK_ID_KEY = "__openclaw_command_task_id__" as const;
+
+type GlobalLaneRegistry = {
+  [LANES_KEY]?: Map<string, LaneState>;
+  [TASK_ID_KEY]?: { value: number };
+};
+
+const g = globalThis as unknown as GlobalLaneRegistry;
+if (!g[LANES_KEY]) {
+  g[LANES_KEY] = new Map<string, LaneState>();
+}
+if (!g[TASK_ID_KEY]) {
+  g[TASK_ID_KEY] = { value: 1 };
+}
+
+const lanes: Map<string, LaneState> = g[LANES_KEY];
 
 function getLaneState(lane: string): LaneState {
   const existing = lanes.get(lane);
@@ -105,7 +120,7 @@ function drainLane(lane: string) {
           );
         }
         logLaneDequeue(lane, waitedMs, state.queue.length);
-        const taskId = nextTaskId++;
+        const taskId = g[TASK_ID_KEY]!.value++;
         const taskGeneration = state.generation;
         state.activeTaskIds.add(taskId);
         void (async () => {

@@ -335,3 +335,20 @@ describe("command queue", () => {
     await expect(enqueueCommand(async () => "ok")).resolves.toBe("ok");
   });
 });
+
+describe("globalThis lane state sharing", () => {
+  it("stores lanes Map on globalThis for cross-chunk deduplication", () => {
+    const g = globalThis as Record<string, unknown>;
+    const lanesMap = g.__openclaw_command_lanes__;
+    expect(lanesMap).toBeInstanceOf(Map);
+  });
+
+  it("setCommandLaneConcurrency affects shared globalThis lanes Map", () => {
+    setCommandLaneConcurrency("main", 6);
+    const g = globalThis as Record<string, unknown>;
+    const lanesMap = g.__openclaw_command_lanes__ as Map<string, { maxConcurrent: number }>;
+    const mainLane = lanesMap.get("main");
+    expect(mainLane).toBeDefined();
+    expect(mainLane!.maxConcurrent).toBe(6);
+  });
+});
