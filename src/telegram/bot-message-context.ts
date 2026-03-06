@@ -823,7 +823,8 @@ export const buildTelegramMessageContext = async ({
         }))
       : undefined;
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
-  const contextMedia = [...currentMediaForContext, ...replyMedia];
+  // Filter out metadata-only sticker entries (empty path) from media arrays
+  const contextMedia = [...currentMediaForContext, ...replyMedia].filter((m) => m.path);
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     // Agent prompt should be the raw user text only; metadata/context is provided via system prompt.

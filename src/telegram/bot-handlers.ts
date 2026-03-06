@@ -993,11 +993,10 @@ export const registerTelegramHandlers = ({
       return;
     }
 
-    // Skip sticker-only messages where the sticker was skipped (animated/video)
-    // These have no media and no text content to process.
+    // Skip sticker-only messages where the sticker was skipped entirely.
     const hasText = Boolean((msg.text ?? msg.caption ?? "").trim());
     if (msg.sticker && !media && !hasText) {
-      logVerbose("telegram: skipping sticker-only message (unsupported sticker type)");
+      logVerbose("telegram: skipping sticker-only message (no media resolved)");
       return;
     }
 
