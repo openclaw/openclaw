@@ -474,22 +474,21 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("throws when formatted and plain fallback text are both empty", async () => {
+  it("skips whitespace-only text replies without calling Telegram", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn();
     const bot = { api: { sendMessage } } as unknown as Bot;
 
-    await expect(
-      deliverReplies({
-        replies: [{ text: "   " }],
-        chatId: "123",
-        token: "tok",
-        runtime,
-        bot,
-        replyToMode: "off",
-        textLimit: 4000,
-      }),
-    ).rejects.toThrow("empty formatted text and empty plain fallback");
+    await deliverReplies({
+      replies: [{ text: "   " }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
     expect(sendMessage).not.toHaveBeenCalled();
   });
 

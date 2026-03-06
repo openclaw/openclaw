@@ -94,6 +94,15 @@ function markDelivered(progress: DeliveryProgress): void {
   progress.deliveredCount += 1;
 }
 
+function isEmptyTextChunk(chunk: { html?: string; text?: string } | undefined): boolean {
+  if (!chunk) {
+    return true;
+  }
+  const html = typeof chunk.html === "string" ? chunk.html.trim() : "";
+  const text = typeof chunk.text === "string" ? chunk.text.trim() : "";
+  return !html && !text;
+}
+
 async function deliverTextReply(params: {
   bot: Bot;
   chatId: string;
@@ -112,7 +121,7 @@ async function deliverTextReply(params: {
   const chunks = params.chunkText(params.replyText);
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
-    if (!chunk) {
+    if (isEmptyTextChunk(chunk)) {
       continue;
     }
     const shouldAttachButtons = i === 0 && params.replyMarkup;
@@ -161,6 +170,9 @@ async function sendPendingFollowUpText(params: {
   const chunks = params.chunkText(params.text);
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
+    if (isEmptyTextChunk(chunk)) {
+      continue;
+    }
     const replyToForFollowUp = resolveReplyToForSend({
       replyToId: params.replyToId,
       replyToMode: params.replyToMode,
@@ -210,6 +222,9 @@ async function sendTelegramVoiceFallbackText(opts: {
   let appliedReplyTo = false;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
+    if (isEmptyTextChunk(chunk)) {
+      continue;
+    }
     // Only apply reply reference, quote text, and buttons to the first chunk.
     const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
     const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
