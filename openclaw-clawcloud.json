@@ -1,6 +1,7 @@
 {
   "gateway": {
-    "bind": "0.0.0.0"
+    "bind": "0.0.0.0",
+    "port": 8080
   },
   "model": "nvidia/llama-3.1-nemotron-70b-instruct",
   "agents": {
