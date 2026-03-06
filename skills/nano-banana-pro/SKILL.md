@@ -39,6 +39,12 @@ Edit (single image)
 uv run {baseDir}/scripts/generate_image.py --prompt "edit instructions" --filename "output.png" -i "/path/in.png" --resolution 2K
 ```
 
+Edit from a hosted image URL
+
+```bash
+uv run {baseDir}/scripts/generate_image.py --prompt "turn this into a watercolor poster" --filename "output.png" -i "https://images.example.com/source.png" --resolution 2K
+```
+
 Multi-image composition (up to 14 images)
 
 ```bash
@@ -53,6 +59,9 @@ API key
 Notes
 
 - Resolutions: `1K` (default), `2K`, `4K`.
+- Input images can be local paths or public `http(s)` URLs.
+- `file://` URLs are rejected; use a normal local path instead.
+- Remote input URLs reject redirects plus private/loopback/special-use hosts for safety.
 - Use timestamps in filenames: `yyyy-mm-dd-hh-mm-ss-name.png`.
 - The script prints a `MEDIA:` line for OpenClaw to auto-attach on supported chat providers.
 - Do not read the image back; report the saved path only.
