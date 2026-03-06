@@ -221,6 +221,17 @@ Config:
 
 - `channels.mattermost.capabilities`: array of capability strings. Add `"inlineButtons"` to
   enable the buttons tool description in the agent system prompt.
+- `channels.mattermost.interactions.callbackBaseUrl`: optional external base URL for button
+  callbacks (for example `https://gateway.example.com`). Use this when Mattermost cannot
+  reach the gateway at its bind host directly.
+- In multi-account setups, you can also set the same field under
+  `channels.mattermost.accounts.<id>.interactions.callbackBaseUrl`.
+- If `interactions.callbackBaseUrl` is omitted, OpenClaw derives the callback URL from
+  `gateway.customBindHost` + `gateway.port`, then falls back to `http://localhost:<port>`.
+- Reachability rule: the button callback URL must be reachable from the Mattermost server.
+  `localhost` only works when Mattermost and OpenClaw run on the same host/network namespace.
+- If your callback target is private/tailnet/internal, add its host/domain to Mattermost
+  `ServiceSettings.AllowedUntrustedInternalConnections`.
 
 ### Direct API integration (external scripts)
 
@@ -244,7 +255,7 @@ the extension when possible; if posting raw JSON, follow these rules:
             name: "Approve", // display label
             style: "primary", // optional: "default", "primary", "danger"
             integration: {
-              url: "http://localhost:18789/mattermost/interactions/default",
+              url: "https://gateway.example.com/mattermost/interactions/default",
               context: {
                 action_id: "mybutton01", // must match button id (for name lookup)
                 action: "approve",
