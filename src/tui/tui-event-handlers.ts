@@ -137,9 +137,9 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const maybeRefreshHistoryForRun = (runId: string) => {
-    if (isLocalRunId?.(runId)) {
+    const localRun = isLocalRunId?.(runId) ?? false;
+    if (localRun) {
       forgetLocalRunId?.(runId);
-      return;
     }
     if (hasConcurrentActiveRun(runId)) {
       return;

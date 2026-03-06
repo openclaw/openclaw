@@ -376,6 +376,26 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
+  it("refreshes history after a local chat final", () => {
+    const { state, loadHistory, noteLocalRunId, isLocalRunId, handleChatEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+    noteLocalRunId("local-run");
+    expect(isLocalRunId("local-run")).toBe(true);
+
+    handleChatEvent({
+      runId: "local-run",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(isLocalRunId("local-run")).toBe(false);
+  });
+
   function createConcurrentRunHarness(localContent = "partial") {
     const { state, chatLog, setActivityStatus, loadHistory, handleChatEvent } =
       createHandlersHarness({
