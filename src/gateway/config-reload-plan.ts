@@ -153,7 +153,9 @@ function matchRule(path: string): ReloadRule | null {
     }
     // Handle wildcard prefix like "channels.telegram.accounts.*.groups"
     if (prefix.includes("*")) {
-      const regex = "^" + prefix.replace(/\*/g, "[^.]+") + "($|\\.)";
+      // Escape regex metacharacters (dots) before substituting wildcard
+      const escapedPrefix = prefix.replace(/\./g, "\\.");
+      const regex = "^" + escapedPrefix.replace(/\*/g, "[^.]+") + "($|\\.)";
       if (new RegExp(regex).test(path)) {
         return rule;
       }
