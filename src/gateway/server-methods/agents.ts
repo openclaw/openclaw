@@ -40,7 +40,6 @@ import {
   loadConfig,
   writeConfigFile,
 } from "../../config/config.js";
-import { resolveStateDir } from "../../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
@@ -570,7 +569,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const rawWorkspace = typeof params.workspace === "string" ? params.workspace.trim() : "";
     const workspaceDir = rawWorkspace
       ? resolveUserPath(rawWorkspace)
-      : path.join(resolveStateDir(process.env), `workspace-${agentId}`);
+      : resolveAgentWorkspaceDir(cfg, agentId);
 
     // Resolve agentDir against the config we're about to persist (vs the pre-write config),
     // so subsequent resolutions can't disagree about the agent's directory.
