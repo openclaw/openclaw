@@ -20,7 +20,12 @@ import {
   normalizeRateLimitClientIp,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
-import { type GatewayAuthResult, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  authorizeHttpGatewayConnect,
+  isLocalDirectRequest,
+  type GatewayAuthResult,
+  type ResolvedGatewayAuth,
+} from "./auth.js";
 import { normalizeCanvasScopedUrl } from "./canvas-capability.js";
 import {
   handleControlUiAvatarRequest,
@@ -46,6 +51,7 @@ import {
   resolveHookDeliver,
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
+import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import {
@@ -151,12 +157,39 @@ function shouldEnforceDefaultPluginGatewayAuth(pathContext: PluginRoutePathConte
   );
 }
 
-function handleGatewayProbeRequest(
+async function canRevealReadinessDetails(params: {
+  req: IncomingMessage;
+  resolvedAuth: ResolvedGatewayAuth;
+  trustedProxies: string[];
+  allowRealIpFallback: boolean;
+}): Promise<boolean> {
+  if (isLocalDirectRequest(params.req, params.trustedProxies, params.allowRealIpFallback)) {
+    return true;
+  }
+  if (params.resolvedAuth.mode === "none") {
+    return false;
+  }
+
+  const bearerToken = getBearerToken(params.req);
+  const authResult = await authorizeHttpGatewayConnect({
+    auth: params.resolvedAuth,
+    connectAuth: bearerToken ? { token: bearerToken, password: bearerToken } : null,
+    req: params.req,
+    trustedProxies: params.trustedProxies,
+    allowRealIpFallback: params.allowRealIpFallback,
+  });
+  return authResult.ok;
+}
+
+async function handleGatewayProbeRequest(
   req: IncomingMessage,
   res: ServerResponse,
   requestPath: string,
+  resolvedAuth: ResolvedGatewayAuth,
+  trustedProxies: string[],
+  allowRealIpFallback: boolean,
   getReadiness?: ReadinessChecker,
-): boolean {
+): Promise<boolean> {
   const status = GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath);
   if (!status) {
     return false;
@@ -177,13 +210,21 @@ function handleGatewayProbeRequest(
   let statusCode: number;
   let body: string;
   if (status === "ready" && getReadiness) {
+    const includeDetails = await canRevealReadinessDetails({
+      req,
+      resolvedAuth,
+      trustedProxies,
+      allowRealIpFallback,
+    });
     try {
       const result = getReadiness();
       statusCode = result.ready ? 200 : 503;
-      body = JSON.stringify(result);
+      body = JSON.stringify(includeDetails ? result : { ready: result.ready });
     } catch {
       statusCode = 503;
-      body = JSON.stringify({ ready: false, failing: ["internal"], uptimeMs: 0 });
+      body = JSON.stringify(
+        includeDetails ? { ready: false, failing: ["internal"], uptimeMs: 0 } : { ready: false },
+      );
     }
   } else {
     statusCode = 200;
@@ -709,7 +750,16 @@ export function createGatewayHttpServer(opts: {
 
       requestStages.push({
         name: "gateway-probes",
-        run: () => handleGatewayProbeRequest(req, res, requestPath, getReadiness),
+        run: () =>
+          handleGatewayProbeRequest(
+            req,
+            res,
+            requestPath,
+            resolvedAuth,
+            trustedProxies,
+            allowRealIpFallback,
+            getReadiness,
+          ),
       });
 
       if (await runGatewayHttpRequestStages(requestStages)) {
