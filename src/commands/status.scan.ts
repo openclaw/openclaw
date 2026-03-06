@@ -1,3 +1,5 @@
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
@@ -12,7 +14,10 @@ import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildChannelsTable } from "./status-all/channels.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
-import { pickGatewaySelfPresence, resolveGatewayProbeAuth } from "./status.gateway-probe.js";
+import {
+  pickGatewaySelfPresence,
+  resolveGatewayProbeAuthResolution,
+} from "./status.gateway-probe.js";
 import { getStatusSummary } from "./status.summary.js";
 import { getUpdateCheckResult } from "./status.update.js";
 
@@ -32,6 +37,11 @@ type GatewayProbeSnapshot = {
   gatewayConnection: ReturnType<typeof buildGatewayConnectionDetails>;
   remoteUrlMissing: boolean;
   gatewayMode: "local" | "remote";
+  gatewayProbeAuth: {
+    token?: string;
+    password?: string;
+  };
+  gatewayProbeAuthWarning?: string;
   gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
 };
 
@@ -71,14 +81,29 @@ async function resolveGatewayProbeSnapshot(params: {
     typeof params.cfg.gateway?.remote?.url === "string" ? params.cfg.gateway.remote.url : "";
   const remoteUrlMissing = isRemoteMode && !remoteUrlRaw.trim();
   const gatewayMode = isRemoteMode ? "remote" : "local";
+  const gatewayProbeAuthResolution = resolveGatewayProbeAuthResolution(params.cfg);
+  let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
   const gatewayProbe = remoteUrlMissing
     ? null
     : await probeGateway({
         url: gatewayConnection.url,
-        auth: resolveGatewayProbeAuth(params.cfg),
+        auth: gatewayProbeAuthResolution.auth,
         timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
       }).catch(() => null);
-  return { gatewayConnection, remoteUrlMissing, gatewayMode, gatewayProbe };
+  if (gatewayProbeAuthWarning && gatewayProbe?.ok === false) {
+    gatewayProbe.error = gatewayProbe.error
+      ? `${gatewayProbe.error}; ${gatewayProbeAuthWarning}`
+      : gatewayProbeAuthWarning;
+    gatewayProbeAuthWarning = undefined;
+  }
+  return {
+    gatewayConnection,
+    remoteUrlMissing,
+    gatewayMode,
+    gatewayProbeAuth: gatewayProbeAuthResolution.auth,
+    gatewayProbeAuthWarning,
+    gatewayProbe,
+  };
 }
 
 async function resolveChannelsStatus(params: {
@@ -108,6 +133,11 @@ export type StatusScanResult = {
   gatewayConnection: ReturnType<typeof buildGatewayConnectionDetails>;
   remoteUrlMissing: boolean;
   gatewayMode: "local" | "remote";
+  gatewayProbeAuth: {
+    token?: string;
+    password?: string;
+  };
+  gatewayProbeAuthWarning?: string;
   gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
   gatewayReachable: boolean;
   gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
@@ -148,7 +178,12 @@ async function scanStatusJsonFast(opts: {
   timeoutMs?: number;
   all?: boolean;
 }): Promise<StatusScanResult> {
-  const cfg = loadConfig();
+  const loadedRaw = loadConfig();
+  const { resolvedConfig: cfg } = await resolveCommandSecretRefsViaGateway({
+    config: loadedRaw,
+    commandName: "status --json",
+    targetIds: getStatusCommandSecretTargetIds(),
+  });
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
@@ -158,7 +193,7 @@ async function scanStatusJsonFast(opts: {
     includeRegistry: true,
   });
   const agentStatusPromise = getAgentLocalStatuses();
-  const summaryPromise = getStatusSummary();
+  const summaryPromise = getStatusSummary({ config: cfg });
 
   const tailscaleDnsPromise =
     tailscaleMode === "off"
@@ -181,7 +216,14 @@ async function scanStatusJsonFast(opts: {
       ? `https://${tailscaleDns}${normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath)}`
       : null;
 
-  const { gatewayConnection, remoteUrlMissing, gatewayMode, gatewayProbe } = gatewaySnapshot;
+  const {
+    gatewayConnection,
+    remoteUrlMissing,
+    gatewayMode,
+    gatewayProbeAuth,
+    gatewayProbeAuthWarning,
+    gatewayProbe,
+  } = gatewaySnapshot;
   const gatewayReachable = gatewayProbe?.ok === true;
   const gatewaySelf = gatewayProbe?.presence
     ? pickGatewaySelfPresence(gatewayProbe.presence)
@@ -202,6 +244,8 @@ async function scanStatusJsonFast(opts: {
     gatewayConnection,
     remoteUrlMissing,
     gatewayMode,
+    gatewayProbeAuth,
+    gatewayProbeAuthWarning,
     gatewayProbe,
     gatewayReachable,
     gatewaySelf,
@@ -233,7 +277,12 @@ export async function scanStatus(
     },
     async (progress) => {
       progress.setLabel("Loading config…");
-      const cfg = loadConfig();
+      const loadedRaw = loadConfig();
+      const { resolvedConfig: cfg } = await resolveCommandSecretRefsViaGateway({
+        config: loadedRaw,
+        commandName: "status",
+        targetIds: getStatusCommandSecretTargetIds(),
+      });
       const osSummary = resolveOsSummary();
       const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
       const tailscaleDnsPromise =
@@ -251,7 +300,7 @@ export async function scanStatus(
         }),
       );
       const agentStatusPromise = deferResult(getAgentLocalStatuses());
-      const summaryPromise = deferResult(getStatusSummary());
+      const summaryPromise = deferResult(getStatusSummary({ config: cfg }));
       progress.tick();
 
       progress.setLabel("Checking Tailscale…");
@@ -271,8 +320,14 @@ export async function scanStatus(
       progress.tick();
 
       progress.setLabel("Probing gateway…");
-      const { gatewayConnection, remoteUrlMissing, gatewayMode, gatewayProbe } =
-        await resolveGatewayProbeSnapshot({ cfg, opts });
+      const {
+        gatewayConnection,
+        remoteUrlMissing,
+        gatewayMode,
+        gatewayProbeAuth,
+        gatewayProbeAuthWarning,
+        gatewayProbe,
+      } = await resolveGatewayProbeSnapshot({ cfg, opts });
       const gatewayReachable = gatewayProbe?.ok === true;
       const gatewaySelf = gatewayProbe?.presence
         ? pickGatewaySelfPresence(gatewayProbe.presence)
@@ -314,6 +369,8 @@ export async function scanStatus(
         gatewayConnection,
         remoteUrlMissing,
         gatewayMode,
+        gatewayProbeAuth,
+        gatewayProbeAuthWarning,
         gatewayProbe,
         gatewayReachable,
         gatewaySelf,
