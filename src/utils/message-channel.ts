@@ -25,6 +25,8 @@ const MARKDOWN_CAPABLE_CHANNELS = new Set<string>([
   "googlechat",
   "matrix",
   "msteams",
+  "whatsapp",
+  "feishu",
   "tui",
   INTERNAL_MESSAGE_CHANNEL,
 ]);
