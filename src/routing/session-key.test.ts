@@ -6,6 +6,7 @@ import {
 } from "../sessions/session-key-utils.js";
 import {
   classifySessionKeyShape,
+  isValidAgentId,
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "./session-key.js";
@@ -113,5 +114,19 @@ describe("session key canonicalization", () => {
         requestKey: "agent:main:main",
       }),
     ).toBe("agent:main:main");
+  });
+});
+
+describe("isValidAgentId", () => {
+  it("accepts valid agent ids", () => {
+    expect(isValidAgentId("main")).toBe(true);
+    expect(isValidAgentId("my-research_agent01")).toBe(true);
+  });
+
+  it("rejects malformed agent ids", () => {
+    expect(isValidAgentId("")).toBe(false);
+    expect(isValidAgentId("Agent not found: xyz")).toBe(false);
+    expect(isValidAgentId("../../../etc/passwd")).toBe(false);
+    expect(isValidAgentId("a".repeat(65))).toBe(false);
   });
 });

@@ -235,6 +235,69 @@ describe("gateway hot reload", () => {
     );
   }
 
+  async function writeDisabledSurfaceRefConfig() {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          channels: {
+            telegram: {
+              enabled: false,
+              botToken: { source: "env", provider: "default", id: "DISABLED_TELEGRAM_STARTUP_REF" },
+            },
+          },
+          tools: {
+            web: {
+              search: {
+                enabled: false,
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "DISABLED_WEB_SEARCH_STARTUP_REF",
+                },
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+
+  async function writeGatewayTokenRefConfig() {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          gateway: {
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: "MISSING_STARTUP_GW_TOKEN" },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+
   async function writeAuthProfileEnvRefStore() {
     const stateDir = process.env.OPENCLAW_STATE_DIR;
     if (!stateDir) {
@@ -385,6 +448,28 @@ describe("gateway hot reload", () => {
     await expect(withGatewayServer(async () => {})).rejects.toThrow(
       "Startup failed: required secrets are unavailable",
     );
+  });
+
+  it("allows startup when unresolved refs exist only on disabled surfaces", async () => {
+    await writeDisabledSurfaceRefConfig();
+    delete process.env.DISABLED_TELEGRAM_STARTUP_REF;
+    delete process.env.DISABLED_WEB_SEARCH_STARTUP_REF;
+    await expect(withGatewayServer(async () => {})).resolves.toBeUndefined();
+  });
+
+  it("honors startup auth overrides before secret preflight gating", async () => {
+    await writeGatewayTokenRefConfig();
+    delete process.env.MISSING_STARTUP_GW_TOKEN;
+    await expect(
+      withGatewayServer(async () => {}, {
+        serverOptions: {
+          auth: {
+            mode: "password",
+            password: "override-password",
+          },
+        },
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("fails startup when auth-profile secret refs are unresolved", async () => {
