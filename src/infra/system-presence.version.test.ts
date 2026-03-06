@@ -25,24 +25,24 @@ describe("system-presence version fallback", () => {
     });
   }
 
-  it("prefers OPENCLAW_SERVICE_VERSION when available", async () => {
+  it("prefers runtime VERSION over OPENCLAW_SERVICE_VERSION when both exist", async () => {
     await expectSelfVersion(
       {
         OPENCLAW_SERVICE_VERSION: "2.4.6-service",
         npm_package_version: "1.0.0-package",
       },
-      "2.4.6-service",
+      async () => (await import("../version.js")).VERSION,
     );
   });
 
-  it("still prefers OPENCLAW_SERVICE_VERSION over OPENCLAW_VERSION", async () => {
+  it("still prefers runtime VERSION over OPENCLAW_VERSION and OPENCLAW_SERVICE_VERSION", async () => {
     await expectSelfVersion(
       {
         OPENCLAW_VERSION: "9.9.9-cli",
         OPENCLAW_SERVICE_VERSION: "2.4.6-service",
         npm_package_version: "1.0.0-package",
       },
-      "2.4.6-service",
+      async () => (await import("../version.js")).VERSION,
     );
   });
 
