@@ -142,7 +142,7 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
 
 ## x402 / Daydreams Router
 
-If you want to use [Daydreams Router (x402)](/providers/x402) with on-device wallet signing via SAW, use the fork installer — it handles SAW setup, gateway install, and x402 onboarding in one command:
+If you want to use [Daydreams Router (x402)](/providers/x402) with either Taskmarket or SAW-based wallet signing, use the fork installer. In an interactive terminal it asks which wallet tooling to install; in non-interactive shells it installs both. It then handles the selected wallet setup, gateway install, and x402 onboarding in one command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/daydreamsai/openclaw-x402-router/main/scripts/install-openclaw-fork.sh | bash

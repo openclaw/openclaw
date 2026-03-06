@@ -277,7 +277,9 @@ describe("rewriteInsufficientTokenBalanceResponse", () => {
       error?: { message?: string; code?: string };
     };
 
-    expect(body.error?.message).toContain("Linked wallet: 0x1111111111111111111111111111111111111111.");
+    expect(body.error?.message).toContain(
+      "Linked wallet: 0x1111111111111111111111111111111111111111.",
+    );
   });
 });
 
@@ -292,9 +294,7 @@ describe("formatInsufficientTokenBalanceMessage", () => {
     const message = __testing.formatInsufficientTokenBalanceMessage(
       "0x2222222222222222222222222222222222222222",
     );
-    expect(message).toContain(
-      "Linked wallet: 0x2222222222222222222222222222222222222222.",
-    );
+    expect(message).toContain("Linked wallet: 0x2222222222222222222222222222222222222222.");
   });
 });
 

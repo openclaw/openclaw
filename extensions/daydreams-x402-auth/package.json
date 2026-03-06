@@ -4,7 +4,8 @@
   "description": "Clawdbot Daydreams Router (x402) auth provider plugin",
   "type": "module",
   "dependencies": {
-    "@daydreamsai/saw": "0.1.2"
+    "@daydreamsai/saw": "0.1.2",
+    "viem": "2.45.0"
   },
   "openclaw": {
     "extensions": [

@@ -1,9 +1,15 @@
+import { spawn, spawnSync } from "node:child_process";
+import { createDecipheriv } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   emptyPluginConfigSchema,
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk";
+import { privateKeyToAccount } from "viem/accounts";
 
 const PROVIDER_ID = "x402";
 const PROVIDER_LABEL = "Daydreams Router (x402)";
@@ -30,6 +36,11 @@ const FALLBACK_MAX_TOKENS = 8192;
 const PRIVATE_KEY_REGEX = /^0x[0-9a-fA-F]{64}$/;
 const DEFAULT_SAW_SOCKET = process.env.SAW_SOCKET || "/run/saw/saw.sock";
 const DEFAULT_SAW_WALLET = "main";
+const TASKMARKET_SENTINEL_PREFIX = "taskmarket:";
+const TASKMARKET_SENTINEL_VERSION = 1 as const;
+const FALLBACK_TASKMARKET_API_URL = "https://api-market.daydreams.systems";
+const DEFAULT_TASKMARKET_API_URL = process.env.TASKMARKET_API_URL || FALLBACK_TASKMARKET_API_URL;
+const DEFAULT_TASKMARKET_KEYSTORE_PATH = "~/.taskmarket/keystore.json";
 
 type X402ModelDefinition = {
   id: string;
@@ -290,8 +301,318 @@ function normalizePrivateKey(value: string): string | null {
   return PRIVATE_KEY_REGEX.test(normalized) ? normalized : null;
 }
 
+function normalizeTaskmarketApiUrl(value: string): string {
+  const raw = value.trim() || DEFAULT_TASKMARKET_API_URL;
+  const withProtocol = raw.startsWith("http") ? raw : `https://${raw}`;
+  return withProtocol.replace(/\/+$/, "");
+}
+
+function resolveHomePath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (trimmed === "~") {
+    return os.homedir();
+  }
+  if (trimmed.startsWith("~/")) {
+    return path.join(os.homedir(), trimmed.slice(2));
+  }
+  return path.resolve(trimmed);
+}
+
+function toBase64Url(value: string): string {
+  return Buffer.from(value, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+type TaskmarketKeystore = {
+  encryptedKey: string;
+  walletAddress: string;
+  deviceId: string;
+  apiToken: string;
+};
+
+function getErrorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
+}
+
+function buildTaskmarketSentinel(payload: { keystorePath: string; apiUrl?: string }): string {
+  const record: Record<string, unknown> = {
+    v: TASKMARKET_SENTINEL_VERSION,
+    keystorePath: payload.keystorePath,
+  };
+  const apiUrl = payload.apiUrl ? normalizeTaskmarketApiUrl(payload.apiUrl) : "";
+  if (apiUrl && apiUrl !== FALLBACK_TASKMARKET_API_URL) {
+    record.apiUrl = apiUrl;
+  }
+  return `${TASKMARKET_SENTINEL_PREFIX}${toBase64Url(JSON.stringify(record))}`;
+}
+
 function buildSawSentinel(walletName: string, socketPath: string): string {
   return `saw:${walletName}@${socketPath}`;
+}
+
+async function loadTaskmarketKeystore(keystorePath: string): Promise<TaskmarketKeystore> {
+  const resolvedPath = resolveHomePath(keystorePath);
+  if (!resolvedPath) {
+    throw new Error("Taskmarket keystore path is required");
+  }
+
+  let raw: string;
+  try {
+    raw = await fs.readFile(resolvedPath, "utf8");
+  } catch (error) {
+    if (getErrorCode(error) === "ENOENT") {
+      throw new Error(
+        `Taskmarket keystore not found at ${resolvedPath}. Run taskmarket init first.`,
+      );
+    }
+    throw new Error(
+      `Taskmarket keystore at ${resolvedPath} could not be read: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`Taskmarket keystore at ${resolvedPath} is not valid JSON.`);
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const encryptedKey =
+    typeof record.encryptedKey === "string" ? record.encryptedKey.trim() : undefined;
+  const walletAddress =
+    typeof record.walletAddress === "string" ? record.walletAddress.trim() : undefined;
+  const deviceId = typeof record.deviceId === "string" ? record.deviceId.trim() : undefined;
+  const apiToken = typeof record.apiToken === "string" ? record.apiToken.trim() : undefined;
+  const normalizedWalletAddress = normalizeAddress(walletAddress);
+
+  if (!encryptedKey || !deviceId || !apiToken || !normalizedWalletAddress) {
+    throw new Error(
+      `Taskmarket keystore at ${resolvedPath} is missing required fields (encryptedKey, walletAddress, deviceId, apiToken).`,
+    );
+  }
+
+  return {
+    encryptedKey,
+    walletAddress: normalizedWalletAddress,
+    deviceId,
+    apiToken,
+  };
+}
+
+async function verifyTaskmarketDeviceKeyAccess(
+  apiUrl: string,
+  keystore: TaskmarketKeystore,
+): Promise<string> {
+  const normalizedUrl = normalizeTaskmarketApiUrl(apiUrl);
+  const endpoint = `${normalizedUrl}/api/devices/${encodeURIComponent(keystore.deviceId)}/key`;
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ deviceId: keystore.deviceId, apiToken: keystore.apiToken }),
+    });
+  } catch (error) {
+    throw new Error(
+      `Could not contact Taskmarket API at ${normalizedUrl}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(
+        "Taskmarket device token was rejected. Reprovision wallet via taskmarket init and rerun onboarding.",
+      );
+    }
+    if (response.status === 404) {
+      throw new Error(
+        `Taskmarket device ${keystore.deviceId} was not found. Reprovision wallet via taskmarket init and rerun onboarding.`,
+      );
+    }
+    throw new Error(
+      `Taskmarket device key probe failed (${response.status}). ${detail.slice(0, 180)} Reprovision your wallet with taskmarket init if needed.`,
+    );
+  }
+
+  const parsed = (await response.json().catch(() => null)) as {
+    deviceEncryptionKey?: unknown;
+  } | null;
+  const dek =
+    parsed && typeof parsed.deviceEncryptionKey === "string"
+      ? parsed.deviceEncryptionKey.trim()
+      : "";
+  if (!/^[0-9a-fA-F]{64}$/.test(dek)) {
+    throw new Error(
+      "Taskmarket device key probe returned an invalid key payload. Reprovision wallet via taskmarket init.",
+    );
+  }
+  return dek;
+}
+
+function decodeTaskmarketEncryptedKey(encryptedHex: string): {
+  iv: Buffer;
+  tag: Buffer;
+  ciphertext: Buffer;
+} {
+  const data = Buffer.from(encryptedHex, "hex");
+  if (data.length <= 28) {
+    throw new Error("Taskmarket encrypted keystore payload is too short.");
+  }
+  const iv = data.subarray(0, 12);
+  const tag = data.subarray(12, 28);
+  const ciphertext = data.subarray(28);
+  if (ciphertext.length === 0) {
+    throw new Error("Taskmarket encrypted keystore payload is empty.");
+  }
+  return { iv, tag, ciphertext };
+}
+
+function decryptTaskmarketPrivateKey(deviceEncryptionKeyHex: string, encryptedHex: string): string {
+  const key = Buffer.from(deviceEncryptionKeyHex, "hex");
+  if (key.length !== 32) {
+    throw new Error(
+      "Taskmarket device key payload is invalid. Reprovision wallet via taskmarket init.",
+    );
+  }
+
+  const { iv, tag, ciphertext } = decodeTaskmarketEncryptedKey(encryptedHex);
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString(
+      "utf8",
+    );
+    const normalized = decrypted.trim().startsWith("0X")
+      ? `0x${decrypted.trim().slice(2)}`
+      : decrypted.trim();
+    if (!PRIVATE_KEY_REGEX.test(normalized)) {
+      throw new Error("Decrypted Taskmarket key is not a valid private key.");
+    }
+    return normalized;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "Decrypted Taskmarket key is not a valid private key."
+    ) {
+      throw error;
+    }
+    throw new Error(
+      "Taskmarket keystore could not be decrypted with the fetched device key. Reprovision wallet via taskmarket init.",
+    );
+  }
+}
+
+function verifyTaskmarketWalletIntegrity(
+  keystore: TaskmarketKeystore,
+  deviceEncryptionKey: string,
+): void {
+  const privateKey = decryptTaskmarketPrivateKey(deviceEncryptionKey, keystore.encryptedKey);
+  const account = privateKeyToAccount(privateKey as `0x${string}`);
+  if (account.address.toLowerCase() !== keystore.walletAddress.toLowerCase()) {
+    throw new Error(
+      "Taskmarket keystore address mismatch after decryption. Reprovision wallet via taskmarket init and rerun onboarding.",
+    );
+  }
+}
+
+function ensureTaskmarketCliAvailable(): void {
+  const probe = spawnSync("taskmarket", ["--help"], {
+    stdio: "ignore",
+    encoding: "utf8",
+  });
+  if (!probe.error) {
+    return;
+  }
+  throw new Error(
+    `Taskmarket CLI is required for this auth method but was not found in PATH (${probe.error.message}). Install it first, then run \`taskmarket init\` and re-run onboarding.`,
+  );
+}
+
+async function ensureTaskmarketWalletProvisioned(
+  ctx: ProviderAuthContext,
+  keystorePath: string,
+): Promise<void> {
+  const resolvedPath = resolveHomePath(keystorePath);
+  if (!resolvedPath) {
+    throw new Error("Taskmarket keystore path is required");
+  }
+
+  try {
+    await fs.access(resolvedPath);
+    return;
+  } catch (error) {
+    if (getErrorCode(error) !== "ENOENT") {
+      throw new Error(
+        `Taskmarket keystore at ${resolvedPath} could not be accessed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  const shouldProvision = await ctx.prompter.confirm({
+    message: `No Taskmarket keystore found at ${resolvedPath}. Run taskmarket init now?`,
+    initialValue: true,
+  });
+  if (!shouldProvision) {
+    throw new Error(
+      `Taskmarket keystore not found at ${resolvedPath}. Run taskmarket init, then re-run onboarding.`,
+    );
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("taskmarket", ["init"], {
+      stdio: "inherit",
+      env: process.env,
+    });
+
+    child.once("error", (error) => {
+      reject(
+        new Error(
+          `Could not start taskmarket init: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+    });
+    child.once("exit", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          `taskmarket init failed${signal ? ` with signal ${signal}` : ` with exit code ${code ?? "unknown"}`}.`,
+        ),
+      );
+    });
+  });
+
+  try {
+    await fs.access(resolvedPath);
+  } catch (error) {
+    throw new Error(
+      getErrorCode(error) === "ENOENT"
+        ? `taskmarket init completed, but no keystore was found at ${resolvedPath}. Re-run taskmarket init or check your Taskmarket config.`
+        : `taskmarket init completed, but the keystore at ${resolvedPath} could not be accessed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+async function resolveSawAddress(walletName: string, socketPath: string): Promise<string | null> {
+  try {
+    const { createSawClient } = await import("@daydreamsai/saw");
+    const client = createSawClient({ wallet: walletName, socketPath });
+    const address = await client.getAddress();
+    return normalizeAddress(address);
+  } catch {
+    return null;
+  }
 }
 
 function normalizeRouterUrl(value: string): string {
@@ -319,17 +640,6 @@ function normalizeAddress(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return /^0x[0-9a-fA-F]{40}$/.test(trimmed) ? trimmed : null;
-}
-
-async function resolveSawAddress(walletName: string, socketPath: string): Promise<string | null> {
-  try {
-    const { createSawClient } = await import("@daydreamsai/saw");
-    const client = createSawClient({ wallet: walletName, socketPath });
-    const address = await client.getAddress();
-    return normalizeAddress(address);
-  } catch {
-    return null;
-  }
 }
 
 async function resolveKeyAddress(privateKey: string): Promise<string | null> {
@@ -382,7 +692,7 @@ const x402Plugin = {
         {
           id: "saw",
           label: "Secure Agent Wallet (SAW)",
-          hint: "Signs permits via SAW daemon (recommended)",
+          hint: "Signs permits via SAW daemon",
           kind: "api_key",
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
             await ctx.prompter.note(
@@ -441,8 +751,7 @@ const x402Plugin = {
             const fundingAddress = await resolveSawAddress(walletName, socketPath);
             if (!fundingAddress) {
               throw new Error(
-                `Could not resolve SAW wallet address for "${walletName}" via socket "${socketPath}". ` +
-                  "Ensure the SAW daemon is running and the wallet exists, then re-run onboarding.",
+                `Could not resolve SAW wallet address for "${walletName}" via socket "${socketPath}". Ensure the SAW daemon is running and the wallet exists, then re-run onboarding.`,
               );
             }
             await showFundingStep(ctx, fundingAddress, network);
@@ -501,6 +810,125 @@ const x402Plugin = {
               notes: [
                 `Daydreams Router base URL set to ${routerUrl}.`,
                 `SAW signing via wallet "${walletName}" at ${socketPath}.`,
+                "Permit caps apply per signed session; update plugins.entries.daydreams-x402-auth.config to change.",
+              ],
+            };
+          },
+        },
+        {
+          id: "taskmarket",
+          label: "Taskmarket wallet keystore",
+          hint: "Signs permits using Taskmarket encrypted keystore + device key",
+          kind: "api_key",
+          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
+            const keystorePath = DEFAULT_TASKMARKET_KEYSTORE_PATH;
+            await ctx.prompter.note(
+              [
+                "This mode uses a Taskmarket encrypted keystore and per-device token.",
+                "If no wallet is provisioned yet, OpenClaw can run `taskmarket init` during onboarding.",
+                "OpenClaw will fetch a Taskmarket device key on demand to sign permits.",
+              ].join("\n"),
+              "Taskmarket wallet",
+            );
+            ensureTaskmarketCliAvailable();
+            await ensureTaskmarketWalletProvisioned(ctx, keystorePath);
+            const keystore = await loadTaskmarketKeystore(keystorePath);
+            const deviceEncryptionKey = await verifyTaskmarketDeviceKeyAccess(
+              DEFAULT_TASKMARKET_API_URL,
+              keystore,
+            );
+            verifyTaskmarketWalletIntegrity(keystore, deviceEncryptionKey);
+
+            const routerInput = await ctx.prompter.text({
+              message: "Daydreams Router URL",
+              initialValue: DEFAULT_ROUTER_URL,
+              validate: (value: string) => {
+                try {
+                  // eslint-disable-next-line no-new
+                  new URL(value);
+                  return undefined;
+                } catch {
+                  return "Invalid URL";
+                }
+              },
+            });
+            const routerUrl = normalizeRouterUrl(String(routerInput));
+
+            const capInput = await ctx.prompter.text({
+              message: "Permit cap (USD)",
+              initialValue: String(DEFAULT_PERMIT_CAP_USD),
+              validate: (value: string) =>
+                normalizePermitCap(value) ? undefined : "Invalid amount",
+            });
+            const permitCap = normalizePermitCap(String(capInput)) ?? DEFAULT_PERMIT_CAP_USD;
+
+            const networkInput = await ctx.prompter.text({
+              message: "Network (CAIP-2)",
+              initialValue: DEFAULT_NETWORK,
+              validate: (value: string) => (normalizeNetwork(value) ? undefined : "Required"),
+            });
+            const network = normalizeNetwork(String(networkInput)) ?? DEFAULT_NETWORK;
+            const selectedDefaultModelRef = await promptDefaultModelRef(ctx);
+            await showFundingStep(ctx, keystore.walletAddress, network);
+
+            const existingPluginConfig =
+              ctx.config.plugins?.entries?.[PLUGIN_ID]?.config &&
+              typeof ctx.config.plugins.entries[PLUGIN_ID]?.config === "object"
+                ? (ctx.config.plugins.entries[PLUGIN_ID]?.config as Record<string, unknown>)
+                : {};
+
+            const pluginConfigPatch: Record<string, unknown> = { ...existingPluginConfig };
+            if (existingPluginConfig.permitCap === undefined) {
+              pluginConfigPatch.permitCap = permitCap;
+            }
+            if (!existingPluginConfig.network) {
+              pluginConfigPatch.network = network;
+            }
+
+            return {
+              profiles: [
+                {
+                  profileId: "x402:default",
+                  credential: {
+                    type: "api_key",
+                    provider: PROVIDER_ID,
+                    key: buildTaskmarketSentinel({
+                      keystorePath,
+                      apiUrl: DEFAULT_TASKMARKET_API_URL,
+                    }),
+                  },
+                },
+              ],
+              configPatch: {
+                plugins: {
+                  entries: {
+                    [PLUGIN_ID]: {
+                      config: pluginConfigPatch,
+                    },
+                  },
+                },
+                models: {
+                  providers: {
+                    [PROVIDER_ID]: {
+                      baseUrl: routerUrl,
+                      apiKey: "x402-wallet",
+                      api: "anthropic-messages",
+                      authHeader: false,
+                      models: cloneX402Models(),
+                    },
+                  },
+                },
+                agents: {
+                  defaults: {
+                    models: buildDefaultAllowlistedModels(),
+                  },
+                },
+              },
+              defaultModel: selectedDefaultModelRef,
+              notes: [
+                `Daydreams Router base URL set to ${routerUrl}.`,
+                `Taskmarket keystore path: ${keystorePath}.`,
+                `Taskmarket API URL: ${DEFAULT_TASKMARKET_API_URL}.`,
                 "Permit caps apply per signed session; update plugins.entries.daydreams-x402-auth.config to change.",
               ],
             };

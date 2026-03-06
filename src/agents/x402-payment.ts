@@ -4,6 +4,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia, mainnet } from "viem/chains";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createTaskmarketAccount, parseTaskmarketWalletConfig } from "./x402-taskmarket-wallet.js";
 
 const log = createSubsystemLogger("agent/x402");
 
@@ -768,10 +769,19 @@ export function maybeWrapStreamFnWithX402Payment(params: {
     return params.streamFn;
   }
 
-  // Detect signing mode: SAW sentinel first, then raw private key
-  const sawConfig = parseSawConfig(params.apiKey);
-  const privateKey = sawConfig ? null : normalizePrivateKey(params.apiKey);
-  if (!sawConfig && !privateKey) {
+  // Detect signing mode: taskmarket sentinel, then SAW sentinel, then raw private key
+  let taskmarketConfig: ReturnType<typeof parseTaskmarketWalletConfig>;
+  try {
+    taskmarketConfig = parseTaskmarketWalletConfig(params.apiKey);
+  } catch (error) {
+    log.warn(
+      `x402 taskmarket credential parse failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return params.streamFn;
+  }
+  const sawConfig = taskmarketConfig ? null : parseSawConfig(params.apiKey);
+  const privateKey = taskmarketConfig || sawConfig ? null : normalizePrivateKey(params.apiKey);
+  if (!taskmarketConfig && !sawConfig && !privateKey) {
     return params.streamFn;
   }
 
@@ -789,41 +799,71 @@ export function maybeWrapStreamFnWithX402Payment(params: {
     }
   })();
 
-  // Build signing backend — SAW resolves the address lazily via the daemon
-  let backendPromise: Promise<SigningBackend>;
-  if (sawConfig) {
-    log.info("x402 using SAW backend", {
-      wallet: sawConfig.walletName,
-      socket: sawConfig.socketPath,
-    });
-    // Dynamic import — @daydreamsai/saw lives in the extension's dependencies,
-    // not the root package, so we suppress the TS module resolution error.
-    const sawModuleId = "@daydreamsai/saw";
-    backendPromise = (
-      import(/* webpackIgnore: true */ sawModuleId) as Promise<{
-        createSawClient: (opts: { socketPath: string; wallet: string }) => SawClient;
-      }>
-    ).then(({ createSawClient: createClient }) => {
-      const client = createClient({
-        socketPath: sawConfig.socketPath,
+  let staticBackendPromise: Promise<SigningBackend> | null = null;
+  let taskmarketBackendAddress: string | null = null;
+
+  const resolveBackend = async (): Promise<SigningBackend> => {
+    // Resolve Taskmarket account at request time so the wallet helper's TTL cache can refresh.
+    if (taskmarketConfig) {
+      const { account, ownerAddress } = await createTaskmarketAccount({
+        config: taskmarketConfig,
+        fetchFn: baseFetch,
+      });
+      if (taskmarketBackendAddress !== ownerAddress) {
+        taskmarketBackendAddress = ownerAddress;
+        log.info("x402 using taskmarket wallet backend", {
+          address: ownerAddress,
+        });
+      }
+      const chain = CHAINS[network] || base;
+      const wallet = createWalletClient({ account, chain, transport: http() });
+      return { mode: "key", wallet, account } satisfies SigningBackend;
+    }
+
+    if (staticBackendPromise) {
+      return staticBackendPromise;
+    }
+
+    if (sawConfig) {
+      log.info("x402 using SAW backend", {
         wallet: sawConfig.walletName,
+        socket: sawConfig.socketPath,
       });
-      return client.getAddress().then((addr: string) => {
-        log.info("SAW address resolved", { address: addr });
-        return {
-          mode: "saw",
-          client,
-          ownerAddress: addr as `0x${string}`,
-        } satisfies SigningBackend;
+      // Dynamic import — @daydreamsai/saw lives in the extension's dependencies,
+      // not the root package, so we suppress the TS module resolution error.
+      const sawModuleId = "@daydreamsai/saw";
+      staticBackendPromise = (
+        import(/* webpackIgnore: true */ sawModuleId) as Promise<{
+          createSawClient: (opts: { socketPath: string; wallet: string }) => SawClient;
+        }>
+      ).then(({ createSawClient: createClient }) => {
+        const client = createClient({
+          socketPath: sawConfig.socketPath,
+          wallet: sawConfig.walletName,
+        });
+        return client.getAddress().then((addr: string) => {
+          log.info("SAW address resolved", { address: addr });
+          return {
+            mode: "saw",
+            client,
+            ownerAddress: addr as `0x${string}`,
+          } satisfies SigningBackend;
+        });
       });
-    });
-  } else {
+      return staticBackendPromise;
+    }
+
     const account = privateKeyToAccount(privateKey as `0x${string}`);
     log.info("x402 using local key backend", { address: account.address });
     const chain = CHAINS[network] || base;
     const wallet = createWalletClient({ account, chain, transport: http() });
-    backendPromise = Promise.resolve({ mode: "key", wallet, account } satisfies SigningBackend);
-  }
+    staticBackendPromise = Promise.resolve({
+      mode: "key",
+      wallet,
+      account,
+    } satisfies SigningBackend);
+    return staticBackendPromise;
+  };
 
   const fetchWithPayment: typeof fetch = async (input, init) => {
     const outboundModel = await extractOutboundModelId(input, init);
@@ -893,7 +933,7 @@ export function maybeWrapStreamFnWithX402Payment(params: {
       return baseFetch(input, init);
     }
 
-    const backend = await backendPromise;
+    const backend = await resolveBackend();
 
     const sendWithPermit = async (permit: CachedPermit): Promise<Response> => {
       const headers = new Headers(init?.headers ?? {});
@@ -981,7 +1021,10 @@ export function maybeWrapStreamFnWithX402Payment(params: {
         retriedErrorResponse,
         getOwnerAddress(backend),
       );
-    } catch {
+    } catch (error) {
+      log.warn(
+        `x402 payment wrapper fallback without payment header: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return baseFetch(input, init);
     }
   };
