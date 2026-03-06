@@ -1,0 +1,27 @@
+{
+  "id": "openfinclaw",
+  "name": "OpenFinClaw",
+  "description": "Complete financial tools suite - strategy builder, backtest, market data, and trading tools. Use fin-strategy-builder skill to create FEP v1.2 strategy packages.",
+  "kind": "financial",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "backtestApiUrl": {
+        "type": "string",
+        "description": "Backtest API base URL (e.g. https://backtest.openfinclaw.ai). No trailing slash."
+      },
+      "backtestApiKey": {
+        "type": "string",
+        "description": "API key for backtest server. Get your key at https://hub.openfinclaw.ai"
+      }
+    }
+  },
+  "uiHints": {
+    "backtestApiKey": { "label": "Backtest API Key", "sensitive": true },
+    "backtestApiUrl": {
+      "label": "Backtest Server URL",
+      "placeholder": "https://backtest.openfinclaw.ai"
+    }
+  }
+}

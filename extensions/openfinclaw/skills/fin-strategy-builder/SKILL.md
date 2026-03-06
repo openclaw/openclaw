@@ -9,12 +9,7 @@ metadata:
         "requires":
           {
             "extensions":
-              [
-                "fin-core",
-                "fin-market-data",
-                "fin-data-bus",
-                "fin-strategy-engine",
-              ],
+              ["fin-core", "fin-market-data", "fin-shared-types", "fin-strategy-engine"],
           },
       },
   }
@@ -111,32 +106,32 @@ fep: "1.2"
 
 # ── 身份标识 (必填) ───────────────────────────────────────
 identity:
-  id: fin-dca-basic-test          # 必填：策略唯一标识（英文 + 连字符）
-  type: strategy                  # strategy | indicator | connector
+  id: fin-dca-basic-test # 必填：策略唯一标识（英文 + 连字符）
+  type: strategy # strategy | indicator | connector
   name: "DCA Basic Test Strategy" # 策略显示名称
-  version: "1.0.0"                # 语义化版本号
-  style: dca                      # trend | mean_reversion | dca | momentum | swing | hybrid
+  version: "1.0.0" # 语义化版本号
+  style: dca # trend | mean_reversion | dca | momentum | swing | hybrid
   author:
-    name: "OpenFinClaw"           # 默认作者
+    name: "OpenFinClaw" # 默认作者
   summary: "Simple DCA strategy for BTC"
 
 # ── 技术配置 (必填) ───────────────────────────────────────
 technical:
   language: python
-  entryPoint: strategy.py         # scripts/ 下的入口文件
+  entryPoint: strategy.py # scripts/ 下的入口文件
 
 # ── 回测配置 (必填) ───────────────────────────────────────
 backtest:
   defaultPeriod:
     startDate: "2024-01-01"
     endDate: "2024-12-31"
-  frequencyDays: 1                # 回测频率（天）
-  initialCapital: 10000           # 初始资金 (USD)
-  currency: USD                   # 货币类型
-  benchmark: BTC-USD              # 基准标的
-  commissionRate: 0.001           # 手续费率 0.1%
-  slippageRate: 0.0005            # 滑点率 0.05%
-  dataSource: synthetic           # synthetic | datahub | csv
+  frequencyDays: 1 # 回测频率（天）
+  initialCapital: 10000 # 初始资金 (USD)
+  currency: USD # 货币类型
+  benchmark: BTC-USD # 基准标的
+  commissionRate: 0.001 # 手续费率 0.1%
+  slippageRate: 0.0005 # 滑点率 0.05%
+  dataSource: synthetic # synthetic | datahub | csv
 ```
 
 ### Version Increment Rule
@@ -150,12 +145,14 @@ backtest:
 ### Identity Fields (FEP v1.2)
 
 **必填字段：**
+
 - `id`: 策略唯一标识（英文 + 连字符，例如 `fin-dca-basic-test`）
 - `type`: `strategy` | `indicator` | `connector`
 - `name`: 策略显示名称
 - `version`: 语义化版本号（例如 `"1.0.0"`）
 
 **可选字段：**
+
 - `style`: `trend` | `mean_reversion` | `dca` | `momentum` | `swing` | `hybrid`
 - `visibility`: `public` | `private` | `unlisted`
 - `summary`: 一句话策略描述
@@ -165,8 +162,8 @@ backtest:
 - `author`: 对象格式
   ```yaml
   author:
-    name: "OpenFinClaw"           # 默认作者名
-    wallet: "0x..."               # 可选：收益分配地址
+    name: "OpenFinClaw" # 默认作者名
+    wallet: "0x..." # 可选：收益分配地址
   ```
 - `createdAt`: `"2024-01-01"` (YYYY-MM-DD)
 - `updatedAt`: `"2024-06-01"` (YYYY-MM-DD)
@@ -182,11 +179,11 @@ backtest:
 
 ```yaml
 classification:
-  archetype: systematic           # systematic | discretionary | hybrid
-  market: Crypto                  # Crypto | US | CN | HK | Forex | Commodity
+  archetype: systematic # systematic | discretionary | hybrid
+  market: Crypto # Crypto | US | CN | HK | Forex | Commodity
   assetClasses: [crypto]
-  frequency: weekly               # daily | weekly | monthly
-  riskProfile: medium             # low | medium | high (fallback for risk.riskLevel)
+  frequency: weekly # daily | weekly | monthly
+  riskProfile: medium # low | medium | high (fallback for risk.riskLevel)
 ```
 
 ### Parameters (可选)
@@ -214,38 +211,38 @@ parameters:
 
 ```yaml
 risk:
-  riskLevel: medium               # low | medium | high
-  maxPositionSizePct: 100         # 单标的最大仓位 %
-  maxExposurePct: 100             # 总敞口 %
-  maxConcurrentPositions: 3       # 最大同时持仓数
-  maxLeverage: 1.0                # 最大杠杆
-  maxDrawdownThreshold: 25        # 最大回撤阈值 %
+  riskLevel: medium # low | medium | high
+  maxPositionSizePct: 100 # 单标的最大仓位 %
+  maxExposurePct: 100 # 总敞口 %
+  maxConcurrentPositions: 3 # 最大同时持仓数
+  maxLeverage: 1.0 # 最大杠杆
+  maxDrawdownThreshold: 25 # 最大回撤阈值 %
   stopLoss:
-    type: trailing                # fixed | trailing | atr-based
-    value: 15                     # 止损百分比或 ATR 倍数
+    type: trailing # fixed | trailing | atr-based
+    value: 15 # 止损百分比或 ATR 倍数
 ```
 
 ### L2 Agent (仅 L2 策略需要)
 
 ```yaml
 agent:
-  engine: agent                   # 触发 L2 Agent 引擎
-  mode: hybrid                    # script | sample | hybrid | full | research
+  engine: agent # 触发 L2 Agent 引擎
+  mode: hybrid # script | sample | hybrid | full | research
   model: claude-sonnet-4-6-20250514
-  budgetCapUsd: 5.0               # LLM 推理成本上限 (USD)
+  budgetCapUsd: 5.0 # LLM 推理成本上限 (USD)
   maxTurnsPerPeriod: 10
-  reflectionInterval: 20          # 每 N 周期执行一次反思
-  drawdownAlertPct: 15.0          # 触发深度分析的回撤阈值
-  priceSpikePct: 5.0              # 触发深度分析的价格波动阈值
+  reflectionInterval: 20 # 每 N 周期执行一次反思
+  drawdownAlertPct: 15.0 # 触发深度分析的回撤阈值
+  priceSpikePct: 5.0 # 触发深度分析的价格波动阈值
 ```
 
 ### Evolution (可选)
 
 ```yaml
 evolution:
-  originId: ""                    # 策略谱系根节点 ID
-  parentId: ""                    # 直接父策略 ID
-  forkSource: ""                  # fork 来源 URL
+  originId: "" # 策略谱系根节点 ID
+  parentId: "" # 直接父策略 ID
+  forkSource: "" # fork 来源 URL
 ```
 
 ### Integrity Proof (v1.2 新增，系统自动生成)
@@ -287,15 +284,15 @@ def compute(data):
 
 Extract key dimensions:
 
-| Dimension | Example |
-|-----------|---------|
-| Asset | BTC, ETH, AAPL, 沪深 300 |
-| Frequency | daily, weekly, monthly |
-| Core idea | buy dips, trend follow, grid, DCA |
-| Capital | $10,000 |
-| Risk tolerance | 25% max drawdown |
-| Time horizon | 2024-01-01 to 2024-12-31 |
-| Market | Crypto, US, CN, HK |
+| Dimension      | Example                           |
+| -------------- | --------------------------------- |
+| Asset          | BTC, ETH, AAPL, 沪深 300          |
+| Frequency      | daily, weekly, monthly            |
+| Core idea      | buy dips, trend follow, grid, DCA |
+| Capital        | $10,000                           |
+| Risk tolerance | 25% max drawdown                  |
+| Time horizon   | 2024-01-01 to 2024-12-31          |
+| Market         | Crypto, US, CN, HK                |
 
 Ask clarifying questions if the idea is vague (e.g. "buy when cheap" → RSI oversold? below MA? fixed schedule?).
 
@@ -332,7 +329,7 @@ Generate:
    - **默认作者：** `identity.author.name` 默认为 `"OpenFinClaw"`，除非用户指定其他作者
    - **tags 格式：** 必须使用行内数组 `tags: [dca, btc, crypto]`，禁止多行列表或单一字符串
 
-2. **scripts/strategy.py** — Must define `compute(data)` returning `{"action", "amount", "price", "reason"}`. Use only allowed imports; no os/subprocess/socket/eval/exec/open/requests/urllib/__import__/importlib.
+2. **scripts/strategy.py** — Must define `compute(data)` returning `{"action", "amount", "price", "reason"}`. Use only allowed imports; no os/subprocess/socket/eval/exec/open/requests/urllib/**import**/importlib.
 
 3. **Optional:** scripts/indicators.py, scripts/risk_manager.py (if design needs them; entry contract remains `compute(data)` in strategy.py).
 
@@ -354,11 +351,11 @@ Auto-fix and re-validate up to 3 iterations; if still failing, explain clearly t
 
 ### Step 5: L1 vs L2 Routing
 
-| Signal | L1 (script) | L2 (agent) |
-|--------|-------------|------------|
-| Decision logic | Fully deterministic rules | Requires judgment, context |
-| Engine in fep/API | `engine: script` or omit | `engine: agent`, `agent.budgetCapUsd` |
-| Cost | No LLM cost | LLM budget cap |
+| Signal            | L1 (script)               | L2 (agent)                            |
+| ----------------- | ------------------------- | ------------------------------------- |
+| Decision logic    | Fully deterministic rules | Requires judgment, context            |
+| Engine in fep/API | `engine: script` or omit  | `engine: agent`, `agent.budgetCapUsd` |
+| Cost              | No LLM cost               | LLM budget cap                        |
 
 **Default: L1.** Only set L2 (agent section in fep.yaml, engine=agent on submit) when the user explicitly wants agent involvement or strategy benefits from LLM analysis.
 
@@ -377,27 +374,27 @@ Present the package and next steps:
 
 ## Strategy Template Library
 
-| Template | style | market | Default engine |
-|----------|-------|--------|----------------|
-| Simple DCA | dca | Crypto | L1 (script) |
-| Adaptive DCA | dca | Crypto | L1 |
-| EMA Crossover | trend | Crypto | L1 |
-| RSI Bounce | mean_reversion | Crypto | L1 |
-| MACD Momentum | momentum | Crypto | L1 |
-| Grid Trading | hybrid | Crypto | L1 |
-| Multi-Factor | hybrid | Crypto | L2 (agent) |
-| Regime Adaptive | hybrid | Crypto | L2 |
+| Template        | style          | market | Default engine |
+| --------------- | -------------- | ------ | -------------- |
+| Simple DCA      | dca            | Crypto | L1 (script)    |
+| Adaptive DCA    | dca            | Crypto | L1             |
+| EMA Crossover   | trend          | Crypto | L1             |
+| RSI Bounce      | mean_reversion | Crypto | L1             |
+| MACD Momentum   | momentum       | Crypto | L1             |
+| Grid Trading    | hybrid         | Crypto | L1             |
+| Multi-Factor    | hybrid         | Crypto | L2 (agent)     |
+| Regime Adaptive | hybrid         | Crypto | L2             |
 
 ---
 
 ## Market Adaptation Rules
 
-| Market | Fee / Settlement | Lot / Limits | Special |
-|--------|------------------|--------------|---------|
-| Crypto | ~0.1%, T+0 | 0.001+ | 24/7 |
-| US Stock | ~0.1%, T+0 | 1 share | Pre/post hours |
+| Market       | Fee / Settlement | Lot / Limits   | Special                            |
+| ------------ | ---------------- | -------------- | ---------------------------------- |
+| Crypto       | ~0.1%, T+0       | 0.001+         | 24/7                               |
+| US Stock     | ~0.1%, T+0       | 1 share        | Pre/post hours                     |
 | A-Share (CN) | ~0.154%, **T+1** | **100 shares** | **±10%/±20%**, stamp tax sell-only |
-| HK | ~0.24%, T+0/T+2 | Variable | Lunch break |
+| HK           | ~0.24%, T+0/T+2  | Variable       | Lunch break                        |
 
 For A-shares: T+1 signal delay, lot rounding to 100, price limit filters.
 

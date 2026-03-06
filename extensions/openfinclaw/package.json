@@ -1,31 +1,39 @@
 {
-  "name": "@openfinclaw/fin-backtest-remote",
+  "name": "@openfinclaw/openfinclaw",
   "version": "2026.3.6",
-  "description": "OpenFinClaw remote backtest agent — submit, poll, and fetch reports via Findoo Backtest API",
+  "description": "OpenFinClaw - Complete financial tools suite for OpenClaw (strategy builder, backtest, market data, trading)",
   "keywords": [
     "backtest",
+    "crypto",
     "financial",
     "openclaw",
     "openfinclaw",
-    "remote"
+    "strategy",
+    "trading"
   ],
   "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cryptoSUN2049/openFinclaw.git",
-    "directory": "extensions/fin-backtest-remote"
+    "directory": "extensions/openfinclaw"
   },
   "files": [
     "skills",
-    "*.ts",
-    "src",
-    "openclaw.plugin.json"
+    "openclaw.plugin.json",
+    "README.md"
   ],
   "type": "module",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org"
+  },
+  "dependencies": {
+    "@openfinclaw/fin-backtest-remote": "workspace:*",
+    "@openfinclaw/fin-core": "workspace:*",
+    "@openfinclaw/fin-market-data": "workspace:*",
+    "@openfinclaw/fin-shared-types": "workspace:*",
+    "@openfinclaw/fin-strategy-engine": "workspace:*"
   },
   "devDependencies": {
     "openfinclaw": "workspace:*"
@@ -34,8 +42,6 @@
     "openfinclaw": ">=2026.2.0"
   },
   "openclaw": {
-    "extensions": [
-      "./index.ts"
-    ]
+    "extensions": []
   }
 }
