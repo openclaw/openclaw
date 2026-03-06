@@ -4,6 +4,8 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
@@ -75,6 +77,20 @@ function normalizeHeartbeatChatFinalText(params: {
   return { suppress: false, text: stripped.text };
 }
 
+function isSilentReplyLeadFragment(text: string): boolean {
+  const normalized = text.trim().toUpperCase();
+  if (!normalized) {
+    return false;
+  }
+  if (!/^[A-Z_]+$/.test(normalized)) {
+    return false;
+  }
+  if (normalized === SILENT_REPLY_TOKEN) {
+    return false;
+  }
+  return SILENT_REPLY_TOKEN.startsWith(normalized);
+}
+
 export type ChatRunEntry = {
   sessionKey: string;
   clientRunId: string;
@@ -144,6 +160,8 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   buffers: Map<string, string>;
   deltaSentAt: Map<string, number>;
+  /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
+  deltaLastBroadcastLen: Map<string, number>;
   abortedRuns: Map<string, number>;
   clear: () => void;
 };
@@ -152,12 +170,14 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const buffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
+  const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
     registry.clear();
     buffers.clear();
     deltaSentAt.clear();
+    deltaLastBroadcastLen.clear();
     abortedRuns.clear();
   };
 
@@ -165,6 +185,7 @@ export function createChatRunState(): ChatRunState {
     registry,
     buffers,
     deltaSentAt,
+    deltaLastBroadcastLen,
     abortedRuns,
     clear,
   };
@@ -288,10 +309,13 @@ export function createAgentEventHandler({
     if (!cleaned) {
       return;
     }
+    chatRunState.buffers.set(clientRunId, cleaned);
     if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
       return;
     }
-    chatRunState.buffers.set(clientRunId, cleaned);
+    if (isSilentReplyLeadFragment(cleaned)) {
+      return;
+    }
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
@@ -301,6 +325,7 @@ export function createAgentEventHandler({
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
+    chatRunState.deltaLastBroadcastLen.set(clientRunId, cleaned.length);
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -316,13 +341,14 @@ export function createAgentEventHandler({
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
-  const emitChatFinal = (
+  const emitChatFinal = async (
     sessionKey: string,
     clientRunId: string,
     sourceRunId: string,
     seq: number,
     jobState: "done" | "error",
     error?: unknown,
+    stopReason?: string,
   ) => {
     const bufferedText = stripInlineDirectiveTagsForDisplay(
       chatRunState.buffers.get(clientRunId) ?? "",
@@ -332,9 +358,85 @@ export function createAgentEventHandler({
       sourceRunId,
       text: bufferedText,
     });
-    const text = normalizedHeartbeatText.text.trim();
+    let text = normalizedHeartbeatText.text.trim();
     const shouldSuppressSilent =
       normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
+    const shouldSuppressSilentLeadFragment = isSilentReplyLeadFragment(text);
+    const shouldSuppressHeartbeatStreaming = shouldHideHeartbeatChatOutput(
+      clientRunId,
+      sourceRunId,
+    );
+
+    // Run message_sending plugin hook so plugins (e.g. security-model-lock) can
+    // intercept or replace the final reply on the webchat/agent path.
+    // This mirrors the behaviour of deliver.ts for channel-based delivery.
+    if (jobState === "done" && text && !shouldSuppressSilent) {
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner?.hasHooks("message_sending")) {
+        try {
+          const hookResult = await hookRunner.runMessageSending(
+            { to: sessionKey, content: text, metadata: { channel: INTERNAL_MESSAGE_CHANNEL } },
+            { channelId: INTERNAL_MESSAGE_CHANNEL, conversationId: sessionKey },
+          );
+          if (hookResult?.cancel) {
+            // Plugin cancelled the message; clear buffers and emit a final with no message.
+            chatRunState.deltaLastBroadcastLen.delete(clientRunId);
+            chatRunState.buffers.delete(clientRunId);
+            chatRunState.deltaSentAt.delete(clientRunId);
+            const cancelPayload = {
+              runId: clientRunId,
+              sessionKey,
+              seq,
+              state: "final" as const,
+              ...(stopReason && { stopReason }),
+              message: undefined,
+            };
+            broadcast("chat", cancelPayload);
+            nodeSendToSession(sessionKey, "chat", cancelPayload);
+            return;
+          }
+          if (typeof hookResult?.content === "string" && hookResult.content !== text) {
+            // Plugin replaced the text; update text and override the buffer so the
+            // flush delta below sends the replacement to streaming clients.
+            text = hookResult.content;
+            chatRunState.buffers.set(clientRunId, text);
+            // Reset broadcast length so the flush delta is always sent.
+            chatRunState.deltaLastBroadcastLen.delete(clientRunId);
+          }
+        } catch {
+          // Never block delivery on hook failure.
+        }
+      }
+    }
+
+    // Flush any throttled delta so streaming clients receive the complete text
+    // before the final event.  The 150 ms throttle in emitChatDelta may have
+    // suppressed the most recent chunk, leaving the client with stale text.
+    // Only flush if the buffer has grown since the last broadcast to avoid duplicates.
+    if (
+      text &&
+      !shouldSuppressSilent &&
+      !shouldSuppressSilentLeadFragment &&
+      !shouldSuppressHeartbeatStreaming
+    ) {
+      const lastBroadcastLen = chatRunState.deltaLastBroadcastLen.get(clientRunId) ?? 0;
+      if (text.length > lastBroadcastLen) {
+        const flushPayload = {
+          runId: clientRunId,
+          sessionKey,
+          seq,
+          state: "delta" as const,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            timestamp: Date.now(),
+          },
+        };
+        broadcast("chat", flushPayload, { dropIfSlow: true });
+        nodeSendToSession(sessionKey, "chat", flushPayload);
+      }
+    }
+    chatRunState.deltaLastBroadcastLen.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
@@ -343,6 +445,7 @@ export function createAgentEventHandler({
         sessionKey,
         seq,
         state: "final" as const,
+        ...(stopReason && { stopReason }),
         message:
           text && !shouldSuppressSilent
             ? {
@@ -456,28 +559,32 @@ export function createAgentEventHandler({
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
+        const evtStopReason =
+          typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
         if (chatLink) {
           const finished = chatRunState.registry.shift(evt.runId);
           if (!finished) {
             clearAgentRunContext(evt.runId);
             return;
           }
-          emitChatFinal(
+          void emitChatFinal(
             finished.sessionKey,
             finished.clientRunId,
             evt.runId,
             evt.seq,
             lifecyclePhase === "error" ? "error" : "done",
             evt.data?.error,
+            evtStopReason,
           );
         } else {
-          emitChatFinal(
+          void emitChatFinal(
             sessionKey,
             eventRunId,
             evt.runId,
             evt.seq,
             lifecyclePhase === "error" ? "error" : "done",
             evt.data?.error,
+            evtStopReason,
           );
         }
       } else if (isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {

@@ -31,7 +31,7 @@ import {
   type OpenClawConfig,
   type ResolvedTelegramAccount,
   type TelegramProbe,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/telegram";
 import { getTelegramRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("telegram");
@@ -44,7 +44,7 @@ function findTelegramTokenOwnerAccountId(params: {
   const tokenOwners = new Map<string, string>();
   for (const id of listTelegramAccountIds(params.cfg)) {
     const account = resolveTelegramAccount({ cfg: params.cfg, accountId: id });
-    const token = account.token.trim();
+    const token = (account.token ?? "").trim();
     if (!token) {
       continue;
     }
@@ -465,7 +465,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         ctx.log?.error?.(`[${account.accountId}] ${reason}`);
         throw new Error(reason);
       }
-      const token = account.token.trim();
+      const token = (account.token ?? "").trim();
       let telegramBotLabel = "";
       try {
         const probe = await getTelegramRuntime().channel.telegram.probeTelegram(

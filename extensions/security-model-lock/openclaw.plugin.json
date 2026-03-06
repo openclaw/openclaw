@@ -1,0 +1,53 @@
+{
+  "id": "security-model-lock",
+  "name": "Security Model Lock",
+  "description": "Automatically switch to a secure model when sensitive skill files are read via the read tool, and lock the session to prevent switching back.",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable or disable the plugin",
+        "default": true
+      },
+      "sensitiveSkills": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "List of sensitive skill names (matches SKILL.md name field). When LLM reads a skill file, the session will be locked.",
+        "default": ["weather"],
+        "examples": [["weather", "notion", "slack"]]
+      },
+      "secureModel": {
+        "type": "object",
+        "description": "The secure model to switch to when a sensitive skill file is read",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "Provider ID (e.g., 'ollama', 'openai', 'local')",
+            "examples": ["ollama", "openai", "local"]
+          },
+          "model": {
+            "type": "string",
+            "description": "Model ID (e.g., 'llama3.3:8b', 'gpt-4')",
+            "examples": ["llama3.3:8b", "safety-model", "qwen2.5:7b"]
+          }
+        },
+        "required": ["provider", "model"]
+      },
+      "lockNotice": {
+        "type": "string",
+        "description": "Custom notice message when lock is triggered",
+        "default": "检测到敏感 skill 调用，已切换到安全模型。会话已锁定，无法切换回其他模型。"
+      },
+      "skillsDir": {
+        "type": "string",
+        "description": "Custom skills directory path (default: auto-detect from cwd and ~/.openclaw/skills)",
+        "examples": ["/path/to/skills", "C:\\\\Users\\\\user\\\\skills"]
+      }
+    }
+  }
+}

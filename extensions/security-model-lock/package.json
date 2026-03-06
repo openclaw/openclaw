@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/security-model-lock",
+  "version": "1.0.0",
+  "description": "Automatically switch to a secure model when sensitive skill files are read via the read tool, and lock the session to prevent switching back.",
+  "type": "module",
+  "private": true,
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "openclaw": "workspace:*"
+  }
+}

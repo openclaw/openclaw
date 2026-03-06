@@ -273,7 +273,10 @@ export async function handleDirectiveOnly(
     (sessionEntry.elevatedLevel as ElevatedLevel | undefined) ??
     (elevatedAllowed ? ("on" as ElevatedLevel) : ("off" as ElevatedLevel));
   const prevReasoningLevel =
-    currentReasoningLevel ?? (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ?? "off";
+    currentReasoningLevel ??
+    (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ??
+    (params.cfg.agents?.defaults?.reasoningDefault as ReasoningLevel | undefined) ??
+    "off";
   let elevatedChanged =
     directives.hasElevatedDirective &&
     directives.elevatedLevel !== undefined &&
