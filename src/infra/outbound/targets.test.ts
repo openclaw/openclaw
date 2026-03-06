@@ -92,11 +92,12 @@ describe("resolveSessionDeliveryTarget", () => {
 
   const expectTopicParsedFromExplicitTo = (
     entry: Parameters<typeof resolveSessionDeliveryTarget>[0]["entry"],
+    explicitTo: string,
   ) => {
     const resolved = resolveSessionDeliveryTarget({
       entry,
       requestedChannel: "last",
-      explicitTo: "63448508:topic:1008013",
+      explicitTo,
     });
     expect(resolved.to).toBe("63448508");
     expect(resolved.threadId).toBe(1008013);
@@ -242,7 +243,16 @@ describe("resolveSessionDeliveryTarget", () => {
       updatedAt: 1,
       lastChannel: "telegram",
       lastTo: "63448508",
-    });
+    }, "63448508:topic:1008013");
+  });
+
+  it("parses :NNN shorthand from explicitTo into threadId", () => {
+    expectTopicParsedFromExplicitTo({
+      sessionId: "sess-topic-shorthand",
+      updatedAt: 1,
+      lastChannel: "telegram",
+      lastTo: "63448508",
+    }, "63448508:1008013");
   });
 
   it("parses :topic:NNN even when lastTo is absent", () => {
@@ -250,7 +260,15 @@ describe("resolveSessionDeliveryTarget", () => {
       sessionId: "sess-no-last",
       updatedAt: 1,
       lastChannel: "telegram",
-    });
+    }, "63448508:topic:1008013");
+  });
+
+  it("parses :NNN shorthand even when lastTo is absent", () => {
+    expectTopicParsedFromExplicitTo({
+      sessionId: "sess-no-last-shorthand",
+      updatedAt: 1,
+      lastChannel: "telegram",
+    }, "63448508:1008013");
   });
 
   it("skips :topic: parsing for non-telegram channels", () => {

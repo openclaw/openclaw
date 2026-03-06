@@ -120,17 +120,21 @@ export function resolveSessionDeliveryTarget(params: {
     channel = params.fallbackChannel;
   }
 
-  // Parse :topic:NNN from explicitTo (Telegram topic syntax).
+  // Parse Telegram topic/thread suffix from explicit targets.
+  // Accept both preferred `:topic:NNN` and shorthand `:NNN` forms so cron can
+  // correctly treat both as explicit thread targets.
   // Only applies when we positively know the channel is Telegram.
   // When channel is unknown, the downstream send path (resolveTelegramSession)
-  // handles :topic: parsing independently.
+  // handles Telegram target parsing independently.
   const isTelegramContext = channel === "telegram" || (!channel && lastChannel === "telegram");
   let explicitTo = rawExplicitTo;
   let parsedThreadId: number | undefined;
-  if (isTelegramContext && rawExplicitTo && rawExplicitTo.includes(":topic:")) {
+  if (isTelegramContext && rawExplicitTo) {
     const parsed = parseTelegramTarget(rawExplicitTo);
-    explicitTo = parsed.chatId;
-    parsedThreadId = parsed.messageThreadId;
+    if (parsed.messageThreadId != null) {
+      explicitTo = parsed.chatId;
+      parsedThreadId = parsed.messageThreadId;
+    }
   }
   const explicitThreadId =
     params.explicitThreadId != null && params.explicitThreadId !== ""

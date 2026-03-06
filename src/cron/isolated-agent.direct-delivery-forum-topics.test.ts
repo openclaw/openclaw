@@ -38,6 +38,25 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
       });
 
       vi.clearAllMocks();
+      mockAgentPayloads([{ text: "forum shorthand message" }]);
+
+      const shorthandRes = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: { mode: "announce", channel: "telegram", to: "123:42" },
+      });
+
+      expect(shorthandRes.status).toBe("ok");
+      expect(shorthandRes.delivered).toBe(true);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expectDirectTelegramDelivery(deps, {
+        chatId: "123",
+        text: "forum shorthand message",
+        messageThreadId: 42,
+      });
+
+      vi.clearAllMocks();
       mockAgentPayloads([{ text: "plain message" }]);
 
       const plainRes = await runTelegramAnnounceTurn({
