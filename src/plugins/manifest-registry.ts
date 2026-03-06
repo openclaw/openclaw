@@ -229,6 +229,25 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
+      // Silently skip duplicate when one candidate is bundled (channel plugin auto-loaded)
+      // and the other is config (explicitly configured in plugins.entries).
+      // This is a common pattern for built-in channel plugins like feishu, telegram, etc.
+      const isBundledAndConfig =
+        [existing.candidate.origin, candidate.origin].toSorted().join(",") === "bundled,config";
+      if (isBundledAndConfig) {
+        // Skip silently - config entry is intentionally for the same bundled channel plugin
+        if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
+          records[existing.recordIndex] = buildRecord({
+            manifest,
+            candidate,
+            manifestPath: manifestRes.manifestPath,
+            schemaCacheKey,
+            configSchema,
+          });
+          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        }
+        continue;
+      }
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
