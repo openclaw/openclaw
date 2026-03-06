@@ -1,21 +1,22 @@
 ---
 name: fin-data-query
-description: "Generic DataHub query — access any of 172 financial data endpoints by path. Use when: specialized tools don't cover the data need, or querying less common endpoints like ETF NAV, FX, company news. NOT for: common queries covered by fin-equity, fin-macro, fin-crypto-defi, fin-derivatives, or fin-market-radar."
+description: "Generic DataHub query — access any of 172+ financial data endpoints by path. Use when: specialized tools don't cover the data need, or querying less common endpoints like company news or coverage metadata. NOT for: common queries covered by fin-equity, fin-macro, fin-crypto-defi, fin-derivatives, fin-market-radar, fin-etf, or fin-currency."
 metadata: { "openclaw": { "emoji": "🔍", "requires": { "extensions": ["findoo-datahub-plugin"] } } }
 ---
 
 # Data Query (Fallback)
 
-Use **fin_query** as a generic fallback to access any of the 172 DataHub endpoints directly (works out of the box). Also use **fin_data_markets** to list supported markets and **fin_data_regime** for market regime detection.
+Use **fin_query** as a generic fallback to access any of the 172+ DataHub endpoints directly (works out of the box). Also use **fin_data_markets** to list supported markets and **fin_data_regime** for market regime detection.
+
+The datahub currently has **13 specialized tools** — prefer those for common queries. Use fin_query only when no specialized tool covers the endpoint.
 
 ## When to Use
 
 - Specialized tools don't cover the endpoint you need
-- ETF NAV / fund manager info
-- FX historical data (USD/CNH, EUR/USD)
 - Company news
 - Coverage metadata (what endpoints/providers exist)
 - Market regime detection (bull/bear/sideways)
+- Any uncommon endpoint not covered below
 
 ## When NOT to Use
 
@@ -24,15 +25,17 @@ Use **fin_query** as a generic fallback to access any of the 172 DataHub endpoin
 - 加密货币/DeFi → use `/fin-crypto-defi` (fin_crypto)
 - 期货/期权/可转债 → use `/fin-derivatives` (fin_derivatives)
 - 龙虎榜/涨停/北向/融资 → use `/fin-market-radar` (fin_market)
+- ETF/基金 NAV/持仓/分红 → use `/fin-etf` (fin_etf)
+- 外汇/汇率 → use `/fin-currency` (fin_currency)
 
 ## Tools & Parameters
 
 ### fin_query — 通用查询
 
-| Parameter | Type   | Required | Format                        | Default | Example                |
-| --------- | ------ | -------- | ----------------------------- | ------- | ---------------------- |
-| path      | string | Yes      | category/endpoint (see below) | —       | etf/fund/manager       |
-| params    | object | No       | key-value query params        | {}      | {"symbol":"510050.SH"} |
+| Parameter | Type   | Required | Format                        | Default | Example           |
+| --------- | ------ | -------- | ----------------------------- | ------- | ----------------- |
+| path      | string | Yes      | category/endpoint (see below) | —       | news/company      |
+| params    | object | No       | key-value query params        | {}      | {"symbol":"AAPL"} |
 
 ### fin_data_ohlcv — K 线数据
 
@@ -58,32 +61,54 @@ Returns one of: `bull` / `bear` / `sideways` / `volatile` / `crisis`
 
 No parameters. Returns list of supported markets, data categories, and total endpoint count.
 
-## DataHub Categories (172 endpoints)
+## DataHub Categories (172+ endpoints)
 
 | Category        | Endpoints | Coverage                                                      |
 | --------------- | --------- | ------------------------------------------------------------- |
 | `equity/*`      | 83        | A-share, HK, US — prices, fundamentals, ownership, money flow |
 | `crypto/*`      | 23        | CEX market data, CoinGecko, DeFi via DefiLlama                |
-| `economy/*`     | 21        | China macro, rates, FX, World Bank                            |
-| `derivatives/*` | 13        | Futures, options, convertible bonds                           |
+| `economy/*`     | 23        | China macro, rates, FX, World Bank, Shibor quote, WZ index    |
+| `derivatives/*` | 13        | Futures (incl. curve), options, convertible bonds             |
 | `index/*`       | 12        | Index data, thematic indices                                  |
-| `etf/*`         | 9         | ETF prices, NAV, fund data                                    |
-| `currency/*`    | 3         | FX historical, search, snapshots                              |
+| `etf/*`         | 9         | ETF prices, NAV, fund portfolio/manager/dividends/share/adj   |
+| `currency/*`    | 4         | FX historical, search, snapshots, news                        |
 | `news/*`        | 1         | Company news                                                  |
 | `coverage/*`    | 2+        | Provider list, endpoint discovery                             |
 
-## Common Queries (not covered by other skills)
+## All 13 Specialized Tools
+
+| Tool               | Endpoints | Primary Use Case                                                                  |
+| ------------------ | --------- | --------------------------------------------------------------------------------- |
+| `fin_stock`        | 22        | A/HK/US stock prices, financials, ownership, flow                                 |
+| `fin_index`        | 6         | Index data, constituents, thematic indices                                        |
+| `fin_macro`        | 23        | GDP/CPI/PMI/rates/FX/World Bank                                                   |
+| `fin_crypto`       | 20        | CEX tickers, CoinGecko, DeFi protocols                                            |
+| `fin_derivatives`  | 12        | Futures, options, convertible bonds                                               |
+| `fin_market`       | 20        | Dragon-tiger, limit-up, northbound/southbound, margin                             |
+| `fin_etf`          | 9         | ETF NAV, info, historical, fund portfolio/manager/dividends/share/adj_nav, search |
+| `fin_currency`     | 4         | FX historical prices, search, snapshots, news                                     |
+| `fin_ta`           | —         | Technical indicators (SMA/EMA/RSI/MACD/BB)                                        |
+| `fin_data_ohlcv`   | —         | Universal OHLCV candles (crypto/equity/commodity)                                 |
+| `fin_data_regime`  | —         | Market regime detection (bull/bear/sideways)                                      |
+| `fin_data_markets` | —         | List supported markets and endpoint coverage                                      |
+| `fin_query`        | all       | Generic fallback for any DataHub endpoint                                         |
+
+## When to Prefer Specialized Tools
+
+| Data Need                   | Use Instead       | Why                                  |
+| --------------------------- | ----------------- | ------------------------------------ |
+| Stock quote / financials    | `fin_stock`       | Better parameter hints, 22 endpoints |
+| Index / thematic            | `fin_index`       | Dedicated index endpoints            |
+| GDP / CPI / interest rates  | `fin_macro`       | Macro-specific analysis patterns     |
+| Futures / options / CB      | `fin_derivatives` | Derivatives-specific analysis        |
+| Crypto / DeFi               | `fin_crypto`      | 20 dedicated crypto endpoints        |
+| Dragon-tiger / market radar | `fin_market`      | Market monitoring + anomaly scoring  |
+| ETF / Fund NAV / portfolio  | `fin_etf`         | 9 dedicated ETF/fund endpoints       |
+| FX / currency               | `fin_currency`    | 4 dedicated FX endpoints             |
+
+## Common Queries (only via fin_query)
 
 ```
-# ETF fund manager info
-fin_query(path="etf/fund/manager", params={"symbol": "110011"})
-
-# ETF NAV historical
-fin_query(path="etf/fund/nav", params={"symbol": "510050.SH"})
-
-# Currency historical (FX)
-fin_query(path="currency/price/historical", params={"symbol": "USDCNH"})
-
 # Company news
 fin_query(path="news/company", params={"symbol": "AAPL"})
 
@@ -99,7 +124,7 @@ fin_query(path="coverage/providers")
 When you don't know the exact endpoint path:
 
 1. `fin_query(path="coverage/providers")` — see all 38+ data providers
-2. `fin_query(path="coverage/commands")` — browse all 172 endpoints with descriptions
+2. `fin_query(path="coverage/commands")` — browse all 172+ endpoints with descriptions
 3. Use the category prefix to narrow down (equity/, crypto/, economy/, etc.)
 4. Call the specific endpoint with appropriate params
 
@@ -114,20 +139,9 @@ fin_data_regime(symbol="000300.SH", market="equity", timeframe="1d")
 fin_data_regime(symbol="BTC/USDT", market="crypto", timeframe="4h")
 ```
 
-- 💡 Regime detection uses SMA crossover + ATR analysis on 200+ bars
-- ⚠️ Needs sufficient historical data (at least 200 bars), otherwise defaults to "sideways"
-- 💡 Useful as input for strategy decisions or risk assessment
-
-## When to Prefer Specialized Tools
-
-| Data Need                   | Use Instead       | Why                                    |
-| --------------------------- | ----------------- | -------------------------------------- |
-| Stock quote / financials    | `fin_stock`       | Better parameter hints, more endpoints |
-| Index / ETF / Fund          | `fin_index`       | Dedicated index endpoints              |
-| GDP / CPI / interest rates  | `fin_macro`       | Macro-specific analysis patterns       |
-| Futures / options / CB      | `fin_derivatives` | Derivatives-specific analysis          |
-| Crypto / DeFi               | `fin_crypto`      | 19 dedicated crypto endpoints          |
-| Dragon-tiger / market radar | `fin_market`      | Market monitoring patterns             |
+- Regime detection uses SMA crossover + ATR analysis on 200+ bars
+- Needs sufficient historical data (at least 200 bars), otherwise defaults to "sideways"
+- Useful as input for strategy decisions or risk assessment
 
 ## Data Notes
 
@@ -135,7 +149,7 @@ fin_data_regime(symbol="BTC/USDT", market="crypto", timeframe="4h")
 - **coverage/commands**: 返回全量 endpoint 列表，是最可靠的 endpoint 发现方式
 - **fin_data_ohlcv**: 带 SQLite 本地缓存，重复查询更快
 - **fin_data_regime**: 需要 200+ 根 K 线才能准确检测，数据不足时返回 "sideways"
-- **FX 数据**: currency/ 下只有 3 个 endpoint，覆盖有限
+- **优先使用专用工具**: 13 个专用工具覆盖了绝大多数场景，fin_query 仅用于它们不覆盖的 endpoint
 
 ## Response Guidelines
 

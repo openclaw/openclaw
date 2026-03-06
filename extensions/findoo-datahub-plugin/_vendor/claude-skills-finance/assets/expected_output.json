@@ -1,0 +1,161 @@
+{
+  "_description": "Expected output structure for all 4 scripts. Values are illustrative to show data format.",
+
+  "ratio_calculator_output": {
+    "categories": {
+      "profitability": {
+        "roe": {
+          "value": 0.25,
+          "formula": "Net Income / Total Equity",
+          "name": "Return on Equity",
+          "interpretation": "Good - above average performance"
+        },
+        "roa": {
+          "value": 0.1375,
+          "formula": "Net Income / Total Assets",
+          "name": "Return on Assets",
+          "interpretation": "Excellent - significantly above peers"
+        },
+        "gross_margin": {
+          "value": 0.40,
+          "formula": "(Revenue - COGS) / Revenue",
+          "name": "Gross Margin",
+          "interpretation": "Acceptable - within normal range"
+        },
+        "operating_margin": {
+          "value": 0.16,
+          "formula": "Operating Income / Revenue",
+          "name": "Operating Margin",
+          "interpretation": "Good - above average performance"
+        },
+        "net_margin": {
+          "value": 0.11,
+          "formula": "Net Income / Revenue",
+          "name": "Net Margin",
+          "interpretation": "Good - above average performance"
+        }
+      },
+      "liquidity": {
+        "current_ratio": {"value": 1.875, "name": "Current Ratio"},
+        "quick_ratio": {"value": 1.4375, "name": "Quick Ratio"},
+        "cash_ratio": {"value": 0.625, "name": "Cash Ratio"}
+      },
+      "leverage": {
+        "debt_to_equity": {"value": 0.545, "name": "Debt-to-Equity Ratio"},
+        "interest_coverage": {"value": 6.67, "name": "Interest Coverage Ratio"},
+        "dscr": {"value": 2.50, "name": "Debt Service Coverage Ratio"}
+      },
+      "efficiency": {
+        "asset_turnover": {"value": 1.25, "name": "Asset Turnover"},
+        "inventory_turnover": {"value": 8.57, "name": "Inventory Turnover"},
+        "receivables_turnover": {"value": 8.33, "name": "Receivables Turnover"},
+        "dso": {"value": 43.8, "name": "Days Sales Outstanding"}
+      },
+      "valuation": {
+        "pe_ratio": {"value": 81.82, "name": "Price-to-Earnings Ratio"},
+        "pb_ratio": {"value": 20.45, "name": "Price-to-Book Ratio"},
+        "ps_ratio": {"value": 9.0, "name": "Price-to-Sales Ratio"},
+        "ev_ebitda": {"value": 45.7, "name": "EV/EBITDA"},
+        "peg_ratio": {"value": 6.82, "name": "PEG Ratio"}
+      }
+    }
+  },
+
+  "dcf_valuation_output": {
+    "wacc": 0.085,
+    "projected_revenue": [55000000, 59950000, 64746000, 69278220, 73434953],
+    "projected_fcf": [6600000, 7793500, 8416980, 9698951, 10280893],
+    "terminal_value": {
+      "perpetuity_growth": 175382225,
+      "exit_multiple": 176243484
+    },
+    "enterprise_value": {
+      "perpetuity_growth": 149500000,
+      "exit_multiple": 150100000
+    },
+    "equity_value": {
+      "perpetuity_growth": 142500000,
+      "exit_multiple": 143100000
+    },
+    "value_per_share": {
+      "perpetuity_growth": 14.25,
+      "exit_multiple": 14.31
+    },
+    "sensitivity_analysis": {
+      "wacc_values": [0.065, 0.075, 0.085, 0.095, 0.105],
+      "growth_values": [0.015, 0.020, 0.025, 0.030, 0.035],
+      "enterprise_value_table": "5x5 nested list of enterprise values",
+      "share_price_table": "5x5 nested list of share prices"
+    }
+  },
+
+  "budget_variance_output": {
+    "executive_summary": {
+      "period": "Q4 2025",
+      "company": "Acme Corp",
+      "total_line_items": 10,
+      "material_variances_count": 3,
+      "favorable_count": 4,
+      "unfavorable_count": 6,
+      "revenue": {
+        "actual": 15700000,
+        "budget": 15500000,
+        "variance_amount": 200000,
+        "variance_pct": 1.29
+      },
+      "expenses": {
+        "actual": 13255000,
+        "budget": 12520000,
+        "variance_amount": 735000,
+        "variance_pct": 5.87
+      },
+      "net_impact": -535000
+    },
+    "material_variances": [
+      {
+        "name": "Cost of Goods Sold",
+        "budget_variance_amount": 600000,
+        "budget_variance_pct": 8.33,
+        "favorability": "Unfavorable"
+      }
+    ],
+    "department_summary": {
+      "Sales": {"total_variance": 0, "variance_pct": 0},
+      "Operations": {"total_variance": 0, "variance_pct": 0}
+    },
+    "category_summary": {
+      "Revenue": {"total_variance": 0, "variance_pct": 0},
+      "COGS": {"total_variance": 0, "variance_pct": 0}
+    }
+  },
+
+  "forecast_builder_output": {
+    "trend_analysis": {
+      "trend": {
+        "slope": 650000,
+        "intercept": 9500000,
+        "r_squared": 0.98,
+        "direction": "upward"
+      },
+      "average_growth_rate": 0.06,
+      "seasonality_index": [0.92, 0.97, 1.01, 1.10]
+    },
+    "scenario_comparison": {
+      "comparison": [
+        {"scenario": "base", "total_revenue": 185000000, "growth_rate": 0.08},
+        {"scenario": "bull", "total_revenue": 210000000, "growth_rate": 0.12},
+        {"scenario": "bear", "total_revenue": 165000000, "growth_rate": 0.05}
+      ]
+    },
+    "rolling_cash_flow": {
+      "weeks": 13,
+      "opening_balance": 2500000,
+      "closing_balance": 2800000,
+      "total_inflows": 4200000,
+      "total_outflows": 3900000,
+      "minimum_balance": 2100000,
+      "minimum_balance_week": 4,
+      "cash_runway_weeks": 12
+    }
+  }
+}

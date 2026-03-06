@@ -125,7 +125,7 @@ const findooDatahubPlugin = {
     } as Parameters<typeof api.registerService>[0]);
 
     // ============================================================
-    // AI Tools (10 total)
+    // AI Tools (13 total)
     // ============================================================
 
     // === Tool 1: fin_stock — Equity data ===
@@ -134,7 +134,7 @@ const findooDatahubPlugin = {
         name: "fin_stock",
         label: "Stock Data (A/HK/US)",
         description:
-          "Fetch A-share, HK, or US equity data — quotes, historical prices, income, balance sheet, cashflow, ratios, money flow, holders, dividends, news.",
+          "Fetch A-share, HK, or US equity data — quotes, historical prices, financials, ratios, money flow, holders, dividends, shareholder trades, repurchase, pledge, earnings forecast.",
         parameters: Type.Object({
           symbol: Type.String({
             description: "Stock code. A-shares: 600519.SH; HK: 00700.HK; US: AAPL",
@@ -149,11 +149,21 @@ const findooDatahubPlugin = {
               "fundamental/ratios",
               "fundamental/metrics",
               "fundamental/dividends",
+              "fundamental/adj_factor",
+              "fundamental/earnings_forecast",
               "ownership/top10_holders",
+              "ownership/shareholder_trade",
+              "ownership/repurchase",
+              "ownership/share_float",
+              "ownership/holder_number",
+              "pledge/stat",
+              "profile",
               "moneyflow/individual",
               "market/top_list",
               "discovery/gainers",
               "discovery/losers",
+              "hk/income",
+              "us/income",
             ],
             description: "DataHub equity endpoint path",
           }),
@@ -200,6 +210,10 @@ const findooDatahubPlugin = {
               "price/historical",
               "constituents",
               "daily_basic",
+              "available",
+              "info",
+              "classify",
+              "global_index",
               "thematic/ths_index",
               "thematic/ths_daily",
               "thematic/ths_member",
@@ -235,7 +249,7 @@ const findooDatahubPlugin = {
         name: "fin_macro",
         label: "Macro / Rates / FX",
         description:
-          "China macro (GDP/CPI/PPI/PMI/M2), interest rates (Shibor/LPR/Libor/Hibor), treasury yields, FX, WorldBank data.",
+          "China macro (GDP/CPI/PPI/PMI/M2), interest rates (Shibor/LPR/Libor/Hibor), treasury yields, FX rates, WorldBank data, economic calendar.",
         parameters: Type.Object({
           endpoint: Type.Unsafe<string>({
             type: "string",
@@ -248,18 +262,23 @@ const findooDatahubPlugin = {
               "social_financing",
               "shibor",
               "shibor_lpr",
+              "shibor_quote",
               "libor",
               "hibor",
               "treasury_cn",
               "treasury_us",
               "index_global",
+              "wz_index",
               "calendar",
+              "currency/price/historical",
+              "currency/search",
+              "currency/snapshots",
               "worldbank/gdp",
               "worldbank/population",
               "worldbank/inflation",
               "worldbank/indicator",
             ],
-            description: "DataHub economy endpoint path",
+            description: "DataHub economy/currency endpoint path",
           }),
           symbol: Type.Optional(Type.String({ description: "Currency pair or indicator code" })),
           country: Type.Optional(Type.String({ description: "Country code for WorldBank" })),
@@ -271,10 +290,14 @@ const findooDatahubPlugin = {
           try {
             const endpoint = String(params.endpoint ?? "cpi");
             const qp = buildParams(params);
-            const results = await client.economy(endpoint, qp);
+            // Route currency/* endpoints to the currency category
+            const results = endpoint.startsWith("currency/")
+              ? await client.currency(endpoint.replace("currency/", ""), qp)
+              : await client.economy(endpoint, qp);
+            const category = endpoint.startsWith("currency/") ? "currency" : "economy";
             return json({
               success: true,
-              endpoint: `economy/${endpoint}`,
+              endpoint: `${category}/${endpoint.startsWith("currency/") ? endpoint.replace("currency/", "") : endpoint}`,
               count: results.length,
               results,
             });
@@ -306,6 +329,7 @@ const findooDatahubPlugin = {
               "futures/settle",
               "futures/warehouse",
               "futures/mapping",
+              "futures/curve",
               "options/basic",
               "options/daily",
               "options/chains",
@@ -368,6 +392,7 @@ const findooDatahubPlugin = {
               "defi/stablecoins",
               "defi/fees",
               "defi/dex_volumes",
+              "defi/bridges",
               "defi/coin_prices",
             ],
             description: "DataHub crypto endpoint path",
@@ -402,7 +427,7 @@ const findooDatahubPlugin = {
         name: "fin_market",
         label: "Market Radar",
         description:
-          "Market monitoring — dragon-tiger list, limit-up/down stats, block trades, sector money flow, margin, Stock Connect flows, global index, IPO calendar.",
+          "Market monitoring — dragon-tiger list, limit-up/down stats, block trades, sector money flow, margin trading, Stock Connect (north+south), IPO calendar.",
         parameters: Type.Object({
           endpoint: Type.Unsafe<string>({
             type: "string",
@@ -417,8 +442,12 @@ const findooDatahubPlugin = {
               "moneyflow/block_trade",
               "margin/summary",
               "margin/detail",
+              "margin/trading",
               "flow/hsgt_flow",
               "flow/hsgt_top10",
+              "flow/ggt_daily",
+              "flow/ggt_top10",
+              "flow/hs_const",
               "discovery/gainers",
               "discovery/losers",
               "discovery/active",
@@ -582,7 +611,7 @@ const findooDatahubPlugin = {
       { names: ["fin_data_regime"] },
     );
 
-    // === Tool 11: fin_ta — Technical Analysis Indicators ===
+    // === Tool 10: fin_ta — Technical Analysis Indicators ===
     api.registerTool(
       {
         name: "fin_ta",
@@ -644,7 +673,104 @@ const findooDatahubPlugin = {
       { names: ["fin_ta"] },
     );
 
-    // === Tool 10: fin_data_markets — Supported Markets ===
+    // === Tool 11: fin_etf — ETF & Fund Data ===
+    api.registerTool(
+      {
+        name: "fin_etf",
+        label: "ETF & Fund",
+        description:
+          "ETF and fund data — NAV, info, historical prices, fund portfolio holdings, manager track record, dividends, share changes, adjusted NAV, search.",
+        parameters: Type.Object({
+          symbol: Type.Optional(
+            Type.String({
+              description: "ETF/Fund code. ETF: 510050.SH; Fund: 110011",
+            }),
+          ),
+          endpoint: Type.Unsafe<string>({
+            type: "string",
+            enum: [
+              "nav",
+              "info",
+              "historical",
+              "fund/portfolio",
+              "fund/manager",
+              "fund/dividends",
+              "fund/share",
+              "fund/adj_nav",
+              "search",
+            ],
+            description: "DataHub ETF/fund endpoint path",
+          }),
+          start_date: Type.Optional(Type.String({ description: "Start date, e.g. 2025-01-01" })),
+          end_date: Type.Optional(Type.String({ description: "End date, e.g. 2025-12-31" })),
+          limit: Type.Optional(Type.Number({ description: "Max records to return" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            const endpoint = String(params.endpoint ?? "info");
+            const qp = buildParams(params);
+            const results = await client.etf(endpoint, qp);
+            return json({
+              success: true,
+              endpoint: `etf/${endpoint}`,
+              count: results.length,
+              results,
+            });
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+      },
+      { names: ["fin_etf"] },
+    );
+
+    // === Tool 12: fin_currency — FX & News ===
+    api.registerTool(
+      {
+        name: "fin_currency",
+        label: "FX & News",
+        description:
+          "Foreign exchange rates (historical, search, snapshots) and company news. Covers major pairs like USDCNH, EURUSD, USDJPY.",
+        parameters: Type.Object({
+          endpoint: Type.Unsafe<string>({
+            type: "string",
+            enum: ["price/historical", "search", "snapshots", "news/company"],
+            description: "DataHub currency/news endpoint path",
+          }),
+          symbol: Type.Optional(
+            Type.String({
+              description: "Currency pair (USDCNH, EURUSD) or stock symbol for news (AAPL)",
+            }),
+          ),
+          start_date: Type.Optional(Type.String({ description: "Start date, e.g. 2025-01-01" })),
+          end_date: Type.Optional(Type.String({ description: "End date, e.g. 2025-12-31" })),
+          limit: Type.Optional(Type.Number({ description: "Max records to return" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            const endpoint = String(params.endpoint ?? "price/historical");
+            const qp = buildParams(params);
+            // Route news/* to the generic query path
+            const results =
+              endpoint === "news/company"
+                ? await client.query(`news/company`, qp)
+                : await client.currency(endpoint, qp);
+            const category = endpoint === "news/company" ? "news" : "currency";
+            return json({
+              success: true,
+              endpoint: `${category}/${endpoint === "news/company" ? "company" : endpoint}`,
+              count: results.length,
+              results,
+            });
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+      },
+      { names: ["fin_currency"] },
+    );
+
+    // === Tool 13: fin_data_markets — Supported Markets ===
     api.registerTool(
       {
         name: "fin_data_markets",

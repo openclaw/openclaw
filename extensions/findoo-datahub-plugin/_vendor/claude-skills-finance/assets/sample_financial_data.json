@@ -1,0 +1,219 @@
+{
+  "_description": "Sample financial data covering all 4 scripts: ratio_calculator, dcf_valuation, budget_variance_analyzer, and forecast_builder",
+
+  "ratio_analysis": {
+    "income_statement": {
+      "revenue": 50000000,
+      "cost_of_goods_sold": 30000000,
+      "operating_income": 8000000,
+      "ebitda": 10000000,
+      "net_income": 5500000,
+      "interest_expense": 1200000
+    },
+    "balance_sheet": {
+      "total_assets": 40000000,
+      "current_assets": 15000000,
+      "cash_and_equivalents": 5000000,
+      "accounts_receivable": 6000000,
+      "inventory": 3500000,
+      "total_equity": 22000000,
+      "total_debt": 12000000,
+      "current_liabilities": 8000000
+    },
+    "cash_flow": {
+      "operating_cash_flow": 7500000,
+      "total_debt_service": 3000000
+    },
+    "market_data": {
+      "share_price": 45.00,
+      "shares_outstanding": 10000000,
+      "market_cap": 450000000,
+      "earnings_growth_rate": 0.12
+    }
+  },
+
+  "dcf_valuation": {
+    "historical": {
+      "revenue": [38000000, 42000000, 45000000, 48000000, 50000000],
+      "net_income": [3800000, 4200000, 4500000, 5000000, 5500000],
+      "net_debt": 7000000,
+      "shares_outstanding": 10000000
+    },
+    "assumptions": {
+      "projection_years": 5,
+      "revenue_growth_rates": [0.10, 0.09, 0.08, 0.07, 0.06],
+      "fcf_margins": [0.12, 0.13, 0.13, 0.14, 0.14],
+      "default_revenue_growth": 0.05,
+      "default_fcf_margin": 0.10,
+      "terminal_growth_rate": 0.025,
+      "terminal_ebitda_margin": 0.20,
+      "exit_ev_ebitda_multiple": 12.0,
+      "wacc_inputs": {
+        "risk_free_rate": 0.04,
+        "equity_risk_premium": 0.06,
+        "beta": 1.1,
+        "cost_of_debt": 0.055,
+        "tax_rate": 0.25,
+        "debt_weight": 0.30,
+        "equity_weight": 0.70
+      }
+    }
+  },
+
+  "budget_variance": {
+    "company": "Acme Corp",
+    "period": "Q4 2025",
+    "line_items": [
+      {
+        "name": "Product Revenue",
+        "type": "revenue",
+        "department": "Sales",
+        "category": "Revenue",
+        "actual": 12500000,
+        "budget": 12000000,
+        "prior_year": 10800000
+      },
+      {
+        "name": "Service Revenue",
+        "type": "revenue",
+        "department": "Sales",
+        "category": "Revenue",
+        "actual": 3200000,
+        "budget": 3500000,
+        "prior_year": 2900000
+      },
+      {
+        "name": "Cost of Goods Sold",
+        "type": "expense",
+        "department": "Operations",
+        "category": "COGS",
+        "actual": 7800000,
+        "budget": 7200000,
+        "prior_year": 6700000
+      },
+      {
+        "name": "Salaries & Wages",
+        "type": "expense",
+        "department": "Human Resources",
+        "category": "Personnel",
+        "actual": 2100000,
+        "budget": 2200000,
+        "prior_year": 1950000
+      },
+      {
+        "name": "Marketing & Advertising",
+        "type": "expense",
+        "department": "Marketing",
+        "category": "Sales & Marketing",
+        "actual": 850000,
+        "budget": 750000,
+        "prior_year": 680000
+      },
+      {
+        "name": "Software & Technology",
+        "type": "expense",
+        "department": "Engineering",
+        "category": "Technology",
+        "actual": 420000,
+        "budget": 400000,
+        "prior_year": 350000
+      },
+      {
+        "name": "Office & Facilities",
+        "type": "expense",
+        "department": "Operations",
+        "category": "G&A",
+        "actual": 180000,
+        "budget": 200000,
+        "prior_year": 175000
+      },
+      {
+        "name": "Travel & Entertainment",
+        "type": "expense",
+        "department": "Sales",
+        "category": "Sales & Marketing",
+        "actual": 95000,
+        "budget": 120000,
+        "prior_year": 88000
+      },
+      {
+        "name": "Professional Services",
+        "type": "expense",
+        "department": "Finance",
+        "category": "G&A",
+        "actual": 310000,
+        "budget": 250000,
+        "prior_year": 220000
+      },
+      {
+        "name": "R&D Expenses",
+        "type": "expense",
+        "department": "Engineering",
+        "category": "R&D",
+        "actual": 1500000,
+        "budget": 1400000,
+        "prior_year": 1200000
+      }
+    ]
+  },
+
+  "forecast": {
+    "historical_periods": [
+      {"period": "Q1 2024", "revenue": 10500000, "gross_profit": 4200000, "operating_income": 1575000},
+      {"period": "Q2 2024", "revenue": 11200000, "gross_profit": 4480000, "operating_income": 1680000},
+      {"period": "Q3 2024", "revenue": 11800000, "gross_profit": 4720000, "operating_income": 1770000},
+      {"period": "Q4 2024", "revenue": 12500000, "gross_profit": 5000000, "operating_income": 1875000},
+      {"period": "Q1 2025", "revenue": 12800000, "gross_profit": 5120000, "operating_income": 1920000},
+      {"period": "Q2 2025", "revenue": 13500000, "gross_profit": 5400000, "operating_income": 2025000},
+      {"period": "Q3 2025", "revenue": 14100000, "gross_profit": 5640000, "operating_income": 2115000},
+      {"period": "Q4 2025", "revenue": 15700000, "gross_profit": 6280000, "operating_income": 2355000}
+    ],
+    "drivers": {
+      "units": {
+        "base_units": 5000,
+        "growth_rate": 0.04
+      },
+      "pricing": {
+        "base_price": 2800,
+        "annual_increase": 0.03
+      }
+    },
+    "assumptions": {
+      "revenue_growth_rate": 0.08,
+      "gross_margin": 0.40,
+      "opex_pct_revenue": 0.25,
+      "forecast_periods": 12
+    },
+    "scenarios": {
+      "base": {
+        "growth_adjustment": 0.0,
+        "margin_adjustment": 0.0
+      },
+      "bull": {
+        "growth_adjustment": 0.04,
+        "margin_adjustment": 0.03
+      },
+      "bear": {
+        "growth_adjustment": -0.03,
+        "margin_adjustment": -0.02
+      }
+    },
+    "cash_flow_inputs": {
+      "opening_cash_balance": 2500000,
+      "weekly_revenue": 350000,
+      "collection_rate": 0.85,
+      "collection_lag_weeks": 2,
+      "weekly_payroll": 160000,
+      "weekly_rent": 15000,
+      "weekly_operating": 45000,
+      "weekly_other": 20000,
+      "one_time_items": [
+        {"week": 3, "amount": -250000, "description": "Annual insurance premium"},
+        {"week": 6, "amount": 500000, "description": "Customer prepayment"},
+        {"week": 9, "amount": -180000, "description": "Equipment purchase"},
+        {"week": 13, "amount": -75000, "description": "Quarterly tax payment"}
+      ]
+    },
+    "forecast_periods": 12
+  }
+}
