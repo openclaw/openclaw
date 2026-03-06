@@ -56,6 +56,45 @@ export type { SystemdUserLingerStatus };
 
 // Unit file parsing/rendering: see systemd-unit.ts
 
+/**
+ * Load environment variables from a systemd EnvironmentFile.
+ * Handles both simple KEY=VALUE lines and quoted values.
+ */
+async function loadSystemdEnvironmentFile(
+  filePath: string,
+  homeDir: string,
+): Promise<Record<string, string>> {
+  const env: Record<string, string> = {};
+  try {
+    // Expand ~ to home directory
+    const expandedPath = filePath.startsWith("~") ? filePath.replace("~", homeDir) : filePath;
+    const content = await fs.readFile(expandedPath, "utf8");
+    for (const rawLine of content.split("\n")) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) {
+        continue;
+      }
+      // Parse KEY=VALUE or KEY="VALUE" or KEY='VALUE'
+      const match = line.match(/^([^=]+)=(.*)$/);
+      if (match) {
+        const key = match[1].trim();
+        let value = match[2].trim();
+        // Remove surrounding quotes if present
+        if (
+          (value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'"))
+        ) {
+          value = value.slice(1, -1);
+        }
+        env[key] = value;
+      }
+    }
+  } catch {
+    // Silently ignore missing files - they may not exist on all systems
+  }
+  return env;
+}
+
 export async function readSystemdServiceExecStart(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
@@ -65,6 +104,28 @@ export async function readSystemdServiceExecStart(
     let execStart = "";
     let workingDirectory = "";
     const environment: Record<string, string> = {};
+    const environmentFiles: string[] = [];
+
+    // First pass: collect EnvironmentFile paths (need to expand ~)
+    for (const rawLine of content.split("\n")) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) {
+        continue;
+      }
+      if (line.startsWith("EnvironmentFile=")) {
+        const filePath = line.slice("EnvironmentFile=".length).trim();
+        environmentFiles.push(filePath);
+      }
+    }
+
+    // Load environment files first
+    const homeDir = env.HOME || "/";
+    for (const filePath of environmentFiles) {
+      const fileEnv = await loadSystemdEnvironmentFile(filePath, homeDir);
+      Object.assign(environment, fileEnv);
+    }
+
+    // Second pass: collect inline Environment entries (these take precedence)
     for (const rawLine of content.split("\n")) {
       const line = rawLine.trim();
       if (!line || line.startsWith("#")) {
