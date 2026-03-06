@@ -591,6 +591,7 @@ describe("classifyFailoverReason", () => {
     // A generic "service unavailable" from a proxy/CDN should stay retryable,
     // but it should not be treated as provider overload / rate limit.
     expect(classifyFailoverReason("LLM error: service unavailable")).toBe("timeout");
+    expect(classifyFailoverReason("503 Internal Database Error")).toBe("timeout");
   });
   it("classifies zhipuai Weekly/Monthly Limit Exhausted as rate_limit (#33785)", () => {
     expect(

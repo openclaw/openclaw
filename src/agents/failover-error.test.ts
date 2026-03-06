@@ -129,6 +129,21 @@ describe("failover-error", () => {
     ).toBe("overloaded");
   });
 
+  it("keeps status-only 503s conservative unless the payload is clearly overloaded", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 503,
+        message: "Internal database error",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 503,
+        message: '{"error":{"message":"The model is overloaded. Please try later"}}',
+      }),
+    ).toBe("overloaded");
+  });
+
   it("treats 400 insufficient_quota payloads as billing instead of format", () => {
     expect(
       resolveFailoverReasonFromError({
