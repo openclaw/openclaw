@@ -5,6 +5,7 @@ const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
 const ensureConfigReadyMock = vi.fn(async () => {});
 const ensurePluginRegistryLoadedMock = vi.fn();
+const routeLogsToStderrMock = vi.fn();
 
 const runtimeMock = {
   log: vi.fn(),
@@ -34,6 +35,10 @@ vi.mock("./config-guard.js", () => ({
 
 vi.mock("../plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
+}));
+
+vi.mock("../../logging.js", () => ({
+  routeLogsToStderr: routeLogsToStderrMock,
 }));
 
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
@@ -195,6 +200,7 @@ describe("registerPreActionHooks", () => {
       commandPath: ["update", "status"],
       suppressDoctorStdout: true,
     });
+    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
 
     vi.clearAllMocks();
     await runPreAction({
@@ -206,6 +212,7 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["config", "set"],
     });
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for config validate", async () => {

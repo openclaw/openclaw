@@ -282,7 +282,7 @@ export function enableConsoleCapture(): void {
       } catch {
         // never block console output on logging failures
       }
-      if (loggingState.forceConsoleToStderr) {
+      if (loggingState.forceConsoleToStderr && !isJsonPayload(formatted)) {
         // in RPC/JSON mode, keep stdout clean
         try {
           const line = timestamp ? `${timestamp} ${formatted}` : formatted;

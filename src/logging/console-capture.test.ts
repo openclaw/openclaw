@@ -109,6 +109,19 @@ describe("enableConsoleCapture", () => {
     expect(log).toHaveBeenCalledWith(payload);
   });
 
+  it("keeps JSON payloads on stdout when stderr routing is enabled", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const log = vi.fn();
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    console.log = log;
+    routeLogsToStderr();
+    enableConsoleCapture();
+    const payload = JSON.stringify({ ok: true });
+    console.log(payload);
+    expect(log).toHaveBeenCalledWith(payload);
+    expect(stderrWrite).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "stdout", stream: process.stdout },
     { name: "stderr", stream: process.stderr },
