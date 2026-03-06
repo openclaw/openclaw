@@ -5,13 +5,14 @@ import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
   parseModelRef,
+  resolveConfiguredModelRef,
+  resolveReasoningDefault,
   buildModelAliasIndex,
   normalizeModelSelection,
   normalizeProviderId,
   normalizeProviderIdForAuth,
   modelKey,
   resolveAllowedModelRef,
-  resolveConfiguredModelRef,
   resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
@@ -823,5 +824,39 @@ describe("normalizeModelSelection", () => {
     expect(normalizeModelSelection(undefined)).toBeUndefined();
     expect(normalizeModelSelection(null)).toBeUndefined();
     expect(normalizeModelSelection(42)).toBeUndefined();
+  });
+
+  describe("resolveReasoningDefault", () => {
+    it("uses explicit config reasoning false before catalog reasoning true", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        models: {
+          providers: {
+            "openai-codex": {
+              models: [
+                {
+                  id: "gpt-5.4",
+                  reasoning: false,
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      const result = resolveReasoningDefault({
+        cfg: cfg as OpenClawConfig,
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        catalog: [
+          {
+            provider: "openai-codex",
+            id: "gpt-5.4",
+            reasoning: true,
+          },
+        ],
+      });
+
+      expect(result).toBe("off");
+    });
   });
 });

@@ -672,19 +672,18 @@ export function resolveReasoningDefault(params: {
   catalog?: ModelCatalogEntry[];
 }): "on" | "off" {
   const key = modelKey(params.provider, params.model);
+  const configured = params.cfg?.models?.providers?.[params.provider]?.models?.find(
+    (entry) => entry.id === params.model,
+  );
+  if (typeof configured?.reasoning === "boolean") {
+    return configured.reasoning ? "on" : "off";
+  }
   const candidate = params.catalog?.find(
     (entry) =>
       (entry.provider === params.provider && entry.id === params.model) ||
       (entry.provider === key && entry.id === params.model),
   );
-  if (candidate?.reasoning === true) {
-    return "on";
-  }
-  const configured =
-    params.cfg?.models?.providers?.[params.provider]?.models?.find(
-      (entry) => entry.id === params.model,
-    )?.reasoning ?? false;
-  return configured ? "on" : "off";
+  return candidate?.reasoning === true ? "on" : "off";
 }
 
 /**
