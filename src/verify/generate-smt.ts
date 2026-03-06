@@ -80,9 +80,17 @@ function main() {
   // 3. Copy property files
   console.log();
   console.log("--- Copying property files ---");
-  if (fs.existsSync(path.join(refDir, "properties"))) {
+  const propSource = path.join(refDir, "properties");
+  if (fs.existsSync(propSource)) {
     copyPropertyFiles(refDir, outputDir);
   } else {
+    if (verify) {
+      throw new Error(
+        `[generate-smt] Error: Property suite not found at ${propSource}. ` +
+          `Formal verification requires the property suite to be present when --verify is used. ` +
+          `Please ensure the 'openclaw-tool-policy-z3' repository is checked out in the sibling directory.`,
+      );
+    }
     console.log("  Reference property files not found, skipping copy.");
   }
   console.log();
