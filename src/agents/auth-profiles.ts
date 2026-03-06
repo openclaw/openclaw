@@ -26,6 +26,7 @@ export {
   ensureAuthProfileStore,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreForRuntime,
+  registerAuthStoreSnapshotSaveHook,
   replaceRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStore,
   saveAuthProfileStore,
