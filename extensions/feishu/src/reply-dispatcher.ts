@@ -385,7 +385,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             )) {
               // In "auto" mode, only the first chunk replies; subsequent chunks
               // use create to avoid topic-folding every chunk under the parent.
-              const chunkReplyTo = first ? deliveryReplyTo : (groupReplyMode === "auto" ? undefined : deliveryReplyTo);
+              const chunkReplyTo = first
+                ? deliveryReplyTo
+                : groupReplyMode === "auto"
+                  ? undefined
+                  : deliveryReplyTo;
               const chunkReplyInThread = chunkReplyTo ? deliveryReplyInThread : undefined;
               await sendMarkdownCardFeishu({
                 cfg,
@@ -413,7 +417,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             )) {
               // In "auto" mode, only the first chunk replies; subsequent chunks
               // use create to avoid topic-folding every chunk under the parent.
-              const chunkReplyTo = first ? deliveryReplyTo : (groupReplyMode === "auto" ? undefined : deliveryReplyTo);
+              const chunkReplyTo = first
+                ? deliveryReplyTo
+                : groupReplyMode === "auto"
+                  ? undefined
+                  : deliveryReplyTo;
               const chunkReplyInThread = chunkReplyTo ? deliveryReplyInThread : undefined;
               await sendMessageFeishu({
                 cfg,
@@ -440,7 +448,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           for (const mediaUrl of mediaList) {
             // When only media is sent (no text), the first media acts as
             // the "first message" for auto mode.
-            const mediaReplyTo = mediaFirst ? deliveryReplyTo : (groupReplyMode === "auto" && !hasText ? undefined : deliveryReplyTo);
+            const mediaReplyTo = mediaFirst
+              ? deliveryReplyTo
+              : groupReplyMode === "auto" && !hasText
+                ? undefined
+                : deliveryReplyTo;
             const mediaReplyInThread = mediaReplyTo ? deliveryReplyInThread : undefined;
             await sendMediaFeishu({
               cfg,
