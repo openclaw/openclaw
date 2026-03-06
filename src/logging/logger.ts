@@ -71,9 +71,13 @@ function canUseSilentVitestFileLogFastPath(envLevel: LogLevel | undefined): bool
 }
 
 function getSettingsDateKey(settings: ResolvedSettings): string {
-  // Extract date from rolling log path, or use a fixed key for custom paths
-  const match = settings.file.match(/openclaw-(\d{4}-\d{2}-\d{2})\.log$/);
-  return match ? match[1] : "custom";
+  // Use isRollingPath to check and extract date consistently with other code
+  if (isRollingPath(settings.file)) {
+    const base = path.basename(settings.file);
+    // Strip "openclaw-" prefix and ".log" suffix to get the date segment
+    return base.slice(LOG_PREFIX.length + 1, base.length - LOG_SUFFIX.length);
+  }
+  return "custom";
 }
 
 function resolveSettings(): ResolvedSettings {
