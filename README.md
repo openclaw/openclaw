@@ -14,7 +14,7 @@
 
 ## how to install
 
-on existing openclaw instance : 
+on existing openclaw instance (this is V2026.3.2) : 
 
 `npm install -g github:bresleveloper/openclaw-dev-mode`
 
