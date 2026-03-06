@@ -1,4 +1,5 @@
 import { listAgentIds } from "../agents/agent-scope.js";
+import { isPwAiLoaded } from "../browser/pw-ai-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
@@ -184,7 +185,20 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     replyAccountId: opts.replyAccount,
   };
   if (opts.local === true) {
-    return await agentCommand(localOpts, runtime, deps);
+    try {
+      return await agentCommand(localOpts, runtime, deps);
+    } finally {
+      // Release the cached Playwright browser connection if the Browser tool was used.
+      // Without this the Node.js event loop stays alive and the process never exits.
+      if (isPwAiLoaded()) {
+        try {
+          const mod = await import("../browser/pw-ai.js");
+          await mod.closePlaywrightBrowserConnection();
+        } catch {
+          // ignore cleanup errors
+        }
+      }
+    }
   }
 
   try {
