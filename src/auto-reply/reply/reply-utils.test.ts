@@ -776,6 +776,51 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(afterReset?.replyToTag).toBe(false);
     expect(afterReset?.replyToId).toBeUndefined();
   });
+
+  it("buffers split silent-token prefix 'NO' then swallows completed 'NO_REPLY'", () => {
+    const acc = createStreamingDirectiveAccumulator();
+    expect(acc.consume("NO", { silentToken: "NO_REPLY" })).toBeNull();
+    expect(acc.consume("_REPLY", { silentToken: "NO_REPLY" })).toBeNull();
+  });
+
+  it("flushes buffered prefix when next chunk proves it is not a silent token", () => {
+    const acc = createStreamingDirectiveAccumulator();
+    expect(acc.consume("NO", { silentToken: "NO_REPLY" })).toBeNull();
+    const result = acc.consume("T really");
+    expect(result?.text).toBe("NOT really");
+  });
+
+  it("does not buffer lowercase 'No' (natural language)", () => {
+    const acc = createStreamingDirectiveAccumulator();
+    const result = acc.consume("No");
+    expect(result?.text).toBe("No");
+  });
+
+  it("handles single-token NO_REPLY without buffering", () => {
+    const acc = createStreamingDirectiveAccumulator();
+    expect(acc.consume("NO_REPLY", { silentToken: "NO_REPLY" })).toBeNull();
+  });
+
+  it("buffers split HEARTBEAT_OK prefix then swallows completed token", () => {
+    const acc = createStreamingDirectiveAccumulator();
+    expect(acc.consume("HEART", { silentToken: "HEARTBEAT_OK" })).toBeNull();
+    expect(acc.consume("BEAT_OK", { silentToken: "HEARTBEAT_OK" })).toBeNull();
+  });
+
+  it("flushes buffered prefix as text on final with no continuation", () => {
+    const acc = createStreamingDirectiveAccumulator();
+    expect(acc.consume("NO", { silentToken: "NO_REPLY" })).toBeNull();
+    const result = acc.consume("", { final: true });
+    expect(result?.text).toBe("NO");
+  });
+
+  it("reset clears pending silent buffer", () => {
+    const acc = createStreamingDirectiveAccumulator();
+    expect(acc.consume("NO", { silentToken: "NO_REPLY" })).toBeNull();
+    acc.reset();
+    const result = acc.consume("Hello");
+    expect(result?.text).toBe("Hello");
+  });
 });
 
 describe("extractShortModelName", () => {

@@ -3,6 +3,7 @@ import { escapeRegExp } from "../utils.js";
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
 
+const TOKEN_CHARS_ONLY = /[^A-Z_]/;
 const silentExactRegexByToken = new Map<string, RegExp>();
 const silentTrailingRegexByToken = new Map<string, RegExp>();
 
@@ -49,6 +50,32 @@ export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKE
   return text.replace(getSilentTrailingRegex(token), "").trim();
 }
 
+/**
+ * Lenient prefix check for streaming buffering.
+ * Unlike isSilentReplyPrefixText, does NOT require an underscore —
+ * catches "NO" as a valid prefix of "NO_REPLY" from BPE tokenizers
+ * that split the token across streaming chunks (e.g. "NO" + "_REPLY").
+ * Returns true only for strict prefixes (shorter than full token).
+ */
+export function couldBeSilentTokenStart(
+  text: string | undefined,
+  token: string = SILENT_REPLY_TOKEN,
+): boolean {
+  if (!text) {
+    return false;
+  }
+  const trimmed = text.trimStart();
+  if (!trimmed) {
+    return false;
+  }
+  // Must already be uppercase + underscores only (reject "No", "no", etc.)
+  if (TOKEN_CHARS_ONLY.test(trimmed)) {
+    return false;
+  }
+  const upper = token.toUpperCase();
+  return trimmed.length < upper.length && upper.startsWith(trimmed);
+}
+
 export function isSilentReplyPrefixText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
@@ -72,7 +99,7 @@ export function isSilentReplyPrefixText(
   if (normalized.length < 2) {
     return false;
   }
-  if (/[^A-Z_]/.test(normalized)) {
+  if (TOKEN_CHARS_ONLY.test(normalized)) {
     return false;
   }
   const tokenUpper = token.toUpperCase();
