@@ -148,5 +148,6 @@ export function parsePolicies(srcDir: string): ParsedPolicies {
     ownerOnlyFallbacks,
     subagentDenyAlways: denyAlways,
     subagentDenyLeaf: denyLeaf,
+    extraTools: ["whatsapp_login"],
   };
 }

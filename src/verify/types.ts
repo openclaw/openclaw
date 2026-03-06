@@ -24,6 +24,7 @@ export interface ParsedPolicies {
   ownerOnlyFallbacks: string[];
   subagentDenyAlways: string[];
   subagentDenyLeaf: string[];
+  extraTools: string[];
 }
 
 export interface PipelineStep {

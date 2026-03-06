@@ -97,7 +97,9 @@ export function emitProfilesSmt2(data: ParsedAll): string {
   w(`  (ite (= current_profile 0) (profile_minimal_allows t)`);
   w(`  (ite (= current_profile 1) (profile_coding_allows t)`);
   w(`  (ite (= current_profile 2) (profile_messaging_allows t)`);
-  w(`       true)))) ; 3 or anything else = full`);
+  w(
+    `       (profile_full_allows t))))) ; default to full if not matched (matches runtime resolveCoreToolProfilePolicy)`,
+  );
   w(``);
 
   // 6. Active step
