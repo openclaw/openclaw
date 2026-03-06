@@ -279,13 +279,15 @@ function buildTelegramThreadReplyParams(params: {
 
   if (params.replyToMessageId != null) {
     const replyToMessageId = Math.trunc(params.replyToMessageId);
-    if (params.quoteText?.trim()) {
-      threadParams.reply_parameters = {
-        message_id: replyToMessageId,
-        quote: params.quoteText.trim(),
-      };
-    } else {
-      threadParams.reply_to_message_id = replyToMessageId;
+    if (Number.isFinite(replyToMessageId) && replyToMessageId > 0) {
+      if (params.quoteText?.trim()) {
+        threadParams.reply_parameters = {
+          message_id: replyToMessageId,
+          quote: params.quoteText.trim(),
+        };
+      } else {
+        threadParams.reply_to_message_id = replyToMessageId;
+      }
     }
   }
   return threadParams;

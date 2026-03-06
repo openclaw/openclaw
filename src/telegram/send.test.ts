@@ -1363,6 +1363,26 @@ describe("shared send behaviors", () => {
     }
   });
 
+  it("ignores non-numeric replyToMessageId instead of sending NaN", async () => {
+    const chatId = "123";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 80,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+    // Simulate a cross-surface UUID-like reply id cast to number (results in NaN)
+    await sendMessageTelegram(chatId, "hello", {
+      token: "tok",
+      api,
+      replyToMessageId: Number("not-a-number"),
+    });
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello", {
+      parse_mode: "HTML",
+    });
+  });
+
   it("wraps chat-not-found with actionable context", async () => {
     const cases = [
       {
