@@ -192,13 +192,19 @@ export const dispatchTelegramMessage = async ({
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const useMessagePreviewTransportForDmReasoning =
       laneName === "reasoning" && threadSpec?.scope === "dm" && canStreamAnswerDraft;
+    // When replyToMode is "off" in DMs, force message transport instead of draft.
+    // sendMessageDraft cannot explicitly clear stale reply references from previous
+    // draft state, which causes "reply to deleted message" artifacts in the Telegram
+    // client when a prior streaming cycle left a dangling reply context.
+    const forceDmMessageTransport =
+      replyToMode === "off" && threadSpec?.scope === "dm" && !useMessagePreviewTransportForDmReasoning;
     const stream = enabled
       ? createTelegramDraftStream({
           api: bot.api,
           chatId,
           maxChars: draftMaxChars,
           thread: threadSpec,
-          previewTransport: useMessagePreviewTransportForDmReasoning ? "message" : "auto",
+          previewTransport: useMessagePreviewTransportForDmReasoning || forceDmMessageTransport ? "message" : "auto",
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,

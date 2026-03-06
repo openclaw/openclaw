@@ -1197,6 +1197,34 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("forces message transport for DM answer lane when replyToMode is off", async () => {
+    setupDraftStreams({ answerMessageId: 999 });
+
+    const context = createContext({ threadSpec: { scope: "dm" } });
+    const bot = createBot();
+
+    await dispatchTelegramMessage({
+      context,
+      bot,
+      cfg: {},
+      runtime: createRuntime(),
+      replyToMode: "off",
+      streamMode: "partial",
+      textLimit: 4096,
+      telegramCfg: {},
+      opts: { token: "token" },
+    });
+
+    // Answer lane should use "message" transport to avoid stale draft reply references
+    expect(createTelegramDraftStream).toHaveBeenCalled();
+    expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        previewTransport: "message",
+        replyToMessageId: undefined,
+      }),
+    );
+  });
+
   it("keeps reasoning and answer streaming in separate preview lanes", async () => {
     const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 999,
