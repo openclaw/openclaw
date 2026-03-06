@@ -82,9 +82,10 @@ describe("cron self-improve helpers", () => {
         agentId: "main",
         sessionsDir,
         maxSessions: 10,
+        referenceTime: "2026-03-06T12:00:00.000Z",
       });
       expect(summary).toBeTruthy();
-      expect(summary).toContain("Conversation history signals");
+      expect(summary).toContain("previous local day 2026-03-05");
       expect(summary).toContain("Potential failures:");
       expect(summary).toContain("I don't have direct DB access");
       expect(summary).toContain("Potential improvements/new features:");
@@ -93,10 +94,53 @@ describe("cron self-improve helpers", () => {
     });
   });
 
+  it("audits all transcripts from the previous day by default instead of sampling recent files", async () => {
+    await withTempSessionsDir(async (sessionsDir) => {
+      for (let index = 0; index < 25; index += 1) {
+        await writeTranscript(sessionsDir, `recent-${index}.jsonl`, [
+          {
+            timestamp: "2026-03-04T10:00:00.000Z",
+            message: {
+              role: "user",
+              content: [{ type: "text", text: `Old request ${index}` }],
+            },
+          },
+        ]);
+      }
+
+      const targetPath = path.join(sessionsDir, "older-but-in-window.jsonl");
+      await writeTranscript(sessionsDir, "older-but-in-window.jsonl", [
+        {
+          timestamp: "2026-03-05T21:00:00.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "Please add better self-improve repo routing." }],
+          },
+        },
+      ]);
+      await fs.utimes(
+        targetPath,
+        new Date("2026-03-01T00:00:00.000Z"),
+        new Date("2026-03-01T00:00:00.000Z"),
+      );
+
+      const summary = await buildSelfImproveConversationHistorySummary({
+        agentId: "main",
+        sessionsDir,
+        referenceTime: "2026-03-06T12:00:00.000Z",
+      });
+
+      expect(summary).toContain("previous local day 2026-03-05");
+      expect(summary).toContain("Please add better self-improve repo routing");
+      expect(summary).not.toContain("Old request");
+    });
+  });
+
   it("returns undefined when sessions directory is missing", async () => {
     const summary = await buildSelfImproveConversationHistorySummary({
       agentId: "main",
       sessionsDir: path.join(os.tmpdir(), "openclaw-self-improve-missing"),
+      referenceTime: "2026-03-06T12:00:00.000Z",
     });
     expect(summary).toBeUndefined();
   });
@@ -104,10 +148,12 @@ describe("cron self-improve helpers", () => {
   it("builds a runbook text with optional history section", () => {
     const text = buildSelfImproveRunbookText({
       agentId: "main",
-      historySummary: "Conversation history signals (recent sessions):\nPotential failures: ...",
+      historySummary:
+        "Conversation history signals (previous local day 2026-03-05; audited 3 transcripts):\nPotential failures: ...",
     });
     expect(text).toContain("Self-improvement runbook:");
     expect(text).toContain("session-logs skill");
+    expect(text).toContain("../morpho-infra-helm");
     expect(text).toContain("Potential failures");
   });
 });

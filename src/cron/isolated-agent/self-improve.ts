@@ -12,6 +12,12 @@ type Finding = {
   assistantText?: string;
 };
 
+type TimeWindow = {
+  dayLabel: string;
+  startMs: number;
+  endMs: number;
+};
+
 const SELF_IMPROVE_TRIGGER_RE =
   /\b(self[\s-]*improv(?:e|ement)?|self[\s-]*heal(?:ing)?|autofix|bot[\s-]*hardening|triage[\s-]*hardening)\b/i;
 const FAILURE_SIGNAL_RE =
@@ -19,7 +25,6 @@ const FAILURE_SIGNAL_RE =
 const IMPROVEMENT_SIGNAL_RE =
   /\b(should|could you|can you|please|feature|improve|improvement|enhance|support|add|new)\b/i;
 
-const DEFAULT_MAX_SESSIONS = 20;
 const DEFAULT_MAX_FAILURES = 12;
 const DEFAULT_MAX_IMPROVEMENTS = 12;
 const SUMMARY_LINE_MAX_CHARS = 220;
@@ -89,6 +94,7 @@ function extractTextFromContent(content: unknown): string | undefined {
 function extractTurn(entry: Record<string, unknown>): {
   role?: "user" | "assistant";
   timestamp?: string;
+  timestampMs?: number;
   text?: string;
 } {
   const message = toRecord(entry.message);
@@ -101,16 +107,18 @@ function extractTurn(entry: Record<string, unknown>): {
     return {};
   }
   const text = extractTextFromContent(message.content);
+  const timestamp = extractTimestamp(entry, message);
   return {
     role,
-    timestamp: extractTimestamp(entry, message),
+    timestamp,
+    timestampMs: parseTimestampMs(timestamp),
     text,
   };
 }
 
 async function listRecentTranscriptFiles(params: {
   sessionsDir: string;
-  maxSessions: number;
+  maxSessions?: number;
 }): Promise<string[]> {
   const entries = await fsp.readdir(params.sessionsDir, { withFileTypes: true });
   const files = entries
@@ -133,20 +141,68 @@ async function listRecentTranscriptFiles(params: {
 
   return stats
     .toSorted((a, b) => b.mtimeMs - a.mtimeMs)
-    .slice(0, Math.max(1, params.maxSessions))
+    .slice(0, Math.max(1, params.maxSessions ?? Number.POSITIVE_INFINITY))
     .map((entry) => entry.filePath);
+}
+
+function parseTimestampMs(timestamp?: string): number | undefined {
+  if (!timestamp?.trim()) {
+    return undefined;
+  }
+  const value = Date.parse(timestamp);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function formatLocalDay(date: Date): string {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function resolvePreviousLocalDayWindow(referenceTime?: Date | number | string): TimeWindow {
+  const base =
+    referenceTime instanceof Date
+      ? new Date(referenceTime.getTime())
+      : referenceTime !== undefined
+        ? new Date(referenceTime)
+        : new Date();
+  const previousDayStart = new Date(
+    base.getFullYear(),
+    base.getMonth(),
+    base.getDate() - 1,
+    0,
+    0,
+    0,
+    0,
+  );
+  const currentDayStart = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 0, 0, 0, 0);
+  return {
+    dayLabel: formatLocalDay(previousDayStart),
+    startMs: previousDayStart.getTime(),
+    endMs: currentDayStart.getTime(),
+  };
+}
+
+function isWithinWindow(timestampMs: number | undefined, window: TimeWindow): boolean {
+  if (timestampMs === undefined || !Number.isFinite(timestampMs)) {
+    return false;
+  }
+  return timestampMs >= window.startMs && timestampMs < window.endMs;
 }
 
 async function collectFindingsFromTranscript(params: {
   filePath: string;
-}): Promise<{ failures: Finding[]; improvements: Finding[] }> {
+  window: TimeWindow;
+}): Promise<{ failures: Finding[]; improvements: Finding[]; hasWindowActivity: boolean }> {
   const failures: Finding[] = [];
   const improvements: Finding[] = [];
   const sessionId = path.basename(params.filePath, ".jsonl");
   const stream = fs.createReadStream(params.filePath, { encoding: "utf-8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
-  let lastUser: { text: string; timestamp?: string } | undefined;
+  let hasWindowActivity = false;
+  let lastUser: { text: string; timestamp?: string; timestampMs?: number } | undefined;
   try {
     for await (const line of rl) {
       const trimmed = line.trim();
@@ -167,10 +223,16 @@ async function collectFindingsFromTranscript(params: {
       if (!turn.role || !turn.text) {
         continue;
       }
+      if (isWithinWindow(turn.timestampMs, params.window)) {
+        hasWindowActivity = true;
+      }
 
       if (turn.role === "user") {
-        lastUser = { text: turn.text, timestamp: turn.timestamp };
-        if (IMPROVEMENT_SIGNAL_RE.test(turn.text)) {
+        lastUser = { text: turn.text, timestamp: turn.timestamp, timestampMs: turn.timestampMs };
+        if (
+          isWithinWindow(turn.timestampMs, params.window) &&
+          IMPROVEMENT_SIGNAL_RE.test(turn.text)
+        ) {
           improvements.push({
             sessionId,
             timestamp: turn.timestamp,
@@ -181,6 +243,10 @@ async function collectFindingsFromTranscript(params: {
       }
 
       if (!lastUser) {
+        continue;
+      }
+      const failureTimestampMs = turn.timestampMs ?? lastUser.timestampMs;
+      if (!isWithinWindow(failureTimestampMs, params.window)) {
         continue;
       }
       if (!FAILURE_SIGNAL_RE.test(turn.text)) {
@@ -198,7 +264,7 @@ async function collectFindingsFromTranscript(params: {
     stream.destroy();
   }
 
-  return { failures, improvements };
+  return { failures, improvements, hasWindowActivity };
 }
 
 function dedupeFindings(findings: Finding[], withAssistant: boolean): Finding[] {
@@ -245,15 +311,16 @@ export async function buildSelfImproveConversationHistorySummary(params: {
   maxSessions?: number;
   maxFailures?: number;
   maxImprovements?: number;
+  referenceTime?: Date | number | string;
 }): Promise<string | undefined> {
   const sessionsDir = params.sessionsDir ?? resolveSessionTranscriptsDirForAgent(params.agentId);
-  const maxSessions = params.maxSessions ?? DEFAULT_MAX_SESSIONS;
   const maxFailures = params.maxFailures ?? DEFAULT_MAX_FAILURES;
   const maxImprovements = params.maxImprovements ?? DEFAULT_MAX_IMPROVEMENTS;
+  const window = resolvePreviousLocalDayWindow(params.referenceTime);
 
   let files: string[];
   try {
-    files = await listRecentTranscriptFiles({ sessionsDir, maxSessions });
+    files = await listRecentTranscriptFiles({ sessionsDir, maxSessions: params.maxSessions });
   } catch {
     return undefined;
   }
@@ -261,15 +328,16 @@ export async function buildSelfImproveConversationHistorySummary(params: {
     return undefined;
   }
 
+  let auditedSessions = 0;
   const failureFindings: Finding[] = [];
   const improvementFindings: Finding[] = [];
   for (const filePath of files) {
-    const findings = await collectFindingsFromTranscript({ filePath });
+    const findings = await collectFindingsFromTranscript({ filePath, window });
+    if (findings.hasWindowActivity) {
+      auditedSessions += 1;
+    }
     failureFindings.push(...findings.failures);
     improvementFindings.push(...findings.improvements);
-    if (failureFindings.length >= maxFailures && improvementFindings.length >= maxImprovements) {
-      break;
-    }
   }
 
   const failures = dedupeFindings(failureFindings, true).slice(0, Math.max(0, maxFailures));
@@ -283,18 +351,20 @@ export async function buildSelfImproveConversationHistorySummary(params: {
   }
 
   const lines: string[] = [];
-  lines.push("Conversation history signals (recent sessions):");
+  lines.push(
+    `Conversation history signals (previous local day ${window.dayLabel}; audited ${auditedSessions} transcript${auditedSessions === 1 ? "" : "s"}):`,
+  );
   if (failures.length > 0) {
     lines.push("Potential failures:");
     lines.push(...failures.map(formatFailure));
   } else {
-    lines.push("Potential failures: none found in sampled sessions.");
+    lines.push("Potential failures: none found in the audited day window.");
   }
   if (improvements.length > 0) {
     lines.push("Potential improvements/new features:");
     lines.push(...improvements.map(formatImprovement));
   } else {
-    lines.push("Potential improvements/new features: none found in sampled sessions.");
+    lines.push("Potential improvements/new features: none found in the audited day window.");
   }
   return lines.join("\n");
 }
@@ -306,16 +376,22 @@ export function buildSelfImproveRunbookText(params: {
   const lines: string[] = [];
   lines.push("Self-improvement runbook:");
   lines.push(
-    `- Review conversation history from session logs under ~/.openclaw/agents/${params.agentId}/sessions/*.jsonl (or use the session-logs skill).`,
+    `- Audit every conversation from the previous local day in ~/.openclaw/agents/${params.agentId}/sessions/*.jsonl (or use the session-logs skill); do not stop at a recent-session sample.`,
   );
   lines.push(
-    "- Identify concrete failures that blocked correct replies, then implement code/config fixes and open PRs.",
+    "- Identify concrete failures that blocked correct replies, then implement code/config fixes when feasible or write concrete proposals with evidence.",
   );
   lines.push(
-    "- Also identify improvement/new-feature asks from user requests, implement them when feasible, and open PRs.",
+    "- Also identify improvement/new-feature asks from user requests and turn them into specific improvement proposals or PRs.",
   );
   lines.push(
-    "- For each PR, include evidence from conversation history that motivated the change.",
+    "- Choose the right repo for each change: bot/runtime/code fixes belong in openclaw-sre; deployment/runtime config or skill seed changes belong in ../morpho-infra-helm.",
+  );
+  lines.push(
+    "- For infra-side changes, inspect ../morpho-infra-helm/charts/openclaw-sre/files/seed-config and ../morpho-infra-helm/charts/openclaw-sre/files/seed-skills before proposing edits.",
+  );
+  lines.push(
+    "- For each proposal or PR, include evidence from conversation history and name the target repo/path.",
   );
   if (params.historySummary?.trim()) {
     lines.push("");
