@@ -49,6 +49,8 @@ type DecisionRecord = {
   reason: string;
   model: string;
   durationMs: number;
+  sender?: string;
+  body?: string;
 };
 
 const MAX_DECISION_HISTORY = 8;
@@ -78,7 +80,7 @@ let logBaseDir: string | undefined;
 function resolveLogDir(groupKey: string): string | undefined {
   if (logBaseDir === undefined) {
     const home = resolveHomeDir();
-    logBaseDir = home ? path.join(home, "logs", "contextual-activation") : "";
+    logBaseDir = home ? path.join(home, ".openclaw", "logs", "contextual-activation") : "";
   }
   if (!logBaseDir) {
     return undefined;
@@ -106,6 +108,8 @@ function writeDecisionLog(groupKey: string, record: DecisionRecord) {
       reason: record.reason,
       model: record.model,
       ms: record.durationMs,
+      ...(record.sender ? { sender: record.sender } : {}),
+      ...(record.body ? { body: record.body } : {}),
     };
     fs.appendFileSync(logFile, JSON.stringify(entry) + "\n");
   } catch {
@@ -549,6 +553,8 @@ export async function shouldParticipateInGroup(params: {
       reason: `timeout after ${engagedTimeout}s`,
       model: "timeout",
       durationMs: 0,
+      sender: currentMessage.sender,
+      body: currentMessage.body,
     });
   }
 
@@ -596,6 +602,8 @@ export async function shouldParticipateInGroup(params: {
         reason,
         model: result.model,
         durationMs: result.durationMs,
+        sender: currentMessage.sender,
+        body: currentMessage.body,
       });
       state.mode = "peeking";
       state.lastActivityAt = 0;
@@ -614,6 +622,8 @@ export async function shouldParticipateInGroup(params: {
       reason,
       model: result.model,
       durationMs: result.durationMs,
+      sender: currentMessage.sender,
+      body: currentMessage.body,
     });
     state.lastActivityAt = Date.now();
     return { shouldProcess: true };
@@ -665,6 +675,8 @@ export async function shouldParticipateInGroup(params: {
       reason,
       model: result.model,
       durationMs: result.durationMs,
+      sender: currentMessage.sender,
+      body: currentMessage.body,
     });
     state.mode = "engaged";
     state.lastActivityAt = Date.now();
@@ -684,6 +696,8 @@ export async function shouldParticipateInGroup(params: {
     reason,
     model: result.model,
     durationMs: result.durationMs,
+    sender: currentMessage.sender,
+    body: currentMessage.body,
   });
   return { shouldProcess: false };
 }
