@@ -843,6 +843,7 @@ export function renderApp(state: AppViewState) {
                   } else {
                     updateConfigFormValue(state, basePath, modelId);
                   }
+                  state.configFormDirty = true;
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
                   if (!configValue) {
@@ -892,6 +893,7 @@ export function renderApp(state: AppViewState) {
                     ? { primary, fallbacks: normalized }
                     : { fallbacks: normalized };
                   updateConfigFormValue(state, basePath, next);
+                  state.configFormDirty = true;
                 },
               })
             : nothing
