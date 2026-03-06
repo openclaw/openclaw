@@ -317,10 +317,56 @@ function checkPluginSdkExports() {
   }
 }
 
+export function collectMacBinaryArchitectureErrors(lipoInfo: string): string[] {
+  const normalized = lipoInfo.trim();
+  if (!normalized) {
+    return ["OpenClaw macOS binary architecture info is empty."];
+  }
+
+  const tokens = new Set(normalized.split(/[^A-Za-z0-9_]+/).filter(Boolean));
+  const missing: string[] = [];
+  if (!tokens.has("arm64")) {
+    missing.push("arm64");
+  }
+  if (!tokens.has("x86_64")) {
+    missing.push("x86_64");
+  }
+  if (missing.length === 0) {
+    return [];
+  }
+  return [
+    `OpenClaw macOS binary is missing required architecture(s): ${missing.join(", ")} (lipo: ${normalized})`,
+  ];
+}
+
+function checkMacBinaryArchitectures() {
+  if (process.platform !== "darwin") {
+    return;
+  }
+  const macBinaryPath = resolve("dist", "OpenClaw.app", "Contents", "MacOS", "OpenClaw");
+  try {
+    const lipoInfo = execSync(`/usr/bin/lipo -info "${macBinaryPath}"`, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const errors = collectMacBinaryArchitectureErrors(lipoInfo);
+    if (errors.length > 0) {
+      console.error("release-check: macOS binary architecture validation failed:");
+      for (const error of errors) {
+        console.error(`  - ${error}`);
+      }
+      process.exit(1);
+    }
+  } catch {
+    // release-check runs in Linux CI for npm packaging; skip when mac app bundle is absent.
+  }
+}
+
 function main() {
   checkPluginVersions();
   checkAppcastSparkleVersions();
   checkPluginSdkExports();
+  checkMacBinaryArchitectures();
 
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);
