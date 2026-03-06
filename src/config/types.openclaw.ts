@@ -14,6 +14,7 @@ import type {
   TalkConfig,
 } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
+import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type {
   AudioConfig,
@@ -22,7 +23,6 @@ import type {
   MessagesConfig,
 } from "./types.messages.js";
 import type { ModelsConfig } from "./types.models.js";
-import type { McpConfig } from "./types.mcp.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";

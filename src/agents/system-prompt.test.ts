@@ -686,7 +686,9 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("For MCP-eligible requests, first attempt routing via local MCP Clients Hub at /tmp/mcp-clients-hub.");
+    expect(prompt).toContain(
+      "For MCP-eligible requests, first attempt routing via local MCP Clients Hub at /tmp/mcp-clients-hub.",
+    );
     expect(prompt).toContain(
       "If the requested capability is unavailable, prioritize adding/installing the required MCP client in that hub, then continue through the hub when feasible.",
     );

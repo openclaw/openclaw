@@ -683,8 +683,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
-  mcp:
-    "MCP policy configuration for operator-level routing behavior. Use this to standardize how MCP-capable tasks are routed in your environment.",
+  mcp: "MCP policy configuration for operator-level routing behavior. Use this to standardize how MCP-capable tasks are routed in your environment.",
   "mcp.clientsHub":
     "Settings for preferring a local MCP Clients Hub as the primary MCP entrypoint when available.",
   "mcp.clientsHub.preferClientsHub":
