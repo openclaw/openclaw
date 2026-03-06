@@ -962,10 +962,44 @@ export const registerTelegramHandlers = ({
       return;
     }
 
+    const inboundMediaFlags = {
+      hasPhoto: Boolean(msg.photo?.length),
+      hasVideo: Boolean(msg.video),
+      hasVideoNote: Boolean(msg.video_note),
+      hasDocument: Boolean(msg.document),
+      hasAudio: Boolean(msg.audio),
+      hasVoice: Boolean(msg.voice),
+      hasSticker: Boolean(msg.sticker),
+    };
+    if (Object.values(inboundMediaFlags).some(Boolean)) {
+      logger.info(
+        {
+          chatId,
+          messageId: msg.message_id,
+          media: inboundMediaFlags,
+          fileId: resolveInboundMediaFileId(msg),
+        },
+        "telegram inbound media candidate",
+      );
+    }
+
     let media: Awaited<ReturnType<typeof resolveMedia>> = null;
     try {
       media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+      if (media) {
+        logger.info(
+          {
+            chatId,
+            messageId: msg.message_id,
+            savedPath: media.path,
+            contentType: media.contentType,
+          },
+          "telegram inbound media saved",
+        );
+      }
     } catch (mediaErr) {
+      // Media failures are non-fatal: warn the user but still forward the message
+      // to the agent (without the media attachment) so captions/text aren't dropped.
       if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {
           const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
@@ -979,18 +1013,17 @@ export const registerTelegramHandlers = ({
           }).catch(() => {});
         }
         logger.warn({ chatId, error: String(mediaErr) }, oversizeLogMessage);
-        return;
+      } else {
+        logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+              reply_to_message_id: msg.message_id,
+            }),
+        }).catch(() => {});
       }
-      logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
-      await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        runtime,
-        fn: () =>
-          bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
-            reply_to_message_id: msg.message_id,
-          }),
-      }).catch(() => {});
-      return;
     }
 
     // Skip sticker-only messages where the sticker was skipped (animated/video)
