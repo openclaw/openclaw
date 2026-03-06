@@ -34,10 +34,12 @@ export const lanxinOnboardingAdapter: ChannelOnboardingAdapter = {
       });
       if (keep) {
         return {
-          ...cfg,
-          channels: {
-            ...cfg.channels,
-            lanxin: { ...cfg.channels?.lanxin, enabled: true },
+          cfg: {
+            ...cfg,
+            channels: {
+              ...cfg.channels,
+              lanxin: { ...cfg.channels?.lanxin, enabled: true },
+            },
           },
         };
       }
@@ -83,19 +85,21 @@ export const lanxinOnboardingAdapter: ChannelOnboardingAdapter = {
     ).trim();
 
     return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        lanxin: {
-          ...cfg.channels?.lanxin,
-          enabled: true,
-          apiBaseUrl,
-          appId,
-          appSecret,
-          aesKey,
-          ...(defaultEntryId ? { defaultEntryId } : {}),
+      cfg: {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          lanxin: {
+            ...cfg.channels?.lanxin,
+            enabled: true,
+            apiBaseUrl,
+            appId,
+            appSecret,
+            aesKey,
+            ...(defaultEntryId ? { defaultEntryId } : {}),
+          },
         },
-      },
-    } as ClawdbotConfig;
+      } as ClawdbotConfig,
+    };
   },
 };

@@ -11,7 +11,8 @@ export const lanxinOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId }) => {
-    const account = resolveLanxinAccount({ cfg, accountId });
+    const normalizedAccountId = accountId ?? undefined;
+    const account = resolveLanxinAccount({ cfg, accountId: normalizedAccountId });
     if (!account.configured) {
       throw new Error("Lanxin not configured");
     }
@@ -20,11 +21,12 @@ export const lanxinOutbound: ChannelOutboundAdapter = {
       accountId,
       textLength: text.length,
     });
-    const result = await sendMessageLanxin({ cfg, to, text, accountId });
+    const result = await sendMessageLanxin({ cfg, to, text, accountId: normalizedAccountId });
     return { channel: "lanxin", ...result };
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId }) => {
-    const account = resolveLanxinAccount({ cfg, accountId });
+    const normalizedAccountId = accountId ?? undefined;
+    const account = resolveLanxinAccount({ cfg, accountId: normalizedAccountId });
     if (!account.configured) {
       throw new Error("Lanxin not configured");
     }
@@ -39,14 +41,14 @@ export const lanxinOutbound: ChannelOutboundAdapter = {
         cfg,
         to,
         text: text?.trim() || "[media]",
-        accountId,
+        accountId: normalizedAccountId,
       });
       return { channel: "lanxin", ...result };
     }
 
     const uploaded = await uploadLanxinMediaFromUrl({
       cfg,
-      accountId,
+      accountId: normalizedAccountId,
       mediaUrl,
       mediaLocalRoots,
     });
@@ -55,7 +57,7 @@ export const lanxinOutbound: ChannelOutboundAdapter = {
       cfg,
       to,
       text: text?.trim() || "",
-      accountId,
+      accountId: normalizedAccountId,
       // Keep msgType=text for compatibility with known working Lanxin bot behavior.
       msgType: "text",
       mediaType: uploaded.fileType,
