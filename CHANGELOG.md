@@ -209,6 +209,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/send retry classification: retry grammY `Network request ... failed after N attempts` envelopes in send flows without reclassifying plain `Network request ... failed!` wrappers as transient, restoring the intended retry path while keeping broad send-context message matching tight. (#38056) Thanks @0xlin2023.
 - Gateway/probes: keep `/health`, `/healthz`, `/ready`, and `/readyz` reachable when the Control UI is mounted at `/`, preserve plugin-owned route precedence on those paths, and make `/ready` and `/readyz` report channel-backed readiness with startup grace plus `503` on disconnected managed channels, while `/health` and `/healthz` stay shallow liveness probes. (#18446) Thanks @vibecodooor, @mahsumaktas, and @vincentkoc.
 - Feishu/media downloads: drop invalid timeout fields from SDK method calls now that client-level `httpTimeoutMs` applies to requests. (#38267) Thanks @ant1eicher and @thewilloftheshadow.
+- PI embedded runner/Feishu docs: propagate sender identity into embedded attempts so Feishu doc auto-grant restores requester access for embedded-runner executions. (#32915) thanks @cszhouwei.
 
 ## 2026.3.2
 
@@ -2880,6 +2881,7 @@ Docs: https://docs.openclaw.ai
 - BlueBubbles: resolve short message IDs safely and expose full IDs in templates. (#1387) Thanks @tyler6204.
 - Infra: preserve fetch helper methods when wrapping abort signals. (#1387)
 - macOS: default distribution packaging to universal binaries. (#1396) Thanks @JustYannicc.
+- Embedded runner: forward sender identity into attempt execution so Feishu doc auto-grant receives requester context again. (#32915) Thanks @cszhouwei.
 
 ## 2026.1.20
 
