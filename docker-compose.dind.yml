@@ -9,9 +9,10 @@
 ##   docker compose -f docker-compose.yml -f docker-compose.dind.yml up -d
 ##
 ## How it works:
-##   A dedicated Docker daemon (DinD) runs as a sidecar. The Gateway talks
-##   to it via DOCKER_HOST=tcp://dind:2375. Both share the openclaw-state
-##   volume so sandbox bind-mount paths resolve correctly inside the DinD.
+##   A dedicated Docker daemon (DinD) runs as a sidecar with TLS enabled.
+##   The Gateway talks to it via DOCKER_HOST=tcp://dind:2376 and
+##   DOCKER_CERT_PATH=/certs/client. Both share the same config and
+##   workspace mounts so sandbox bind-mount paths resolve correctly inside DinD.
 ##
 ## Prerequisites:
 ##   - Gateway image must include Docker CLI (docker-ce-cli).
@@ -19,21 +20,27 @@
 ##     Or use docker-setup.sh with OPENCLAW_SANDBOX=1.
 ##   - The sandbox image (openclaw-sandbox:bookworm-slim) must be built
 ##     inside the DinD daemon. After first start, run:
-##       DOCKER_HOST=tcp://localhost:2375 scripts/sandbox-setup.sh
-##     Or use a startup script that builds it automatically.
+##       docker compose -f docker-compose.yml -f docker-compose.dind.yml exec openclaw-gateway scripts/sandbox-setup.sh
+##     (The gateway already has DOCKER_HOST and DOCKER_CERT_PATH set.)
 ##   - Set agents.defaults.sandbox.mode in openclaw.json to enable sandbox.
 ##   - Set agents.defaults.sandbox.docker.network to "bridge" (DinD default).
 
 services:
   dind:
-    image: docker:dind
+    image: docker:27-dind
     privileged: true
     restart: unless-stopped
     environment:
-      DOCKER_TLS_CERTDIR: ""
+      DOCKER_TLS_CERTDIR: /certs
+      DOCKER_HOST: tcp://127.0.0.1:2376
+      DOCKER_TLS_VERIFY: "1"
+      DOCKER_CERT_PATH: /certs/client
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
       - dind-storage:/var/lib/docker
+      - dind-certs-ca:/certs/ca
+      - dind-certs-client:/certs/client
     networks:
       - openclaw-dind
     healthcheck:
@@ -45,15 +52,22 @@ services:
 
   openclaw-gateway:
     environment:
-      DOCKER_HOST: tcp://dind:2375
+      DOCKER_HOST: tcp://dind:2376
+      DOCKER_TLS_VERIFY: "1"
+      DOCKER_CERT_PATH: /certs/client
+    volumes:
+      - dind-certs-client:/certs/client:ro
     depends_on:
       dind:
         condition: service_healthy
     networks:
+      - default
       - openclaw-dind
 
 volumes:
   dind-storage:
+  dind-certs-ca:
+  dind-certs-client:
 
 networks:
   openclaw-dind:
