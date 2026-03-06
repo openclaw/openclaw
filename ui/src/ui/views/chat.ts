@@ -7,6 +7,7 @@ import {
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
+import { buildToolCardOutputLookup, extractToolCards } from "../chat/tool-cards.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -36,6 +37,7 @@ export type ChatProps = {
   onSessionKeyChange: (next: string) => void;
   thinkingLevel: string | null;
   showThinking: boolean;
+  showInlineToolFlow: boolean;
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
@@ -243,7 +245,8 @@ export function renderChat(props: ChatProps) {
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
-  const showReasoning = props.showThinking && reasoningLevel !== "off";
+  const showReasoning =
+    (props.showThinking || props.showInlineToolFlow) && reasoningLevel !== "off";
   const assistantIdentity = {
     name: props.assistantName,
     avatar: props.assistantAvatar ?? props.assistantAvatarUrl ?? null,
@@ -258,6 +261,9 @@ export function renderChat(props: ChatProps) {
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const historyMessages = Array.isArray(props.messages) ? props.messages : [];
+  const toolMessages = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const toolOutputLookup = buildToolCardOutputLookup([...historyMessages, ...toolMessages]);
   const thread = html`
     <div
       class="chat-thread"
@@ -305,6 +311,7 @@ export function renderChat(props: ChatProps) {
               showReasoning,
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,
+              toolOutputLookup,
             });
           }
 
@@ -522,10 +529,27 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   return result;
 }
 
+type ToolCallRef = {
+  toolCallId: string;
+  runId?: string;
+};
+
 function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const showInlineToolFlow = props.showInlineToolFlow;
+  const historyToolCallRefs = showInlineToolFlow ? collectToolCallRefs(history) : [];
+  const historyToolCallsByRun = new Set<string>();
+  for (const entry of historyToolCallRefs) {
+    if (!entry.runId) {
+      continue;
+    }
+    historyToolCallsByRun.add(buildToolCallRunKey(entry.toolCallId, entry.runId));
+  }
+  const historyToolCallsWithoutRun = new Set<string>(
+    historyToolCallRefs.filter((entry) => !entry.runId).map((entry) => entry.toolCallId),
+  );
   const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
   if (historyStart > 0) {
     items.push({
@@ -556,7 +580,13 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       continue;
     }
 
-    if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
+    const rawRole = typeof raw.role === "string" ? raw.role.toLowerCase() : "";
+    const isStandaloneToolMessage =
+      rawRole === "toolresult" ||
+      rawRole === "tool_result" ||
+      rawRole === "tool" ||
+      rawRole === "function";
+    if (!showInlineToolFlow && isStandaloneToolMessage) {
       continue;
     }
 
@@ -566,8 +596,18 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       message: msg,
     });
   }
-  if (props.showThinking) {
-    for (let i = 0; i < tools.length; i++) {
+
+  if (props.showInlineToolFlow) {
+    for (let i = 0; i < tools.length; i += 1) {
+      const liveRefs = collectToolCallRefs([tools[i]]);
+      const duplicateWithHistory = liveRefs.some((entry) =>
+        entry.runId
+          ? historyToolCallsByRun.has(buildToolCallRunKey(entry.toolCallId, entry.runId))
+          : historyToolCallsWithoutRun.has(entry.toolCallId),
+      );
+      if (duplicateWithHistory) {
+        continue;
+      }
       items.push({
         kind: "message",
         key: messageKey(tools[i], i + history.length),
@@ -593,11 +633,60 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   return groupMessages(items);
 }
 
+function normalizeToken(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function buildToolCallRunKey(toolCallId: string, runId: string): string {
+  return `${runId}::${toolCallId}`;
+}
+
+function collectToolCallRefs(messages: unknown[]): ToolCallRef[] {
+  const refs: ToolCallRef[] = [];
+  const seen = new Set<string>();
+  for (const message of messages) {
+    const record = message as Record<string, unknown>;
+    const runId = normalizeToken(record.runId) || undefined;
+    const appendRef = (toolCallId: unknown) => {
+      const normalizedToolCallId = normalizeToken(toolCallId);
+      if (!normalizedToolCallId) {
+        return;
+      }
+      const key = runId
+        ? buildToolCallRunKey(normalizedToolCallId, runId)
+        : `norun::${normalizedToolCallId}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      refs.push({ toolCallId: normalizedToolCallId, runId });
+    };
+    const directToolCallId =
+      typeof record.toolCallId === "string"
+        ? record.toolCallId
+        : typeof record.tool_call_id === "string"
+          ? record.tool_call_id
+          : "";
+    appendRef(directToolCallId);
+    const cards = extractToolCards(message);
+    for (const card of cards) {
+      appendRef(card.toolCallId);
+    }
+  }
+  return refs;
+}
+
 function messageKey(message: unknown, index: number): string {
   const m = message as Record<string, unknown>;
-  const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
+  const toolCallId =
+    typeof m.toolCallId === "string"
+      ? m.toolCallId
+      : typeof m.tool_call_id === "string"
+        ? m.tool_call_id
+        : "";
   if (toolCallId) {
-    return `tool:${toolCallId}`;
+    const runId = normalizeToken(m.runId);
+    return runId ? `tool:${runId}:${toolCallId}` : `tool:${toolCallId}`;
   }
   const id = typeof m.id === "string" ? m.id : "";
   if (id) {

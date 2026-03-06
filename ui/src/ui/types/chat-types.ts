@@ -41,4 +41,5 @@ export type ToolCard = {
   name: string;
   args?: unknown;
   text?: string;
+  toolCallId?: string;
 };

@@ -200,3 +200,9 @@
     transform: scale(1);
   }
 }
+
+/* Keep the left timeline card minimal; full output stays in sidebar. */
+.chat-tool-card__preview,
+.chat-tool-card__inline {
+  display: none;
+}

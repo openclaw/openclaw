@@ -383,6 +383,7 @@ export class OpenClawApp extends LitElement {
   private chatUserNearBottom = true;
   @state() chatNewMessagesBelow = false;
   private nodesPollInterval: number | null = null;
+  private chatRunPollInterval: number | null = null;
   private logsPollInterval: number | null = null;
   private debugPollInterval: number | null = null;
   private logsScrollFrame: number | null = null;

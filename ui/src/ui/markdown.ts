@@ -105,10 +105,11 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     const escaped = escapeHtml(`${truncated.text}${suffix}`);
     const html = `<pre class="code-block">${escaped}</pre>`;
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
+    const enhanced = decorateDiffCodeBlocks(sanitized);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-      setCachedMarkdown(input, sanitized);
+      setCachedMarkdown(input, enhanced);
     }
-    return sanitized;
+    return enhanced;
   }
   const rendered = marked.parse(`${truncated.text}${suffix}`, {
     renderer: htmlEscapeRenderer,
@@ -116,10 +117,11 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     breaks: true,
   }) as string;
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
+  const enhanced = decorateDiffCodeBlocks(sanitized);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-    setCachedMarkdown(input, sanitized);
+    setCachedMarkdown(input, enhanced);
   }
-  return sanitized;
+  return enhanced;
 }
 
 // Prevent raw HTML in chat messages from being rendered as formatted HTML.
@@ -136,4 +138,41 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function decorateDiffCodeBlocks(html: string): string {
+  return html.replace(
+    /<pre><code class="([^"]*\blanguage-diff\b[^"]*)">([\s\S]*?)<\/code><\/pre>/g,
+    (_match, classNames: string, diffContent: string) => {
+      const renderedLines = renderDiffLines(diffContent);
+      return `<pre class="code-block code-block--diff"><code class="${classNames}">${renderedLines}</code></pre>`;
+    },
+  );
+}
+
+function renderDiffLines(diffContent: string): string {
+  return diffContent
+    .split("\n")
+    .map((line) => {
+      const lineClass = classifyDiffLine(line);
+      const content = line.length > 0 ? line : " ";
+      return `<span class="diff-line ${lineClass}">${content}</span>`;
+    })
+    .join("\n");
+}
+
+function classifyDiffLine(line: string): string {
+  if (line.startsWith("@@")) {
+    return "diff-line--hunk";
+  }
+  if (line.startsWith("+++ ") || line.startsWith("--- ")) {
+    return "diff-line--meta";
+  }
+  if (line.startsWith("+")) {
+    return "diff-line--add";
+  }
+  if (line.startsWith("-")) {
+    return "diff-line--del";
+  }
+  return "diff-line--context";
 }
