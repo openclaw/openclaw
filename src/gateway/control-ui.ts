@@ -39,6 +39,7 @@ export type ControlUiRequestOptions = {
 };
 
 export type ControlUiRootState =
+  | { kind: "bundled"; path: string }
   | { kind: "resolved"; path: string }
   | { kind: "invalid"; path: string }
   | { kind: "missing" };
@@ -152,7 +153,10 @@ function isValidAgentId(agentId: string): boolean {
 export function handleControlUiAvatarRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { basePath?: string; resolveAvatar: (agentId: string) => ControlUiAvatarResolution },
+  opts: {
+    basePath?: string;
+    resolveAvatar: (agentId: string) => ControlUiAvatarResolution;
+  },
 ): boolean {
   const urlRaw = req.url;
   if (!urlRaw) {
@@ -360,7 +364,9 @@ export function handleControlUiHttpRequest(
 
   const rootState = opts?.root;
   if (rootState?.kind === "invalid") {
-    respondControlUiAssetsUnavailable(res, { configuredRootPath: rootState.path });
+    respondControlUiAssetsUnavailable(res, {
+      configuredRootPath: rootState.path,
+    });
     return true;
   }
   if (rootState?.kind === "missing") {
@@ -421,7 +427,7 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const safeFile = resolveSafeControlUiFile(rootReal, filePath, rootState?.kind === "resolved");
+  const safeFile = resolveSafeControlUiFile(rootReal, filePath, rootState?.kind !== "bundled");
   if (safeFile) {
     try {
       if (respondHeadForFile(req, res, safeFile.path)) {
