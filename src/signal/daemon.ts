@@ -6,6 +6,8 @@ export type SignalDaemonOpts = {
   account?: string;
   httpHost: string;
   httpPort: number;
+  tcpHost?: string;
+  tcpPort?: number;
   receiveMode?: "on-start" | "manual";
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
@@ -50,14 +52,15 @@ function bindSignalCliOutput(params: {
   stream: NodeJS.ReadableStream | null | undefined;
   log: (message: string) => void;
   error: (message: string) => void;
+  quiet?: boolean;
 }): void {
   params.stream?.on("data", (data) => {
     for (const line of data.toString().split(/\r?\n/)) {
       const kind = classifySignalCliLogLine(line);
-      if (kind === "log") {
-        params.log(`signal-cli: ${line.trim()}`);
-      } else if (kind === "error") {
+      if (kind === "error") {
         params.error(`signal-cli: ${line.trim()}`);
+      } else if (kind === "log" && !params.quiet) {
+        params.log(`signal-cli: ${line.trim()}`);
       }
     }
   });
@@ -70,7 +73,11 @@ function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
   }
   args.push("daemon");
   args.push("--http", `${opts.httpHost}:${opts.httpPort}`);
-  args.push("--no-receive-stdout");
+  if (opts.tcpHost && opts.tcpPort) {
+    args.push("--tcp", `${opts.tcpHost}:${opts.tcpPort}`);
+  } else {
+    args.push("--no-receive-stdout");
+  }
 
   if (opts.receiveMode) {
     args.push("--receive-mode", opts.receiveMode);
@@ -95,6 +102,8 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   });
   const log = opts.runtime?.log ?? (() => {});
   const error = opts.runtime?.error ?? (() => {});
+  // Suppress noisy stdout logs when TCP socket is active (events arrive via socket)
+  const quiet = Boolean(opts.tcpHost && opts.tcpPort);
   let exited = false;
   let settledExit = false;
   let resolveExit!: (value: SignalDaemonExitEvent) => void;
@@ -110,8 +119,8 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
     resolveExit(value);
   };
 
-  bindSignalCliOutput({ stream: child.stdout, log, error });
-  bindSignalCliOutput({ stream: child.stderr, log, error });
+  bindSignalCliOutput({ stream: child.stdout, log, error, quiet });
+  bindSignalCliOutput({ stream: child.stderr, log, error, quiet });
   child.once("exit", (code, signal) => {
     settleExit({
       source: "process",

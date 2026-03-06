@@ -1395,6 +1395,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow Signal to write config in response to channel events/commands (default: true).",
   "channels.signal.account":
     "Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.",
+  "channels.signal.tcpHost":
+    "TCP socket host for signal-cli daemon when using persistent socket transport (default: 127.0.0.1).",
+  "channels.signal.tcpPort":
+    "TCP socket port for signal-cli daemon when using persistent socket transport (default: 7583).",
   "channels.imessage.configWrites":
     "Allow iMessage to write config in response to channel events/commands (default: true).",
   "channels.imessage.cliPath":

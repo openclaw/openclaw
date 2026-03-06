@@ -799,6 +799,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.mattermost.oncharPrefixes": "Mattermost Onchar Prefixes",
   "channels.mattermost.requireMention": "Mattermost Require Mention",
   "channels.signal.account": "Signal Account",
+  "channels.signal.tcpHost": "Signal TCP Host",
+  "channels.signal.tcpPort": "Signal TCP Port",
   "channels.imessage.cliPath": "iMessage CLI Path",
   "agents.list[].skills": "Agent Skill Filter",
   "agents.list[].identity.avatar": "Agent Avatar",

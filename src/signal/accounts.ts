@@ -9,6 +9,8 @@ export type ResolvedSignalAccount = {
   enabled: boolean;
   name?: string;
   baseUrl: string;
+  tcpHost?: string;
+  tcpPort?: number;
   configured: boolean;
   config: SignalAccountConfig;
 };
@@ -50,6 +52,7 @@ export function resolveSignalAccount(params: {
     merged.cliPath?.trim() ||
     merged.httpHost?.trim() ||
     typeof merged.httpPort === "number" ||
+    typeof merged.tcpPort === "number" ||
     typeof merged.autoStart === "boolean",
   );
   return {
@@ -57,6 +60,8 @@ export function resolveSignalAccount(params: {
     enabled,
     name: merged.name?.trim() || undefined,
     baseUrl,
+    tcpHost: merged.tcpHost?.trim() || undefined,
+    tcpPort: merged.tcpPort,
     configured,
     config: merged,
   };

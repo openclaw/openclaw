@@ -14,6 +14,10 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   httpHost?: string;
   /** HTTP port for signal-cli daemon (default 8080). */
   httpPort?: number;
+  /** TCP host for signal-cli persistent socket transport. */
+  tcpHost?: string;
+  /** TCP port for signal-cli persistent socket transport. */
+  tcpPort?: number;
   /** signal-cli binary path (default: signal-cli). */
   cliPath?: string;
   /** Auto-start signal-cli daemon (default: true if httpUrl not set). */

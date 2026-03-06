@@ -947,6 +947,8 @@ export const SignalAccountSchemaBase = z
     httpUrl: z.string().optional(),
     httpHost: z.string().optional(),
     httpPort: z.number().int().positive().optional(),
+    tcpHost: z.string().optional(),
+    tcpPort: z.number().int().positive().optional(),
     cliPath: ExecutableTokenSchema.optional(),
     autoStart: z.boolean().optional(),
     startupTimeoutMs: z.number().int().min(1000).max(120000).optional(),
