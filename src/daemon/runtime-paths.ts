@@ -122,25 +122,28 @@ export async function resolveSystemNodePath(
   return null;
 }
 
-export async function resolveSystemNodeInfo(params: {
-  env?: Record<string, string | undefined>;
-  platform?: NodeJS.Platform;
-  execFile?: ExecFileAsync;
-}): Promise<SystemNodeInfo | null> {
-  const env = params.env ?? process.env;
-  const platform = params.platform ?? process.platform;
-  const systemNode = await resolveSystemNodePath(env, platform);
-  if (!systemNode) {
-    return null;
-  }
-
-  const version = await resolveNodeVersion(systemNode, params.execFile ?? execFileAsync);
-  return {
-    path: systemNode,
-    version,
-    supported: isSupportedNodeVersion(version),
-  };
-}
+    export async function resolveSystemNodeInfo(params: {
+      env?: Record<string, string | undefined>;
+      platform?: NodeJS.Platform;
+      execFile?: ExecFileAsync;
+    }): Promise<SystemNodeInfo | null> {
+      const env = params.env ?? process.env;
+      const platform = params.platform ?? process.platform;
+      const systemNode = await resolveSystemNodePath(env, platform);
+      if (!systemNode) {
+        return null;
+      }
+    
+      // Resolve versioned paths (e.g. Homebrew Cellar) to stable symlinks.
+      // This ensures the path persists across upgrades and logs remain accurate.
+      const stablePath = await resolveStableNodePath(systemNode);
+      const version = await resolveNodeVersion(stablePath, params.execFile ?? execFileAsync);
+      return {
+        path: stablePath,
+        version,
+        supported: isSupportedNodeVersion(version),
+      };
+    }
 
 export function renderSystemNodeWarning(
   systemNode: SystemNodeInfo | null,
