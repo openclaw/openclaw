@@ -75,6 +75,7 @@ function parseConfig(api: OpenClawPluginApi): SecurityModelLockConfig {
     lockNotice:
       config?.lockNotice ??
       "⚠️ 检测到敏感 skill 调用，会话已切换并固定为安全模型，请重新输入。切换其他模型请使用 /new 或 /reset命令重置会话。",
+    skillsDir: config?.skillsDir,
   };
 }
 
