@@ -1,3 +1,4 @@
+import path from "node:path";
 import { inspect } from "node:util";
 import {
   Client,
@@ -30,6 +31,7 @@ import {
 import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
+import { STATE_DIR } from "../../config/paths.js";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -43,6 +45,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getPluginCommandSpecs } from "../../plugins/commands.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
+import { loadComponentRegistry } from "../components-registry.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
@@ -318,6 +321,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
 
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
+
+  // Restore CV2 component entries that were registered before the last gateway
+  // restart.  Uses a single shared file (the registry Map is a module-level
+  // singleton) so re-entrant calls from multiple accounts are idempotent.
+  loadComponentRegistry(path.join(STATE_DIR, "discord", "cv2-components.json"));
 
   const rawDiscordCfg = account.config;
   const discordRootThreadBindings = cfg.channels?.discord?.threadBindings;

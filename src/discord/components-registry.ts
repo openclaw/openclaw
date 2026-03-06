@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
 const DEFAULT_COMPONENT_TTL_MS = 30 * 60 * 1000;
@@ -31,6 +32,7 @@ function flushToDisk(): void {
     modalEntries: Array.from(modalEntries.values()),
   };
   try {
+    fs.mkdirSync(path.dirname(registryStorePath), { recursive: true });
     fs.writeFileSync(registryStorePath, JSON.stringify(data), "utf8");
   } catch {
     // Best-effort persistence — do not crash the registry on write failure
@@ -46,11 +48,16 @@ export function setComponentRegistryStorePath(path: string | null): void {
 }
 
 /**
- * Load component registry from a previously persisted store file.
- * Entries that have already expired are silently discarded.
- * Call this once during gateway startup to restore entries that survived a restart.
+ * Load component registry from a previously persisted store file and activate
+ * persistence for future mutations.  Entries that have already expired are
+ * silently discarded.  Call this once during gateway startup to restore entries
+ * that survived a restart; subsequent register/consume/expire calls will then
+ * flush back to the same file automatically.
  */
 export function loadComponentRegistry(storePath: string): void {
+  // Activate persistence so every subsequent mutation flushes to this file.
+  registryStorePath = storePath;
+
   let raw: string;
   try {
     raw = fs.readFileSync(storePath, "utf8");
@@ -66,19 +73,31 @@ export function loadComponentRegistry(storePath: string): void {
     return;
   }
   const now = Date.now();
-  for (const raw of data.componentEntries ?? []) {
-    const entry = raw as DiscordComponentEntry & { expiresAt?: number };
-    if (isExpired(entry, now)) {
-      continue;
+  const rawComponents = data.componentEntries;
+  if (Array.isArray(rawComponents)) {
+    for (const raw of rawComponents) {
+      if (!raw || typeof raw !== "object") {
+        continue;
+      }
+      const entry = raw as DiscordComponentEntry & { expiresAt?: number };
+      if (isExpired(entry, now)) {
+        continue;
+      }
+      componentEntries.set(entry.id, entry);
     }
-    componentEntries.set(entry.id, entry);
   }
-  for (const raw of data.modalEntries ?? []) {
-    const entry = raw as DiscordModalEntry & { expiresAt?: number };
-    if (isExpired(entry, now)) {
-      continue;
+  const rawModals = data.modalEntries;
+  if (Array.isArray(rawModals)) {
+    for (const raw of rawModals) {
+      if (!raw || typeof raw !== "object") {
+        continue;
+      }
+      const entry = raw as DiscordModalEntry & { expiresAt?: number };
+      if (isExpired(entry, now)) {
+        continue;
+      }
+      modalEntries.set(entry.id, entry);
     }
-    modalEntries.set(entry.id, entry);
   }
 }
 
