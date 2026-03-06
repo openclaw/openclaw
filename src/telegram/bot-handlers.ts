@@ -1392,6 +1392,14 @@ export const registerTelegramHandlers = ({
       if (event.ctx.me?.id != null && event.msg.from?.id === event.ctx.me.id) {
         return;
       }
+      // Channel posts often omit from.id and only expose sender_chat/chat identity.
+      // Use sent-message tracking to skip self-authored echoes in those cases.
+      if (
+        typeof event.msg.message_id === "number" &&
+        wasSentByBot(event.chatId, event.msg.message_id)
+      ) {
+        return;
+      }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId: event.chatId,
         isGroup: event.isGroup,
