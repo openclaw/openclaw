@@ -100,7 +100,11 @@ export async function loadModelRegistry(cfg: OpenClawConfig) {
   const agentDir = resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);
-  const models = augmentKnownForwardCompatModels(registry.getAll());
+  const discoveredModels = registry.getAll();
+  const discoveredKeys = new Set(
+    discoveredModels.map((model) => modelKey(model.provider, model.id)),
+  );
+  const models = augmentKnownForwardCompatModels(discoveredModels);
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
 
@@ -119,7 +123,7 @@ export async function loadModelRegistry(cfg: OpenClawConfig) {
       availabilityErrorMessage = formatErrorWithStack(err);
     }
   }
-  return { registry, models, availableKeys, availabilityErrorMessage };
+  return { registry, models, availableKeys, availabilityErrorMessage, discoveredKeys };
 }
 
 export function toModelRow(params: {
