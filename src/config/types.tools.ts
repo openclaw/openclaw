@@ -324,7 +324,15 @@ export type MemorySearchConfig = {
     sessionMemory?: boolean;
   };
   /** Embedding provider mode. */
-  provider?: "openai" | "siliconflow" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
+  provider?:
+    | "openai"
+    | "gemini"
+    | "local"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "siliconflow"
+    | "auto";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
@@ -345,12 +353,12 @@ export type MemorySearchConfig = {
   /** Fallback behavior when embeddings fail. */
   fallback?:
     | "openai"
-    | "siliconflow"
     | "gemini"
     | "local"
     | "voyage"
     | "mistral"
     | "ollama"
+    | "siliconflow"
     | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;

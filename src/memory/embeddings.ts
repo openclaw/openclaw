@@ -38,19 +38,25 @@ export type EmbeddingProvider = {
 
 export type EmbeddingProviderId =
   | "openai"
-  | "siliconflow"
   | "local"
   | "gemini"
   | "voyage"
   | "mistral"
-  | "ollama";
+  | "ollama"
+  | "siliconflow";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
 // Remote providers considered for auto-selection when provider === "auto".
 // Ollama is intentionally excluded here so that "auto" mode does not
 // implicitly assume a local Ollama instance is available.
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
+const REMOTE_EMBEDDING_PROVIDER_IDS = [
+  "openai",
+  "gemini",
+  "voyage",
+  "mistral",
+  "siliconflow",
+] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
@@ -197,8 +203,8 @@ export async function createEmbeddingProvider(
       return { provider, mistral: client };
     }
     if (id === "siliconflow") {
-      const { provider, client } = await createOpenAiEmbeddingProvider(options, "siliconflow");
-      return { provider, openAi: client };
+      const { provider, client } = await createOpenAiEmbeddingProvider(options);
+      return { provider: { ...provider, id: "siliconflow" }, openAi: client };
     }
     const { provider, client } = await createOpenAiEmbeddingProvider(options);
     return { provider, openAi: client };

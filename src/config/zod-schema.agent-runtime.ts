@@ -562,6 +562,8 @@ export const MemorySearchSchema = z
         z.literal("voyage"),
         z.literal("mistral"),
         z.literal("ollama"),
+        z.literal("siliconflow"),
+        z.literal("auto"),
       ])
       .optional(),
     remote: z
@@ -591,6 +593,7 @@ export const MemorySearchSchema = z
         z.literal("voyage"),
         z.literal("mistral"),
         z.literal("ollama"),
+        z.literal("siliconflow"),
         z.literal("none"),
       ])
       .optional(),
