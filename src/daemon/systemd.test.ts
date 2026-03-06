@@ -138,6 +138,19 @@ describe("isSystemdServiceEnabled", () => {
     const result = await isSystemdServiceEnabled({ env: {} });
     expect(result).toBe(false);
   });
+
+  it("returns false when WSL2 returns not-found on stdout with generic error message", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = new Error(
+        "Command failed: systemctl --user is-enabled openclaw-gateway.service",
+      ) as Error & { code?: number };
+      err.code = 1;
+      cb(err, "not-found\n", "");
+    });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
 });
 
 describe("systemd runtime parsing", () => {
