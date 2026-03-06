@@ -127,7 +127,12 @@ export async function finalizeOnboardingWizard(
       );
     }
     const service = resolveGatewayService();
-    const loaded = await service.isLoaded({ env: process.env });
+    let loaded = false;
+    try {
+      loaded = await service.isLoaded({ env: process.env });
+    } catch {
+      loaded = false;
+    }
     if (loaded) {
       const action = await prompter.select({
         message: "Gateway service already installed",

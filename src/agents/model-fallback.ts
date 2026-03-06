@@ -37,7 +37,7 @@ export type ModelFallbackRunOptions = {
   allowRateLimitCooldownProbe?: boolean;
 };
 
-type ModelFallbackRunFn<T> = (
+export type ModelFallbackRunFn<T> = (
   provider: string,
   model: string,
   options?: ModelFallbackRunOptions,
@@ -104,7 +104,7 @@ function createModelCandidateCollector(allowlist: Set<string> | null | undefined
   return { candidates, addExplicitCandidate, addAllowlistedCandidate };
 }
 
-type ModelFallbackErrorHandler = (attempt: {
+export type ModelFallbackErrorHandler = (attempt: {
   provider: string;
   model: string;
   error: unknown;
@@ -112,7 +112,7 @@ type ModelFallbackErrorHandler = (attempt: {
   total: number;
 }) => void | Promise<void>;
 
-type ModelFallbackRunResult<T> = {
+export type ModelFallbackRunResult<T> = {
   result: T;
   provider: string;
   model: string;

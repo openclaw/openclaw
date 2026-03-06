@@ -14,8 +14,43 @@ import {
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
+export const LocalModelFallbackSchema = z
+  .object({
+    provider: z.union([z.literal("ollama"), z.literal("lmstudio")]).optional(),
+    baseUrl: z.string().optional(),
+    model: z.string().optional(),
+    apiKey: z.string().optional(),
+    enabled: z.boolean().optional(),
+    timeoutMs: z.number().int().positive().optional(),
+    healthCheckIntervalMs: z.number().int().positive().optional(),
+    maxRetries: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
+export const SemanticCacheSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    similarityThreshold: z.number().min(0).max(1).optional(),
+    maxEntries: z.number().int().positive().optional(),
+    ttlMs: z.number().int().positive().optional(),
+    embeddingProvider: z
+      .union([z.literal("ollama"), z.literal("openai"), z.literal("local"), z.literal("auto")])
+      .optional(),
+    embeddingModel: z.string().optional(),
+    baseUrl: z.string().optional(),
+    apiKey: z.string().optional(),
+    storePath: z.string().optional(),
+    minQueryLength: z.number().int().nonnegative().optional(),
+    maxQueryLength: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 export const AgentDefaultsSchema = z
   .object({
+    localModelFallback: LocalModelFallbackSchema,
+    semanticCache: SemanticCacheSchema,
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
     pdfModel: AgentModelSchema.optional(),
