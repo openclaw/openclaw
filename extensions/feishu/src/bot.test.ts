@@ -379,6 +379,109 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("prefers sender user_id lookup for direct display name resolution when available", async () => {
+    const getUser = vi
+      .fn()
+      .mockResolvedValue({ code: 0, data: { user: { name: "SenderByUserId" } } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: { user: { get: getUser } },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret_test",
+          dmPolicy: "open",
+          resolveSenderNames: true,
+          resolveDmDisplayNames: true,
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-direct-with-user-id",
+          user_id: "fouser_12345",
+        },
+      },
+      message: {
+        message_id: "msg-direct-display-user-id",
+        chat_id: "oc-dm-direct-display-user-id",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello dm user id" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(getUser).toHaveBeenCalledWith({
+      path: { user_id: "fouser_12345" },
+      params: { user_id_type: "user_id" },
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SenderName: "SenderByUserId (ou-direct-with-user-id)",
+      }),
+    );
+  });
+
+  it("falls back to open_id lookup when user_id lookup response is non-zero", async () => {
+    const getUser = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 400, msg: "bad user_id" })
+      .mockResolvedValueOnce({ code: 0, data: { user: { name: "SenderByOpenId" } } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: { user: { get: getUser } },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret_test",
+          dmPolicy: "open",
+          resolveSenderNames: true,
+          resolveDmDisplayNames: true,
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou_direct_fallback_open_id",
+          user_id: "fouser_bad",
+        },
+      },
+      message: {
+        message_id: "msg-direct-display-fallback-open-id",
+        chat_id: "oc-dm-direct-display-fallback-open-id",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello dm fallback" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(getUser).toHaveBeenNthCalledWith(1, {
+      path: { user_id: "fouser_bad" },
+      params: { user_id_type: "user_id" },
+    });
+    expect(getUser).toHaveBeenNthCalledWith(2, {
+      path: { user_id: "ou_direct_fallback_open_id" },
+      params: { user_id_type: "open_id" },
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SenderName: "SenderByOpenId (ou_direct_fallback_open_id)",
+      }),
+    );
+  });
+
   it("keeps open_id in direct chat labels when resolveDmDisplayNames is disabled", async () => {
     const cfg: ClawdbotConfig = {
       channels: {

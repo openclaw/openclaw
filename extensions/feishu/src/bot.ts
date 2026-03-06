@@ -129,37 +129,63 @@ function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "u
 async function resolveFeishuSenderName(params: {
   account: ResolvedFeishuAccount;
   senderId: string;
+  senderUserId?: string;
   log: (...args: any[]) => void;
 }): Promise<SenderNameResult> {
-  const { account, senderId, log } = params;
+  const { account, senderId, senderUserId, log } = params;
   if (!account.configured) return {};
 
-  const normalizedSenderId = senderId.trim();
-  if (!normalizedSenderId) return {};
+  const candidateIds = [senderUserId?.trim(), senderId.trim()].filter(
+    (v): v is string => typeof v === "string" && v.length > 0,
+  );
+  if (candidateIds.length === 0) return {};
 
-  const cached = senderNameCache.get(normalizedSenderId);
   const now = Date.now();
-  if (cached && cached.expireAt > now) return { name: cached.name };
+  for (const candidateId of candidateIds) {
+    const cached = senderNameCache.get(candidateId);
+    if (cached && cached.expireAt > now) return { name: cached.name };
+  }
 
   try {
     const client = createFeishuClient(account);
-    const userIdType = resolveSenderLookupIdType(normalizedSenderId);
 
-    // contact/v3/users/:user_id?user_id_type=<open_id|user_id|union_id>
-    const res: any = await client.contact.user.get({
-      path: { user_id: normalizedSenderId },
-      params: { user_id_type: userIdType },
-    });
+    for (const candidateId of candidateIds) {
+      const userIdType = resolveSenderLookupIdType(candidateId);
 
-    const name: string | undefined =
-      res?.data?.user?.name ||
-      res?.data?.user?.display_name ||
-      res?.data?.user?.nickname ||
-      res?.data?.user?.en_name;
+      // contact/v3/users/:user_id?user_id_type=<open_id|user_id|union_id>
+      const res: any = await client.contact.user.get({
+        path: { user_id: candidateId },
+        params: { user_id_type: userIdType },
+      });
 
-    if (name && typeof name === "string") {
-      senderNameCache.set(normalizedSenderId, { name, expireAt: now + SENDER_NAME_TTL_MS });
-      return { name };
+      if (res?.code != null && res.code !== 0) {
+        const permErr = extractPermissionError(res);
+        if (permErr) {
+          if (shouldSuppressPermissionErrorNotice(permErr)) {
+            log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
+            return {};
+          }
+          log(`feishu: permission error resolving sender name: code=${permErr.code}`);
+          return { permissionError: permErr };
+        }
+        log(
+          `feishu: sender name lookup failed for ${candidateId}: code=${String(res.code)} msg=${String(res?.msg ?? "")}`,
+        );
+        continue;
+      }
+
+      const name: string | undefined =
+        res?.data?.user?.name ||
+        res?.data?.user?.display_name ||
+        res?.data?.user?.nickname ||
+        res?.data?.user?.en_name;
+
+      if (name && typeof name === "string") {
+        for (const idForCache of candidateIds) {
+          senderNameCache.set(idForCache, { name, expireAt: now + SENDER_NAME_TTL_MS });
+        }
+        return { name };
+      }
     }
 
     return {};
@@ -176,7 +202,7 @@ async function resolveFeishuSenderName(params: {
     }
 
     // Best-effort. Don't fail message handling if name lookup fails.
-    log(`feishu: failed to resolve sender name for ${normalizedSenderId}: ${String(err)}`);
+    log(`feishu: failed to resolve sender name for ${candidateIds.join(",")}: ${String(err)}`);
     return {};
   }
 }
@@ -986,6 +1012,7 @@ export async function handleFeishuMessage(params: {
     const senderResult = await resolveFeishuSenderName({
       account,
       senderId: ctx.senderOpenId,
+      senderUserId,
       log,
     });
     if (senderResult.name) ctx = { ...ctx, senderName: senderResult.name };
