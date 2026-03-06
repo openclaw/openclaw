@@ -28,10 +28,12 @@ openclaw dashboard --no-open
 ```
 
 - **Diagnosis**
+
   ```bash
   curl -vk http://127.0.0.1:18789/health || true
   systemctl --user status openclaw-gateway
   ```
+
   If `curl` still reports ECONNREFUSED, the gateway never bound; check whether Docker is still building or if the daemon crashed (see `journalctl --user -u openclaw-gateway`).
 
 ### Token mismatch spiral
@@ -43,27 +45,35 @@ browser console: WebSocket close code 1008 -- token mismatch / expired
 ```
 
 - **Diagnosis**
+
   ```bash
   curl -sSf http://127.0.0.1:18789/api/ping \
        -H "X-OpenClaw-Token: $(cat ~/.openclaw/token)"
   ```
+
   If the ping succeeds, your token is valid--clear browser storage and reinject (`localStorage.setItem('gatewayToken', '...')`). If curl fails with 401, regenerate via `openclaw dashboard --no-open`.
 
 ## Quick scripts
 
 - **Check where compose files live**
+
   ```bash
   ls docker-compose*.yml
   # If empty, you're not in the repo root.
   ```
+
 - **Dry-run config before hot reload** (manual stopgap until the automation tool ships)
+
   ```bash
   jq empty ~/.openclaw/openclaw.json && openclaw doctor --non-interactive
   ```
+
 - **Auth profile sync sanity check**
+
   ```bash
   diff -u ~/.openclaw/agents/main/agent/auth-profiles.json \
          ~/.openclaw/agents/*/agent/auth-profiles.json || true
   ```
+
 
 _Add new rows whenever you decode a scary message. The goal is zero guesswork._
