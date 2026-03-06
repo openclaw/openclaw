@@ -202,7 +202,6 @@ export async function sendDiscordComponentMessage(
           agentId: opts.agentId,
           sessionKey,
           text: transcriptText,
-          mediaUrls: opts.mediaUrl ? [opts.mediaUrl] : undefined,
         });
       } catch {
         // Outbound delivery already succeeded; transcript mirroring is best-effort.

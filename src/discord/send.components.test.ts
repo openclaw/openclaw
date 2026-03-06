@@ -5,6 +5,11 @@ import { registerDiscordComponentEntries } from "./components-registry.js";
 import { sendDiscordComponentMessage } from "./send.components.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 
+vi.mock("../web/media.js", async () => {
+  const { discordWebMediaMockFactory } = await import("./send.test-harness.js");
+  return discordWebMediaMockFactory();
+});
+
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ session: { dmScope: "main" } })));
 
 vi.mock("../config/config.js", async () => {
@@ -66,5 +71,39 @@ describe("sendDiscordComponentMessage", () => {
         text: expect.stringContaining("Tap"),
       }),
     );
+  });
+
+  it("preserves transcript mirror text when media is attached", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.DM,
+      recipients: [{ id: "user-1" }],
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "dm-1" });
+
+    await sendDiscordComponentMessage(
+      "channel:dm-1",
+      {
+        text: "Pick an option",
+        blocks: [{ type: "actions", buttons: [{ label: "Tap" }] }],
+      },
+      {
+        rest,
+        token: "t",
+        sessionKey: "agent:main:discord:channel:dm-1",
+        agentId: "main",
+        mediaUrl: "https://example.test/photo.jpg",
+      },
+    );
+
+    expect(appendTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(appendTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:channel:dm-1",
+        agentId: "main",
+        text: expect.stringContaining("Pick an option"),
+      }),
+    );
+    expect(appendTranscriptMock.mock.calls[0]?.[0]?.mediaUrls).toBeUndefined();
   });
 });
