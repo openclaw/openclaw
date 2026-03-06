@@ -17,6 +17,22 @@ const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 const PARALLEL_TOOL_CALLS_APIS = new Set(["openai-completions", "openai-responses"]);
 
+function resolveParallelToolCallsAliasRaw(params: Record<string, unknown> | undefined): {
+  found: boolean;
+  value: unknown;
+} {
+  if (!params) {
+    return { found: false, value: undefined };
+  }
+  if (Object.prototype.hasOwnProperty.call(params, "parallel_tool_calls")) {
+    return { found: true, value: params.parallel_tool_calls };
+  }
+  if (Object.prototype.hasOwnProperty.call(params, "parallelToolCalls")) {
+    return { found: true, value: params.parallelToolCalls };
+  }
+  return { found: false, value: undefined };
+}
+
 function mergeExtraParamsWithAliasPrecedence(
   lowerPriority: Record<string, unknown> | undefined,
   higherPriority: Record<string, unknown> | undefined,
@@ -26,13 +42,12 @@ function mergeExtraParamsWithAliasPrecedence(
   }
 
   const merged = Object.assign({}, lowerPriority, higherPriority);
-  const parallelToolCallsRaw =
-    higherPriority?.parallel_tool_calls ??
-    higherPriority?.parallelToolCalls ??
-    lowerPriority?.parallel_tool_calls ??
-    lowerPriority?.parallelToolCalls;
-  if (parallelToolCallsRaw !== undefined) {
-    merged.parallel_tool_calls = parallelToolCallsRaw;
+  const higherParallelToolCalls = resolveParallelToolCallsAliasRaw(higherPriority);
+  const lowerParallelToolCalls = resolveParallelToolCallsAliasRaw(lowerPriority);
+  if (higherParallelToolCalls.found || lowerParallelToolCalls.found) {
+    merged.parallel_tool_calls = higherParallelToolCalls.found
+      ? higherParallelToolCalls.value
+      : lowerParallelToolCalls.value;
     delete merged.parallelToolCalls;
   }
   return merged;
@@ -380,10 +395,11 @@ function resolveOpenAIServiceTier(
 function resolveParallelToolCalls(
   extraParams: Record<string, unknown> | undefined,
 ): boolean | undefined {
-  const raw = extraParams?.parallel_tool_calls ?? extraParams?.parallelToolCalls;
-  if (raw === undefined) {
+  const rawAlias = resolveParallelToolCallsAliasRaw(extraParams);
+  if (!rawAlias.found) {
     return undefined;
   }
+  const raw = rawAlias.value;
   if (typeof raw !== "boolean") {
     const rawSummary = typeof raw === "string" ? raw : typeof raw;
     log.warn(`ignoring invalid parallel tool calls param: ${rawSummary}`);

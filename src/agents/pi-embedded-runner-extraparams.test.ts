@@ -150,6 +150,40 @@ describe("resolveExtraParams", () => {
     expect(result).not.toHaveProperty("parallelToolCalls");
   });
 
+  it("keeps explicit null alias overrides from higher-precedence params", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5": {
+                params: {
+                  parallel_tool_calls: true,
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "risk-reviewer",
+              params: {
+                parallelToolCalls: null,
+              },
+            },
+          ],
+        },
+      },
+      provider: "openai",
+      modelId: "gpt-5",
+      agentId: "risk-reviewer",
+    });
+
+    expect(result).toMatchObject({
+      parallel_tool_calls: null,
+    });
+    expect(result).not.toHaveProperty("parallelToolCalls");
+  });
+
   it("ignores per-agent params when agentId does not match", () => {
     const result = resolveExtraParams({
       cfg: {
@@ -1752,6 +1786,41 @@ describe("applyExtraParamsToAgent", () => {
       });
       expect(payload).not.toHaveProperty("parallel_tool_calls");
       expect(warnSpy).toHaveBeenCalledWith("ignoring invalid parallel tool calls param: nope");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not fall back to lower-scope values when override sets null alias", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const payload = runParallelToolCallsPayloadMutationCase({
+        applyProvider: "nvidia",
+        applyModelId: "moonshotai/kimi-k2.5",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "nvidia/moonshotai/kimi-k2.5": {
+                  params: {
+                    parallel_tool_calls: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+        extraParamsOverride: {
+          parallelToolCalls: null,
+        },
+        model: {
+          api: "openai-completions",
+          provider: "nvidia",
+          id: "moonshotai/kimi-k2.5",
+        } as Model<"openai-completions">,
+      });
+      expect(payload).not.toHaveProperty("parallel_tool_calls");
+      expect(warnSpy).toHaveBeenCalledWith("ignoring invalid parallel tool calls param: object");
     } finally {
       warnSpy.mockRestore();
     }
