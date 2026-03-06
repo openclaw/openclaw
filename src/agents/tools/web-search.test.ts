@@ -384,6 +384,27 @@ describe("web_search provider auto-detection for openrouter", () => {
     );
   });
 
+  it("OPENROUTER_API_KEY takes precedence over legacy PERPLEXITY_API_KEY sk-or-* fallback", () => {
+    withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        OPENROUTER_API_KEY: "sk-or-new-key",
+        PERPLEXITY_API_KEY: "sk-or-old-key",
+        XAI_API_KEY: undefined,
+      },
+      () => {
+        // Auto-detect still picks openrouter.
+        expect(resolveSearchProvider(undefined)).toBe("openrouter");
+        // The dedicated OPENROUTER_API_KEY must win; resolveOpenRouterApiKey with an
+        // empty config (no legacy fallback injected) should return the env key.
+        expect(resolveOpenRouterApiKey({})).toBe("sk-or-new-key");
+      },
+    );
+  });
+
   it("keeps perplexity provider when PERPLEXITY_API_KEY has native perplexity format", () => {
     withEnv(
       {

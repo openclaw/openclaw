@@ -679,10 +679,18 @@ function resolveOpenRouterConfig(search?: WebSearchConfig): OpenRouterConfig {
   }
   // Fall back to the perplexity key if it looks like an OpenRouter key (sk-or-* prefix).
   // This supports legacy configs that routed Perplexity models via OpenRouter.
-  const perplexityConfig = resolvePerplexityConfig(search);
-  const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
-  if (perplexityKey?.startsWith("sk-or-")) {
-    return { apiKey: perplexityKey };
+  // Only apply the fallback when OPENROUTER_API_KEY is not already set, so the
+  // dedicated env var always takes precedence over the legacy migration path.
+  if (!normalizeApiKey(process.env.OPENROUTER_API_KEY)) {
+    const perplexityConfig = resolvePerplexityConfig(search);
+    const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
+    if (perplexityKey?.startsWith("sk-or-")) {
+      console.warn(
+        "[openclaw] web_search: Detected OpenRouter-format API key (sk-or-*) in perplexity config. " +
+          "Set OPENROUTER_API_KEY or tools.web.search.openrouter.apiKey to suppress this warning.",
+      );
+      return { apiKey: perplexityKey };
+    }
   }
   return {};
 }
