@@ -174,6 +174,7 @@ export const TelegramAccountSchemaBase = z
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
+    streamThrottleMs: z.number().int().min(250).optional(),
     blockStreaming: z.boolean().optional(),
     draftChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),

@@ -117,6 +117,8 @@ export type TelegramAccountConfig = {
    * Legacy boolean values are still accepted and auto-migrated.
    */
   streaming?: TelegramStreamingMode | boolean;
+  /** Throttle interval (ms) for draft streaming updates. Min 250, default 1000. */
+  streamThrottleMs?: number;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** @deprecated Legacy chunking config from `streamMode: "block"`; ignored after migration. */

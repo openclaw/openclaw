@@ -200,6 +200,7 @@ export const dispatchTelegramMessage = async ({
           thread: threadSpec,
           previewTransport: useMessagePreviewTransportForDmReasoning ? "message" : "auto",
           replyToMessageId: draftReplyToMessageId,
+          throttleMs: telegramCfg.streamThrottleMs,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,
           onSupersededPreview:
