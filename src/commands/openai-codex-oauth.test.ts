@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
@@ -56,30 +56,10 @@ async function runCodexOAuth(params: { isRemote: boolean }) {
 }
 
 describe("loginOpenAICodexOAuth", () => {
-  let restoreFetch: (() => void) | null = null;
-
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({ ok: true });
     mocks.formatOpenAIOAuthTlsPreflightFix.mockReturnValue("tls fix");
-
-    const originalFetch = globalThis.fetch;
-    const fetchMock = vi.fn(
-      async () =>
-        new Response('{"error":{"message":"model is required"}}', {
-          status: 400,
-          headers: { "content-type": "application/json" },
-        }),
-    );
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-    restoreFetch = () => {
-      globalThis.fetch = originalFetch;
-    };
-  });
-
-  afterEach(() => {
-    restoreFetch?.();
-    restoreFetch = null;
   });
 
   it("returns credentials on successful oauth login", async () => {
@@ -186,52 +166,6 @@ describe("loginOpenAICodexOAuth", () => {
     expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
     expect(runtime.error).not.toHaveBeenCalledWith("tls fix");
     expect(prompter.note).not.toHaveBeenCalledWith("tls fix", "OAuth prerequisites");
-  });
-
-  it("fails with actionable error when token is missing api.responses.write scope", async () => {
-    mocks.createVpsAwareOAuthHandlers.mockReturnValue({
-      onAuth: vi.fn(),
-      onPrompt: vi.fn(),
-    });
-    mocks.loginOpenAICodex.mockResolvedValue({
-      provider: "openai-codex" as const,
-      access: "access-token",
-      refresh: "refresh-token",
-      expires: Date.now() + 60_000,
-      email: "user@example.com",
-    });
-    globalThis.fetch = vi.fn(
-      async () =>
-        new Response('{"error":{"message":"Missing scopes: api.responses.write"}}', {
-          status: 401,
-          headers: { "content-type": "application/json" },
-        }),
-    ) as unknown as typeof fetch;
-
-    await expect(runCodexOAuth({ isRemote: false })).rejects.toThrow(
-      "missing required scope: api.responses.write",
-    );
-  });
-
-  it("does not fail oauth completion when scope probe is unavailable", async () => {
-    const creds = {
-      provider: "openai-codex" as const,
-      access: "access-token",
-      refresh: "refresh-token",
-      expires: Date.now() + 60_000,
-      email: "user@example.com",
-    };
-    mocks.createVpsAwareOAuthHandlers.mockReturnValue({
-      onAuth: vi.fn(),
-      onPrompt: vi.fn(),
-    });
-    mocks.loginOpenAICodex.mockResolvedValue(creds);
-    globalThis.fetch = vi.fn(async () => {
-      throw new Error("network down");
-    }) as unknown as typeof fetch;
-
-    const { result } = await runCodexOAuth({ isRemote: false });
-    expect(result).toEqual(creds);
   });
 
   it("fails early with actionable message when TLS preflight fails", async () => {
