@@ -326,22 +326,39 @@ function resolveToolPolicies(params: {
   return policies;
 }
 
-function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  const search = cfg.tools?.web?.search;
-  return Boolean(
-    search?.apiKey || search?.perplexity?.apiKey || env.BRAVE_API_KEY || env.PERPLEXITY_API_KEY,
-  );
-}
-
 function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const enabled = cfg.tools?.web?.search?.enabled;
   if (enabled === false) {
     return false;
   }
-  if (enabled === true) {
-    return true;
+  // When a keyed provider is explicitly pinned, web_search is only capable
+  // if the corresponding credentials are present (otherwise it returns a
+  // missing-key error at runtime). When no provider is set, auto-detection
+  // falls through to You.com free tier which always works.
+  const provider = cfg.tools?.web?.search?.provider;
+  if (provider && provider !== "you") {
+    const search = cfg.tools?.web?.search;
+    // Check the top-level apiKey, provider sub-config key, and the env var(s)
+    // specific to the pinned provider — not all provider env vars.
+    const sub =
+      search && typeof search === "object"
+        ? (search as Record<string, unknown>)[provider]
+        : undefined;
+    const subApiKey =
+      sub && typeof sub === "object" ? (sub as Record<string, unknown>).apiKey : undefined;
+    const providerEnvKeys: Record<string, string[]> = {
+      brave: ["BRAVE_API_KEY"],
+      perplexity: ["PERPLEXITY_API_KEY"],
+      grok: ["XAI_API_KEY"],
+      gemini: ["GEMINI_API_KEY"],
+      kimi: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+    };
+    const envKeys = providerEnvKeys[provider] ?? [];
+    const hasEnvKey = envKeys.some((k) => Boolean(env[k]));
+    return Boolean(search?.apiKey || subApiKey || hasEnvKey);
   }
-  return hasWebSearchKey(cfg, env);
+  // No provider pinned or provider="you" → always available (You.com free tier)
+  return true;
 }
 
 function isWebFetchEnabled(cfg: OpenClawConfig): boolean {
@@ -350,6 +367,19 @@ function isWebFetchEnabled(cfg: OpenClawConfig): boolean {
     return false;
   }
   return true;
+}
+
+function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  const enabled = cfg.tools?.web?.research?.enabled;
+  if (enabled === false) {
+    return false;
+  }
+  // web_research always requires an API key to be internet-capable;
+  // without one createWebResearchTool only returns a missing-key error.
+  // Normalize to match runtime behavior (trims whitespace-only values).
+  const raw = cfg.tools?.web?.research?.apiKey || env.YDC_API_KEY;
+  const apiKey = typeof raw === "string" ? raw.trim() : "";
+  return Boolean(apiKey);
 }
 
 function isBrowserEnabled(cfg: OpenClawConfig): boolean {
@@ -1233,6 +1263,11 @@ export function collectSmallModelRiskFindings(params: {
         exposed.push("web_fetch");
       }
     }
+    if (isWebResearchEnabled(params.cfg, params.env)) {
+      if (isToolAllowedByPolicies("web_research", policies)) {
+        exposed.push("web_research");
+      }
+    }
     if (isBrowserEnabled(params.cfg)) {
       if (isToolAllowedByPolicies("browser", policies)) {
         exposed.push("browser");
@@ -1271,7 +1306,7 @@ export function collectSmallModelRiskFindings(params: {
       `\n` +
       "Small models are not recommended for untrusted inputs.",
     remediation:
-      'If you must use small models, enable sandboxing for all sessions (agents.defaults.sandbox.mode="all") and disable web_search/web_fetch/browser (tools.deny=["group:web","browser"]).',
+      'If you must use small models, enable sandboxing for all sessions (agents.defaults.sandbox.mode="all") and disable web_search/web_fetch/web_research/browser (tools.deny=["group:web","browser"]).',
   });
 
   return findings;
