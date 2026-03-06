@@ -8,6 +8,7 @@ import {
   readVersionFromBuildInfoForModuleUrl,
   readVersionFromPackageJsonForModuleUrl,
   resolveBinaryVersion,
+  resolveRuntimeClientVersion,
   resolveRuntimeServiceVersion,
   resolveUsableRuntimeVersion,
   resolveVersionFromModuleUrl,
@@ -180,5 +181,26 @@ describe("version resolution", () => {
         "fallback",
       ),
     ).toBe(VERSION);
+  });
+
+  it("resolves client-visible runtime version without OPENCLAW_SERVICE_VERSION fallback", () => {
+    const expected = resolveUsableRuntimeVersion(VERSION) ?? "1.0.0-package";
+    expect(
+      resolveRuntimeClientVersion({
+        OPENCLAW_VERSION: " ",
+        OPENCLAW_SERVICE_VERSION: "9.9.9-stale",
+        npm_package_version: "1.0.0-package",
+      }),
+    ).toBe(expected);
+  });
+
+  it("still prioritizes OPENCLAW_VERSION for client-visible runtime version", () => {
+    expect(
+      resolveRuntimeClientVersion({
+        OPENCLAW_VERSION: "2026.9.9",
+        OPENCLAW_SERVICE_VERSION: "9.9.9-stale",
+        npm_package_version: "1.0.0-package",
+      }),
+    ).toBe("2026.9.9");
   });
 });

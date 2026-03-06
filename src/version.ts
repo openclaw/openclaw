@@ -118,6 +118,22 @@ export function resolveRuntimeServiceVersion(
   );
 }
 
+/**
+ * Resolve the runtime version shown to interactive clients (Control UI/TUI).
+ * Unlike service diagnostics, this intentionally ignores OPENCLAW_SERVICE_VERSION
+ * because that env can be stale across package upgrades until daemon reinstall.
+ */
+export function resolveRuntimeClientVersion(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+  fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
+): string {
+  const runtimeVersion = resolveUsableRuntimeVersion(VERSION);
+
+  return (
+    firstNonEmpty(env["OPENCLAW_VERSION"], runtimeVersion, env["npm_package_version"]) ?? fallback
+  );
+}
+
 // Single source of truth for the current OpenClaw version.
 // - Embedded/bundled builds: injected define or env var.
 // - Dev/npm builds: package.json.
