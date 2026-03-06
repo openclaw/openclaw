@@ -63,6 +63,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+
   const order = resolveAuthProfileOrder({ cfg, store, provider });
   let current = sessionEntry.authProfileOverride?.trim();
 
@@ -125,6 +126,11 @@ export async function resolveSessionAuthProfileOverride(params: {
     next = pickNextAvailable(current);
   } else if (!current || isProfileInCooldown(store, current)) {
     next = pickFirstAvailable();
+  } else if (source === "auto") {
+    const best = pickFirstAvailable();
+    if (best && order.indexOf(best) < order.indexOf(current)) {
+      next = best;
+    }
   }
 
   if (!next) {
