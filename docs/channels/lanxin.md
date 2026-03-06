@@ -8,7 +8,7 @@ title: Lanxin
 
 # Lanxin bot
 
-Lanxin is an instant messaging platform built for government agencies, state-owned enterprises, and large organizations in China, serving over 8,000 enterprises. The OpenClaw Lanxin plugin connects via the Open Platform (https://developer.lanxin.cn) callback + message API, enabling DM/group messaging and media file sending.
+Lanxin is an instant messaging platform built for government agencies, state-owned enterprises, and large organizations in China, serving over 8,000 enterprises. The OpenClaw Lanxin plugin connects via Lanxin Open Platform callback + message API, enabling DM/group messaging and media file sending.
 
 Current features:
 
@@ -172,9 +172,9 @@ On the app's **Callback Events** page, enable the following permissions:
 On the app's **Callback Events** page:
 
 1. Enter the callback URL:
-   ```text
-   https://<your-domain>/lanxin/callback
-   ```
+
+   `https://<your-domain>/lanxin/callback`
+
 2. Subscribe to required events (e.g., DM messages, group messages)
 3. Save the configuration
 
@@ -558,6 +558,7 @@ If sending proactively without `entryId`, configure `defaultEntryId`.
 - Current media sending uses Lanxin's common compatibility path: `msgType=text` + `msgData.text.mediaType/mediaIds`.
 - Callback path matching uses `pathname`, supporting query parameters (e.g., `timestamp/nonce/signature`).
 - If your Lanxin tenant API domain differs, explicitly set `apiBaseUrl`.
+- Lanxin app token endpoint (`apptoken/create`) uses `GET` with query params (`grant_type/appid/secret`) per platform spec.
 
 ---
 
