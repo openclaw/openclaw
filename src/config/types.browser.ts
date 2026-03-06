@@ -48,6 +48,8 @@ export type BrowserConfig = {
   headless?: boolean;
   /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
   noSandbox?: boolean;
+  /** Root directory for browser user-data profiles. Default: ~/.openclaw/browser */
+  userDataDir?: string;
   /** If true: never launch; only attach to an existing browser. Default: false */
   attachOnly?: boolean;
   /** Starting local CDP port for auto-assigned browser profiles. Default derives from gateway port. */

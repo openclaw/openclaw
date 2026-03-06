@@ -95,6 +95,30 @@ WantedBy=default.target
 
 Enable with: `systemctl --user enable --now openclaw-browser.service`
 
+### Solution 3: Configure `userDataDir` to a non-hidden path (Snap Fix)
+
+If you want OpenClaw to manage the snap Chromium process automatically, you must move the browser's user data directory to a location that snap is permitted to access (non-hidden directories in your home folder).
+
+1. Update your OpenClaw config (`~/.openclaw/openclaw.json`):
+
+```json
+{
+  "browser": {
+    "enabled": true,
+    "userDataDir": "/home/youruser/Documents/openclaw-browser",
+    "noSandbox": true
+  }
+}
+```
+
+_Note: Replace `/home/youruser/Documents/openclaw-browser` with a real path in your Documents or similar non-hidden folder._
+
+2. Restart the gateway service:
+
+```bash
+openclaw gateway restart
+```
+
 ### Verifying the Browser Works
 
 Check status:
@@ -116,6 +140,7 @@ curl -s http://127.0.0.1:18791/tabs
 | ------------------------ | -------------------------------------------------------------------- | ----------------------------------------------------------- |
 | `browser.enabled`        | Enable browser control                                               | `true`                                                      |
 | `browser.executablePath` | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected (prefers default browser when Chromium-based) |
+| `browser.userDataDir`    | Custom path for browser user data (e.g. for snap sandboxing)         | `~/.openclaw/browser`                                       |
 | `browser.headless`       | Run without GUI                                                      | `false`                                                     |
 | `browser.noSandbox`      | Add `--no-sandbox` flag (needed for some Linux setups)               | `false`                                                     |
 | `browser.attachOnly`     | Don't launch browser, only attach to existing                        | `false`                                                     |
