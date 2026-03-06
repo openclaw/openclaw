@@ -47,6 +47,37 @@ async function resetTempDir(name: string): Promise<string> {
 }
 
 describe("gateway config methods", () => {
+  it("returns a path-scoped config schema lookup", async () => {
+    const res = await rpcReq<{
+      path: string;
+      hintPath?: string;
+      children?: Array<{ key: string; path: string; required: boolean; hintPath?: string }>;
+      schema?: { properties?: unknown };
+    }>(requireWs(), "config.schema.lookup", {
+      path: "gateway.auth",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.payload?.path).toBe("gateway.auth");
+    expect(res.payload?.hintPath).toBe("gateway.auth");
+    const tokenChild = res.payload?.children?.find((child) => child.key === "token");
+    expect(tokenChild).toMatchObject({
+      key: "token",
+      path: "gateway.auth.token",
+      hintPath: "gateway.auth.token",
+    });
+    expect(res.payload?.schema?.properties).toBeUndefined();
+  });
+
+  it("rejects config.schema.lookup when the path is missing", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+      path: "gateway.notReal.path",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("config schema path not found");
+  });
+
   it("rejects config.patch when raw is not an object", async () => {
     const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
       raw: "[]",

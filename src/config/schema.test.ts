@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { buildConfigSchema } from "./schema.js";
+import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 
 describe("config schema", () => {
@@ -201,5 +201,35 @@ describe("config schema", () => {
         expect(allowed.has(tag), `unexpected tag ${tag} on ${key}`).toBe(true);
       }
     }
+  });
+
+  it("looks up a config schema path with immediate child summaries", () => {
+    const lookup = lookupConfigSchema(baseSchema, "gateway.auth");
+    expect(lookup?.path).toBe("gateway.auth");
+    expect(lookup?.hintPath).toBe("gateway.auth");
+    expect(lookup?.children.some((child) => child.key === "token")).toBe(true);
+    const tokenChild = lookup?.children.find((child) => child.key === "token");
+    expect(tokenChild?.path).toBe("gateway.auth.token");
+    expect(tokenChild?.hint?.sensitive).toBe(true);
+    expect(tokenChild?.hintPath).toBe("gateway.auth.token");
+    const schema = lookup?.schema as { properties?: unknown } | undefined;
+    expect(schema?.properties).toBeUndefined();
+  });
+
+  it("matches wildcard ui hints for concrete lookup paths", () => {
+    const lookup = lookupConfigSchema(baseSchema, "agents.list.0.identity.avatar");
+    expect(lookup?.path).toBe("agents.list.0.identity.avatar");
+    expect(lookup?.hintPath).toBe("agents.list.*.identity.avatar");
+    expect(lookup?.hint?.help).toContain("workspace-relative path");
+  });
+
+  it("normalizes bracketed lookup paths", () => {
+    const lookup = lookupConfigSchema(baseSchema, "agents.list[0].identity.avatar");
+    expect(lookup?.path).toBe("agents.list.0.identity.avatar");
+    expect(lookup?.hintPath).toBe("agents.list.*.identity.avatar");
+  });
+
+  it("returns null for missing config schema paths", () => {
+    expect(lookupConfigSchema(baseSchema, "gateway.notReal.path")).toBeNull();
   });
 });

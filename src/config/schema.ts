@@ -17,6 +17,7 @@ type JsonSchemaObject = JsonSchemaNode & {
   properties?: Record<string, JsonSchemaObject>;
   required?: string[];
   additionalProperties?: JsonSchemaObject | boolean;
+  items?: JsonSchemaObject | JsonSchemaObject[];
 };
 
 function cloneSchema<T>(value: T): T {
@@ -69,6 +70,24 @@ export type ConfigSchemaResponse = {
   uiHints: ConfigUiHints;
   version: string;
   generatedAt: string;
+};
+
+export type ConfigSchemaLookupChild = {
+  key: string;
+  path: string;
+  type?: string | string[];
+  required: boolean;
+  hasChildren: boolean;
+  hint?: ConfigUiHint;
+  hintPath?: string;
+};
+
+export type ConfigSchemaLookupResult = {
+  path: string;
+  schema: JsonSchemaNode;
+  hint?: ConfigUiHint;
+  hintPath?: string;
+  children: ConfigSchemaLookupChild[];
 };
 
 export type PluginUiMetadata = {
@@ -429,4 +448,179 @@ export function buildConfigSchema(params?: {
   };
   setMergedSchemaCache(cacheKey, merged);
   return merged;
+}
+
+function normalizeLookupPath(path: string): string {
+  return path
+    .trim()
+    .replace(/\[(\*|\d+)\]/g, ".$1")
+    .replace(/^\.+|\.+$/g, "")
+    .replace(/\.+/g, ".");
+}
+
+function splitLookupPath(path: string): string[] {
+  const normalized = normalizeLookupPath(path);
+  return normalized ? normalized.split(".").filter(Boolean) : [];
+}
+
+function resolveUiHintMatch(
+  uiHints: ConfigUiHints,
+  path: string,
+): { path: string; hint: ConfigUiHint } | null {
+  const targetParts = splitLookupPath(path);
+  let best: { path: string; hint: ConfigUiHint; wildcardCount: number } | null = null;
+
+  for (const [hintPath, hint] of Object.entries(uiHints)) {
+    const hintParts = splitLookupPath(hintPath);
+    if (hintParts.length !== targetParts.length) {
+      continue;
+    }
+
+    let wildcardCount = 0;
+    let matches = true;
+    for (let index = 0; index < hintParts.length; index += 1) {
+      const hintPart = hintParts[index];
+      const targetPart = targetParts[index];
+      if (hintPart === targetPart) {
+        continue;
+      }
+      if (hintPart === "*") {
+        wildcardCount += 1;
+        continue;
+      }
+      matches = false;
+      break;
+    }
+    if (!matches) {
+      continue;
+    }
+    if (!best || wildcardCount < best.wildcardCount) {
+      best = { path: hintPath, hint, wildcardCount };
+    }
+  }
+
+  return best ? { path: best.path, hint: best.hint } : null;
+}
+
+function schemaHasChildren(schema: JsonSchemaObject): boolean {
+  if (schema.properties && Object.keys(schema.properties).length > 0) {
+    return true;
+  }
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+    return true;
+  }
+  if (Array.isArray(schema.items)) {
+    return schema.items.some((entry) => typeof entry === "object" && entry !== null);
+  }
+  return Boolean(schema.items && typeof schema.items === "object");
+}
+
+function resolveItemsSchema(schema: JsonSchemaObject): JsonSchemaObject | null {
+  if (Array.isArray(schema.items)) {
+    return schema.items.find((entry) => typeof entry === "object" && entry !== null) ?? null;
+  }
+  return schema.items && typeof schema.items === "object" ? schema.items : null;
+}
+
+function resolveLookupChildSchema(
+  schema: JsonSchemaObject,
+  segment: string,
+): JsonSchemaObject | null {
+  const explicit = schema.properties?.[segment];
+  if (explicit) {
+    return explicit;
+  }
+
+  const items = resolveItemsSchema(schema);
+  if ((segment === "*" || /^\d+$/.test(segment)) && items) {
+    return items;
+  }
+
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+    return schema.additionalProperties;
+  }
+
+  return null;
+}
+
+function stripNestedSchema(schema: JsonSchemaObject): JsonSchemaNode {
+  const next = cloneSchema(schema);
+  delete next.properties;
+  if (next.additionalProperties && typeof next.additionalProperties === "object") {
+    delete next.additionalProperties;
+  }
+  if (next.items && typeof next.items === "object") {
+    delete next.items;
+  }
+  return next;
+}
+
+function buildLookupChildren(
+  schema: JsonSchemaObject,
+  path: string,
+  uiHints: ConfigUiHints,
+): ConfigSchemaLookupChild[] {
+  const children: ConfigSchemaLookupChild[] = [];
+  const required = new Set(schema.required ?? []);
+
+  const pushChild = (key: string, childSchema: JsonSchemaObject, isRequired: boolean) => {
+    const childPath = path ? `${path}.${key}` : key;
+    const resolvedHint = resolveUiHintMatch(uiHints, childPath);
+    children.push({
+      key,
+      path: childPath,
+      type: childSchema.type,
+      required: isRequired,
+      hasChildren: schemaHasChildren(childSchema),
+      hint: resolvedHint?.hint,
+      hintPath: resolvedHint?.path,
+    });
+  };
+
+  for (const [key, childSchema] of Object.entries(schema.properties ?? {})) {
+    pushChild(key, childSchema, required.has(key));
+  }
+
+  const wildcardSchema =
+    (schema.additionalProperties &&
+    typeof schema.additionalProperties === "object" &&
+    !Array.isArray(schema.additionalProperties)
+      ? schema.additionalProperties
+      : null) ?? resolveItemsSchema(schema);
+  if (wildcardSchema) {
+    pushChild("*", wildcardSchema, false);
+  }
+
+  return children;
+}
+
+export function lookupConfigSchema(
+  response: ConfigSchemaResponse,
+  path: string,
+): ConfigSchemaLookupResult | null {
+  const normalizedPath = normalizeLookupPath(path);
+  if (!normalizedPath) {
+    return null;
+  }
+
+  let current = asSchemaObject(response.schema);
+  if (!current) {
+    return null;
+  }
+  for (const segment of splitLookupPath(normalizedPath)) {
+    const next = resolveLookupChildSchema(current, segment);
+    if (!next) {
+      return null;
+    }
+    current = next;
+  }
+
+  const resolvedHint = resolveUiHintMatch(response.uiHints, normalizedPath);
+  return {
+    path: normalizedPath,
+    schema: stripNestedSchema(current),
+    hint: resolvedHint?.hint,
+    hintPath: resolvedHint?.path,
+    children: buildLookupChildren(current, normalizedPath, response.uiHints),
+  };
 }
