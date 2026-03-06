@@ -71,7 +71,7 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
   // Suppress partial "Reasoning:" arriving during streaming before any
   // actual reasoning content follows (trim() collapses "Reasoning:\n" to
   // "Reasoning:" which would otherwise fall through to answerText).
-  if (/^Reasoning:?\s*$/.test(trimmed)) {
+  if (/^Reasoning:\s*$/.test(trimmed)) {
     return {};
   }
   if (
