@@ -369,11 +369,7 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
         chatUserId: replyUserId,
       });
 
-      const timeoutPromise = new Promise<null>((_, reject) =>
-        setTimeout(() => reject(new Error("Agent response timeout (120s)")), 120_000),
-      );
-
-      const reply = await Promise.race([deliverPromise, timeoutPromise]);
+      const reply = await deliverPromise;
 
       // Send reply back to Synology Chat using the resolved Chat user_id
       if (reply) {
