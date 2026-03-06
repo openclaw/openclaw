@@ -132,25 +132,26 @@ async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFil
   const dirEntries = await fs.promises
     .readdir(sessionsDir, { withFileTypes: true })
     .catch(() => []);
-  const files: SessionsDirFileStat[] = [];
-  for (const dirent of dirEntries) {
-    if (!dirent.isFile()) {
-      continue;
-    }
-    const filePath = path.join(sessionsDir, dirent.name);
-    const stat = await fs.promises.stat(filePath).catch(() => null);
-    if (!stat?.isFile()) {
-      continue;
-    }
-    files.push({
-      path: filePath,
-      canonicalPath: canonicalizePathForComparison(filePath),
-      name: dirent.name,
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
-    });
-  }
-  return files;
+  const fileEntries = dirEntries.filter((d) => d.isFile());
+  // Stat all files in parallel rather than serially to reduce I/O latency
+  // when the sessions directory contains many transcript files.
+  const results = await Promise.all(
+    fileEntries.map(async (dirent) => {
+      const filePath = path.join(sessionsDir, dirent.name);
+      const stat = await fs.promises.stat(filePath).catch(() => null);
+      if (!stat?.isFile()) {
+        return null;
+      }
+      return {
+        path: filePath,
+        canonicalPath: canonicalizePathForComparison(filePath),
+        name: dirent.name,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      };
+    }),
+  );
+  return results.filter((f): f is SessionsDirFileStat => f !== null);
 }
 
 async function removeFileIfExists(filePath: string): Promise<number> {
