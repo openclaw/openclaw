@@ -810,6 +810,8 @@ export function renderApp(state: AppViewState) {
                 },
                 onModelChange: (agentId, modelId) => {
                   if (!configValue) {
+                    state.lastError =
+                      "Config not loaded yet. Wait for config to load or click Reload Config.";
                     return;
                   }
                   const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
@@ -846,6 +848,8 @@ export function renderApp(state: AppViewState) {
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
                   if (!configValue) {
+                    state.lastError =
+                      "Config not loaded yet. Wait for config to load or click Reload Config.";
                     return;
                   }
                   const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
