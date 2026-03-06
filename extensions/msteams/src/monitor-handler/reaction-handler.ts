@@ -4,11 +4,12 @@ import {
   readStoreAllowFromForDmPolicy,
   resolveEffectiveAllowFromLists,
   resolveDmGroupAccessWithLists,
+  resolveDefaultGroupPolicy,
   isDangerousNameMatchingEnabled,
 } from "openclaw/plugin-sdk";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
-import { resolveMSTeamsAllowlistMatch } from "../policy.js";
+import { resolveMSTeamsAllowlistMatch, resolveMSTeamsRouteConfig } from "../policy.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 
@@ -71,6 +72,10 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
     const senderId = from.aadObjectId ?? from.id;
     const replyToId = activity.replyToId ?? undefined;
 
+    const teamId = activity.channelData?.team?.id;
+    const teamName = activity.channelData?.team?.name;
+    const channelName = activity.channelData?.channel?.name;
+
     // Authorization — reuse the same allowlist logic as message-handler
     const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
     const storedAllowFrom = await readStoreAllowFromForDmPolicy({
@@ -89,13 +94,29 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       storeAllowFrom: storedAllowFrom,
       dmPolicy,
     });
+    const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+    const groupPolicy =
+      !isDirectMessage && msteamsCfg
+        ? (msteamsCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist")
+        : "disabled";
     const effectiveGroupAllowFrom = resolvedAllowFromLists.effectiveGroupAllowFrom;
+    const channelGate = resolveMSTeamsRouteConfig({
+      cfg: msteamsCfg,
+      teamId,
+      teamName,
+      conversationId,
+      channelName,
+    });
     const senderGroupPolicy =
-      effectiveGroupAllowFrom.length > 0 ? "allowlist" : ("open" as const);
+      groupPolicy === "disabled"
+        ? "disabled"
+        : effectiveGroupAllowFrom.length > 0
+          ? "allowlist"
+          : "open";
     const access = resolveDmGroupAccessWithLists({
       isGroup: !isDirectMessage,
       dmPolicy,
-      groupPolicy: isDirectMessage ? dmPolicy : senderGroupPolicy,
+      groupPolicy: senderGroupPolicy,
       allowFrom: configuredDmAllowFrom,
       groupAllowFrom,
       storeAllowFrom: storedAllowFrom,
@@ -117,6 +138,42 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
         reason: access.reason,
       });
       return;
+    }
+
+    // Group policy gating — mirror message-handler logic
+    if (!isDirectMessage && msteamsCfg) {
+      if (groupPolicy === "disabled") {
+        log.debug?.("dropping group reaction (groupPolicy: disabled)", {
+          conversationId,
+        });
+        return;
+      }
+
+      if (groupPolicy === "allowlist") {
+        if (channelGate.allowlistConfigured && !channelGate.allowed) {
+          log.debug?.("dropping group reaction (not in team/channel allowlist)", {
+            conversationId,
+            teamKey: channelGate.teamKey ?? "none",
+            channelKey: channelGate.channelKey ?? "none",
+            channelMatchKey: channelGate.channelMatchKey ?? "none",
+            channelMatchSource: channelGate.channelMatchSource ?? "none",
+          });
+          return;
+        }
+        if (effectiveGroupAllowFrom.length === 0 && !channelGate.allowlistConfigured) {
+          log.debug?.("dropping group reaction (groupPolicy: allowlist, no allowlist)", {
+            conversationId,
+          });
+          return;
+        }
+        if (effectiveGroupAllowFrom.length > 0 && access.decision !== "allow") {
+          log.debug?.("dropping group reaction (not in groupAllowFrom)", {
+            senderId,
+            senderName,
+          });
+          return;
+        }
+      }
     }
 
     // Resolve agent route
