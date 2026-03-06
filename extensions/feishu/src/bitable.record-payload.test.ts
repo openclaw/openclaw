@@ -54,7 +54,7 @@ function captureToolParameters(name: string): Record<string, unknown> {
     registerTool: (tool: unknown, opts?: { name?: string }) => {
       registered.push({ tool, opts });
     },
-  } as Parameters<typeof registerFeishuBitableTools>[0];
+  } as unknown as Parameters<typeof registerFeishuBitableTools>[0];
 
   registerFeishuBitableTools(api);
   const hit = registered.find((entry) => entry.opts?.name === name);
