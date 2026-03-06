@@ -2,7 +2,10 @@ import { DWClient, TOPIC_ROBOT } from "dingtalk-stream";
 import type { DWClientDownStream } from "dingtalk-stream";
 import type { ResolvedDingtalkAccount } from "./types.js";
 
-export type DingtalkStreamCallbackHandler = (msg: DWClientDownStream) => void;
+export type DingtalkStreamCallbackHandler = (
+  msg: DWClientDownStream,
+  ack: (messageId: string) => void,
+) => void;
 
 /**
  * 创建并启动 Stream 模式监控 / Create and start Stream mode monitor
@@ -29,8 +32,17 @@ export async function monitorStream(params: {
     clientSecret: account.clientSecret,
   });
 
-  // 注册机器人消息回调 / Register robot message callback
-  client.registerCallbackListener(TOPIC_ROBOT, onMessage);
+  const ack = (messageId: string) => {
+    try {
+      client.socketCallBackResponse(messageId, { success: true });
+    } catch {
+      // ignore ack failures
+    }
+  };
+
+  client.registerCallbackListener(TOPIC_ROBOT, (downstream: DWClientDownStream) => {
+    onMessage(downstream, ack);
+  });
 
   // 监听中止信号 / Listen for abort signal
   if (abortSignal) {

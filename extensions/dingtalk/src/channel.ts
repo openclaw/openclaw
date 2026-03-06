@@ -59,7 +59,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
     reactions: false,
     edit: false,
     reply: false,
-    blockStreaming: false,
+    blockStreaming: true,
   },
   agentPrompt: {
     messageToolHints: () => [
@@ -104,6 +104,12 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
         chunkMode: { type: "string", enum: ["length", "newline"] },
         mediaMaxMb: { type: "number", minimum: 0 },
         resolveSenderNames: { type: "boolean" },
+        streaming: {
+          type: "object",
+          properties: {
+            enabled: { type: "boolean" },
+          },
+        },
         accounts: {
           type: "object",
           additionalProperties: {

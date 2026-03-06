@@ -98,7 +98,19 @@ openclaw channels add
 2. 设置机器人名称
 3. **消息接收模式选择 Stream 模式**（非 HTTP 模式）
 
-### 5. 发布应用
+### 5. 开通权限
+
+在 **权限管理** 中，根据需要的功能开通以下权限：
+
+| 权限 | 用途 | 说明 |
+| --- | --- | --- |
+| `qyapi_robot_sendmsg` | **必须** | 机器人发送消息（主动发送消息） |
+| `Card.Instance.Write` | AI Card 流式输出 | 创建互动卡片实例 |
+| `Card.Streaming.Write` | AI Card 流式输出 | 向互动卡片推送流式内容 |
+
+开通权限后，必须**重新发布应用**才能生效。
+
+### 6. 发布应用
 
 1. 在 **版本管理与发布** 中，创建新版本
 2. 设置可见范围（哪些用户/部门可以访问机器人）
@@ -359,21 +371,27 @@ openclaw pairing list dingtalk
 - `textChunkLimit`：出站消息分块大小（默认：2000 字符）
 - `mediaMaxMb`：媒体上传/下载大小限制（默认：20MB）
 
-### 流式输出
+### 流式输出（AI Card）
 
-钉钉通过互动卡片支持流式回复。启用后，机器人会先发送一张卡片，然后在生成文本时持续更新卡片内容（打字机效果）。
+钉钉通过 [AI 互动卡片](https://open.dingtalk.com/document/isvapp/streaming-interactive-card) 支持流式回复。启用后，机器人会先创建一张卡片，然后在 AI 生成文本时持续更新卡片内容（打字机效果）。
+
+**前提条件：** 钉钉应用必须开通 `Card.Instance.Write` 和 `Card.Streaming.Write` 权限。参见 [开通权限](#5-开通权限)。
 
 ```json5
 {
   channels: {
     dingtalk: {
-      streaming: true, // 启用流式卡片输出（默认 true）
+      streaming: {
+        enabled: true,
+      },
     },
   },
 }
 ```
 
-设置 `streaming: false` 可等待完整回复后再发送。
+如果运行时创建卡片失败（如权限未开通），机器人会自动降级为纯文本消息发送。
+
+设置 `streaming.enabled: false`（默认）可始终等待完整回复后以单条文本/Markdown 消息发送。
 
 ### 多 Agent 路由
 
@@ -444,7 +462,7 @@ openclaw pairing list dingtalk
 | `channels.dingtalk.groups.<conversationId>.enabled`        | 启用/禁用单个群组                 | `true`     |
 | `channels.dingtalk.textChunkLimit`                         | 消息分块大小                      | `2000`     |
 | `channels.dingtalk.mediaMaxMb`                             | 媒体大小限制                      | `20`       |
-| `channels.dingtalk.streaming`                              | 启用流式卡片输出                  | `true`     |
+| `channels.dingtalk.streaming.enabled`                      | 启用 AI Card 流式输出             | `false`    |
 | `channels.dingtalk.resolveSenderNames`                     | 解析发送者显示名称                | `true`     |
 
 ---
@@ -456,6 +474,36 @@ openclaw pairing list dingtalk
 | `"pairing"`   | **默认。** 未知用户会收到配对码，需要管理员审批后才能对话 |
 | `"allowlist"` | 仅 `allowFrom` 中的用户可以对话                           |
 | `"open"`      | 允许所有用户（需要 `allowFrom` 包含 `"*"`）               |
+
+---
+
+## 主动发送消息
+
+OpenClaw 支持主动向钉钉用户或群组发送消息，无需等待用户先发消息。底层使用钉钉机器人消息 API（私聊：`/v1.0/robot/oToMessages/batchSend`，群聊：`/v1.0/robot/groupMessages/send`）。
+
+**前提条件：** 钉钉应用必须开通 `qyapi_robot_sendmsg` 权限。
+
+### CLI 方式
+
+```bash
+# 发送给用户（使用 staffId）
+openclaw message send --channel dingtalk --to "staffId123" --text "你好！"
+
+# 发送到群组（使用 conversationId）
+openclaw message send --channel dingtalk --to "cidXXXXXX" --text "大家好！"
+```
+
+### API 方式
+
+通过出站 API 使用 `channel: "dingtalk"`：
+
+- **`sendText`**：发送文本或 Markdown 消息（自动检测格式）
+- **`sendMedia`**：发送图片（通过 URL）或文件链接
+
+目标格式：
+
+- **私聊**：使用 `staffId` 作为目标
+- **群聊**：使用 `conversationId`（如 `cidXXXXXX`）作为目标
 
 ---
 

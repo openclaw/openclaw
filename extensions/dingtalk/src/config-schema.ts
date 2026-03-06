@@ -22,6 +22,14 @@ export const DingtalkGroupSchema = z
   })
   .strict();
 
+// AI Card 流式配置 / AI Card streaming configuration
+const DingtalkStreamingSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 // 共享配置字段（顶层和账号级别） / Shared config fields (top-level and per-account)
 const DingtalkSharedConfigShape = {
   dmPolicy: DmPolicySchema.optional(),
@@ -36,6 +44,8 @@ const DingtalkSharedConfigShape = {
   groupSessionScope: GroupSessionScopeSchema,
   // 是否解析发送者名称 / Whether to resolve sender names
   resolveSenderNames: z.boolean().optional(),
+  // AI Card 流式响应 / AI Card streaming responses
+  streaming: DingtalkStreamingSchema,
 };
 
 // 单账号配置 / Per-account configuration
