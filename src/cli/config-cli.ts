@@ -430,6 +430,11 @@ export function registerConfigCli(program: Command) {
     .argument("<value>", "Value (JSON5 or raw string)")
     .option("--strict-json", "Strict JSON5 parsing (error instead of raw string fallback)", false)
     .option("--json", "Legacy alias for --strict-json", false)
+    .option(
+      "--no-validate",
+      "Skip schema validation (use when setting fields of a discriminated union incrementally)",
+      false,
+    )
     .action(async (path: string, value: string, opts) => {
       try {
         const parsedPath = parseRequiredPath(path);
@@ -443,8 +448,14 @@ export function registerConfigCli(program: Command) {
         const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
         ensureValidOllamaProviderForApiKeySet(next, parsedPath);
         setAtPath(next, parsedPath, parsedValue);
-        await writeConfigFile(next);
+        const skipValidation = opts.validate === false;
+        await writeConfigFile(next, { skipValidation });
         defaultRuntime.log(info(`Updated ${path}. Restart the gateway to apply.`));
+        if (skipValidation) {
+          defaultRuntime.log(
+            `Validation skipped. Run ${formatCliCommand("openclaw config validate")} when done.`,
+          );
+        }
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

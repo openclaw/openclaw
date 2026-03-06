@@ -131,6 +131,12 @@ export type ConfigWriteOptions = {
    * even if schema/default normalization reintroduces them.
    */
   unsetPaths?: string[][];
+  /**
+   * Skip schema validation before writing. Use when building up a config
+   * object incrementally (e.g. setting discriminated-union fields one at a
+   * time via `config set`).
+   */
+  skipValidation?: boolean;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -1066,18 +1072,24 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
     }
 
-    const validated = validateConfigObjectRawWithPlugins(persistCandidate);
-    if (!validated.ok) {
-      const issue = validated.issues[0];
-      const pathLabel = issue?.path ? issue.path : "<root>";
-      const issueMessage = issue?.message ?? "invalid";
-      throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
-    }
-    if (validated.warnings.length > 0) {
-      const details = validated.warnings
-        .map((warning) => `- ${warning.path}: ${warning.message}`)
-        .join("\n");
-      deps.logger.warn(`Config warnings:\n${details}`);
+    let validatedConfig: OpenClawConfig;
+    if (!options.skipValidation) {
+      const validated = validateConfigObjectRawWithPlugins(persistCandidate);
+      if (!validated.ok) {
+        const issue = validated.issues[0];
+        const pathLabel = issue?.path ? issue.path : "<root>";
+        const issueMessage = issue?.message ?? "invalid";
+        throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
+      }
+      if (validated.warnings.length > 0) {
+        const details = validated.warnings
+          .map((warning) => `- ${warning.path}: ${warning.message}`)
+          .join("\n");
+        deps.logger.warn(`Config warnings:\n${details}`);
+      }
+      validatedConfig = validated.config;
+    } else {
+      validatedConfig = persistCandidate as OpenClawConfig;
     }
 
     // Restore ${VAR} env var references that were resolved during config loading.
@@ -1089,7 +1101,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     // pulling values from included files into the root config on write-back.
     // Apply env restoration to validated.config (which has runtime defaults stripped
     // per issue #6070) rather than the raw caller input.
-    let cfgToWrite = validated.config;
+    let cfgToWrite = validatedConfig;
     try {
       if (deps.fs.existsSync(configPath)) {
         const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");
@@ -1395,5 +1407,6 @@ export async function writeConfigFile(
   await io.writeConfigFile(nextCfg, {
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
+    skipValidation: options.skipValidation,
   });
 }
