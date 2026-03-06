@@ -150,6 +150,15 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toBe("");
     expect(result!.mediaUrl).toBe("https://example.com/img.png");
   });
+
+  it("does not prefix reasoning-prefixed messages", () => {
+    const result = normalizeReplyPayload(
+      { text: "Reasoning:\n_hidden_" },
+      { responsePrefix: "[openclaw]" },
+    );
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("Reasoning:\n_hidden_");
+  });
 });
 
 describe("typing controller", () => {

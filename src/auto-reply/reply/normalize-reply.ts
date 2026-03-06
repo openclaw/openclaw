@@ -15,6 +15,12 @@ import {
 
 export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
 
+const REASONING_PREFIX = "reasoning:";
+
+function isReasoningPrefixedText(text: string): boolean {
+  return text.trimStart().toLowerCase().startsWith(REASONING_PREFIX);
+}
+
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
   /** Context for template variable interpolation in responsePrefix */
@@ -100,6 +106,10 @@ export function normalizeReplyPayload(
     effectivePrefix &&
     text &&
     text.trim() !== HEARTBEAT_TOKEN &&
+    // Preserve reasoning suppression behavior in downstream channel deliverers.
+    // Some channels (e.g. WhatsApp) suppress payloads that start with "Reasoning:",
+    // but adding a prefix would prevent that detection and leak the reasoning block.
+    !isReasoningPrefixedText(text) &&
     !text.startsWith(effectivePrefix)
   ) {
     text = `${effectivePrefix} ${text}`;
