@@ -241,6 +241,7 @@ export function getLogger(): TsLogger<LogObj> {
   if (!cachedLogger || settingsChanged(cachedSettings, settings)) {
     loggingState.cachedLogger = buildLogger(settings);
     loggingState.cachedSettings = settings;
+    loggingState.loggerGeneration++;
   }
   return loggingState.cachedLogger as TsLogger<LogObj>;
 }
@@ -303,6 +304,7 @@ export function setLoggerOverride(settings: LoggerSettings | null) {
   loggingState.cachedLogger = null;
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
+  loggingState.loggerGeneration++;
 }
 
 export function resetLogger() {
@@ -310,6 +312,7 @@ export function resetLogger() {
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
   loggingState.overrideSettings = null;
+  loggingState.loggerGeneration++;
 }
 
 export function registerLogTransport(transport: LogTransport): () => void {
