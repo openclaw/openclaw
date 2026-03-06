@@ -2,6 +2,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type FetchMock, withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(async (params: { url: string; init?: RequestInit; fetchImpl?: typeof fetch }) => {
+    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+    if (!fetchImpl) {
+      throw new Error("fetch is not available");
+    }
+    const response = await fetchImpl(params.url, params.init);
+    return {
+      response,
+      finalUrl: params.url,
+      release: async () => {},
+    };
+  }),
+);
+
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: Parameters<typeof actual.fetchWithSsrFGuard>) =>
+      fetchWithSsrFGuardMock(...args),
+  };
+});
+
 vi.mock("../agents/model-auth.js", async () => {
   const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
   return createModelAuthMockModule();

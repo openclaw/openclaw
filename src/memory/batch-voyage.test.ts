@@ -4,6 +4,30 @@ import type { VoyageBatchOutputLine, VoyageBatchRequest } from "./batch-voyage.j
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(async (params: { url: string; init?: RequestInit; fetchImpl?: typeof fetch }) => {
+    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+    if (!fetchImpl) {
+      throw new Error("fetch is not available");
+    }
+    const response = await fetchImpl(params.url, params.init);
+    return {
+      response,
+      finalUrl: params.url,
+      release: async () => {},
+    };
+  }),
+);
+
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: Parameters<typeof actual.fetchWithSsrFGuard>) =>
+      fetchWithSsrFGuardMock(...args),
+  };
+});
+
 // Mock internal.js if needed, but runWithConcurrency is simple enough to keep real.
 // We DO need to mock retryAsync to avoid actual delays/retries logic complicating tests
 vi.mock("../infra/retry.js", () => ({
