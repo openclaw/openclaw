@@ -118,7 +118,7 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
   isGroup: boolean;
   ctx: MsgContext;
 }): LegacyMainDeliveryRetirement | undefined {
-  const dmScope = params.sessionCfg?.dmScope ?? "main";
+  const dmScope = params.sessionCfg?.dmScope ?? "per-channel-peer";
   if (dmScope === "main" || params.isGroup) {
     return undefined;
   }

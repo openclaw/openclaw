@@ -137,7 +137,7 @@ export function buildAgentPeerSessionKey(params: {
 }): string {
   const peerKind = params.peerKind ?? "direct";
   if (peerKind === "direct") {
-    const dmScope = params.dmScope ?? "main";
+    const dmScope = params.dmScope ?? "per-channel-peer"; // default per-channel-peer prevents cross-channel DM leakage
     let peerId = (params.peerId ?? "").trim();
     const linkedPeerId =
       dmScope === "main"
