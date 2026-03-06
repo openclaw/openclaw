@@ -278,6 +278,7 @@ export async function saveMediaSource(
     const id = ext ? `${baseId}${ext}` : baseId;
     const finalDest = path.join(dir, id);
     await fs.rename(tempDest, finalDest);
+    await fs.chmod(finalDest, MEDIA_FILE_MODE);
     return { id, path: finalDest, size, contentType: mime };
   }
   // local path
@@ -288,6 +289,7 @@ export async function saveMediaSource(
     const id = ext ? `${baseId}${ext}` : baseId;
     const dest = path.join(dir, id);
     await fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE });
+    await fs.chmod(dest, MEDIA_FILE_MODE);
     return { id, path: dest, size: stat.size, contentType: mime };
   } catch (err) {
     if (err instanceof SafeOpenError) {
@@ -327,5 +329,6 @@ export async function saveMediaBuffer(
 
   const dest = path.join(dir, id);
   await fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE });
+  await fs.chmod(dest, MEDIA_FILE_MODE);
   return { id, path: dest, size: buffer.byteLength, contentType: mime };
 }
