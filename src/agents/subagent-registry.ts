@@ -1149,7 +1149,7 @@ export function registerSubagentRun(params: {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
-  role?: string;
+  role?: import("./subagent-roles.js").SubagentRole;
   roleConfig?: import("./subagent-roles.js").SubagentRoleConfig;
 }) {
   const now = Date.now();

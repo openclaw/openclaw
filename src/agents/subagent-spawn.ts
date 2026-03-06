@@ -22,6 +22,7 @@ import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import {
   resolveRoleConfig,
   resolveRoleModel,
+  resolveRoleToolPolicy,
   type SubagentRole,
   type SubagentRoleConfig,
 } from "./subagent-roles.js";
@@ -449,8 +450,12 @@ export async function spawnSubagentDirect(
     };
   }
 
-  if (resolvedModel) {
-    const modelPatchError = await patchChildSession({ model: resolvedModel });
+  // Resolve role configuration BEFORE patching the model
+  const resolvedRoleConfig = resolveRoleConfig(params.role, params.roleConfig);
+  const effectiveModel = resolveRoleModel(resolvedRoleConfig, resolvedModel);
+
+  if (effectiveModel) {
+    const modelPatchError = await patchChildSession({ model: effectiveModel });
     if (modelPatchError) {
       return {
         status: "error",
@@ -506,11 +511,6 @@ export async function spawnSubagentDirect(
     threadBindingReady = true;
   }
   const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
-
-  // Resolve role configuration if specified
-  const resolvedRoleConfig = resolveRoleConfig(params.role, params.roleConfig);
-  const roleModel = resolveRoleModel(resolvedRoleConfig, resolvedModel);
-  const effectiveModel = roleModel ?? resolvedModel;
 
   let childSystemPrompt = buildSubagentSystemPrompt({
     requesterSessionKey,
