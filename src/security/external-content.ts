@@ -118,8 +118,8 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x27e9: ">", // mathematical right angle bracket
   0xfe64: "<", // small less-than sign
   0xfe65: ">", // small greater-than sign
-  0x00ab: "<", // left-pointing double angle quotation mark
-  0x00bb: ">", // right-pointing double angle quotation mark
+  0x00ab: "<", // left-pointing double angle quotation mark «
+  0x00bb: ">", // right-pointing double angle quotation mark »
   0x300a: "<", // left double angle bracket
   0x300b: ">", // right double angle bracket
   0x27ea: "<", // mathematical left double angle bracket
@@ -132,6 +132,22 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x276d: ">", // medium right-pointing angle bracket ornament
   0x276e: "<", // heavy left-pointing angle quotation mark ornament
   0x276f: ">", // heavy right-pointing angle quotation mark ornament
+  0x2770: "<", // heavy left-pointing angle bracket ornament
+  0x2771: ">", // heavy right-pointing angle bracket ornament
+  0x29fc: "<", // left-pointing curved angle bracket
+  0x29fd: ">", // right-pointing curved angle bracket
+  0xfe3f: "<", // presentation form for vertical left angle bracket
+  0xfe40: ">", // presentation form for vertical right angle bracket
+  0x2991: "<", // left angle bracket with dot
+  0x2992: ">", // right angle bracket with dot
+  0x2993: "<", // left arc less-than bracket
+  0x2994: ">", // right arc greater-than bracket
+  0x2995: "<", // double left arc greater-than bracket
+  0x2996: ">", // double right arc less-than bracket
+  0x226a: "<", // much less-than ≪
+  0x226b: ">", // much greater-than ≫
+  0x22d6: "<", // less-than with dot
+  0x22d7: ">", // greater-than with dot
 };
 
 function foldMarkerChar(char: string): string {
@@ -151,7 +167,7 @@ function foldMarkerChar(char: string): string {
 
 function foldMarkerText(input: string): string {
   return input.replace(
-    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F]/g,
+    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F\u2770\u2771\u29FC\u29FD\uFE3F\uFE40\u2991\u2992\u2993\u2994\u2995\u2996\u226A\u226B\u22D6\u22D7]/g,
     (char) => foldMarkerChar(char),
   );
 }

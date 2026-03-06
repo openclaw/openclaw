@@ -204,6 +204,14 @@ describe("external-content security", () => {
         ["\u27EE", "\u27EF"], // flattened parentheses
         ["\u276C", "\u276D"], // medium angle bracket ornaments
         ["\u276E", "\u276F"], // heavy angle quotation ornaments
+        ["\u2770", "\u2771"], // heavy angle bracket ornaments
+        ["\u29FC", "\u29FD"], // curved angle brackets
+        ["\uFE3F", "\uFE40"], // vertical angle brackets
+        ["\u2991", "\u2992"], // angle bracket with dot
+        ["\u2993", "\u2994"], // arc less/greater-than brackets
+        ["\u2995", "\u2996"], // double arc brackets
+        ["\u226A", "\u226B"], // much less/greater-than
+        ["\u22D6", "\u22D7"], // less/greater-than with dot
       ];
 
       for (const [left, right] of bracketPairs) {
