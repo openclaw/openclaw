@@ -572,6 +572,58 @@ describe("runMessageAction context isolation", () => {
     });
   });
 
+  it("ignores non-deliverable tool-context provider hints for multi-target remap", async () => {
+    await withSandbox(async (workspaceDir) => {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "routing-targets.json"),
+        JSON.stringify({
+          groups: {
+            support_pair: {
+              member_handles: ["U11111111", "U22222222"],
+              channels: {
+                slack: "channel:C76543210",
+              },
+            },
+          },
+        }),
+      );
+
+      const cfg = {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+          },
+        },
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await runDrySend({
+        cfg,
+        actionParams: {
+          targets: ["U11111111", "U22222222"],
+          message: "hi",
+        },
+        toolContext: {
+          // Channel IDs can leak into provider hints; they must not be treated as channel aliases.
+          currentChannelProvider: "C12345678",
+        },
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.channel).toBe("slack");
+      expect(result.to).toBe("channel:C76543210");
+    });
+  });
+
   it("rejects explicit channel ids for multi-target remap when channel is unknown", async () => {
     await withSandbox(async (workspaceDir) => {
       await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });

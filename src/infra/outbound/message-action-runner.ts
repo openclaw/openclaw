@@ -379,12 +379,18 @@ async function normalizeTargetsParamForAction(params: {
         `Unknown channel "${explicitChannelRaw}" for multi-target ${params.action}. Provide a configured channel or use target for one destination.`,
       );
     }
-    let channelHint =
-      explicitChannelHint ?? normalizeMessageChannel(params.toolContext?.currentChannelProvider);
+    const normalizedToolContextChannel = normalizeMessageChannel(
+      params.toolContext?.currentChannelProvider,
+    );
+    const toolContextChannelHint =
+      normalizedToolContextChannel && isDeliverableMessageChannel(normalizedToolContextChannel)
+        ? normalizedToolContextChannel
+        : undefined;
+    let channelHint = explicitChannelHint ?? toolContextChannelHint;
     if (!channelHint) {
       const inferred = await resolveMessageChannelSelection({
         cfg: params.cfg,
-        fallbackChannel: params.toolContext?.currentChannelProvider,
+        fallbackChannel: toolContextChannelHint,
       });
       channelHint = inferred.channel;
       if (inferred.source === "tool-context-fallback") {
