@@ -13,7 +13,7 @@ import {
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
-import { loadAgents } from "./controllers/agents.ts";
+import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
@@ -62,10 +62,14 @@ type GatewayHost = {
   agentsLoading: boolean;
   agentsList: AgentsListResult | null;
   agentsError: string | null;
+  toolsCatalogLoading: boolean;
+  toolsCatalogError: string | null;
+  toolsCatalogResult: import("./types.ts").ToolsCatalogResult | null;
   debugHealth: HealthSnapshot | null;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
+  serverVersion: string | null;
   sessionKey: string;
   chatRunId: string | null;
   refreshSessionsAfterChat: Set<string>;
@@ -80,6 +84,33 @@ type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
   scope?: string;
 };
+
+export function resolveControlUiClientVersion(params: {
+  gatewayUrl: string;
+  serverVersion: string | null;
+  pageUrl?: string;
+}): string | undefined {
+  const serverVersion = params.serverVersion?.trim();
+  if (!serverVersion) {
+    return undefined;
+  }
+  const pageUrl =
+    params.pageUrl ?? (typeof window === "undefined" ? undefined : window.location.href);
+  if (!pageUrl) {
+    return undefined;
+  }
+  try {
+    const page = new URL(pageUrl);
+    const gateway = new URL(params.gatewayUrl, page);
+    const allowedProtocols = new Set(["ws:", "wss:", "http:", "https:"]);
+    if (!allowedProtocols.has(gateway.protocol) || gateway.host !== page.host) {
+      return undefined;
+    }
+    return serverVersion;
+  } catch {
+    return undefined;
+  }
+}
 
 function normalizeSessionKeyForDefaults(
   value: string | undefined,
@@ -142,11 +173,16 @@ export function connectGateway(host: GatewayHost) {
   host.execApprovalError = null;
 
   const previousClient = host.client;
+  const clientVersion = resolveControlUiClientVersion({
+    gatewayUrl: host.settings.gatewayUrl,
+    serverVersion: host.serverVersion,
+  });
   const client = new GatewayBrowserClient({
     url: host.settings.gatewayUrl,
     token: host.settings.token.trim() ? host.settings.token : undefined,
     password: host.password.trim() ? host.password : undefined,
     clientName: "openclaw-control-ui",
+    clientVersion,
     mode: "webchat",
     instanceId: host.clientInstanceId,
     onHello: (hello) => {
@@ -166,6 +202,7 @@ export function connectGateway(host: GatewayHost) {
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void loadAssistantIdentity(host as unknown as OpenClawApp);
       void loadAgents(host as unknown as OpenClawApp);
+      void loadToolsCatalog(host as unknown as OpenClawApp);
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);

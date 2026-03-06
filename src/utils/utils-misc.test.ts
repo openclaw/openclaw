@@ -58,16 +58,20 @@ describe("isReasoningTagProvider", () => {
       value: "Ollama",
       expected: false,
     },
+    {
+      name: "returns true for google (gemini-api-key auth provider)",
+      value: "google",
+      expected: true,
+    },
+    {
+      name: "returns true for Google (case-insensitive)",
+      value: "Google",
+      expected: true,
+    },
     { name: "returns true for google-gemini-cli", value: "google-gemini-cli", expected: true },
     {
       name: "returns true for google-generative-ai",
       value: "google-generative-ai",
-      expected: true,
-    },
-    { name: "returns true for google-antigravity", value: "google-antigravity", expected: true },
-    {
-      name: "returns true for google-antigravity model suffixes",
-      value: "google-antigravity/gemini-3",
       expected: true,
     },
     { name: "returns true for minimax", value: "minimax", expected: true },

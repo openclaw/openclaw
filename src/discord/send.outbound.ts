@@ -4,7 +4,7 @@ import path from "node:path";
 import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import type { RetryConfig } from "../infra/retry.js";
@@ -12,9 +12,11 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { maxBytesForKind } from "../media/constants.js";
 import { extensionForMime } from "../media/mime.js";
+import { unlinkIfExists } from "../media/temp-files.js";
 import type { PollInput } from "../polls.js";
 import { loadWebMediaRaw } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
+import { rewriteDiscordKnownMentions } from "./mentions.js";
 import {
   buildDiscordMessagePayload,
   buildDiscordSendError,
@@ -42,6 +44,7 @@ import {
 } from "./voice-message.js";
 
 type DiscordSendOpts = {
+  cfg?: OpenClawConfig;
   token?: string;
   accountId?: string;
   mediaUrl?: string;
@@ -119,9 +122,9 @@ async function resolveDiscordSendTarget(
   to: string,
   opts: DiscordSendOpts,
 ): Promise<{ rest: RequestClient; request: DiscordClientRequest; channelId: string }> {
-  const cfg = loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   const { rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId);
+  const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   return { rest, request, channelId };
 }
@@ -131,7 +134,7 @@ export async function sendMessageDiscord(
   text: string,
   opts: DiscordSendOpts = {},
 ): Promise<DiscordSendResult> {
-  const cfg = loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   const accountInfo = resolveDiscordAccount({
     cfg,
     accountId: opts.accountId,
@@ -143,8 +146,11 @@ export async function sendMessageDiscord(
   });
   const chunkMode = resolveChunkMode(cfg, "discord", accountInfo.accountId);
   const textWithTables = convertMarkdownTables(text ?? "", tableMode);
+  const textWithMentions = rewriteDiscordKnownMentions(textWithTables, {
+    accountId: accountInfo.accountId,
+  });
   const { token, rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId);
+  const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   // Forum/Media channels reject POST /messages; auto-create a thread post instead.
@@ -152,7 +158,7 @@ export async function sendMessageDiscord(
 
   if (isForumLikeType(channelType)) {
     const threadName = deriveForumThreadName(textWithTables);
-    const chunks = buildDiscordTextChunks(textWithTables, {
+    const chunks = buildDiscordTextChunks(textWithMentions, {
       maxLinesPerMessage: accountInfo.config.maxLinesPerMessage,
       chunkMode,
     });
@@ -262,7 +268,7 @@ export async function sendMessageDiscord(
       result = await sendDiscordMedia(
         rest,
         channelId,
-        textWithTables,
+        textWithMentions,
         opts.mediaUrl,
         opts.mediaLocalRoots,
         opts.replyTo,
@@ -277,7 +283,7 @@ export async function sendMessageDiscord(
       result = await sendDiscordText(
         rest,
         channelId,
-        textWithTables,
+        textWithMentions,
         opts.replyTo,
         request,
         accountInfo.config.maxLinesPerMessage,
@@ -305,6 +311,7 @@ export async function sendMessageDiscord(
 }
 
 type DiscordWebhookSendOpts = {
+  cfg?: OpenClawConfig;
   webhookId: string;
   webhookToken: string;
   accountId?: string;
@@ -341,6 +348,9 @@ export async function sendWebhookMessageDiscord(
     throw new Error("Discord webhook id/token are required");
   }
 
+  const rewrittenText = rewriteDiscordKnownMentions(text, {
+    accountId: opts.accountId,
+  });
   const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
 
@@ -357,7 +367,7 @@ export async function sendWebhookMessageDiscord(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        content: text,
+        content: rewrittenText,
         username: opts.username?.trim() || undefined,
         avatar_url: opts.avatarUrl?.trim() || undefined,
         ...(messageReference ? { message_reference: messageReference } : {}),
@@ -377,7 +387,7 @@ export async function sendWebhookMessageDiscord(
   };
   try {
     const account = resolveDiscordAccount({
-      cfg: loadConfig(),
+      cfg: opts.cfg ?? loadConfig(),
       accountId: opts.accountId,
     });
     recordChannelActivity({
@@ -405,12 +415,17 @@ export async function sendStickerDiscord(
 ): Promise<DiscordSendResult> {
   const { rest, request, channelId } = await resolveDiscordSendTarget(to, opts);
   const content = opts.content?.trim();
+  const rewrittenContent = content
+    ? rewriteDiscordKnownMentions(content, {
+        accountId: opts.accountId,
+      })
+    : undefined;
   const stickers = normalizeStickerIds(stickerIds);
   const res = (await request(
     () =>
       rest.post(Routes.channelMessages(channelId), {
         body: {
-          content: content || undefined,
+          content: rewrittenContent || undefined,
           sticker_ids: stickers,
         },
       }) as Promise<{ id: string; channel_id: string }>,
@@ -426,6 +441,11 @@ export async function sendPollDiscord(
 ): Promise<DiscordSendResult> {
   const { rest, request, channelId } = await resolveDiscordSendTarget(to, opts);
   const content = opts.content?.trim();
+  const rewrittenContent = content
+    ? rewriteDiscordKnownMentions(content, {
+        accountId: opts.accountId,
+      })
+    : undefined;
   if (poll.durationSeconds !== undefined) {
     throw new Error("Discord polls do not support durationSeconds; use durationHours");
   }
@@ -435,7 +455,7 @@ export async function sendPollDiscord(
     () =>
       rest.post(Routes.channelMessages(channelId), {
         body: {
-          content: content || undefined,
+          content: rewrittenContent || undefined,
           poll: payload,
           ...(flags ? { flags } : {}),
         },
@@ -446,6 +466,7 @@ export async function sendPollDiscord(
 }
 
 type VoiceMessageOpts = {
+  cfg?: OpenClawConfig;
   token?: string;
   accountId?: string;
   verbose?: boolean;
@@ -491,7 +512,7 @@ export async function sendVoiceMessageDiscord(
   let channelId: string | undefined;
 
   try {
-    const cfg = loadConfig();
+    const cfg = opts.cfg ?? loadConfig();
     const accountInfo = resolveDiscordAccount({
       cfg,
       accountId: opts.accountId,
@@ -500,7 +521,7 @@ export async function sendVoiceMessageDiscord(
     token = client.token;
     rest = client.rest;
     const request = client.request;
-    const recipient = await parseAndResolveRecipient(to, opts.accountId);
+    const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
     channelId = (await resolveChannelId(rest, recipient, request)).channelId;
 
     // Convert to OGG/Opus if needed
@@ -523,6 +544,7 @@ export async function sendVoiceMessageDiscord(
       opts.replyTo,
       request,
       opts.silent,
+      token,
     );
 
     recordChannelActivity({
@@ -543,18 +565,7 @@ export async function sendVoiceMessageDiscord(
     }
     throw err;
   } finally {
-    // Clean up temporary OGG file if we created one
-    if (oggCleanup && oggPath) {
-      try {
-        await fs.unlink(oggPath);
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
-    try {
-      await fs.unlink(localInputPath);
-    } catch {
-      // Ignore cleanup errors
-    }
+    await unlinkIfExists(oggCleanup ? oggPath : null);
+    await unlinkIfExists(localInputPath);
   }
 }

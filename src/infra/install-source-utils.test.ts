@@ -56,6 +56,31 @@ async function runPack(spec: string, cwd: string, timeoutMs = 1000) {
   });
 }
 
+async function expectPackFallsBackToDetectedArchive(params: { stdout: string }) {
+  const cwd = await createTempDir("openclaw-install-source-utils-");
+  const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
+  await fs.writeFile(archivePath, "", "utf-8");
+  runCommandWithTimeoutMock.mockResolvedValue({
+    stdout: params.stdout,
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+  });
+
+  const result = await packNpmSpecToArchive({
+    spec: "openclaw-plugin@1.2.3",
+    timeoutMs: 5000,
+    cwd,
+  });
+
+  expect(result).toEqual({
+    ok: true,
+    archivePath,
+    metadata: {},
+  });
+}
+
 beforeEach(() => {
   runCommandWithTimeoutMock.mockClear();
 });
@@ -123,6 +148,8 @@ describe("resolveArchiveSourcePath", () => {
 describe("packNpmSpecToArchive", () => {
   it("packs spec and returns archive path using JSON output metadata", async () => {
     const cwd = await createFixtureDir();
+    const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
+    await fs.writeFile(archivePath, "", "utf-8");
     mockPackCommandResult({
       stdout: JSON.stringify([
         {
@@ -140,7 +167,7 @@ describe("packNpmSpecToArchive", () => {
 
     expect(result).toEqual({
       ok: true,
-      archivePath: path.join(cwd, "openclaw-plugin-1.2.3.tgz"),
+      archivePath,
       metadata: {
         name: "openclaw-plugin",
         version: "1.2.3",
@@ -160,6 +187,8 @@ describe("packNpmSpecToArchive", () => {
 
   it("falls back to parsing final stdout line when npm json output is unavailable", async () => {
     const cwd = await createFixtureDir();
+    const expectedArchivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
+    await fs.writeFile(expectedArchivePath, "", "utf-8");
     mockPackCommandResult({
       stdout: "npm notice created package\nopenclaw-plugin-1.2.3.tgz\n",
     });
@@ -168,7 +197,7 @@ describe("packNpmSpecToArchive", () => {
 
     expect(result).toEqual({
       ok: true,
-      archivePath: path.join(cwd, "openclaw-plugin-1.2.3.tgz"),
+      archivePath: expectedArchivePath,
       metadata: {},
     });
   });
@@ -190,6 +219,32 @@ describe("packNpmSpecToArchive", () => {
     }
   });
 
+  it("falls back to archive detected in cwd when npm pack stdout is empty", async () => {
+    await expectPackFallsBackToDetectedArchive({ stdout: " \n\n" });
+  });
+
+  it("falls back to archive detected in cwd when stdout does not contain a tgz", async () => {
+    await expectPackFallsBackToDetectedArchive({ stdout: "npm pack completed successfully\n" });
+  });
+
+  it("returns friendly error for 404 (package not on npm)", async () => {
+    const cwd = await createFixtureDir();
+    mockPackCommandResult({
+      stdout: "",
+      stderr: "npm error code E404\nnpm error 404  '@openclaw/whatsapp@*' is not in this registry.",
+      code: 1,
+    });
+
+    const result = await runPack("@openclaw/whatsapp", cwd);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("Package not found on npm");
+      expect(result.error).toContain("@openclaw/whatsapp");
+      expect(result.error).toContain("docs.openclaw.ai/tools/plugin");
+    }
+  });
+
   it("returns explicit error when npm pack produces no archive name", async () => {
     const cwd = await createFixtureDir();
     mockPackCommandResult({
@@ -206,6 +261,7 @@ describe("packNpmSpecToArchive", () => {
 
   it("parses scoped metadata from id-only json output even with npm notice prefix", async () => {
     const cwd = await createFixtureDir();
+    await fs.writeFile(path.join(cwd, "openclaw-plugin-demo-2.0.0.tgz"), "", "utf-8");
     mockPackCommandResult({
       stdout:
         "npm notice creating package\n" +

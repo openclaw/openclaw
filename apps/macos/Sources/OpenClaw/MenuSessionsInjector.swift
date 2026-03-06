@@ -446,6 +446,8 @@ extension MenuSessionsInjector {
 
     private func buildUsageOverflowMenu(rows: [UsageRow], width: CGFloat) -> NSMenu {
         let menu = NSMenu()
+        // Keep submenu delegate nil: reusing the status-menu delegate here causes
+        // recursive reinjection whenever this submenu is opened.
         for row in rows {
             let item = NSMenuItem()
             item.tag = self.tag
@@ -493,7 +495,6 @@ extension MenuSessionsInjector {
         guard !summary.daily.isEmpty else { return nil }
 
         let menu = NSMenu()
-        menu.delegate = self
 
         let chartView = CostUsageHistoryMenuView(summary: summary, width: width)
         let hosting = NSHostingView(rootView: AnyView(chartView))
@@ -1224,6 +1225,12 @@ extension MenuSessionsInjector {
         self.cachedUsageSummary = summary
         self.cachedUsageErrorText = errorText
         self.usageCacheUpdatedAt = Date()
+    }
+
+    func setTestingCostUsageSummary(_ summary: GatewayCostUsageSummary?, errorText: String? = nil) {
+        self.cachedCostSummary = summary
+        self.cachedCostErrorText = errorText
+        self.costCacheUpdatedAt = Date()
     }
 
     func injectForTesting(into menu: NSMenu) {

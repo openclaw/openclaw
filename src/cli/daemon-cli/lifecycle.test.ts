@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type RestartHealthSnapshot = {
   healthy: boolean;
@@ -41,6 +41,8 @@ vi.mock("../../daemon/service.js", () => ({
 }));
 
 vi.mock("./restart-health.js", () => ({
+  DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
+  DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
   waitForGatewayHealthyRestart,
   terminateStaleGatewayPids,
   renderRestartDiagnostics,
@@ -54,8 +56,13 @@ vi.mock("./lifecycle-core.js", () => ({
 }));
 
 describe("runDaemonRestart health checks", () => {
+  let runDaemonRestart: (opts?: { json?: boolean }) => Promise<boolean>;
+
+  beforeAll(async () => {
+    ({ runDaemonRestart } = await import("./lifecycle.js"));
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     service.readCommand.mockClear();
     service.restart.mockClear();
     runServiceRestart.mockClear();
@@ -102,7 +109,6 @@ describe("runDaemonRestart health checks", () => {
     waitForGatewayHealthyRestart.mockResolvedValueOnce(unhealthy).mockResolvedValueOnce(healthy);
     terminateStaleGatewayPids.mockResolvedValue([1993]);
 
-    const { runDaemonRestart } = await import("./lifecycle.js");
     const result = await runDaemonRestart({ json: true });
 
     expect(result).toBe(true);
@@ -120,10 +126,9 @@ describe("runDaemonRestart health checks", () => {
     };
     waitForGatewayHealthyRestart.mockResolvedValue(unhealthy);
 
-    const { runDaemonRestart } = await import("./lifecycle.js");
-
     await expect(runDaemonRestart({ json: true })).rejects.toMatchObject({
-      message: "Gateway restart failed health checks.",
+      message: "Gateway restart timed out after 60s waiting for health checks.",
+      hints: ["openclaw gateway status --deep", "openclaw doctor"],
     });
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);

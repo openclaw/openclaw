@@ -21,6 +21,7 @@ import { theme } from "../terminal/theme.js";
 import { formatHealthChannelLines, type HealthSummary } from "./health.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
 import { statusAllCommand } from "./status-all.js";
+import { groupChannelIssuesByChannel } from "./status-all/channel-issues.js";
 import { formatGatewayAuthUsed } from "./status-all/format.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 import {
@@ -29,13 +30,39 @@ import {
   formatTokensCompact,
   shortenText,
 } from "./status.format.js";
-import { resolveGatewayProbeAuth } from "./status.gateway-probe.js";
 import { scanStatus } from "./status.scan.js";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
   resolveUpdateAvailability,
 } from "./status.update.js";
+
+function resolvePairingRecoveryContext(params: {
+  error?: string | null;
+  closeReason?: string | null;
+}): { requestId: string | null } | null {
+  const sanitizeRequestId = (value: string): string | null => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    // Keep CLI guidance injection-safe: allow only compact id characters.
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(trimmed)) {
+      return null;
+    }
+    return trimmed;
+  };
+  const source = [params.error, params.closeReason]
+    .filter((part) => typeof part === "string" && part.trim().length > 0)
+    .join(" ");
+  if (!source || !/pairing required/i.test(source)) {
+    return null;
+  }
+  const requestIdMatch = source.match(/requestId:\s*([^\s)]+)/i);
+  const requestId =
+    requestIdMatch && requestIdMatch[1] ? sanitizeRequestId(requestIdMatch[1]) : null;
+  return { requestId: requestId || null };
+}
 
 export async function statusCommand(
   opts: {
@@ -57,6 +84,29 @@ export async function statusCommand(
     { json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all },
     runtime,
   );
+  const securityAudit = opts.json
+    ? await runSecurityAudit({
+        config: scan.cfg,
+        sourceConfig: scan.sourceConfig,
+        deep: false,
+        includeFilesystem: true,
+        includeChannelSecurity: true,
+      })
+    : await withProgress(
+        {
+          label: "Running security audit…",
+          indeterminate: true,
+          enabled: true,
+        },
+        async () =>
+          await runSecurityAudit({
+            config: scan.cfg,
+            sourceConfig: scan.sourceConfig,
+            deep: false,
+            includeFilesystem: true,
+            includeChannelSecurity: true,
+          }),
+      );
   const {
     cfg,
     osSummary,
@@ -67,6 +117,8 @@ export async function statusCommand(
     gatewayConnection,
     remoteUrlMissing,
     gatewayMode,
+    gatewayProbeAuth,
+    gatewayProbeAuthWarning,
     gatewayProbe,
     gatewayReachable,
     gatewaySelf,
@@ -74,24 +126,10 @@ export async function statusCommand(
     agentStatus,
     channels,
     summary,
+    secretDiagnostics,
     memory,
     memoryPlugin,
   } = scan;
-
-  const securityAudit = await withProgress(
-    {
-      label: "Running security audit…",
-      indeterminate: true,
-      enabled: opts.json !== true,
-    },
-    async () =>
-      await runSecurityAudit({
-        config: cfg,
-        deep: false,
-        includeFilesystem: true,
-        includeChannelSecurity: true,
-      }),
-  );
 
   const usage = opts.usage
     ? await withProgress(
@@ -159,11 +197,13 @@ export async function statusCommand(
             connectLatencyMs: gatewayProbe?.connectLatencyMs ?? null,
             self: gatewaySelf,
             error: gatewayProbe?.error ?? null,
+            authWarning: gatewayProbeAuthWarning ?? null,
           },
           gatewayService: daemon,
           nodeService: nodeDaemon,
           agents: agentStatus,
           securityAudit,
+          secretDiagnostics,
           ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
         },
         null,
@@ -188,6 +228,14 @@ export async function statusCommand(
   }
 
   const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+
+  if (secretDiagnostics.length > 0) {
+    runtime.log(theme.warn("Secret diagnostics:"));
+    for (const entry of secretDiagnostics) {
+      runtime.log(`- ${entry}`);
+    }
+    runtime.log("");
+  }
 
   const dashboard = (() => {
     const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
@@ -214,7 +262,7 @@ export async function statusCommand(
         : warn(gatewayProbe?.error ? `unreachable (${gatewayProbe.error})` : "unreachable");
     const auth =
       gatewayReachable && !remoteUrlMissing
-        ? ` · auth ${formatGatewayAuthUsed(resolveGatewayProbeAuth(cfg))}`
+        ? ` · auth ${formatGatewayAuthUsed(gatewayProbeAuth)}`
         : "";
     const self =
       gatewaySelf?.host || gatewaySelf?.version || gatewaySelf?.platform
@@ -230,12 +278,16 @@ export async function statusCommand(
     const suffix = self ? ` · ${self}` : "";
     return `${gatewayMode} · ${target} · ${reach}${auth}${suffix}`;
   })();
+  const pairingRecovery = resolvePairingRecoveryContext({
+    error: gatewayProbe?.error ?? null,
+    closeReason: gatewayProbe?.close?.reason ?? null,
+  });
 
   const agentsValue = (() => {
     const pending =
       agentStatus.bootstrapPendingCount > 0
-        ? `${agentStatus.bootstrapPendingCount} bootstrapping`
-        : "no bootstraps";
+        ? `${agentStatus.bootstrapPendingCount} bootstrap file${agentStatus.bootstrapPendingCount === 1 ? "" : "s"} present`
+        : "no bootstrap files";
     const def = agentStatus.agents.find((a) => a.id === agentStatus.defaultId);
     const defActive = def?.lastActiveAgeMs != null ? formatTimeAgo(def.lastActiveAgeMs) : "unknown";
     const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
@@ -371,6 +423,9 @@ export async function statusCommand(
       Value: updateAvailability.available ? warn(`available · ${updateLine}`) : updateLine,
     },
     { Item: "Gateway", Value: gatewayValue },
+    ...(gatewayProbeAuthWarning
+      ? [{ Item: "Gateway auth warning", Value: warn(gatewayProbeAuthWarning) }]
+      : []),
     { Item: "Gateway service", Value: daemonValue },
     { Item: "Node service", Value: nodeDaemonValue },
     { Item: "Agents", Value: agentsValue },
@@ -398,6 +453,20 @@ export async function statusCommand(
       rows: overviewRows,
     }).trimEnd(),
   );
+
+  if (pairingRecovery) {
+    runtime.log("");
+    runtime.log(theme.warn("Gateway pairing approval required."));
+    if (pairingRecovery.requestId) {
+      runtime.log(
+        theme.muted(
+          `Recovery: ${formatCliCommand(`openclaw devices approve ${pairingRecovery.requestId}`)}`,
+        ),
+      );
+    }
+    runtime.log(theme.muted(`Fallback: ${formatCliCommand("openclaw devices approve --latest")}`));
+    runtime.log(theme.muted(`Inspect: ${formatCliCommand("openclaw devices list")}`));
+  }
 
   runtime.log("");
   runtime.log(theme.heading("Security audit"));
@@ -447,19 +516,7 @@ export async function statusCommand(
 
   runtime.log("");
   runtime.log(theme.heading("Channels"));
-  const channelIssuesByChannel = (() => {
-    const map = new Map<string, typeof channelIssues>();
-    for (const issue of channelIssues) {
-      const key = issue.channel;
-      const list = map.get(key);
-      if (list) {
-        list.push(issue);
-      } else {
-        map.set(key, [issue]);
-      }
-    }
-    return map;
-  })();
+  const channelIssuesByChannel = groupChannelIssuesByChannel(channelIssues);
   runtime.log(
     renderTable({
       width: tableWidth,

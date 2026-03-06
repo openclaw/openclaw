@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "../config/config.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -44,15 +45,15 @@ async function launchctlGetenv(name: string): Promise<string | undefined> {
 }
 
 function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
-  const localToken =
-    typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway?.auth?.token.trim() : "";
-  const localPassword =
-    typeof cfg.gateway?.auth?.password === "string" ? cfg.gateway?.auth?.password.trim() : "";
-  const remoteToken =
-    typeof cfg.gateway?.remote?.token === "string" ? cfg.gateway?.remote?.token.trim() : "";
-  const remotePassword =
-    typeof cfg.gateway?.remote?.password === "string" ? cfg.gateway?.remote?.password.trim() : "";
-  return Boolean(localToken || localPassword || remoteToken || remotePassword);
+  const localPassword = cfg.gateway?.auth?.password;
+  const remoteToken = cfg.gateway?.remote?.token;
+  const remotePassword = cfg.gateway?.remote?.password;
+  return Boolean(
+    hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults) ||
+    hasConfiguredSecretInput(localPassword, cfg.secrets?.defaults) ||
+    hasConfiguredSecretInput(remoteToken, cfg.secrets?.defaults) ||
+    hasConfiguredSecretInput(remotePassword, cfg.secrets?.defaults),
+  );
 }
 
 export async function noteMacLaunchctlGatewayEnvOverrides(
@@ -139,4 +140,82 @@ export function noteDeprecatedLegacyEnvVars(
     }),
   ];
   (deps?.noteFn ?? note)(lines.join("\n"), "Environment");
+}
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isTmpCompileCachePath(cachePath: string): boolean {
+  const normalized = cachePath.trim().replace(/\/+$/, "");
+  return (
+    normalized === "/tmp" ||
+    normalized.startsWith("/tmp/") ||
+    normalized === "/private/tmp" ||
+    normalized.startsWith("/private/tmp/")
+  );
+}
+
+export function noteStartupOptimizationHints(
+  env: NodeJS.ProcessEnv = process.env,
+  deps?: {
+    platform?: NodeJS.Platform;
+    arch?: string;
+    totalMemBytes?: number;
+    noteFn?: typeof note;
+  },
+) {
+  const platform = deps?.platform ?? process.platform;
+  if (platform === "win32") {
+    return;
+  }
+  const arch = deps?.arch ?? os.arch();
+  const totalMemBytes = deps?.totalMemBytes ?? os.totalmem();
+  const isArmHost = arch === "arm" || arch === "arm64";
+  const isLowMemoryLinux =
+    platform === "linux" && totalMemBytes > 0 && totalMemBytes <= 8 * 1024 ** 3;
+  const isStartupTuneTarget = platform === "linux" && (isArmHost || isLowMemoryLinux);
+  if (!isStartupTuneTarget) {
+    return;
+  }
+
+  const noteFn = deps?.noteFn ?? note;
+  const compileCache = env.NODE_COMPILE_CACHE?.trim() ?? "";
+  const disableCompileCache = env.NODE_DISABLE_COMPILE_CACHE?.trim() ?? "";
+  const noRespawn = env.OPENCLAW_NO_RESPAWN?.trim() ?? "";
+  const lines: string[] = [];
+
+  if (!compileCache) {
+    lines.push(
+      "- NODE_COMPILE_CACHE is not set; repeated CLI runs can be slower on small hosts (Pi/VM).",
+    );
+  } else if (isTmpCompileCachePath(compileCache)) {
+    lines.push(
+      "- NODE_COMPILE_CACHE points to /tmp; use /var/tmp so cache survives reboots and warms startup reliably.",
+    );
+  }
+
+  if (isTruthyEnvValue(disableCompileCache)) {
+    lines.push("- NODE_DISABLE_COMPILE_CACHE is set; startup compile cache is disabled.");
+  }
+
+  if (noRespawn !== "1") {
+    lines.push(
+      "- OPENCLAW_NO_RESPAWN is not set to 1; set it to avoid extra startup overhead from self-respawn.",
+    );
+  }
+
+  if (lines.length === 0) {
+    return;
+  }
+
+  const suggestions = [
+    "- Suggested env for low-power hosts:",
+    "  export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache",
+    "  mkdir -p /var/tmp/openclaw-compile-cache",
+    "  export OPENCLAW_NO_RESPAWN=1",
+    isTruthyEnvValue(disableCompileCache) ? "  unset NODE_DISABLE_COMPILE_CACHE" : undefined,
+  ].filter((line): line is string => Boolean(line));
+
+  noteFn([...lines, ...suggestions].join("\n"), "Startup optimization");
 }

@@ -21,6 +21,19 @@ import os
 import sys
 from pathlib import Path
 
+SUPPORTED_ASPECT_RATIOS = [
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
+]
+
 
 def get_api_key(provided_key: str | None) -> str | None:
     """Get API key from argument first, then environment."""
@@ -55,6 +68,12 @@ def main():
         choices=["1K", "2K", "4K"],
         default="1K",
         help="Output resolution: 1K (default), 2K, or 4K"
+    )
+    parser.add_argument(
+        "--aspect-ratio", "-a",
+        choices=SUPPORTED_ASPECT_RATIOS,
+        default=None,
+        help=f"Output aspect ratio (default: model decides). Options: {', '.join(SUPPORTED_ASPECT_RATIOS)}"
     )
     parser.add_argument(
         "--api-key", "-k",
@@ -95,12 +114,13 @@ def main():
         max_input_dim = 0
         for img_path in args.input_images:
             try:
-                img = PILImage.open(img_path)
-                input_images.append(img)
+                with PILImage.open(img_path) as img:
+                    copied = img.copy()
+                    width, height = copied.size
+                input_images.append(copied)
                 print(f"Loaded input image: {img_path}")
 
                 # Track largest dimension for auto-resolution
-                width, height = img.size
                 max_input_dim = max(max_input_dim, width, height)
             except Exception as e:
                 print(f"Error loading input image '{img_path}': {e}", file=sys.stderr)
@@ -126,14 +146,17 @@ def main():
         print(f"Generating image with resolution {output_resolution}...")
 
     try:
+        # Build image config with optional aspect ratio
+        image_cfg_kwargs = {"image_size": output_resolution}
+        if args.aspect_ratio:
+            image_cfg_kwargs["aspect_ratio"] = args.aspect_ratio
+
         response = client.models.generate_content(
             model="gemini-3-pro-image-preview",
             contents=contents,
             config=types.GenerateContentConfig(
                 response_modalities=["TEXT", "IMAGE"],
-                image_config=types.ImageConfig(
-                    image_size=output_resolution
-                )
+                image_config=types.ImageConfig(**image_cfg_kwargs)
             )
         )
 

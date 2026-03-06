@@ -1,5 +1,5 @@
 export type GatewayServiceRuntime = {
-  status?: "running" | "stopped" | "unknown";
+  status?: string;
   state?: string;
   subState?: string;
   pid?: number;

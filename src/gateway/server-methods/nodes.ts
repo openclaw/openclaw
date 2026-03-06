@@ -14,6 +14,11 @@ import {
   sendApnsAlert,
   sendApnsBackgroundWake,
 } from "../../infra/push-apns.js";
+import {
+  buildCanvasScopedHostUrl,
+  CANVAS_CAPABILITY_TTL_MS,
+  mintCanvasCapabilityToken,
+} from "../canvas-capability.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import {
@@ -558,6 +563,51 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
     });
   },
+  "node.canvas.capability.refresh": async ({ params, respond, client }) => {
+    if (!validateNodeListParams(params)) {
+      respondInvalidParams({
+        respond,
+        method: "node.canvas.capability.refresh",
+        validator: validateNodeListParams,
+      });
+      return;
+    }
+    const baseCanvasHostUrl = client?.canvasHostUrl?.trim() ?? "";
+    if (!baseCanvasHostUrl) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "canvas host unavailable for this node session"),
+      );
+      return;
+    }
+
+    const canvasCapability = mintCanvasCapabilityToken();
+    const canvasCapabilityExpiresAtMs = Date.now() + CANVAS_CAPABILITY_TTL_MS;
+    const scopedCanvasHostUrl = buildCanvasScopedHostUrl(baseCanvasHostUrl, canvasCapability);
+    if (!scopedCanvasHostUrl) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "failed to mint scoped canvas host URL"),
+      );
+      return;
+    }
+
+    if (client) {
+      client.canvasCapability = canvasCapability;
+      client.canvasCapabilityExpiresAtMs = canvasCapabilityExpiresAtMs;
+    }
+    respond(
+      true,
+      {
+        canvasCapability,
+        canvasCapabilityExpiresAtMs,
+        canvasHostUrl: scopedCanvasHostUrl,
+      },
+      undefined,
+    );
+  },
   "node.invoke": async ({ params, respond, context, client, req }) => {
     if (!validateNodeInvokeParams(params)) {
       respondInvalidParams({
@@ -687,16 +737,18 @@ export const nodeHandlers: GatewayRequestHandlers = {
         allowlist,
       });
       if (!allowed.ok) {
+        const hint = buildNodeCommandRejectionHint(allowed.reason, command, nodeSession);
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "node command not allowed", {
+          errorShape(ErrorCodes.INVALID_REQUEST, hint, {
             details: { reason: allowed.reason, command },
           }),
         );
         return;
       }
       const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
+        nodeId,
         command,
         rawParams: p.params,
         client,
@@ -784,3 +836,21 @@ export const nodeHandlers: GatewayRequestHandlers = {
     });
   },
 };
+
+function buildNodeCommandRejectionHint(
+  reason: string,
+  command: string,
+  node: { platform?: string } | undefined,
+): string {
+  const platform = node?.platform ?? "unknown";
+  if (reason === "command not declared by node") {
+    return `node command not allowed: the node (platform: ${platform}) does not support "${command}"`;
+  }
+  if (reason === "command not allowlisted") {
+    return `node command not allowed: "${command}" is not in the allowlist for platform "${platform}"`;
+  }
+  if (reason === "node did not declare commands") {
+    return `node command not allowed: the node did not declare any supported commands`;
+  }
+  return `node command not allowed: ${reason}`;
+}

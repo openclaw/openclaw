@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { getReplyFromConfig } from "../../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import type { sendMessageWhatsApp } from "../outbound.js";
 
 const state = vi.hoisted(() => ({
@@ -15,6 +16,10 @@ const state = vi.hoisted(() => ({
     idleExpiresAt: null as number | null,
   },
   events: [] as unknown[],
+  loggerInfoCalls: [] as unknown[][],
+  loggerWarnCalls: [] as unknown[][],
+  heartbeatInfoLogs: [] as string[],
+  heartbeatWarnLogs: [] as string[],
 }));
 
 vi.mock("../../agents/current-time.js", () => ({
@@ -64,15 +69,15 @@ vi.mock("../../infra/heartbeat-events.js", () => ({
 
 vi.mock("../../logging.js", () => ({
   getChildLogger: () => ({
-    info: () => {},
-    warn: () => {},
+    info: (...args: unknown[]) => state.loggerInfoCalls.push(args),
+    warn: (...args: unknown[]) => state.loggerWarnCalls.push(args),
   }),
 }));
 
 vi.mock("./loggers.js", () => ({
   whatsappHeartbeatLog: {
-    info: () => {},
-    warn: () => {},
+    info: (msg: string) => state.heartbeatInfoLogs.push(msg),
+    warn: (msg: string) => state.heartbeatWarnLogs.push(msg),
   },
 }));
 
@@ -115,6 +120,10 @@ describe("runWebHeartbeatOnce", () => {
       idleExpiresAt: null,
     };
     state.events = [];
+    state.loggerInfoCalls = [];
+    state.loggerWarnCalls = [];
+    state.heartbeatInfoLogs = [];
+    state.heartbeatWarnLogs = [];
 
     senderMock = vi.fn(async () => ({ messageId: "m1" }));
     sender = senderMock as unknown as typeof sendMessageWhatsApp;
@@ -186,5 +195,24 @@ describe("runWebHeartbeatOnce", () => {
         expect.objectContaining({ status: "failed", reason: "ERR:Error: nope" }),
       ]),
     );
+  });
+
+  it("redacts recipient and omits body preview in heartbeat logs", async () => {
+    replyResolverMock.mockResolvedValue({ text: "sensitive heartbeat body" });
+    const { runWebHeartbeatOnce } = await getModules();
+    await runWebHeartbeatOnce(buildRunArgs({ dryRun: true }));
+
+    const expected = redactIdentifier("+123");
+    const heartbeatLogs = state.heartbeatInfoLogs.join("\n");
+    const childLoggerLogs = state.loggerInfoCalls.map((entry) => JSON.stringify(entry)).join("\n");
+
+    expect(heartbeatLogs).toContain(expected);
+    expect(heartbeatLogs).not.toContain("+123");
+    expect(heartbeatLogs).not.toContain("sensitive heartbeat body");
+
+    expect(childLoggerLogs).toContain(expected);
+    expect(childLoggerLogs).not.toContain("+123");
+    expect(childLoggerLogs).not.toContain("sensitive heartbeat body");
+    expect(childLoggerLogs).not.toContain('"preview"');
   });
 });

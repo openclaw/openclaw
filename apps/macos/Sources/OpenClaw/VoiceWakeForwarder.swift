@@ -37,7 +37,7 @@ enum VoiceWakeForwarder {
         var thinking: String = "low"
         var deliver: Bool = true
         var to: String?
-        var channel: GatewayAgentChannel = .last
+        var channel: GatewayAgentChannel = .webchat
     }
 
     @discardableResult

@@ -35,6 +35,18 @@ async function resolveBedrockProvider() {
   });
 }
 
+async function expectBedrockAuthSource(params: {
+  env: Record<string, string | undefined>;
+  expectedSource: string;
+}) {
+  await withEnvAsync(params.env, async () => {
+    const resolved = await resolveBedrockProvider();
+    expect(resolved.mode).toBe("aws-sdk");
+    expect(resolved.apiKey).toBeUndefined();
+    expect(resolved.source).toContain(params.expectedSource);
+  });
+}
+
 describe("getApiKeyForModel", () => {
   it("migrates legacy oauth.json into auth-profiles.json", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-"));
@@ -145,7 +157,7 @@ describe("getApiKeyForModel", () => {
           } catch (err) {
             error = err;
           }
-          expect(String(error)).toContain("openai-codex/gpt-5.3-codex");
+          expect(String(error)).toContain("openai-codex/gpt-5.4");
         },
       );
     } finally {
@@ -214,6 +226,62 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("resolves synthetic local auth key for configured ollama provider without apiKey", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "ollama",
+        store: { version: 1, profiles: {} },
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://gpu-node-server:11434",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("ollama-local");
+      expect(resolved.mode).toBe("api-key");
+      expect(resolved.source).toContain("synthetic local key");
+    });
+  });
+
+  it("prefers explicit OLLAMA_API_KEY over synthetic local key", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: "env-ollama-key" }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "ollama",
+        store: { version: 1, profiles: {} },
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://gpu-node-server:11434",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("env-ollama-key");
+      expect(resolved.source).toContain("OLLAMA_API_KEY");
+    });
+  });
+
+  it("still throws for ollama when no env/profile/config provider is available", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
+      await expect(
+        resolveApiKeyForProvider({
+          provider: "ollama",
+          store: { version: 1, profiles: {} },
+        }),
+      ).rejects.toThrow('No API key found for provider "ollama".');
+    });
+  });
+
   it("resolves Vercel AI Gateway API key from env", async () => {
     await withEnvAsync({ AI_GATEWAY_API_KEY: "gateway-test-key" }, async () => {
       const resolved = await resolveApiKeyForProvider({
@@ -226,57 +294,39 @@ describe("getApiKeyForModel", () => {
   });
 
   it("prefers Bedrock bearer token over access keys and profile", async () => {
-    await withEnvAsync(
-      {
+    await expectBedrockAuthSource({
+      env: {
         AWS_BEARER_TOKEN_BEDROCK: "bedrock-token",
         AWS_ACCESS_KEY_ID: "access-key",
         AWS_SECRET_ACCESS_KEY: "secret-key",
         AWS_PROFILE: "profile",
       },
-      async () => {
-        const resolved = await resolveBedrockProvider();
-
-        expect(resolved.mode).toBe("aws-sdk");
-        expect(resolved.apiKey).toBeUndefined();
-        expect(resolved.source).toContain("AWS_BEARER_TOKEN_BEDROCK");
-      },
-    );
+      expectedSource: "AWS_BEARER_TOKEN_BEDROCK",
+    });
   });
 
   it("prefers Bedrock access keys over profile", async () => {
-    await withEnvAsync(
-      {
+    await expectBedrockAuthSource({
+      env: {
         AWS_BEARER_TOKEN_BEDROCK: undefined,
         AWS_ACCESS_KEY_ID: "access-key",
         AWS_SECRET_ACCESS_KEY: "secret-key",
         AWS_PROFILE: "profile",
       },
-      async () => {
-        const resolved = await resolveBedrockProvider();
-
-        expect(resolved.mode).toBe("aws-sdk");
-        expect(resolved.apiKey).toBeUndefined();
-        expect(resolved.source).toContain("AWS_ACCESS_KEY_ID");
-      },
-    );
+      expectedSource: "AWS_ACCESS_KEY_ID",
+    });
   });
 
   it("uses Bedrock profile when access keys are missing", async () => {
-    await withEnvAsync(
-      {
+    await expectBedrockAuthSource({
+      env: {
         AWS_BEARER_TOKEN_BEDROCK: undefined,
         AWS_ACCESS_KEY_ID: undefined,
         AWS_SECRET_ACCESS_KEY: undefined,
         AWS_PROFILE: "profile",
       },
-      async () => {
-        const resolved = await resolveBedrockProvider();
-
-        expect(resolved.mode).toBe("aws-sdk");
-        expect(resolved.apiKey).toBeUndefined();
-        expect(resolved.source).toContain("AWS_PROFILE");
-      },
-    );
+      expectedSource: "AWS_PROFILE",
+    });
   });
 
   it("accepts VOYAGE_API_KEY for voyage", async () => {

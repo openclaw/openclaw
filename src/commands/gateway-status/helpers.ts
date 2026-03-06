@@ -1,6 +1,8 @@
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
+import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
+import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { pickGatewaySelfPresence } from "../gateway-presence.js";
@@ -144,38 +146,124 @@ export function sanitizeSshTarget(value: unknown): string | null {
   return trimmed.replace(/^ssh\\s+/, "");
 }
 
-export function resolveAuthForTarget(
+function readGatewayTokenEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const token = env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+  return token || undefined;
+}
+
+function readGatewayPasswordEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const password = env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim();
+  return password || undefined;
+}
+
+export async function resolveAuthForTarget(
   cfg: OpenClawConfig,
   target: GatewayStatusTarget,
   overrides: { token?: string; password?: string },
-): { token?: string; password?: string } {
+): Promise<{ token?: string; password?: string; diagnostics?: string[] }> {
   const tokenOverride = overrides.token?.trim() ? overrides.token.trim() : undefined;
   const passwordOverride = overrides.password?.trim() ? overrides.password.trim() : undefined;
   if (tokenOverride || passwordOverride) {
     return { token: tokenOverride, password: passwordOverride };
   }
 
+  const diagnostics: string[] = [];
+  const authMode = cfg.gateway?.auth?.mode;
+  const tokenOnly = authMode === "token";
+  const passwordOnly = authMode === "password";
+
+  const resolveToken = async (value: unknown, path: string): Promise<string | undefined> => {
+    const tokenResolution = await resolveConfiguredSecretInputString({
+      config: cfg,
+      env: process.env,
+      value,
+      path,
+      unresolvedReasonStyle: "detailed",
+    });
+    if (tokenResolution.unresolvedRefReason) {
+      diagnostics.push(tokenResolution.unresolvedRefReason);
+    }
+    return tokenResolution.value;
+  };
+  const resolvePassword = async (value: unknown, path: string): Promise<string | undefined> => {
+    const passwordResolution = await resolveConfiguredSecretInputString({
+      config: cfg,
+      env: process.env,
+      value,
+      path,
+      unresolvedReasonStyle: "detailed",
+    });
+    if (passwordResolution.unresolvedRefReason) {
+      diagnostics.push(passwordResolution.unresolvedRefReason);
+    }
+    return passwordResolution.value;
+  };
+
   if (target.kind === "configRemote" || target.kind === "sshTunnel") {
-    const token =
-      typeof cfg.gateway?.remote?.token === "string" ? cfg.gateway.remote.token.trim() : "";
-    const remotePassword = (cfg.gateway?.remote as { password?: unknown } | undefined)?.password;
-    const password = typeof remotePassword === "string" ? remotePassword.trim() : "";
+    const remoteTokenValue = cfg.gateway?.remote?.token;
+    const remotePasswordValue = (cfg.gateway?.remote as { password?: unknown } | undefined)
+      ?.password;
+    const token = await resolveToken(remoteTokenValue, "gateway.remote.token");
+    const password = token
+      ? undefined
+      : await resolvePassword(remotePasswordValue, "gateway.remote.password");
     return {
-      token: token.length > 0 ? token : undefined,
-      password: password.length > 0 ? password : undefined,
+      token,
+      password,
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
     };
   }
 
-  const envToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || "";
-  const envPassword = process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || "";
-  const cfgToken =
-    typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : "";
-  const cfgPassword =
-    typeof cfg.gateway?.auth?.password === "string" ? cfg.gateway.auth.password.trim() : "";
+  const authDisabled = authMode === "none" || authMode === "trusted-proxy";
+  if (authDisabled) {
+    return {};
+  }
+
+  const envToken = readGatewayTokenEnv();
+  const envPassword = readGatewayPasswordEnv();
+  if (tokenOnly) {
+    if (envToken) {
+      return { token: envToken };
+    }
+    const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
+    return {
+      token,
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    };
+  }
+  if (passwordOnly) {
+    if (envPassword) {
+      return { password: envPassword };
+    }
+    const password = await resolvePassword(cfg.gateway?.auth?.password, "gateway.auth.password");
+    return {
+      password,
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    };
+  }
+
+  if (envToken) {
+    return { token: envToken };
+  }
+  const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
+  if (token) {
+    return {
+      token,
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    };
+  }
+  if (envPassword) {
+    return {
+      password: envPassword,
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    };
+  }
+  const password = await resolvePassword(cfg.gateway?.auth?.password, "gateway.auth.password");
 
   return {
-    token: envToken || cfgToken || undefined,
-    password: envPassword || cfgPassword || undefined,
+    token,
+    password,
+    ...(diagnostics.length > 0 ? { diagnostics } : {}),
   };
 }
 
@@ -191,6 +279,10 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
 
   const cfg = (snap?.config ?? {}) as Record<string, unknown>;
   const gateway = (cfg.gateway ?? {}) as Record<string, unknown>;
+  const secrets = (cfg.secrets ?? {}) as Record<string, unknown>;
+  const secretDefaults = (secrets.defaults ?? undefined) as
+    | { env?: string; file?: string; exec?: string }
+    | undefined;
   const discovery = (cfg.discovery ?? {}) as Record<string, unknown>;
   const wideArea = (discovery.wideArea ?? {}) as Record<string, unknown>;
 
@@ -200,15 +292,12 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
   const tailscale = (gateway.tailscale ?? {}) as Record<string, unknown>;
 
   const authMode = typeof auth.mode === "string" ? auth.mode : null;
-  const authTokenConfigured = typeof auth.token === "string" ? auth.token.trim().length > 0 : false;
-  const authPasswordConfigured =
-    typeof auth.password === "string" ? auth.password.trim().length > 0 : false;
+  const authTokenConfigured = hasConfiguredSecretInput(auth.token, secretDefaults);
+  const authPasswordConfigured = hasConfiguredSecretInput(auth.password, secretDefaults);
 
   const remoteUrl = typeof remote.url === "string" ? normalizeWsUrl(remote.url) : null;
-  const remoteTokenConfigured =
-    typeof remote.token === "string" ? remote.token.trim().length > 0 : false;
-  const remotePasswordConfigured =
-    typeof remote.password === "string" ? String(remote.password).trim().length > 0 : false;
+  const remoteTokenConfigured = hasConfiguredSecretInput(remote.token, secretDefaults);
+  const remotePasswordConfigured = hasConfiguredSecretInput(remote.password, secretDefaults);
 
   const wideAreaEnabled = typeof wideArea.enabled === "boolean" ? wideArea.enabled : null;
 

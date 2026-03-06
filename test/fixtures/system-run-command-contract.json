@@ -1,0 +1,75 @@
+{
+  "cases": [
+    {
+      "name": "direct argv infers display command",
+      "command": ["echo", "hi there"],
+      "expected": {
+        "valid": true,
+        "displayCommand": "echo \"hi there\""
+      }
+    },
+    {
+      "name": "direct argv rejects mismatched raw command",
+      "command": ["uname", "-a"],
+      "rawCommand": "echo hi",
+      "expected": {
+        "valid": false,
+        "errorContains": "rawCommand does not match command"
+      }
+    },
+    {
+      "name": "shell wrapper accepts shell payload raw command when no positional argv carriers",
+      "command": ["/bin/sh", "-lc", "echo hi"],
+      "rawCommand": "echo hi",
+      "expected": {
+        "valid": true,
+        "displayCommand": "echo hi"
+      }
+    },
+    {
+      "name": "shell wrapper positional argv carrier requires full argv display binding",
+      "command": ["/bin/sh", "-lc", "$0 \"$1\"", "/usr/bin/touch", "/tmp/marker"],
+      "rawCommand": "$0 \"$1\"",
+      "expected": {
+        "valid": false,
+        "errorContains": "rawCommand does not match command"
+      }
+    },
+    {
+      "name": "shell wrapper positional argv carrier accepts canonical full argv raw command",
+      "command": ["/bin/sh", "-lc", "$0 \"$1\"", "/usr/bin/touch", "/tmp/marker"],
+      "rawCommand": "/bin/sh -lc \"$0 \\\"$1\\\"\" /usr/bin/touch /tmp/marker",
+      "expected": {
+        "valid": true,
+        "displayCommand": "/bin/sh -lc \"$0 \\\"$1\\\"\" /usr/bin/touch /tmp/marker"
+      }
+    },
+    {
+      "name": "env wrapper shell payload accepted when prelude has no env modifiers",
+      "command": ["/usr/bin/env", "bash", "-lc", "echo hi"],
+      "rawCommand": "echo hi",
+      "expected": {
+        "valid": true,
+        "displayCommand": "echo hi"
+      }
+    },
+    {
+      "name": "env assignment prelude requires full argv display binding",
+      "command": ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
+      "rawCommand": "echo hi",
+      "expected": {
+        "valid": false,
+        "errorContains": "rawCommand does not match command"
+      }
+    },
+    {
+      "name": "env assignment prelude accepts canonical full argv raw command",
+      "command": ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
+      "rawCommand": "/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc \"echo hi\"",
+      "expected": {
+        "valid": true,
+        "displayCommand": "/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc \"echo hi\""
+      }
+    }
+  ]
+}
