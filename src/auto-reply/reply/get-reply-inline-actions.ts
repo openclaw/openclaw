@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
@@ -192,6 +193,34 @@ export async function handleInlineActions(params: {
     }
 
     const dispatch = skillInvocation.command.dispatch;
+    if (dispatch?.kind === "tool" && dispatch.commandExec) {
+      // command-exec: run a fixed shell command directly (no tool lookup).
+      const rawArgs = (skillInvocation.args ?? "").trim();
+      const fullCommand = rawArgs ? `${dispatch.commandExec} ${rawArgs}` : dispatch.commandExec;
+      try {
+        const result = spawnSync("sh", ["-c", fullCommand], {
+          encoding: "utf-8",
+          timeout: 15_000,
+          env: { ...process.env },
+        });
+        const text = (result.stdout ?? "").trim() || (result.stderr ?? "").trim() || "✅ Done.";
+        if (result.status !== 0) {
+          typing.cleanup();
+          return {
+            kind: "reply",
+            reply: {
+              text: `❌ Exit ${result.status}: ${(result.stderr ?? "").trim() || text}`,
+            },
+          };
+        }
+        typing.cleanup();
+        return { kind: "reply", reply: { text } };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        typing.cleanup();
+        return { kind: "reply", reply: { text: `❌ ${message}` } };
+      }
+    }
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const channel =
