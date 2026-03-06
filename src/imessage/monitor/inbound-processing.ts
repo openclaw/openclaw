@@ -30,6 +30,7 @@ import {
   isAllowedIMessageSender,
   normalizeIMessageHandle,
 } from "../targets.js";
+import { buildIMessageEchoScope } from "./echo-scope.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 
 type IMessageReplyContext = {
@@ -108,6 +109,8 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "missing sender" };
   }
   const senderNormalized = normalizeIMessageHandle(sender);
+
+  // Drop bridge-reported "from me"; avoids duplicate when bridge sends same user message twice with is_from_me=true.
   if (params.message.is_from_me) {
     return { kind: "drop", reason: "from me" };
   }
@@ -214,7 +217,7 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "empty body" };
   }
 
-  // Echo detection: check if the received message matches a recently sent message (within 5 seconds).
+  // Echo detection: check if the received message matches a recently sent bot reply.
   // Scope by conversation so same text in different chats is not conflated.
   const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
   if (params.echoCache && (messageText || inboundMessageId)) {
@@ -471,14 +474,8 @@ export function buildIMessageInboundContext(params: {
   return { ctxPayload, fromLabel, chatTarget, imessageTo, inboundHistory };
 }
 
-export function buildIMessageEchoScope(params: {
-  accountId: string;
-  isGroup: boolean;
-  chatId?: number;
-  sender: string;
-}): string {
-  return `${params.accountId}:${params.isGroup ? formatIMessageChatTarget(params.chatId) : `imessage:${params.sender}`}`;
-}
+// Re-export from shared module for backwards compatibility.
+export { buildIMessageEchoScope } from "./echo-scope.js";
 
 export function describeIMessageEchoDropLog(params: {
   messageText: string;

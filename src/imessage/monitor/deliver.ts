@@ -6,7 +6,8 @@ import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { createIMessageRpcClient } from "../client.js";
 import { sendMessageIMessage } from "../send.js";
-import type { SentMessageCache } from "./echo-cache.js";
+import { buildDeliveryEchoScope } from "./echo-scope.js";
+import type { SentMessageCache } from "./sent-message-cache.js";
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -20,7 +21,7 @@ export async function deliverReplies(params: {
 }) {
   const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
     params;
-  const scope = `${accountId ?? ""}:${target}`;
+  const scope = buildDeliveryEchoScope(accountId ?? "", target);
   const cfg = loadConfig();
   const tableMode = resolveMarkdownTableMode({
     cfg,
