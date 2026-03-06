@@ -618,8 +618,10 @@ describe("tts", () => {
       const globalConfig = resolveTtsConfig(cfg);
       const agentConfig = resolveTtsConfig(cfg, agentId);
 
-      expect(resolveTtsPrefsPath(globalConfig)).toMatch(/settings\/tts\.json$/);
-      expect(resolveTtsPrefsPath(agentConfig, agentId)).toMatch(/settings\/tts\.voiceagent\.json$/);
+      expect(resolveTtsPrefsPath(globalConfig)).toMatch(/settings[\\/]+tts\.json$/);
+      expect(resolveTtsPrefsPath(agentConfig, agentId)).toMatch(
+        /settings[\\/]+tts\.voiceagent\.json$/,
+      );
     });
   });
 
