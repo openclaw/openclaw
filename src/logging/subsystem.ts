@@ -283,7 +283,9 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     const currentGen = loggingState.loggerGeneration;
     if (!fileLogger || fileLoggerGeneration !== currentGen) {
       fileLogger = getChildLogger({ subsystem });
-      fileLoggerGeneration = currentGen;
+      // Read generation after getChildLogger — the getLogger() call inside
+      // may itself increment the counter, so capture the final value.
+      fileLoggerGeneration = loggingState.loggerGeneration;
     }
     return fileLogger;
   };
