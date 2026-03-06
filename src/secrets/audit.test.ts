@@ -295,6 +295,33 @@ describe("secrets audit", () => {
     expect(report.filesScanned).toContain(fixture.modelsPath);
   });
 
+  it("scans agent models.json files for plaintext provider header values", async () => {
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "OPENAI_API_KEY",
+          headers: {
+            Authorization: "Bearer sk-header-plaintext",
+          },
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.modelsPath &&
+          entry.jsonPath === "providers.openai.headers.Authorization",
+      ),
+    ).toBe(true);
+  });
+
   it("does not flag models.json marker values as plaintext", async () => {
     await writeJsonFile(fixture.modelsPath, {
       providers: {
@@ -317,6 +344,70 @@ describe("secrets audit", () => {
           entry.jsonPath === "providers.openai.apiKey",
       ),
     ).toBe(false);
+  });
+
+  it("does not flag models.json header marker values as plaintext", async () => {
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "OPENAI_API_KEY",
+          headers: {
+            Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+            "x-managed-token": "secretref-managed",
+          },
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.modelsPath &&
+          entry.jsonPath === "providers.openai.headers.Authorization",
+      ),
+    ).toBe(false);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.modelsPath &&
+          entry.jsonPath === "providers.openai.headers.x-managed-token",
+      ),
+    ).toBe(false);
+  });
+
+  it("reports unresolved models.json SecretRef objects in provider headers", async () => {
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "OPENAI_API_KEY",
+          headers: {
+            Authorization: { source: "env", provider: "default", id: "OPENAI_HEADER_TOKEN" },
+          },
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "REF_UNRESOLVED" &&
+          entry.file === fixture.modelsPath &&
+          entry.jsonPath === "providers.openai.headers.Authorization",
+      ),
+    ).toBe(true);
   });
 
   it("reports malformed models.json as unresolved findings", async () => {

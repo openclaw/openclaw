@@ -29,7 +29,10 @@ describe("runCapability deepgram provider options", () => {
             deepgram: {
               baseUrl: "https://provider.example",
               apiKey: "test-key",
-              headers: { "X-Provider": "1" },
+              headers: {
+                "X-Provider": "1",
+                "X-Provider-Managed": "secretref-managed",
+              },
               models: [],
             },
           },
@@ -39,7 +42,10 @@ describe("runCapability deepgram provider options", () => {
             audio: {
               enabled: true,
               baseUrl: "https://config.example",
-              headers: { "X-Config": "2" },
+              headers: {
+                "X-Config": "2",
+                "X-Config-Managed": "secretref-env:DEEPGRAM_HEADER_TOKEN",
+              },
               providerOptions: {
                 deepgram: {
                   detect_language: true,
@@ -52,7 +58,10 @@ describe("runCapability deepgram provider options", () => {
                   provider: "deepgram",
                   model: "nova-3",
                   baseUrl: "https://entry.example",
-                  headers: { "X-Entry": "3" },
+                  headers: {
+                    "X-Entry": "3",
+                    "X-Entry-Managed": "secretref-managed",
+                  },
                   providerOptions: {
                     deepgram: {
                       detectLanguage: false,
@@ -82,6 +91,9 @@ describe("runCapability deepgram provider options", () => {
         "X-Config": "2",
         "X-Entry": "3",
       });
+      expect((seenHeaders as Record<string, string>)["X-Provider-Managed"]).toBeUndefined();
+      expect((seenHeaders as Record<string, string>)["X-Config-Managed"]).toBeUndefined();
+      expect((seenHeaders as Record<string, string>)["X-Entry-Managed"]).toBeUndefined();
       expect(seenQuery).toMatchObject({
         detect_language: false,
         punctuate: false,

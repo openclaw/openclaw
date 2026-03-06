@@ -23,6 +23,7 @@ Scope intent:
 [//]: # "secretref-supported-list-start"
 
 - `models.providers.*.apiKey`
+- `models.providers.*.headers.*`
 - `skills.entries.*.apiKey`
 - `agents.defaults.memorySearch.remote.apiKey`
 - `agents.list[].memorySearch.remote.apiKey`

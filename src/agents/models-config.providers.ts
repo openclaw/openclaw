@@ -47,6 +47,8 @@ import {
   QWEN_OAUTH_MARKER,
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
+  resolveNonEnvSecretRefHeaderValueMarker,
+  resolveEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
@@ -409,6 +411,43 @@ function resolveAwsSdkApiKeyVarName(): string {
   return resolveAwsSdkEnvVarName() ?? "AWS_PROFILE";
 }
 
+function normalizeHeaderValues(params: {
+  headers: ProviderConfig["headers"] | undefined;
+  secretDefaults:
+    | {
+        env?: string;
+        file?: string;
+        exec?: string;
+      }
+    | undefined;
+}): { headers: ProviderConfig["headers"] | undefined; mutated: boolean } {
+  const { headers } = params;
+  if (!headers) {
+    return { headers, mutated: false };
+  }
+  let mutated = false;
+  const nextHeaders: Record<string, NonNullable<ProviderConfig["headers"]>[string]> = {};
+  for (const [headerName, headerValue] of Object.entries(headers)) {
+    const resolvedRef = resolveSecretInputRef({
+      value: headerValue,
+      defaults: params.secretDefaults,
+    }).ref;
+    if (!resolvedRef || !resolvedRef.id.trim()) {
+      nextHeaders[headerName] = headerValue;
+      continue;
+    }
+    mutated = true;
+    nextHeaders[headerName] =
+      resolvedRef.source === "env"
+        ? resolveEnvSecretRefHeaderValueMarker(resolvedRef.id)
+        : resolveNonEnvSecretRefHeaderValueMarker(resolvedRef.source);
+  }
+  if (!mutated) {
+    return { headers, mutated: false };
+  }
+  return { headers: nextHeaders, mutated: true };
+}
+
 type ProfileApiKeyResolution = {
   apiKey: string;
   source: "plaintext" | "env-ref" | "non-env-ref";
@@ -569,6 +608,14 @@ export function normalizeProviders(params: {
       mutated = true;
     }
     let normalizedProvider = provider;
+    const normalizedHeaders = normalizeHeaderValues({
+      headers: normalizedProvider.headers,
+      secretDefaults: params.secretDefaults,
+    });
+    if (normalizedHeaders.mutated) {
+      mutated = true;
+      normalizedProvider = { ...normalizedProvider, headers: normalizedHeaders.headers };
+    }
     const configuredApiKey = normalizedProvider.apiKey;
     const configuredApiKeyRef = resolveSecretInputRef({
       value: configuredApiKey,

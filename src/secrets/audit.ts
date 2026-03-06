@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import {
+  isNonSecretApiKeyMarker,
+  isSecretRefHeaderValueMarker,
+} from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
@@ -355,22 +358,50 @@ function collectModelsJsonSecrets(params: {
         message: "models.json contains an unresolved SecretRef object; regenerate models.json.",
         provider: providerId,
       });
+    } else if (isNonEmptyString(apiKey) && !isNonSecretApiKeyMarker(apiKey)) {
+      addFinding(params.collector, {
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: params.modelsJsonPath,
+        jsonPath: `providers.${providerId}.apiKey`,
+        message: "models.json provider apiKey is stored as plaintext.",
+        provider: providerId,
+      });
+    }
+
+    const headers = isRecord(providerValue.headers) ? providerValue.headers : undefined;
+    if (!headers) {
       continue;
     }
-    if (!isNonEmptyString(apiKey)) {
-      continue;
+    for (const [headerKey, headerValue] of Object.entries(headers)) {
+      const headerPath = `providers.${providerId}.headers.${headerKey}`;
+      if (coerceSecretRef(headerValue)) {
+        addFinding(params.collector, {
+          code: "REF_UNRESOLVED",
+          severity: "error",
+          file: params.modelsJsonPath,
+          jsonPath: headerPath,
+          message:
+            "models.json contains an unresolved SecretRef object for provider headers; regenerate models.json.",
+          provider: providerId,
+        });
+        continue;
+      }
+      if (!isNonEmptyString(headerValue)) {
+        continue;
+      }
+      if (isSecretRefHeaderValueMarker(headerValue)) {
+        continue;
+      }
+      addFinding(params.collector, {
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: params.modelsJsonPath,
+        jsonPath: headerPath,
+        message: "models.json provider header value is stored as plaintext.",
+        provider: providerId,
+      });
     }
-    if (isNonSecretApiKeyMarker(apiKey)) {
-      continue;
-    }
-    addFinding(params.collector, {
-      code: "PLAINTEXT_FOUND",
-      severity: "warn",
-      file: params.modelsJsonPath,
-      jsonPath: `providers.${providerId}.apiKey`,
-      message: "models.json provider apiKey is stored as plaintext.",
-      provider: providerId,
-    });
   }
 }
 

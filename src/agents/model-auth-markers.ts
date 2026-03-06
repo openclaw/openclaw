@@ -4,6 +4,7 @@ export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
 export const QWEN_OAUTH_MARKER = "qwen-oauth";
 export const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
 export const NON_ENV_SECRETREF_MARKER = "secretref-managed";
+export const SECRETREF_ENV_HEADER_MARKER_PREFIX = "secretref-env:";
 
 const AWS_SDK_ENV_MARKERS = new Set([
   "AWS_BEARER_TOKEN_BEDROCK",
@@ -21,6 +22,21 @@ export function isAwsSdkAuthMarker(value: string): boolean {
 
 export function resolveNonEnvSecretRefApiKeyMarker(_source: SecretRefSource): string {
   return NON_ENV_SECRETREF_MARKER;
+}
+
+export function resolveNonEnvSecretRefHeaderValueMarker(_source: SecretRefSource): string {
+  return NON_ENV_SECRETREF_MARKER;
+}
+
+export function resolveEnvSecretRefHeaderValueMarker(envVarName: string): string {
+  return `${SECRETREF_ENV_HEADER_MARKER_PREFIX}${envVarName.trim()}`;
+}
+
+export function isSecretRefHeaderValueMarker(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    trimmed === NON_ENV_SECRETREF_MARKER || trimmed.startsWith(SECRETREF_ENV_HEADER_MARKER_PREFIX)
+  );
 }
 
 export function isNonSecretApiKeyMarker(
