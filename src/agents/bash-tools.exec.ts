@@ -369,11 +369,22 @@ export function createExecTool(
         validateHostEnv(params.env);
       }
 
+      const safeWorkspaceEnv = (workspaceEnv: Record<string, string>): Record<string, string> => {
+        const baseKeysLower = new Set(Object.keys(baseEnv).map((k) => k.toLowerCase()));
+        const safe: Record<string, string> = {};
+        for (const [key, value] of Object.entries(workspaceEnv)) {
+          if (!baseKeysLower.has(key.toLowerCase())) {
+            safe[key] = value;
+          }
+        }
+        return safe;
+      };
+
       const effectiveBase =
         host !== "sandbox" &&
         defaults?.workspaceEnv &&
         Object.keys(defaults.workspaceEnv).length > 0
-          ? { ...defaults.workspaceEnv, ...baseEnv }
+          ? { ...safeWorkspaceEnv(defaults.workspaceEnv), ...baseEnv }
           : baseEnv;
 
       const mergedEnv = params.env ? { ...effectiveBase, ...params.env } : effectiveBase;
