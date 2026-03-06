@@ -209,6 +209,18 @@ function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   }
 }
 
+function isOpenAIPublicApiBaseUrl(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return false;
+  }
+
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === "api.openai.com";
+  } catch {
+    return baseUrl.toLowerCase().includes("api.openai.com");
+  }
+}
+
 function shouldForceResponsesStore(model: {
   api?: unknown;
   provider?: unknown;
@@ -352,7 +364,7 @@ function createOpenAIServiceTierWrapper(
     if (
       model.api !== "openai-responses" ||
       model.provider !== "openai" ||
-      !isDirectOpenAIBaseUrl(model.baseUrl)
+      !isOpenAIPublicApiBaseUrl(model.baseUrl)
     ) {
       return underlying(model, context, options);
     }
