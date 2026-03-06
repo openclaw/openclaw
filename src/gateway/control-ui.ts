@@ -375,7 +375,7 @@ export function handleControlUiHttpRequest(
   }
 
   const root =
-    rootState?.kind === "resolved"
+    rootState?.kind === "resolved" || rootState?.kind === "bundled"
       ? rootState.path
       : resolveControlUiRootSync({
           moduleUrl: import.meta.url,
@@ -456,7 +456,7 @@ export function handleControlUiHttpRequest(
 
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
-  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rootState?.kind === "resolved");
+  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rootState?.kind !== "bundled");
   if (safeIndex) {
     try {
       if (respondHeadForFile(req, res, safeIndex.path)) {
