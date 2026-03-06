@@ -174,6 +174,18 @@ async function resolveTelegramCommandAuth(params: {
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
   const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+  // Guard: Telegram strips message_thread_id from unqualified slash commands
+  // (e.g. /new without @botname) sent in forum supergroups. Without a thread ID
+  // we cannot determine which topic the command belongs to, so we skip it to
+  // avoid routing to the wrong session (e.g. General topic when the command was
+  // sent in topic 158). Users should use qualified commands (/new@botname) in
+  // forum groups with multiple bots. (#35963)
+  if (isGroup && isForum && messageThreadId == null) {
+    logVerbose(
+      `telegram: skipping unqualified command in forum group ${chatId} — no message_thread_id`,
+    );
+    return null;
+  }
   const threadSpec = resolveTelegramThreadSpec({
     isGroup,
     isForum,

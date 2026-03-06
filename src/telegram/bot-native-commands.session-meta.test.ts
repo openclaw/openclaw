@@ -102,6 +102,26 @@ function buildStatusTopicCommandContext() {
   };
 }
 
+/** Simulates an unqualified command (/new without @botname) in a forum group.
+ * Telegram strips message_thread_id from unqualified commands in forum topics. */
+function buildForumCommandContextWithoutThreadId() {
+  return {
+    match: "",
+    message: {
+      message_id: 3,
+      date: Math.floor(Date.now() / 1000),
+      chat: {
+        id: -1001234567890,
+        type: "supergroup" as const,
+        title: "OpenClaw",
+        is_forum: true,
+      },
+      // No message_thread_id — Telegram strips it for unqualified commands (#35963)
+      from: { id: 200, username: "bob" },
+    },
+  };
+}
+
 function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
   allowFrom?: string[];
@@ -383,4 +403,24 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       expect.objectContaining({ message_thread_id: 42 }),
     );
   });
+
+  it("ignores unqualified forum commands that lack message_thread_id (#35963)", async () => {
+    // Telegram strips message_thread_id from unqualified commands (e.g. /new without @botname)
+    // sent in forum topics. Without a thread ID we cannot determine which topic the command
+    // belongs to, so OpenClaw skips it to prevent routing to the wrong session.
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "new",
+      cfg: {},
+      allowFrom: ["200"],
+      groupAllowFrom: ["200"],
+      useAccessGroups: false,
+    });
+    await handler(buildForumCommandContextWithoutThreadId());
+
+    // Command should be silently dropped — no session reset, no reply
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(sessionMocks.recordSessionMetaFromInbound).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
 });
+
