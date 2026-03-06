@@ -102,3 +102,29 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("NO-")).toBe(false);
   });
 });
+
+describe("isSilentReplyText – JSON-wrapped NO_REPLY (#37727)", () => {
+  it('suppresses {"action":"NO_REPLY"}', () => {
+    expect(isSilentReplyText('{"action":"NO_REPLY"}')).toBe(true);
+  });
+
+  it("suppresses with extra whitespace", () => {
+    expect(isSilentReplyText('  { "action" : "NO_REPLY" }  ')).toBe(true);
+  });
+
+  it("suppresses case-insensitively", () => {
+    expect(isSilentReplyText('{"action":"no_reply"}')).toBe(true);
+  });
+
+  it("does not suppress objects with unrelated values", () => {
+    expect(isSilentReplyText('{"action":"hello"}')).toBe(false);
+  });
+
+  it("does not suppress larger objects", () => {
+    expect(isSilentReplyText('{"action":"NO_REPLY","text":"hi","extra":"data"}')).toBe(false);
+  });
+
+  it("does not suppress non-JSON text mentioning NO_REPLY", () => {
+    expect(isSilentReplyText("The action is NO_REPLY and more")).toBe(false);
+  });
+});

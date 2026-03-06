@@ -37,7 +37,12 @@ export function isSilentReplyText(
   }
   // Match only the exact silent token with optional surrounding whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  return getSilentExactRegex(token).test(text);
+  if (getSilentExactRegex(token).test(text)) {
+    return true;
+  }
+  // Catch JSON-wrapped silent tokens like {"action":"NO_REPLY"} that some models
+  // emit instead of the bare sentinel. These must never leak to end users (#37727).
+  return isJsonWrappedSilentToken(text, token);
 }
 
 /**
@@ -86,4 +91,34 @@ export function isSilentReplyPrefixText(
   // uppercase words (e.g. HEART/HE with HEARTBEAT_OK). Only allow bare "NO"
   // because NO_REPLY streaming can transiently emit that fragment.
   return tokenUpper === SILENT_REPLY_TOKEN && normalized === "NO";
+}
+
+/**
+ * Detect JSON-wrapped silent tokens like `{"action":"NO_REPLY"}` or
+ * `{ "action" : "NO_REPLY" }`.  Only matches tiny payloads where the sole
+ * meaningful value equals the silent token — avoids false positives on
+ * larger JSON objects that happen to mention the token.
+ */
+function isJsonWrappedSilentToken(text: string, token: string): boolean {
+  const trimmed = text.trim();
+  // Quick guard: must look like a small JSON object.
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}") || trimmed.length > 200) {
+    return false;
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return false;
+    }
+    const values = Object.values(parsed as Record<string, unknown>);
+    // Accept objects with 1–2 keys where at least one value is the silent token.
+    if (values.length === 0 || values.length > 2) {
+      return false;
+    }
+    return values.some(
+      (v) => typeof v === "string" && v.trim().toUpperCase() === token.toUpperCase(),
+    );
+  } catch {
+    return false;
+  }
 }
