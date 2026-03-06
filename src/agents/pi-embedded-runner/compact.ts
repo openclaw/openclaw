@@ -1,11 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import {
-  createAgentSession,
-  estimateTokens,
-  SessionManager,
-} from "@mariozechner/pi-coding-agent";
+import { createAgentSession, estimateTokens, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
