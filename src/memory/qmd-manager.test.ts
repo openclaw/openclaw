@@ -369,7 +369,7 @@ describe("QmdMemoryManager", () => {
     expect(addSessions?.[2]).toBe(path.join(stateDir, "agents", devAgentId, "qmd", "sessions"));
   });
 
-  it("rebinds managed collections when qmd only reports collection names", async () => {
+  it("avoids destructive rebind when qmd only reports collection names", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -401,25 +401,11 @@ describe("QmdMemoryManager", () => {
     await manager.close();
 
     const commands = spawnMock.mock.calls.map((call: unknown[]) => call[1] as string[]);
-    const removeSessions = commands.find(
-      (args) =>
-        args[0] === "collection" && args[1] === "remove" && args[2] === sessionCollectionName,
-    );
-    expect(removeSessions).toBeDefined();
-    const removeWorkspace = commands.find(
-      (args) =>
-        args[0] === "collection" && args[1] === "remove" && args[2] === `workspace-${agentId}`,
-    );
-    expect(removeWorkspace).toBeDefined();
+    const removeCalls = commands.filter((args) => args[0] === "collection" && args[1] === "remove");
+    expect(removeCalls).toHaveLength(0);
 
-    const addSessions = commands.find((args) => {
-      if (args[0] !== "collection" || args[1] !== "add") {
-        return false;
-      }
-      const nameIdx = args.indexOf("--name");
-      return nameIdx >= 0 && args[nameIdx + 1] === sessionCollectionName;
-    });
-    expect(addSessions).toBeDefined();
+    const addCalls = commands.filter((args) => args[0] === "collection" && args[1] === "add");
+    expect(addCalls).toHaveLength(0);
   });
 
   it("migrates unscoped legacy collections before adding scoped names", async () => {
