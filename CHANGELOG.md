@@ -213,7 +213,6 @@ Docs: https://docs.openclaw.ai
 - Gateway/probes: keep `/health`, `/healthz`, `/ready`, and `/readyz` reachable when the Control UI is mounted at `/`, preserve plugin-owned route precedence on those paths, and make `/ready` and `/readyz` report channel-backed readiness with startup grace plus `503` on disconnected managed channels, while `/health` and `/healthz` stay shallow liveness probes. (#18446) Thanks @vibecodooor, @mahsumaktas, and @vincentkoc.
 - Feishu/media downloads: drop invalid timeout fields from SDK method calls now that client-level `httpTimeoutMs` applies to requests. (#38267) Thanks @ant1eicher and @thewilloftheshadow.
 - PI embedded runner/Feishu docs: propagate sender identity into embedded attempts so Feishu doc auto-grant restores requester access for embedded-runner executions. (#32915) thanks @cszhouwei.
-- Auth/owner-only tool gating: preserve internal `operator.admin` owner authorization and limit the no-owner-allowlist fallback to direct chats so ownerOnly tools stay available for safe single-user setups without granting group chats implicit owner access. (#26331) thanks @widingmarcus-cyber.
 
 ## 2026.3.2
 
