@@ -441,6 +441,45 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("bypasses time throttle when character growth exceeds threshold", () => {
+    let now = 12_000;
+    const nowSpy2 = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-char-growth", {
+      sessionKey: "session-char-growth",
+      clientRunId: "client-char-growth",
+    });
+
+    handler({
+      runId: "run-char-growth",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "A" },
+    });
+
+    // Within 150ms window but with 30+ chars of growth — should still broadcast
+    now = 12_050;
+    const longText = "A" + "x".repeat(40);
+    handler({
+      runId: "run-char-growth",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: longText },
+    });
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(2);
+    const secondPayload = chatCalls[1]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(secondPayload.state).toBe("delta");
+    expect(secondPayload.message?.content?.[0]?.text).toBe(longText);
+    nowSpy2.mockRestore();
+  });
+
   it("cleans up agent run sequence tracking when lifecycle completes", () => {
     const { agentRunSeq, chatRunState, handler, nowSpy } = createHarness({ now: 2_500 });
     chatRunState.registry.add("run-cleanup", {
