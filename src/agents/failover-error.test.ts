@@ -69,7 +69,7 @@ describe("failover-error", () => {
     // Keep the status-only path behavior-preserving and conservative.
     expect(resolveFailoverReasonFromError({ status: 500 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 503 })).toBe("overloaded");
+    expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 521 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 522 })).toBeNull();
@@ -114,7 +114,7 @@ describe("failover-error", () => {
         status: 503,
         message: BEDROCK_SERVICE_UNAVAILABLE_MESSAGE,
       }),
-    ).toBe("overloaded");
+    ).toBe("timeout");
     expect(
       resolveFailoverReasonFromError({
         status: 429,

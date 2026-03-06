@@ -293,10 +293,16 @@ export function classifyFailoverReasonFromHttpStatus(
   if (status === 408) {
     return "timeout";
   }
+  if (status === 503) {
+    if (message && isOverloadedErrorMessage(message)) {
+      return "overloaded";
+    }
+    return "timeout";
+  }
   if (status === 502 || status === 504) {
     return "timeout";
   }
-  if (status === 503 || status === 529) {
+  if (status === 529) {
     return "overloaded";
   }
   if (status === 400) {
