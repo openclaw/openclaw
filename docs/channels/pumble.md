@@ -66,8 +66,41 @@ npx pumble-cli@1.0.2 create
 
   </Step>
 
+  <Step title="Update manifest scopes">
+    Before running the dev server, edit `manifest.json` in the generated directory to include all required scopes. The default template only includes `messages:read` and `messages:write` -- OpenClaw needs additional scopes for channel awareness, user resolution, reactions, and file uploads:
+
+```json
+{
+  "name": "openclaw",
+  "displayName": "OpenClaw",
+  "botTitle": "Chat with your OpenClaw agents using Pumble",
+  "bot": true,
+  "socketMode": false,
+  "scopes": {
+    "botScopes": [
+      "messages:read",
+      "messages:write",
+      "channels:read",
+      "channels:list",
+      "user:read",
+      "reaction:read",
+      "reaction:write",
+      "files:read",
+      "files:write"
+    ],
+    "userScopes": ["messages:read"]
+  }
+}
+```
+
+<Warning>
+The bot token scopes are set at app creation time. If you skip this step, features like ack reactions, channel type detection, and file uploads will fail with `403 Bad scopes` errors. You would need to recreate the app to fix this.
+</Warning>
+
+  </Step>
+
   <Step title="Run the dev command">
-    Change into the generated directory and start the dev server:
+    Start the dev server:
 
 ```bash
 cd <app-name>
