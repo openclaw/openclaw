@@ -392,6 +392,26 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.reason).toBe("dm-blocked");
   });
 
+  it("treats whitespace-only heartbeat.to as implicit routing for directPolicy checks", () => {
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-heartbeat-telegram-direct-whitespace",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "5232990709",
+      },
+      heartbeat: {
+        target: "last",
+        to: "   ",
+        directPolicy: "block",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("dm-blocked");
+  });
+
   it("keeps heartbeat delivery to Telegram groups", () => {
     const cfg: OpenClawConfig = {};
     const resolved = resolveHeartbeatDeliveryTarget({

@@ -263,10 +263,13 @@ export function resolveHeartbeatDeliveryTarget(params: {
     });
   }
 
+  const heartbeatTo =
+    typeof heartbeat?.to === "string" && heartbeat.to.trim() ? heartbeat.to.trim() : undefined;
+
   const resolvedTarget = resolveSessionDeliveryTarget({
     entry,
     requestedChannel: target === "last" ? "last" : target,
-    explicitTo: heartbeat?.to,
+    explicitTo: heartbeatTo,
     mode: "heartbeat",
   });
 
@@ -324,7 +327,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   const sessionChatTypeHint =
-    target === "last" && !heartbeat?.to ? normalizeChatType(entry?.chatType) : undefined;
+    target === "last" && !heartbeatTo ? normalizeChatType(entry?.chatType) : undefined;
   const deliveryChatType = resolveHeartbeatDeliveryChatType({
     channel: resolvedTarget.channel,
     to: resolved.to,
@@ -332,7 +335,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   });
   // Only block DM delivery for implicit routing (target: "last" without explicit `to`).
   // When the user explicitly configures heartbeat.to pointing to a DM, respect it. (#26338)
-  const isImplicitRouting = target === "last" && !heartbeat?.to;
+  const isImplicitRouting = target === "last" && !heartbeatTo;
   if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block" && isImplicitRouting) {
     return buildNoHeartbeatDeliveryTarget({
       reason: "dm-blocked",
