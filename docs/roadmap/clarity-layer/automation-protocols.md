@@ -8,6 +8,7 @@ draft: true
 These are the standards we want upstream OpenClaw to adopt. Each protocol turns a recurring pain point into a deterministic workflow.
 
 ## 1. Credential Auto-Sync Protocol
+
 - **Origin:** Case 1 -- Subagent Auth Desync.
 - **Problem:** Subagents boot inside their own `~/.openclaw/agents/<agentId>/agent/` tree. If their `auth-profiles.json` diverges from the main agent, launches fail with `No API key found for provider "anthropic"` even though the root config is correct.
 - **Standard definition:**
@@ -23,6 +24,7 @@ These are the standards we want upstream OpenClaw to adopt. Each protocol turns 
   - `openclaw doctor` gains a check that asserts `synced=true` for every configured subagent.
 
 ## 2. Safe-Reload Protocol
+
 - **Origin:** Case 3 -- JSON Schema Suicide.
 - **Problem:** Editing `~/.openclaw/openclaw.json` with invalid keys causes the gateway to restart in a tight loop. There is no safety net; operators watch "gateway restarting" forever.
 - **Standard definition:**
@@ -38,6 +40,7 @@ These are the standards we want upstream OpenClaw to adopt. Each protocol turns 
   - Control UI shows a red banner with the exact invalid path/value so an operator can fix it without tailing logs.
 
 ## 3. Execution Path Integrity Protocol
+
 - **Origin:** Case 2 -- Docker Path Shadowing.
 - **Problem:** Operators often run `docker compose` from `~/.openclaw` (data dir) instead of the repo root where `docker-compose.yml` lives. Today this fails with `command not found` or cryptic mount errors.
 - **Standard definition:**
@@ -53,6 +56,7 @@ These are the standards we want upstream OpenClaw to adopt. Each protocol turns 
   - Support docs can simply say "type `openclaw compose up`."
 
 ## 4. Visual Health Dashboard Protocol
+
 - **Origin:** Field install feedback -- operators panic because install state is a black box (`health: starting`).
 - **Problem:** Current Control UI shows binary status (connected/disconnected). There is no shared view of Docker progress vs. Gateway readiness vs. API reachability.
 - **Standard definition:**
@@ -68,13 +72,16 @@ These are the standards we want upstream OpenClaw to adopt. Each protocol turns 
   - Support can ask for a screenshot of the dashboard instead of parsing logs.
 
 ---
+
 ### Patch -> native mapping
-| Protocol | Temporary patch (docs stopgap / tooling prototypes) | Native change (what upstream must implement) |
-| --- | --- | --- |
-| Credential Auto-Sync | Status Playbook + upcoming `auth-sync-check.sh` reminding users to copy/sync profiles. | Subagent bootstrap hook that hashes + auto-syncs `auth-profiles.json` before launch, with telemetry + doctor checks. |
-| Safe-Reload | Install guide tells users to run `jq` + `openclaw doctor` manually; a tooling prototype will provide `config-lint.sh`. | Gateway watcher enforces dry-run + rollback, Control UI surfaces blocking alerts, CLI gains `--dry-run/--revert`. |
-| Execution Path Integrity | Docs warn about repo/data split; the tooling prototype will ship a `claw-path-guard` shell snippet to detect `PWD`. | CLI + docker helpers detect misaligned `PWD`, auto navigate or block compose calls globally. |
-| Visual Health Dashboard | Clarity Layer + Status Playbook provide human-readable interpretations. | Gateway exposes a structured health graph API + Control UI/CLI renders realtime progress + stall hints. |
+
+| Protocol                 | Temporary patch (docs stopgap / tooling prototypes)                                                                    | Native change (what upstream must implement)                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Credential Auto-Sync     | Status Playbook + upcoming `auth-sync-check.sh` reminding users to copy/sync profiles.                                 | Subagent bootstrap hook that hashes + auto-syncs `auth-profiles.json` before launch, with telemetry + doctor checks. |
+| Safe-Reload              | Install guide tells users to run `jq` + `openclaw doctor` manually; a tooling prototype will provide `config-lint.sh`. | Gateway watcher enforces dry-run + rollback, Control UI surfaces blocking alerts, CLI gains `--dry-run/--revert`.    |
+| Execution Path Integrity | Docs warn about repo/data split; the tooling prototype will ship a `claw-path-guard` shell snippet to detect `PWD`.    | CLI + docker helpers detect misaligned `PWD`, auto navigate or block compose calls globally.                         |
+| Visual Health Dashboard  | Clarity Layer + Status Playbook provide human-readable interpretations.                                                | Gateway exposes a structured health graph API + Control UI/CLI renders realtime progress + stall hints.              |
 
 ---
+
 **Next steps:** finalize wording and start implementing the temporary patches while preparing upstream issue drafts referencing these protocols.

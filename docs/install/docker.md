@@ -28,6 +28,7 @@ Sandboxing details: [Sandboxing](/gateway/sandboxing)
 Use this section as a pre-flight + troubleshooting layer layered on top of the standard install flow.
 
 ### Note for Apple Silicon / M4 Users
+
 - **Run the Global Compass first:** Confirm Rosetta, free disk (>=15 GB), Docker Desktop running, and Terminal Full Disk Access (see [Global Compass](#operator-global-compass-pre-flight)).
 - **Wait for Docker to settle:** After updates the whale icon pulses for ~90 s—running compose before it stabilizes causes mount failures unique to M4 laptops.
 - **Protect the gateway from JSON typos:** Before editing `~/.openclaw/openclaw.json`, run a lint + backup step (`python3 -m json.tool <file>` / `jq` + temp file) so malformed configs never hit disk; if you prefer automation, refer to the forthcoming tooling PR that carries the experimental config-guard add-on.
@@ -35,25 +36,31 @@ Use this section as a pre-flight + troubleshooting layer layered on top of the s
 - **Bookmark the Status Decoder:** If you see `token mismatch` or `gateway restarting`, jump to the [Status decoder](#status-decoder-keep-nearby) table below—it translates every log referenced in this note.
 
 ### Operator Global Compass (pre-flight)
+
 #### Apple Silicon (M1–M4)
+
 - [ ] Rosetta installed: `softwareupdate --install-rosetta --agree-to-license`.
 - [ ] Docker Desktop running with a steady whale icon; >=15 GB free disk.
 - [ ] Terminal granted Full Disk Access; PATH not clobbered by legacy shells.
 
 #### Intel Mac
+
 - [ ] `brew update && brew upgrade` succeeds.
 - [ ] Docker Desktop resources >=4 CPU / 6 GB RAM; laptop on power.
 
 #### Linux / VPS
+
 - [ ] `sudo -n true` works (or be ready to enter password repeatedly).
 - [ ] `locale` shows UTF-8; `df -h ~` >=10 GB free.
 - [ ] `docker info` / `docker ps` both succeed.
 
 #### Windows / WSL2
+
 - [ ] WSL2 enabled with the repo living inside the WSL ext4 filesystem (avoid `/mnt/c`).
 - [ ] Developer Mode + Long Paths enabled in Windows settings.
 
 ### Platform runbook highlights
+
 - **Apple Silicon:** Wait for Docker to finish "starting" before running `docker-setup.sh`; `health: starting` <120 s is normal on cold boots.
 - **Intel Mac:** Update Homebrew first; slower image pulls are expected.
 - **Linux / VPS:** Remember "repo root != ~/.openclaw"; run Docker commands from the clone, not the data directory.
@@ -61,15 +68,14 @@ Use this section as a pre-flight + troubleshooting layer layered on top of the s
 
 ### Status decoder (keep nearby)
 
-| Signal / Log | What it really means | What to do | Avg. duration |
-| ------------- | -------------------- | ---------- | ------------- |
-| `health: starting` | Gateway booting, waiting for services (db, browser bridge, sandbox). Common right after onboarding or Docker restart. | Wait up to 120 s (Apple Silicon) / 60 s (Intel & Linux). If it exceeds that, run `openclaw logs --limit 50` and check for config errors. | 30–120 s |
-| `gateway restarting` (loop) | Config validation failed or a fatal crash occurred; supervisor keeps trying. | Run `openclaw logs --limit 200 | less` to find the first error. Most often caused by malformed `openclaw.json`. Revert the last change or run `openclaw doctor --fix`. | Until config is fixed |
+| Signal / Log                | What it really means                                                                                                  | What to do                                                                                                                               | Avg. duration                                                                                                                       |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| `health: starting`          | Gateway booting, waiting for services (db, browser bridge, sandbox). Common right after onboarding or Docker restart. | Wait up to 120 s (Apple Silicon) / 60 s (Intel & Linux). If it exceeds that, run `openclaw logs --limit 50` and check for config errors. | 30–120 s                                                                                                                            |
+| `gateway restarting` (loop) | Config validation failed or a fatal crash occurred; supervisor keeps trying.                                          | Run `openclaw logs --limit 200                                                                                                           | less`to find the first error. Most often caused by malformed`openclaw.json`. Revert the last change or run `openclaw doctor --fix`. | Until config is fixed |
 
 ### Status decoder deep dives
 
 See [Status Playbook](./status-playbook.md) for expanded tables, logbook captures, and recovery drills.
-
 
 ## Requirements
 
