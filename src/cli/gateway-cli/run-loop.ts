@@ -1,3 +1,4 @@
+import { flushAllActiveSessionGuards } from "../../agents/session-tool-result-guard-wrapper.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
@@ -127,6 +128,11 @@ export async function runGatewayLoop(params: {
               gatewayLog.warn("drain timeout reached; proceeding with restart");
             }
           }
+          // Flush any tool calls still in-flight so the JSONL transcript does
+          // not contain orphaned tool_use blocks.  This prevents the next
+          // gateway boot from synthesising a result and delivering a silent
+          // turn with no assistant reply.
+          flushAllActiveSessionGuards();
         }
 
         await server?.close({

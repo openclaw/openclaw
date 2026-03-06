@@ -14,6 +14,38 @@ export type GuardedSessionManager = SessionManager & {
 };
 
 /**
+ * Module-level registry of pending-flush callbacks for all active guarded sessions.
+ *
+ * Each entry is the session-level flushPendingToolResults wrapper. The wrapper
+ * removes itself from this set when called directly (normal teardown path), so
+ * the set only ever holds sessions whose tool calls are still unresolved.
+ *
+ * flushAllActiveSessionGuards() drains this set during gateway restart.
+ */
+const activeSessionGuardFlushes = new Set<() => void>();
+
+/**
+ * Flush pending tool results for ALL currently active guarded sessions.
+ *
+ * Called by the gateway restart sequence (run-loop) after the drain phase,
+ * before server.close().  Prevents orphaned tool_use blocks in JSONL
+ * transcripts that would otherwise cause silent turns on the next startup.
+ *
+ * Safe to call at any time; idempotent per session.
+ */
+export function flushAllActiveSessionGuards(): void {
+  const flushes = Array.from(activeSessionGuardFlushes);
+  activeSessionGuardFlushes.clear();
+  for (const flush of flushes) {
+    try {
+      flush();
+    } catch {
+      // Best-effort: flush as many sessions as possible even if one throws.
+    }
+  }
+}
+
+/**
  * Apply the tool-result guard to a SessionManager exactly once and expose
  * a flush method on the instance for easy teardown handling.
  */
@@ -70,7 +102,18 @@ export function guardSessionManager(
     allowedToolNames: opts?.allowedToolNames,
     beforeMessageWriteHook: beforeMessageWrite,
   });
-  (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
+
+  // Wrap flushPendingToolResults to auto-deregister from the global restart
+  // registry when the session flushes via the normal teardown path.  This
+  // prevents the global flush from double-invoking an already-flushed session.
+  const rawFlush = guard.flushPendingToolResults;
+  const wrappedFlush = () => {
+    activeSessionGuardFlushes.delete(wrappedFlush);
+    rawFlush();
+  };
+  activeSessionGuardFlushes.add(wrappedFlush);
+
+  (sessionManager as GuardedSessionManager).flushPendingToolResults = wrappedFlush;
   (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;
   return sessionManager as GuardedSessionManager;
 }
