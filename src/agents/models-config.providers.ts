@@ -27,6 +27,7 @@ import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
+import { DASHSCOPE_BASE_URL, buildDashscopeModelDefinition } from "./dashscope-models.js";
 import {
   buildDoubaoModelDefinition,
   DOUBAO_BASE_URL,
@@ -920,6 +921,14 @@ export function buildKilocodeProvider(): ProviderConfig {
   };
 }
 
+export function buildDashscopeProvider(): ProviderConfig {
+  return {
+    baseUrl: DASHSCOPE_BASE_URL,
+    api: "openai-completions",
+    models: [buildDashscopeModelDefinition()],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -1113,6 +1122,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
   if (qianfanKey) {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
+  }
+
+  const dashscopeKey =
+    resolveEnvApiKeyVarName("dashscope") ??
+    resolveApiKeyFromProfiles({ provider: "dashscope", store: authStore });
+  if (dashscopeKey) {
+    providers.dashscope = { ...buildDashscopeProvider(), apiKey: dashscopeKey };
   }
 
   const openrouterKey =

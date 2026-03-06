@@ -25,6 +25,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "qianfanApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
+  | "dashscopeApiKey"
 >;
 
 export type OnboardProviderAuthFlag = {
@@ -197,5 +198,12 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--byteplus-api-key",
     cliOption: "--byteplus-api-key <key>",
     description: "BytePlus API key",
+  },
+  {
+    optionKey: "dashscopeApiKey",
+    authChoice: "dashscope-api-key",
+    cliFlag: "--dashscope-api-key",
+    cliOption: "--dashscope-api-key <key>",
+    description: "Dashscope API key",
   },
 ];

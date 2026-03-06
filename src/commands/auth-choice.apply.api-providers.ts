@@ -24,6 +24,8 @@ import {
   applyKilocodeProviderConfig,
   applyQianfanConfig,
   applyQianfanProviderConfig,
+  applyDashscopeConfig,
+  applyDashscopeProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyLitellmConfig,
@@ -64,6 +66,7 @@ import {
   setQianfanApiKey,
   setGeminiApiKey,
   setKilocodeApiKey,
+  setDashscopeApiKey,
   setLitellmApiKey,
   setKimiCodingApiKey,
   setMistralApiKey,
@@ -76,6 +79,7 @@ import {
   setXiaomiApiKey,
   setZaiApiKey,
   ZAI_DEFAULT_MODEL_REF,
+  DASHSCOPE_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
 import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
@@ -307,6 +311,23 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
     applyProviderConfig: applySyntheticProviderConfig,
     normalize: (value) => String(value ?? "").trim(),
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+  },
+  "dashscope-api-key": {
+    provider: "dashscope",
+    profileId: "dashscope:default",
+    expectedProviders: ["dashscope"],
+    envLabel: "DASHSCOPE_API_KEY",
+    promptMessage: "Enter Dashscope API key",
+    setCredential: setDashscopeApiKey,
+    defaultModel: DASHSCOPE_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyDashscopeConfig,
+    applyProviderConfig: applyDashscopeProviderConfig,
+    noteDefault: DASHSCOPE_DEFAULT_MODEL_REF,
+    noteMessage: [
+      "Dashscope is Aliyun's AI API (OpenAI-compatible endpoint).",
+      "Get your API key at: https://bailian.console.aliyun.com/",
+    ].join("\n"),
+    noteTitle: "Dashscope",
   },
 };
 

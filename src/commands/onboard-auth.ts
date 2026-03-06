@@ -13,6 +13,8 @@ export {
   applyKilocodeProviderConfig,
   applyQianfanConfig,
   applyQianfanProviderConfig,
+  applyDashscopeConfig,
+  applyDashscopeProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyLitellmConfig,
@@ -68,6 +70,7 @@ export {
   setQianfanApiKey,
   setGeminiApiKey,
   setKilocodeApiKey,
+  setDashscopeApiKey,
   setLitellmApiKey,
   setKimiCodingApiKey,
   setMinimaxApiKey,
@@ -92,6 +95,7 @@ export {
   TOGETHER_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
+  DASHSCOPE_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
   buildKilocodeModelDefinition,

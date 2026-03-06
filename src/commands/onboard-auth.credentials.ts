@@ -15,7 +15,11 @@ import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./onboard-types.js";
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
-export { MISTRAL_DEFAULT_MODEL_REF, XAI_DEFAULT_MODEL_REF } from "./onboard-auth.models.js";
+export {
+  MISTRAL_DEFAULT_MODEL_REF,
+  XAI_DEFAULT_MODEL_REF,
+  DASHSCOPE_DEFAULT_MODEL_REF,
+} from "./onboard-auth.models.js";
 export { KILOCODE_DEFAULT_MODEL_REF };
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
@@ -335,7 +339,6 @@ export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
-
 export async function setZaiApiKey(
   key: SecretInput,
   agentDir?: string,
@@ -499,6 +502,18 @@ export async function setKilocodeApiKey(
   upsertAuthProfile({
     profileId: "kilocode:default",
     credential: buildApiKeyCredential("kilocode", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setDashscopeApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "dashscope:default",
+    credential: buildApiKeyCredential("dashscope", key, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }

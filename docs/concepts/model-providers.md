@@ -311,9 +311,21 @@ Coding models (`byteplus-plan`):
 - `byteplus-plan/kimi-k2-thinking`
 - `byteplus-plan/glm-4.7`
 
-### Synthetic
+### Dashscope (Aliyun)
 
-Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
+Dashscope is Aliyun's AI API (OpenAI-compatible endpoint), providing access to
+the **Qwen3** model family.
+
+- Provider: `dashscope`
+- Auth: `DASHSCOPE_API_KEY`
+- Example model: `dashscope/qwen3-max`
+- CLI: `openclaw onboard --auth-choice dashscope-api-key`
+
+Available regions: CN (`dashscope.aliyuncs.com`), SG (`dashscope-intl.aliyuncs.com`), US (`dashscope-us.aliyuncs.com`).
+
+See [/providers/dashscope](/providers/dashscope) for setup details, region selection, and config snippets.
+
+### Synthetic
 
 - Provider: `synthetic`
 - Auth: `SYNTHETIC_API_KEY`
