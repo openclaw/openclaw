@@ -337,13 +337,18 @@ export async function handleToolExecutionEnd(
   } else if (ctx.state.lastToolError) {
     // Keep unresolved mutating failures until the same action succeeds.
     if (ctx.state.lastToolError.mutatingAction) {
-      if (
-        isSameToolMutationAction(ctx.state.lastToolError, {
-          toolName,
-          meta,
-          actionFingerprint: callSummary?.actionFingerprint,
-        })
-      ) {
+      const sameAction = isSameToolMutationAction(ctx.state.lastToolError, {
+        toolName,
+        meta,
+        actionFingerprint: callSummary?.actionFingerprint,
+      });
+      // Also treat as recovered when the same tool name succeeds on the
+      // same target (even when the fingerprint differs due to changed args,
+      // e.g. edit retried with a longer search string).
+      const sameToolName =
+        !sameAction &&
+        toolName.trim().toLowerCase() === ctx.state.lastToolError.toolName.trim().toLowerCase();
+      if (sameAction || sameToolName) {
         ctx.state.lastToolError = undefined;
       }
     } else {
