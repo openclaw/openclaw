@@ -47,6 +47,10 @@ type ConfigSnapshot = {
   };
 };
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 export function normalizeAgentLabel(agent: {
   id: string;
   name?: string;
@@ -131,6 +135,62 @@ export function resolveAgentConfig(config: Record<string, unknown> | null, agent
     entry,
     defaults: cfg?.agents?.defaults,
     globalTools: cfg?.tools,
+  };
+}
+
+export type AgentConfigSlot = {
+  index: number;
+  seedPath: Array<string | number> | null;
+  seedValue?: unknown;
+};
+
+/**
+ * Resolve the config slot for an agent-backed settings panel.
+ *
+ * Some installs rely on an implicit `main` agent and may not have a matching
+ * `agents.list` entry. In that case we return a seed operation so callers can
+ * materialize an entry before writing nested fields.
+ */
+export function resolveAgentConfigSlot(
+  configValue: Record<string, unknown> | null,
+  agentId: string,
+): AgentConfigSlot | null {
+  const normalizedId = agentId.trim();
+  if (!normalizedId) {
+    return null;
+  }
+
+  const agentsValue = isObjectRecord(configValue) ? configValue.agents : undefined;
+  if (agentsValue != null && !isObjectRecord(agentsValue)) {
+    return null;
+  }
+
+  const listValue = isObjectRecord(agentsValue) ? agentsValue.list : undefined;
+  if (listValue != null && !Array.isArray(listValue)) {
+    return null;
+  }
+
+  const list = Array.isArray(listValue) ? listValue : [];
+  const index = list.findIndex(
+    (entry) =>
+      isObjectRecord(entry) && typeof entry.id === "string" && entry.id.trim() === normalizedId,
+  );
+  if (index >= 0) {
+    return { index, seedPath: null };
+  }
+
+  if (Array.isArray(listValue)) {
+    return {
+      index: list.length,
+      seedPath: ["agents", "list", list.length, "id"],
+      seedValue: normalizedId,
+    };
+  }
+
+  return {
+    index: 0,
+    seedPath: ["agents", "list"],
+    seedValue: [{ id: normalizedId }],
   };
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveAgentConfigSlot,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
@@ -96,5 +97,67 @@ describe("sortLocaleStrings", () => {
 
   it("accepts any iterable input, including sets", () => {
     expect(sortLocaleStrings(new Set(["beta", "alpha"]))).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("resolveAgentConfigSlot", () => {
+  it("returns existing agent index without seed operation", () => {
+    const slot = resolveAgentConfigSlot(
+      {
+        agents: {
+          list: [{ id: "main" }, { id: "ops" }],
+        },
+      },
+      "ops",
+    );
+
+    expect(slot).toEqual({
+      index: 1,
+      seedPath: null,
+    });
+  });
+
+  it("returns append seed when selected agent is missing from list", () => {
+    const slot = resolveAgentConfigSlot(
+      {
+        agents: {
+          list: [{ id: "ops" }],
+        },
+      },
+      "main",
+    );
+
+    expect(slot).toEqual({
+      index: 1,
+      seedPath: ["agents", "list", 1, "id"],
+      seedValue: "main",
+    });
+  });
+
+  it("returns initial list seed when agents.list is absent", () => {
+    const slot = resolveAgentConfigSlot({}, "main");
+
+    expect(slot).toEqual({
+      index: 0,
+      seedPath: ["agents", "list"],
+      seedValue: [{ id: "main" }],
+    });
+  });
+
+  it("returns null when agentId is blank", () => {
+    expect(resolveAgentConfigSlot({}, "   ")).toBeNull();
+  });
+
+  it("returns null when agents.list is not an array", () => {
+    expect(
+      resolveAgentConfigSlot(
+        {
+          agents: {
+            list: "invalid",
+          },
+        },
+        "main",
+      ),
+    ).toBeNull();
   });
 });
