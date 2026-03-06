@@ -855,6 +855,45 @@ function createKimiCodingAnthropicToolSchemaWrapper(baseStreamFn: StreamFn | und
  * Create a streamFn wrapper that adds OpenRouter app attribution headers
  * and injects reasoning.effort based on the configured thinking level.
  */
+function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkLevel): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+
+  const payloadObj = payload as Record<string, unknown>;
+
+  // pi-ai may inject a top-level reasoning_effort (OpenAI flat format).
+  // OpenRouter-compatible proxy gateways expect the nested reasoning.effort
+  // shape instead, and some models reject the flat field outright.
+  delete payloadObj.reasoning_effort;
+
+  // When thinking is "off", or provider/model guards disable injection,
+  // leave reasoning unset after normalizing away the legacy flat field.
+  if (!thinkingLevel || thinkingLevel === "off") {
+    return;
+  }
+
+  const existingReasoning = payloadObj.reasoning;
+
+  // OpenRouter treats reasoning.effort and reasoning.max_tokens as
+  // alternative controls. If max_tokens is already present, do not inject
+  // effort and do not overwrite caller-supplied reasoning.
+  if (
+    existingReasoning &&
+    typeof existingReasoning === "object" &&
+    !Array.isArray(existingReasoning)
+  ) {
+    const reasoningObj = existingReasoning as Record<string, unknown>;
+    if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
+      reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
+    }
+  } else if (!existingReasoning) {
+    payloadObj.reasoning = {
+      effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
+    };
+  }
+}
+
 function createOpenRouterWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
@@ -869,42 +908,7 @@ function createOpenRouterWrapper(
         ...options?.headers,
       },
       onPayload: (payload) => {
-        if (thinkingLevel && payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-
-          // pi-ai may inject a top-level reasoning_effort (OpenAI flat format).
-          // OpenRouter expects the nested reasoning.effort format instead, and
-          // rejects payloads containing both fields. Remove the flat field so
-          // only the nested one is sent.
-          delete payloadObj.reasoning_effort;
-
-          // When thinking is "off", do not inject reasoning at all.
-          // Some models (e.g. deepseek/deepseek-r1) require reasoning and reject
-          // { effort: "none" } with "Reasoning is mandatory for this endpoint and
-          // cannot be disabled." Omitting the field lets each model use its own
-          // default reasoning behavior.
-          if (thinkingLevel !== "off") {
-            const existingReasoning = payloadObj.reasoning;
-
-            // OpenRouter treats reasoning.effort and reasoning.max_tokens as
-            // alternative controls. If max_tokens is already present, do not
-            // inject effort and do not overwrite caller-supplied reasoning.
-            if (
-              existingReasoning &&
-              typeof existingReasoning === "object" &&
-              !Array.isArray(existingReasoning)
-            ) {
-              const reasoningObj = existingReasoning as Record<string, unknown>;
-              if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
-                reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
-              }
-            } else if (!existingReasoning) {
-              payloadObj.reasoning = {
-                effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
-              };
-            }
-          }
-        }
+        normalizeProxyReasoningPayload(payload, thinkingLevel);
         onPayload?.(payload);
       },
     });
@@ -912,10 +916,9 @@ function createOpenRouterWrapper(
 }
 
 /**
- * Models on OpenRouter that do not support the `reasoning.effort` parameter.
- * Injecting it causes "Invalid arguments passed to the model" errors.
+ * Models on OpenRouter-style proxy providers that reject `reasoning.effort`.
  */
-function isOpenRouterReasoningUnsupported(modelId: string): boolean {
+function isProxyReasoningUnsupported(modelId: string): boolean {
   const id = modelId.toLowerCase();
   return id.startsWith("x-ai/");
 }
@@ -941,31 +944,7 @@ function createKilocodeWrapper(
         ...resolveKilocodeAppHeaders(),
       },
       onPayload: (payload) => {
-        if (thinkingLevel && payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-
-          // Remove flat reasoning_effort — the gateway expects the nested
-          // reasoning.effort format (same as OpenRouter).
-          delete payloadObj.reasoning_effort;
-
-          if (thinkingLevel !== "off") {
-            const existingReasoning = payloadObj.reasoning;
-            if (
-              existingReasoning &&
-              typeof existingReasoning === "object" &&
-              !Array.isArray(existingReasoning)
-            ) {
-              const reasoningObj = existingReasoning as Record<string, unknown>;
-              if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
-                reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
-              }
-            } else if (!existingReasoning) {
-              payloadObj.reasoning = {
-                effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
-              };
-            }
-          }
-        }
+        normalizeProxyReasoningPayload(payload, thinkingLevel);
         onPayload?.(payload);
       },
     });
@@ -1179,7 +1158,7 @@ export function applyExtraParamsToAgent(
     // and reject payloads containing it with "Invalid arguments passed to the
     // model." Skip reasoning injection for these models.
     // See: openclaw/openclaw#32039
-    const skipReasoningInjection = modelId === "auto" || isOpenRouterReasoningUnsupported(modelId);
+    const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
     const openRouterThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
@@ -1191,9 +1170,7 @@ export function applyExtraParamsToAgent(
     // (same rationale as OpenRouter "auto"). See: openclaw/openclaw#24851
     // Also skip for models known to reject reasoning.effort (e.g. x-ai/*).
     const kilocodeThinkingLevel =
-      modelId === "kilo/auto" || isOpenRouterReasoningUnsupported(modelId)
-        ? undefined
-        : thinkingLevel;
+      modelId === "kilo/auto" || isProxyReasoningUnsupported(modelId) ? undefined : thinkingLevel;
     agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
   }
 

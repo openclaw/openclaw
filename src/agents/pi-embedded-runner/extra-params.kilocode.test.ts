@@ -96,7 +96,7 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
     let capturedPayload: Record<string, unknown> | undefined;
 
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {};
+      const payload: Record<string, unknown> = { reasoning_effort: "high" };
       options?.onPayload?.(payload);
       capturedPayload = payload;
       return createAssistantMessageEventStream();
@@ -117,6 +117,7 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
 
     // kilo/auto should not have reasoning injected
     expect(capturedPayload?.reasoning).toBeUndefined();
+    expect(capturedPayload).not.toHaveProperty("reasoning_effort");
   });
 
   it("injects reasoning.effort for non-auto kilocode models", () => {
@@ -156,7 +157,7 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
     let capturedPayload: Record<string, unknown> | undefined;
 
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {};
+      const payload: Record<string, unknown> = { reasoning_effort: "high" };
       options?.onPayload?.(payload);
       capturedPayload = payload;
       return createAssistantMessageEventStream();
@@ -176,5 +177,6 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
 
     // x-ai models reject reasoning.effort — should be skipped
     expect(capturedPayload?.reasoning).toBeUndefined();
+    expect(capturedPayload).not.toHaveProperty("reasoning_effort");
   });
 });
