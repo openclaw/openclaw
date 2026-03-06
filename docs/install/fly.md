@@ -96,7 +96,7 @@ Set a gateway token **and save it somewhere**. You will need this exact value in
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
-# Save this toen; you'll paste it into the UI later.
+# Save this token; you'll paste it into the UI later.
 export OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
 echo "$OPENCLAW_GATEWAY_TOKEN"
 
