@@ -520,13 +520,21 @@ describe("gateway server sessions", () => {
     const reset = await rpcReq<{
       ok: true;
       key: string;
-      entry: { sessionId: string; modelProvider?: string; model?: string };
+      entry: {
+        sessionId: string;
+        modelProvider?: string;
+        model?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+      };
     }>(ws, "sessions.reset", { key: "agent:main:main" });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
-    expect(reset.payload?.entry.modelProvider).toBe("openai");
-    expect(reset.payload?.entry.model).toBe("gpt-test-a");
+    expect(reset.payload?.entry.modelProvider).toBeUndefined();
+    expect(reset.payload?.entry.model).toBeUndefined();
+    expect(reset.payload?.entry.providerOverride).toBe("openai");
+    expect(reset.payload?.entry.modelOverride).toBe("gpt-test-a");
     const filesAfterReset = await fs.readdir(dir);
     expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
 
@@ -972,6 +980,70 @@ describe("gateway server sessions", () => {
       reason: "session-reset",
       sendFarewell: true,
     });
+
+    ws.close();
+  });
+
+  test("sessions.reset clears runtime model metadata but preserves explicit overrides", async () => {
+    const { storePath } = await createSessionStoreDir();
+
+    await writeSessionStore({
+      storePath,
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          providerOverride: "openai-codex",
+          modelOverride: "gpt-5.4",
+          authProfileOverride: "openai-codex:default",
+          authProfileOverrideSource: "user",
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{
+      ok: true;
+      entry: {
+        modelProvider?: string;
+        model?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        authProfileOverride?: string;
+        authProfileOverrideSource?: string;
+      };
+    }>(ws, "sessions.reset", {
+      key: "main",
+    });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.modelProvider).toBeUndefined();
+    expect(reset.payload?.entry.model).toBeUndefined();
+    expect(reset.payload?.entry.providerOverride).toBe("openai-codex");
+    expect(reset.payload?.entry.modelOverride).toBe("gpt-5.4");
+    expect(reset.payload?.entry.authProfileOverride).toBe("openai-codex:default");
+    expect(reset.payload?.entry.authProfileOverrideSource).toBe("user");
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        modelProvider?: string;
+        model?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        authProfileOverride?: string;
+        authProfileOverrideSource?: string;
+      }
+    >;
+    const entry = store["agent:main:main"];
+    expect(entry?.modelProvider).toBeUndefined();
+    expect(entry?.model).toBeUndefined();
+    expect(entry?.providerOverride).toBe("openai-codex");
+    expect(entry?.modelOverride).toBe("gpt-5.4");
+    expect(entry?.authProfileOverride).toBe("openai-codex:default");
+    expect(entry?.authProfileOverrideSource).toBe("user");
 
     ws.close();
   });

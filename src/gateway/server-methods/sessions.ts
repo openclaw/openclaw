@@ -506,9 +506,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const next = await updateSessionStore(storePath, (store) => {
       const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
       const entry = store[primaryKey];
-      const parsed = parseAgentSessionKey(primaryKey);
-      const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
-      const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
       oldSessionId = entry?.sessionId;
       oldSessionFile = entry?.sessionFile;
       const now = Date.now();
@@ -521,8 +518,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         responseUsage: entry?.responseUsage,
-        model: resolvedModel.model,
-        modelProvider: resolvedModel.provider,
+        modelOverride: entry?.modelOverride,
+        providerOverride: entry?.providerOverride,
+        authProfileOverride: entry?.authProfileOverride,
+        authProfileOverrideSource: entry?.authProfileOverrideSource,
+        authProfileOverrideCompactionCount: entry?.authProfileOverrideCompactionCount,
         contextTokens: entry?.contextTokens,
         sendPolicy: entry?.sendPolicy,
         label: entry?.label,
