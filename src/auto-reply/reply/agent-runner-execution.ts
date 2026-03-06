@@ -10,6 +10,12 @@ import {
   isContextOverflowError,
   isLikelyContextOverflowError,
   isTransientHttpError,
+  isRateLimitErrorMessage,
+  isOverloadedErrorMessage,
+  isBillingErrorMessage,
+  isAuthErrorMessage,
+  isAuthPermanentErrorMessage,
+  isTimeoutErrorMessage,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -606,15 +612,27 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-      const safeMessage = isTransientHttp
-        ? sanitizeUserFacingText(message, { errorContext: true })
-        : message;
-      const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
+
+      // Classify the error to provide a user-friendly message instead of
+      // leaking raw API error details (rate limits, billing info, auth
+      // tokens, internal request IDs, etc.) into the chat.
       const fallbackText = isContextOverflow
         ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
         : isRoleOrderingError
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+          : isRateLimitErrorMessage(message) || isOverloadedErrorMessage(message)
+            ? "⚠️ API rate limit reached. Please try again later."
+            : isBillingErrorMessage(message)
+              ? "⚠️ API billing error — your API key has run out of credits. Check your provider's billing dashboard."
+              : isAuthPermanentErrorMessage(message)
+                ? "⚠️ Authentication failed — your API key appears to be invalid or revoked. Please check your configuration."
+                : isAuthErrorMessage(message)
+                  ? "⚠️ Authentication error — please verify your API key or credentials."
+                  : isTimeoutErrorMessage(message)
+                    ? "⚠️ LLM request timed out. Please try again."
+                    : isTransientHttp
+                      ? `⚠️ AI service temporarily unavailable. Please try again in a moment.`
+                      : "⚠️ An unexpected error occurred. Check `openclaw logs --follow` for details.";
 
       return {
         kind: "final",
