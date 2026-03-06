@@ -27,3 +27,7 @@
 {"timestamp":"2026-03-06T10:31:51.045Z","action":"send_email_error","recipient":"fjventura20@gmail.com","subject":"🎯 Tim Agent Test Email","error":"Failed to get inbox ID: No inbox found for timsmail@agentmail.to. Available inboxes: TimsMail"}
 {"timestamp":"2026-03-06T10:32:12.851Z","action":"send_email_attempt","recipient":"fjventura20@gmail.com","subject":"🎯 Tim Agent Test Email","message_hash":"61c9d65808d0eda816307be4febdca246cddee4d42a9b3270cbbdef4b3b90b6f"}
 {"timestamp":"2026-03-06T10:32:13.446Z","action":"send_email_success","recipient":"fjventura20@gmail.com","subject":"🎯 Tim Agent Test Email","message_hash":"61c9d65808d0eda816307be4febdca246cddee4d42a9b3270cbbdef4b3b90b6f","message_id":"<0100019cc2b4788d-ed5cee50-317a-41d5-934e-cead59a118a1-000000@email.amazonses.com>"}
+{"timestamp":"2026-03-06T10:32:28.581Z","action":"read_inbox_attempt","email":"timsmail@agentmail.to"}
+{"timestamp":"2026-03-06T10:32:28.881Z","action":"read_inbox_success","email":"timsmail@agentmail.to","message_count":2}
+{"timestamp":"2026-03-06T10:34:37.926Z","action":"read_inbox_attempt","email":"timsmail@agentmail.to"}
+{"timestamp":"2026-03-06T10:34:38.270Z","action":"read_inbox_success","email":"timsmail@agentmail.to","message_count":3}
