@@ -12,6 +12,7 @@ import {
   parseCanonicalIpAddress,
   parseLooseIpAddress,
 } from "../../shared/net/ip.js";
+import { withTimeout } from "../../utils/with-timeout.js";
 import { normalizeHostname } from "./hostname.js";
 
 type LookupCallback = (
@@ -352,10 +353,12 @@ export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<v
       // Race against a short timer and fall back to destroy().
       const closed = candidate.close();
       if (closed && typeof closed.then === "function") {
-        const timeout = new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 3_000));
-        const result = await Promise.race([closed.then(() => "ok" as const), timeout]);
-        if (result === "timeout" && typeof candidate.destroy === "function") {
-          candidate.destroy();
+        try {
+          await withTimeout(closed, 3_000);
+        } catch {
+          if (typeof candidate.destroy === "function") {
+            candidate.destroy();
+          }
         }
         return;
       }

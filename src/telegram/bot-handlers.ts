@@ -75,7 +75,14 @@ function isMediaSizeLimitError(err: unknown): boolean {
 }
 
 function isRecoverableMediaGroupError(err: unknown): boolean {
-  return err instanceof MediaFetchError || isMediaSizeLimitError(err);
+  // Treat all media-related errors as recoverable in media groups so a single
+  // failed attachment (e.g. getFile timeout, size limit) doesn't abort the
+  // entire album and drop the caption/text.
+  return (
+    err instanceof MediaFetchError ||
+    isMediaSizeLimitError(err) ||
+    (err instanceof Error && /telegram getFile failed|getFile.*timeout/i.test(err.message))
+  );
 }
 
 function hasInboundMedia(msg: Message): boolean {
