@@ -212,6 +212,10 @@ export type TelegramAccountConfig = {
    * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
    */
   ackReaction?: string;
+  /** Throttle in ms between draft preview updates (min 250ms). Lower = smoother streaming. */
+  streamThrottleMs?: number;
+  /** Minimum characters before sending first draft preview (improves push notification UX). */
+  minInitialChars?: number;
   /** Custom Telegram Bot API root URL (e.g. "https://my-proxy.example.com" or a local Bot API server). */
   apiRoot?: string;
   /** Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. */

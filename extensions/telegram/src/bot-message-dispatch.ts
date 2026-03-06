@@ -355,7 +355,8 @@ export const dispatchTelegramMessage = async ({
   const canStreamReasoningDraft = streamReasoningDraft;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
-  const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
+  const draftStreamThrottleMs = telegramCfg.streamThrottleMs;
+  const draftMinInitialChars = telegramCfg.minInitialChars ?? DRAFT_MIN_INITIAL_CHARS;
   // DM draft previews still duplicate briefly at materialize time.
   const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
@@ -370,6 +371,7 @@ export const dispatchTelegramMessage = async ({
           thread: threadSpec,
           previewTransport: useMessagePreviewTransportForDm ? "message" : "auto",
           replyToMessageId: draftReplyToMessageId,
+          throttleMs: draftStreamThrottleMs,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,
           onSupersededPreview:
