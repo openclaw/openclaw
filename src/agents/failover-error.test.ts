@@ -7,6 +7,33 @@ import {
   resolveFailoverStatus,
 } from "./failover-error.js";
 
+// OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
+const OPENAI_RATE_LIMIT_MESSAGE =
+  "Rate limit reached for gpt-4.1-mini in organization org_test on requests per min. Limit: 3.000000 / min. Current: 3.000000 / min.";
+// Anthropic overloaded_error example shape: https://docs.anthropic.com/en/api/errors
+const ANTHROPIC_OVERLOADED_PAYLOAD =
+  '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_test"}';
+// Gemini RESOURCE_EXHAUSTED troubleshooting example: https://ai.google.dev/gemini-api/docs/troubleshooting
+const GEMINI_RESOURCE_EXHAUSTED_MESSAGE =
+  "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).";
+// OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
+const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
+// Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
+// https://github.com/openclaw/openclaw/issues/23440
+const INSUFFICIENT_QUOTA_PAYLOAD =
+  '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
+// AWS Bedrock 429 ThrottlingException / 503 ServiceUnavailable:
+// https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+const BEDROCK_THROTTLING_EXCEPTION_MESSAGE =
+  "ThrottlingException: Your request was denied due to exceeding the account quotas for Amazon Bedrock.";
+const BEDROCK_SERVICE_UNAVAILABLE_MESSAGE =
+  "ServiceUnavailable: The service is temporarily unable to handle the request.";
+// Groq error codes examples: https://console.groq.com/docs/errors
+const GROQ_TOO_MANY_REQUESTS_MESSAGE =
+  "429 Too Many Requests: Too many requests were sent in a given timeframe.";
+const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
+  "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.";
+
 describe("failover-error", () => {
   it("infers failover reason from HTTP status", () => {
     expect(resolveFailoverReasonFromError({ status: 402 })).toBe("billing");
@@ -14,10 +41,76 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
-    // Transient server errors (502/503/504) should trigger failover as timeout.
+    // Keep the status-only path behavior-preserving and conservative.
+    expect(resolveFailoverReasonFromError({ status: 500 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ status: 521 })).toBeNull();
+    expect(resolveFailoverReasonFromError({ status: 522 })).toBeNull();
+    expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
+    expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
+    expect(resolveFailoverReasonFromError({ status: 529 })).toBe("rate_limit");
+  });
+
+  it("classifies documented provider error shapes at the error boundary", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 429,
+        message: OPENAI_RATE_LIMIT_MESSAGE,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 529,
+        message: ANTHROPIC_OVERLOADED_PAYLOAD,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 429,
+        message: GEMINI_RESOURCE_EXHAUSTED_MESSAGE,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: OPENROUTER_CREDITS_MESSAGE,
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 429,
+        message: BEDROCK_THROTTLING_EXCEPTION_MESSAGE,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 503,
+        message: BEDROCK_SERVICE_UNAVAILABLE_MESSAGE,
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 429,
+        message: GROQ_TOO_MANY_REQUESTS_MESSAGE,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 503,
+        message: GROQ_SERVICE_UNAVAILABLE_MESSAGE,
+      }),
+    ).toBe("timeout");
+  });
+
+  it("treats 400 insufficient_quota payloads as billing instead of format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: INSUFFICIENT_QUOTA_PAYLOAD,
+      }),
+    ).toBe("billing");
   });
 
   it("infers format errors from error messages", () => {
@@ -33,12 +126,33 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
   });
 
-  it("infers timeout from abort stop-reason messages", () => {
+  it("infers timeout from abort/error stop-reason messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: abort" })).toBe(
       "timeout",
     );
+    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: error" })).toBe(
+      "timeout",
+    );
     expect(resolveFailoverReasonFromError({ message: "stop reason: abort" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("timeout");
+  });
+
+  it("infers timeout from connection/network error messages", () => {
+    expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "Network error: ECONNREFUSED" })).toBe(
+      "timeout",
+    );
+    expect(
+      resolveFailoverReasonFromError({
+        message: "dial tcp: lookup api.example.com: no such host (ENOTFOUND)",
+      }),
+    ).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "temporary dns failure EAI_AGAIN" })).toBe(
+      "timeout",
+    );
   });
 
   it("treats AbortError reason=abort as timeout", () => {

@@ -38,24 +38,32 @@ async function fetchDiscordApplicationMe(
   timeoutMs: number,
   fetcher: typeof fetch,
 ): Promise<{ id?: string; flags?: number } | undefined> {
-  const normalized = normalizeDiscordToken(token);
-  if (!normalized) {
-    return undefined;
-  }
   try {
-    const res = await fetchWithTimeout(
-      `${DISCORD_API_BASE}/oauth2/applications/@me`,
-      { headers: { Authorization: `Bot ${normalized}` } },
-      timeoutMs,
-      getResolvedFetch(fetcher),
-    );
-    if (!res.ok) {
+    const appResponse = await fetchDiscordApplicationMeResponse(token, timeoutMs, fetcher);
+    if (!appResponse || !appResponse.ok) {
       return undefined;
     }
-    return (await res.json()) as { id?: string; flags?: number };
+    return (await appResponse.json()) as { id?: string; flags?: number };
   } catch {
     return undefined;
   }
+}
+
+async function fetchDiscordApplicationMeResponse(
+  token: string,
+  timeoutMs: number,
+  fetcher: typeof fetch,
+): Promise<Response | undefined> {
+  const normalized = normalizeDiscordToken(token, "channels.discord.token");
+  if (!normalized) {
+    return undefined;
+  }
+  return await fetchWithTimeout(
+    `${DISCORD_API_BASE}/oauth2/applications/@me`,
+    { headers: { Authorization: `Bot ${normalized}` } },
+    timeoutMs,
+    getResolvedFetch(fetcher),
+  );
 }
 
 export function resolveDiscordPrivilegedIntentsFromFlags(
@@ -118,7 +126,7 @@ export async function probeDiscord(
   const started = Date.now();
   const fetcher = opts?.fetcher ?? fetch;
   const includeApplication = opts?.includeApplication === true;
-  const normalized = normalizeDiscordToken(token);
+  const normalized = normalizeDiscordToken(token, "channels.discord.token");
   const result: DiscordProbe = {
     ok: false,
     status: null,
@@ -174,7 +182,7 @@ export async function probeDiscord(
  * Number.MAX_SAFE_INTEGER.
  */
 export function parseApplicationIdFromToken(token: string): string | undefined {
-  const normalized = normalizeDiscordToken(token);
+  const normalized = normalizeDiscordToken(token, "channels.discord.token");
   if (!normalized) {
     return undefined;
   }
@@ -198,17 +206,15 @@ export async function fetchDiscordApplicationId(
   timeoutMs: number,
   fetcher: typeof fetch = fetch,
 ): Promise<string | undefined> {
-  const normalized = normalizeDiscordToken(token);
+  const normalized = normalizeDiscordToken(token, "channels.discord.token");
   if (!normalized) {
     return undefined;
   }
   try {
-    const res = await fetchWithTimeout(
-      `${DISCORD_API_BASE}/oauth2/applications/@me`,
-      { headers: { Authorization: `Bot ${normalized}` } },
-      timeoutMs,
-      getResolvedFetch(fetcher),
-    );
+    const res = await fetchDiscordApplicationMeResponse(token, timeoutMs, fetcher);
+    if (!res) {
+      return undefined;
+    }
     if (res.ok) {
       const json = (await res.json()) as { id?: string };
       if (json?.id) {

@@ -1,7 +1,7 @@
 import { join, parse } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("openclaw/plugin-sdk", () => ({
+vi.mock("openclaw/plugin-sdk/google-gemini-cli-auth", () => ({
   isWSL2Sync: () => false,
   fetchWithSsrFGuard: async (params: {
     url: string;
@@ -239,14 +239,15 @@ describe("loginGeminiCliOAuth", () => {
     "GOOGLE_CLOUD_PROJECT_ID",
   ] as const;
 
-  function getExpectedPlatform(): "WINDOWS" | "MACOS" | "LINUX" {
+  function getExpectedPlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
     if (process.platform === "win32") {
       return "WINDOWS";
     }
-    if (process.platform === "linux") {
-      return "LINUX";
+    if (process.platform === "darwin") {
+      return "MACOS";
     }
-    return "MACOS";
+    // Matches updated resolvePlatform() which uses PLATFORM_UNSPECIFIED for Linux
+    return "PLATFORM_UNSPECIFIED";
   }
 
   function getRequestUrl(input: string | URL | Request): string {
