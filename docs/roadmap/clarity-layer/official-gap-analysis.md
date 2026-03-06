@@ -1,3 +1,8 @@
+---
+summary: "Clarity Layer roadmap notes"
+draft: true
+---
+
 # Official Docs vs Install Safeguard Issue -- Gap Analysis (2026-03-05)
 
 ## Snapshot

@@ -1,3 +1,8 @@
+---
+summary: "Clarity Layer roadmap notes"
+draft: true
+---
+
 # Clarity Layer Protocols (Automation Draft)
 
 These are the standards we want upstream OpenClaw to adopt. Each protocol turns a recurring pain point into a deterministic workflow.
