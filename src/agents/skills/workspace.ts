@@ -224,6 +224,7 @@ function loadSkillEntries(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    sandboxMode?: boolean;
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config);
@@ -321,8 +322,17 @@ function loadSkillEntries(
     return loadedSkills;
   };
 
-  const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
   const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
+  const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
+
+  // In sandbox mode, all skills have been synced into the workspace by
+  // syncSkillsToWorkspace(). Loading from external host paths (bundled,
+  // managed, personal, extras) would inject filePath values that point outside
+  // the sandbox root, causing "Path escapes sandbox root" errors when the
+  // agent tries to read them.
+  const skipExternalDirs = opts?.sandboxMode === true;
+
+  const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw
@@ -334,29 +344,35 @@ function loadSkillEntries(
   });
   const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
 
-  const bundledSkills = bundledSkillsDir
-    ? loadSkills({
-        dir: bundledSkillsDir,
-        source: "openclaw-bundled",
-      })
-    : [];
-  const extraSkills = mergedExtraDirs.flatMap((dir) => {
-    const resolved = resolveUserPath(dir);
-    return loadSkills({
-      dir: resolved,
-      source: "openclaw-extra",
-    });
-  });
-  const managedSkills = loadSkills({
-    dir: managedSkillsDir,
-    source: "openclaw-managed",
-  });
+  const bundledSkills =
+    bundledSkillsDir && !skipExternalDirs
+      ? loadSkills({
+          dir: bundledSkillsDir,
+          source: "openclaw-bundled",
+        })
+      : [];
+  const extraSkills = skipExternalDirs
+    ? []
+    : mergedExtraDirs.flatMap((dir) => {
+        const resolved = resolveUserPath(dir);
+        return loadSkills({
+          dir: resolved,
+          source: "openclaw-extra",
+        });
+      });
+  const managedSkills = skipExternalDirs
+    ? []
+    : loadSkills({
+        dir: managedSkillsDir,
+        source: "openclaw-managed",
+      });
   const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
-  const personalAgentsSkills = loadSkills({
-    dir: personalAgentsSkillsDir,
-    source: "agents-skills-personal",
-  });
-  const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
+  const personalAgentsSkills = skipExternalDirs
+    ? []
+    : loadSkills({
+        dir: personalAgentsSkillsDir,
+        source: "agents-skills-personal",
+      });
   const projectAgentsSkills = loadSkills({
     dir: projectAgentsSkillsDir,
     source: "agents-skills-project",
@@ -542,6 +558,7 @@ export function loadWorkspaceSkillEntries(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    sandboxMode?: boolean;
   },
 ): SkillEntry[] {
   return loadSkillEntries(workspaceDir, opts);

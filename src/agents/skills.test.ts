@@ -235,6 +235,60 @@ describe("buildWorkspaceSkillsPrompt", () => {
   });
 });
 
+describe("loadWorkspaceSkillEntries sandboxMode", () => {
+  it("excludes bundled skills when sandboxMode is true", async () => {
+    const workspaceDir = await makeWorkspace();
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    await writeSkill({
+      dir: path.join(bundledDir, "bundled-only"),
+      name: "bundled-only",
+      description: "Bundled skill",
+      body: "# Bundled\n",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "workspace-skill"),
+      name: "workspace-skill",
+      description: "Workspace skill",
+      body: "# Workspace\n",
+    });
+
+    const normal = loadWorkspaceSkillEntries(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+    });
+    expect(normal.some((e) => e.skill.name === "bundled-only")).toBe(true);
+    expect(normal.some((e) => e.skill.name === "workspace-skill")).toBe(true);
+
+    const sandboxed = loadWorkspaceSkillEntries(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      sandboxMode: true,
+    });
+    expect(sandboxed.some((e) => e.skill.name === "bundled-only")).toBe(false);
+    expect(sandboxed.some((e) => e.skill.name === "workspace-skill")).toBe(true);
+  });
+
+  it("excludes managed skills when sandboxMode is true", async () => {
+    const workspaceDir = await makeWorkspace();
+    const managedDir = path.join(workspaceDir, ".managed");
+    await writeSkill({
+      dir: path.join(managedDir, "managed-only"),
+      name: "managed-only",
+      description: "Managed skill",
+      body: "# Managed\n",
+    });
+
+    const normal = loadWorkspaceSkillEntries(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+    });
+    expect(normal.some((e) => e.skill.name === "managed-only")).toBe(true);
+
+    const sandboxed = loadWorkspaceSkillEntries(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      sandboxMode: true,
+    });
+    expect(sandboxed.some((e) => e.skill.name === "managed-only")).toBe(false);
+  });
+});
+
 describe("applySkillEnvOverrides", () => {
   it("sets and restores env vars", async () => {
     const workspaceDir = await makeWorkspace();

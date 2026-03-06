@@ -700,6 +700,7 @@ export async function runEmbeddedAttempt(
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
   });
+  const isSandboxed = sandbox?.enabled === true && sandbox.workspaceAccess !== "rw";
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
       ? resolvedWorkspace
@@ -714,6 +715,7 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
       config: params.config,
       skillsSnapshot: params.skillsSnapshot,
+      sandboxed: isSandboxed,
     });
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({

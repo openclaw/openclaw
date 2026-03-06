@@ -323,6 +323,7 @@ export async function compactEmbeddedPiSessionDirect(
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
   });
+  const isSandboxed = sandbox?.enabled === true && sandbox.workspaceAccess !== "rw";
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
       ? resolvedWorkspace
@@ -342,6 +343,7 @@ export async function compactEmbeddedPiSessionDirect(
       workspaceDir: effectiveWorkspace,
       config: params.config,
       skillsSnapshot: params.skillsSnapshot,
+      sandboxed: isSandboxed,
     });
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
