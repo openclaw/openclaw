@@ -172,9 +172,13 @@ function resolveOpenAICodexForwardCompatModel(
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow:
-      lower === OPENAI_CODEX_GPT_54_MODEL_ID ? OPENAI_CODEX_GPT_54_CONTEXT_TOKENS : DEFAULT_CONTEXT_TOKENS,
+      lower === OPENAI_CODEX_GPT_54_MODEL_ID
+        ? OPENAI_CODEX_GPT_54_CONTEXT_TOKENS
+        : DEFAULT_CONTEXT_TOKENS,
     maxTokens:
-      lower === OPENAI_CODEX_GPT_54_MODEL_ID ? OPENAI_CODEX_GPT_54_MAX_TOKENS : DEFAULT_CONTEXT_TOKENS,
+      lower === OPENAI_CODEX_GPT_54_MODEL_ID
+        ? OPENAI_CODEX_GPT_54_MAX_TOKENS
+        : DEFAULT_CONTEXT_TOKENS,
   } as Model<Api>);
 }
 
