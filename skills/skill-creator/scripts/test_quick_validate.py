@@ -67,6 +67,87 @@ metadata: |
 
         self.assertTrue(valid, message)
 
+    def test_rejects_allowed_tools_scalar_with_pyyaml(self):
+        skill_dir = self.temp_dir / "scalar-skill"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: scalar-skill
+description: bad allowed-tools
+allowed-tools: gh
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        valid, message = quick_validate.validate_skill(skill_dir)
+
+        self.assertFalse(valid)
+        self.assertEqual(message, "allowed-tools must be a YAML list of non-empty strings")
+
+    def test_rejects_allowed_tools_empty_entries_with_pyyaml(self):
+        skill_dir = self.temp_dir / "empty-allowed-tools-skill"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: empty-allowed-tools-skill
+description: bad allowed-tools
+allowed-tools:
+  - gh
+  - ""
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        valid, message = quick_validate.validate_skill(skill_dir)
+
+        self.assertFalse(valid)
+        self.assertEqual(message, "allowed-tools must be a YAML list of non-empty strings")
+
+    def test_rejects_allowed_tools_scalar_without_pyyaml(self):
+        skill_dir = self.temp_dir / "scalar-skill-fallback"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: scalar-skill-fallback
+description: bad allowed-tools
+allowed-tools: gh
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        previous_yaml = quick_validate.yaml
+        quick_validate.yaml = None
+        try:
+            valid, message = quick_validate.validate_skill(skill_dir)
+        finally:
+            quick_validate.yaml = previous_yaml
+
+        self.assertFalse(valid)
+        self.assertEqual(message, "allowed-tools must be a YAML list of non-empty strings")
+
+    def test_rejects_allowed_tools_non_list_syntax_without_pyyaml(self):
+        skill_dir = self.temp_dir / "bad-list-skill-fallback"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: bad-list-skill-fallback
+description: bad allowed-tools
+allowed-tools:
+  gh
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        previous_yaml = quick_validate.yaml
+        quick_validate.yaml = None
+        try:
+            valid, message = quick_validate.validate_skill(skill_dir)
+        finally:
+            quick_validate.yaml = previous_yaml
+
+        self.assertFalse(valid)
+        self.assertEqual(message, "allowed-tools must be a YAML list of non-empty strings")
+
 
 if __name__ == "__main__":
     main()

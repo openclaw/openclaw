@@ -64,6 +64,36 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
     return parsed
 
 
+def _parse_allowed_tools_fallback(raw: str) -> tuple[bool, list[str] | str]:
+    """Parse allowed-tools from the fallback frontmatter parser.
+
+    The fallback parser flattens indented YAML into newline-joined strings.
+    For `allowed-tools`, we support a minimal YAML list syntax:
+
+      allowed-tools:
+        - gh
+        - browser
+
+    Returns (ok, tools) where tools is a list[str] if ok else an error message.
+    """
+    lines = [ln.strip() for ln in (raw or "").splitlines() if ln.strip()]
+    tools: list[str] = []
+
+    # Reject scalars like `allowed-tools: gh` to match the expected list shape.
+    if not lines:
+        return True, tools
+
+    for ln in lines:
+        if not ln.startswith("-"):
+            return False, "allowed-tools must be a YAML list of non-empty strings"
+        item = ln[1:].strip()
+        if not item:
+            return False, "allowed-tools must be a YAML list of non-empty strings"
+        tools.append(item)
+
+    return True, tools
+
+
 def validate_skill(skill_path):
     """Basic validation of a skill"""
     skill_path = Path(skill_path)
@@ -110,6 +140,21 @@ def validate_skill(skill_path):
         return False, "Missing 'name' in frontmatter"
     if "description" not in frontmatter:
         return False, "Missing 'description' in frontmatter"
+
+    # `allowed-tools` is optional, but when present it must be a list of non-empty strings.
+    if "allowed-tools" in frontmatter:
+        allowed_tools = frontmatter.get("allowed-tools")
+        if yaml is None:
+            if not isinstance(allowed_tools, str):
+                return False, "allowed-tools must be a YAML list of non-empty strings"
+            ok, parsed = _parse_allowed_tools_fallback(allowed_tools)
+            if not ok:
+                return False, parsed  # type: ignore[return-value]
+        else:
+            if not isinstance(allowed_tools, list) or any(
+                (not isinstance(x, str) or not x.strip()) for x in allowed_tools
+            ):
+                return False, "allowed-tools must be a YAML list of non-empty strings"
 
     name = frontmatter.get("name", "")
     if not isinstance(name, str):
