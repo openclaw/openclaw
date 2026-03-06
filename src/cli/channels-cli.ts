@@ -92,6 +92,7 @@ export function registerChannelsCli(program: Command) {
   channels
     .command("list")
     .description("List configured channels + auth profiles")
+    .option("--verbose", "Show detailed channel account fields", false)
     .option("--no-usage", "Skip model provider usage/quota snapshots")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -103,6 +104,7 @@ export function registerChannelsCli(program: Command) {
   channels
     .command("status")
     .description("Show gateway channel status (use status --deep for local)")
+    .option("--verbose", "Show detailed channel runtime fields", false)
     .option("--probe", "Probe channel credentials", false)
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--json", "Output JSON", false)

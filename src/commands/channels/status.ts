@@ -16,6 +16,7 @@ export type ChannelsStatusOptions = {
   json?: boolean;
   probe?: boolean;
   timeout?: string;
+  verbose?: boolean;
 };
 
 function appendEnabledConfiguredLinkedBits(bits: string[], account: Record<string, unknown>) {
@@ -69,7 +70,43 @@ function buildChannelAccountLine(
   return `- ${labelText}: ${bits.join(", ")}`;
 }
 
-export function formatGatewayChannelsStatusLines(payload: Record<string, unknown>): string[] {
+function appendVerboseStatusBits(bits: string[], account: Record<string, unknown>) {
+  if (typeof account.reconnectAttempts === "number" && Number.isFinite(account.reconnectAttempts)) {
+    bits.push(`reconnect:${account.reconnectAttempts}`);
+  }
+  if (typeof account.lastConnectedAt === "number" && Number.isFinite(account.lastConnectedAt)) {
+    bits.push(`lastConnected:${formatTimeAgo(Date.now() - account.lastConnectedAt)}`);
+  }
+  if (typeof account.lastMessageAt === "number" && Number.isFinite(account.lastMessageAt)) {
+    bits.push(`lastMessage:${formatTimeAgo(Date.now() - account.lastMessageAt)}`);
+  }
+  if (typeof account.credentialSource === "string" && account.credentialSource.length > 0) {
+    bits.push(`credential:${account.credentialSource}`);
+  }
+  if (typeof account.secretSource === "string" && account.secretSource.length > 0) {
+    bits.push(`secret:${account.secretSource}`);
+  }
+  if (typeof account.webhookPath === "string" && account.webhookPath.length > 0) {
+    bits.push(`webhookPath:${account.webhookPath}`);
+  }
+  if (typeof account.webhookUrl === "string" && account.webhookUrl.length > 0) {
+    bits.push(`webhookUrl:${account.webhookUrl}`);
+  }
+  if (typeof account.cliPath === "string" && account.cliPath.length > 0) {
+    bits.push(`cliPath:${account.cliPath}`);
+  }
+  if (typeof account.dbPath === "string" && account.dbPath.length > 0) {
+    bits.push(`dbPath:${account.dbPath}`);
+  }
+  if (typeof account.port === "number" && Number.isFinite(account.port)) {
+    bits.push(`port:${account.port}`);
+  }
+}
+
+export function formatGatewayChannelsStatusLines(
+  payload: Record<string, unknown>,
+  options?: { verbose?: boolean },
+): string[] {
   const lines: string[] = [];
   lines.push(theme.success("Gateway reachable."));
   const accountLines = (provider: ChatChannel, accounts: Array<Record<string, unknown>>) =>
@@ -146,6 +183,9 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (typeof account.lastError === "string" && account.lastError) {
         bits.push(`error:${account.lastError}`);
       }
+      if (options?.verbose) {
+        appendVerboseStatusBits(bits, account);
+      }
       return buildChannelAccountLine(provider, account, bits);
     });
 
@@ -187,6 +227,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
 async function formatConfigChannelsStatusLines(
   cfg: OpenClawConfig,
   meta: { path?: string; mode?: "local" | "remote" },
+  options?: { verbose?: boolean },
 ): Promise<string[]> {
   const lines: string[] = [];
   lines.push(theme.warn("Gateway not reachable; showing config-only status."));
@@ -207,6 +248,9 @@ async function formatConfigChannelsStatusLines(
       appendModeBit(bits, account);
       appendTokenSourceBits(bits, account);
       appendBaseUrlBit(bits, account);
+      if (options?.verbose) {
+        appendVerboseStatusBits(bits, account);
+      }
       return buildChannelAccountLine(provider, account, bits);
     });
 
@@ -265,7 +309,9 @@ export async function channelsStatusCommand(
       runtime.log(JSON.stringify(payload, null, 2));
       return;
     }
-    runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
+    runtime.log(
+      formatGatewayChannelsStatusLines(payload, { verbose: Boolean(opts.verbose) }).join("\n"),
+    );
   } catch (err) {
     runtime.error(`Gateway not reachable: ${String(err)}`);
     const cfg = await requireValidConfig(runtime);
@@ -276,10 +322,14 @@ export async function channelsStatusCommand(
     const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
     runtime.log(
       (
-        await formatConfigChannelsStatusLines(cfg, {
-          path: snapshot.path,
-          mode,
-        })
+        await formatConfigChannelsStatusLines(
+          cfg,
+          {
+            path: snapshot.path,
+            mode,
+          },
+          { verbose: Boolean(opts.verbose) },
+        )
       ).join("\n"),
     );
   }
