@@ -63,6 +63,7 @@ import {
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
+import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
@@ -90,6 +91,7 @@ import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
+import type { CompactEmbeddedPiSessionParams } from "../compact.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
@@ -617,6 +619,60 @@ export function resolveAttemptFsWorkspaceOnly(params: {
   });
 }
 
+export function prependSystemPromptAddition(params: {
+  systemPrompt: string;
+  systemPromptAddition?: string;
+}): string {
+  if (!params.systemPromptAddition) {
+    return params.systemPrompt;
+  }
+  return `${params.systemPromptAddition}\n\n${params.systemPrompt}`;
+}
+
+/** Build legacy compaction params passed into context-engine afterTurn hooks. */
+export function buildAfterTurnLegacyCompactionParams(params: {
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    | "sessionKey"
+    | "messageChannel"
+    | "messageProvider"
+    | "agentAccountId"
+    | "config"
+    | "skillsSnapshot"
+    | "senderIsOwner"
+    | "provider"
+    | "modelId"
+    | "thinkLevel"
+    | "reasoningLevel"
+    | "bashElevated"
+    | "extraSystemPrompt"
+    | "ownerNumbers"
+    | "authProfileId"
+  >;
+  workspaceDir: string;
+  agentDir: string;
+}): Partial<CompactEmbeddedPiSessionParams> {
+  return {
+    sessionKey: params.attempt.sessionKey,
+    messageChannel: params.attempt.messageChannel,
+    messageProvider: params.attempt.messageProvider,
+    agentAccountId: params.attempt.agentAccountId,
+    authProfileId: params.attempt.authProfileId,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    config: params.attempt.config,
+    skillsSnapshot: params.attempt.skillsSnapshot,
+    senderIsOwner: params.attempt.senderIsOwner,
+    provider: params.attempt.provider,
+    model: params.attempt.modelId,
+    thinkLevel: params.attempt.thinkLevel,
+    reasoningLevel: params.attempt.reasoningLevel,
+    bashElevated: params.attempt.bashElevated,
+    extraSystemPrompt: params.attempt.extraSystemPrompt,
+    ownerNumbers: params.attempt.ownerNumbers,
+  };
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -1025,6 +1081,17 @@ export async function runEmbeddedAttempt(
       });
       trackSessionManagerAccess(params.sessionFile);
 
+      if (hadSessionFile && params.contextEngine?.bootstrap) {
+        try {
+          await params.contextEngine.bootstrap({
+            sessionId: params.sessionId,
+            sessionFile: params.sessionFile,
+          });
+        } catch (bootstrapErr) {
+          log.warn(`context engine bootstrap failed: ${String(bootstrapErr)}`);
+        }
+      }
+
       await prepareSessionManagerForRun({
         sessionManager,
         sessionFile: params.sessionFile,
@@ -1037,6 +1104,10 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
+      });
+      applyPiAutoCompactionGuard({
+        settingsManager,
+        contextEngineInfo: params.contextEngine?.info,
       });
 
       // Sets compaction/pruning runtime state and returns extension factories
@@ -1336,6 +1407,33 @@ export async function runEmbeddedAttempt(
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
         }
+
+        if (params.contextEngine) {
+          try {
+            const assembled = await params.contextEngine.assemble({
+              sessionId: params.sessionId,
+              messages: activeSession.messages,
+              tokenBudget: params.contextTokenBudget,
+            });
+            if (assembled.messages !== activeSession.messages) {
+              activeSession.agent.replaceMessages(assembled.messages);
+            }
+            if (assembled.systemPromptAddition) {
+              systemPromptText = prependSystemPromptAddition({
+                systemPrompt: systemPromptText,
+                systemPromptAddition: assembled.systemPromptAddition,
+              });
+              applySystemPromptOverrideToSession(activeSession, systemPromptText);
+              log.debug(
+                `context engine: prepended system prompt addition (${assembled.systemPromptAddition.length} chars)`,
+              );
+            }
+          } catch (assembleErr) {
+            log.warn(
+              `context engine assemble failed, using pipeline messages: ${String(assembleErr)}`,
+            );
+          }
+        }
       } catch (err) {
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,
@@ -1515,6 +1613,7 @@ export async function runEmbeddedAttempt(
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
+      const prePromptMessageCount = activeSession.messages.length;
       try {
         const promptStartedAt = Date.now();
 
@@ -1769,6 +1868,56 @@ export async function runEmbeddedAttempt(
             });
           } catch (entryErr) {
             log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
+          }
+        }
+
+        // Let the active context engine run its post-turn lifecycle.
+        if (params.contextEngine) {
+          const afterTurnLegacyCompactionParams = buildAfterTurnLegacyCompactionParams({
+            attempt: params,
+            workspaceDir: effectiveWorkspace,
+            agentDir,
+          });
+
+          if (typeof params.contextEngine.afterTurn === "function") {
+            try {
+              await params.contextEngine.afterTurn({
+                sessionId: sessionIdUsed,
+                sessionFile: params.sessionFile,
+                messages: messagesSnapshot,
+                prePromptMessageCount,
+                tokenBudget: params.contextTokenBudget,
+                legacyCompactionParams: afterTurnLegacyCompactionParams,
+              });
+            } catch (afterTurnErr) {
+              log.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
+            }
+          } else {
+            // Fallback: ingest new messages individually
+            const newMessages = messagesSnapshot.slice(prePromptMessageCount);
+            if (newMessages.length > 0) {
+              if (typeof params.contextEngine.ingestBatch === "function") {
+                try {
+                  await params.contextEngine.ingestBatch({
+                    sessionId: sessionIdUsed,
+                    messages: newMessages,
+                  });
+                } catch (ingestErr) {
+                  log.warn(`context engine ingest failed: ${String(ingestErr)}`);
+                }
+              } else {
+                for (const msg of newMessages) {
+                  try {
+                    await params.contextEngine.ingest({
+                      sessionId: sessionIdUsed,
+                      message: msg,
+                    });
+                  } catch (ingestErr) {
+                    log.warn(`context engine ingest failed: ${String(ingestErr)}`);
+                  }
+                }
+              }
+            }
           }
         }
 
