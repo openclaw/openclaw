@@ -521,43 +521,48 @@ export async function runReplyAgent(params: {
       contextAlertDecision.nextLevel === 95 || contextAlertDecision.nextLevel === 85
         ? contextAlertDecision.nextLevel
         : undefined;
+    const persistContextAlertState = async (update: {
+      includeLevel?: boolean;
+      contextAlertLevel?: SessionEntry["contextAlertLevel"];
+      includeAlertAt?: boolean;
+      contextAlertAt?: number;
+    }): Promise<void> => {
+      if (activeSessionEntry) {
+        if (update.includeLevel) {
+          activeSessionEntry.contextAlertLevel = update.contextAlertLevel;
+        }
+        if (update.includeAlertAt) {
+          activeSessionEntry.contextAlertAt = update.contextAlertAt;
+        }
+      }
+      if (sessionKey && activeSessionStore && activeSessionEntry) {
+        activeSessionStore[sessionKey] = activeSessionEntry;
+      }
+      if (sessionKey && storePath) {
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => {
+            const patch: Partial<SessionEntry> = {};
+            if (update.includeLevel) {
+              patch.contextAlertLevel = update.contextAlertLevel;
+            }
+            if (update.includeAlertAt) {
+              patch.contextAlertAt = update.contextAlertAt;
+            }
+            return patch;
+          },
+        });
+      }
+    };
 
-    if (contextAlertDecision.nextLevel !== previousAlertLevel) {
-      const nextAlertAt = contextAlertDecision.shouldAlert ? Date.now() : undefined;
-      if (activeSessionEntry) {
-        activeSessionEntry.contextAlertLevel = nextPersistedAlertLevel;
-        activeSessionEntry.contextAlertAt = nextAlertAt;
-      }
-      if (sessionKey && activeSessionStore && activeSessionEntry) {
-        activeSessionStore[sessionKey] = activeSessionEntry;
-      }
-      if (sessionKey && storePath) {
-        await updateSessionStoreEntry({
-          storePath,
-          sessionKey,
-          update: async () => ({
-            contextAlertLevel: nextPersistedAlertLevel,
-            contextAlertAt: nextAlertAt,
-          }),
-        });
-      }
-    } else if (contextAlertDecision.shouldAlert) {
-      const nextAlertAt = Date.now();
-      if (activeSessionEntry) {
-        activeSessionEntry.contextAlertAt = nextAlertAt;
-      }
-      if (sessionKey && activeSessionStore && activeSessionEntry) {
-        activeSessionStore[sessionKey] = activeSessionEntry;
-      }
-      if (sessionKey && storePath) {
-        await updateSessionStoreEntry({
-          storePath,
-          sessionKey,
-          update: async () => ({
-            contextAlertAt: nextAlertAt,
-          }),
-        });
-      }
+    if (contextAlertDecision.nextLevel < previousAlertLevel) {
+      await persistContextAlertState({
+        includeLevel: true,
+        contextAlertLevel: nextPersistedAlertLevel,
+        includeAlertAt: true,
+        contextAlertAt: undefined,
+      });
     }
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
@@ -594,6 +599,15 @@ export async function runReplyAgent(params: {
 
     if (replyPayloads.length === 0) {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
+
+    if (contextAlertDecision.shouldAlert) {
+      await persistContextAlertState({
+        includeLevel: contextAlertDecision.nextLevel !== previousAlertLevel,
+        contextAlertLevel: nextPersistedAlertLevel,
+        includeAlertAt: true,
+        contextAlertAt: Date.now(),
+      });
     }
 
     const successfulCronAdds = runResult.successfulCronAdds ?? 0;
