@@ -211,8 +211,16 @@ export function resolveFeishuAccount(params: {
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
 
-  // Resolve credentials from merged config
-  const creds = resolveFeishuCredentials(merged);
+  // Resolve credentials from merged config.
+  // When running outside the gateway (e.g. `openclaw plugins list`), SecretRef
+  // values have not been resolved yet and `resolveFeishuCredentials` throws.
+  // Treat unresolved refs as missing credentials so the plugin can still load.
+  let creds: ReturnType<typeof resolveFeishuCredentials>;
+  try {
+    creds = resolveFeishuCredentials(merged);
+  } catch {
+    creds = null;
+  }
   const accountName = (merged as FeishuAccountConfig).name;
 
   return {
