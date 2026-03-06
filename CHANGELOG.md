@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- WhatsApp/self-chat response prefix fallback: stop forcing `"[openclaw]"` as the implicit outbound response prefix when no identity name or response prefix is configured, so blank/default prefix settings no longer inject branding text unexpectedly in self-chat flows. (#27962) Thanks @ecanmor.
 - Memory/QMD search result decoding: accept `qmd search` hits that only include `file` URIs (for example `qmd://collection/path.md`) without `docid`, resolve them through managed collection roots, and keep multi-collection results keyed by file fallback so valid QMD hits no longer collapse to empty `memory_search` output. (#28181) Thanks @0x76696265.
 - Memory/QMD collection-name conflict recovery: when `qmd collection add` fails because another collection already occupies the same `path + pattern`, detect the conflicting collection from `collection list`, remove it, and retry add so agent-scoped managed collections are created deterministically instead of being silently skipped; also add warning-only fallback when qmd metadata is unavailable to avoid destructive guesses. (#25496) Thanks @Ramsbaby.
 - Slack/app_mention race dedupe: when `app_mention` dispatch wins while same-`ts` `message` prepare is still in-flight, suppress the later message dispatch so near-simultaneous Slack deliveries do not produce duplicate replies; keep single-retry behavior and add regression coverage for both dropped and successful message-prepare outcomes. (#37033) Thanks @Takhoffman.
