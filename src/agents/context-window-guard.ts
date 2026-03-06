@@ -68,7 +68,7 @@ export function evaluateContextWindowGuard(params: {
   return {
     ...params.info,
     tokens,
-    shouldWarn: tokens > 0 && tokens < warnBelow,
+    shouldWarn: tokens > 0 && tokens < warnBelow && params.info.source !== "modelsConfig",
     shouldBlock: tokens > 0 && tokens < hardMin,
   };
 }
