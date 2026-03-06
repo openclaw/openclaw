@@ -4,7 +4,7 @@ import { HttpsProxyAgent } from "https-proxy-agent";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import WebSocket from "ws";
 import type { DiscordAccountConfig } from "../../config/types.js";
-import { danger } from "../../globals.js";
+import { danger, warn } from "../../globals.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 export function resolveDiscordGatewayIntents(
@@ -65,13 +65,23 @@ export function createDiscordGatewayPlugin(params: {
             } as Record<string, unknown>);
             this.gatewayInfo = (await response.json()) as APIGatewayBotInfo;
           } catch (error) {
-            throw new Error(
-              `Failed to get gateway information from Discord: ${error instanceof Error ? error.message : String(error)}`,
-              { cause: error },
+            params.runtime.log?.(
+              warn(
+                `discord: gateway metadata lookup failed (startup will continue without Discord): ${error instanceof Error ? error.message : String(error)}`,
+              ),
             );
+            return;
           }
         }
-        return super.registerClient(client);
+        try {
+          return await super.registerClient(client);
+        } catch (error) {
+          params.runtime.log?.(
+            warn(
+              `discord: gateway client registration failed (startup will continue without Discord): ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          );
+        }
       }
 
       override createWebSocket(url: string) {

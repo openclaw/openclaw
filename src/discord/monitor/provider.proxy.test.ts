@@ -194,4 +194,30 @@ describe("createDiscordGatewayPlugin", () => {
     );
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("swallows gateway metadata lookup failures and logs a warning", async () => {
+    const runtime = createRuntime();
+    undiciFetchMock.mockRejectedValue(new Error("network down"));
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: { proxy: "http://proxy.test:8080" },
+      runtime,
+    });
+
+    await expect(
+      (
+        plugin as unknown as {
+          registerClient: (client: { options: { token: string } }) => Promise<void>;
+        }
+      ).registerClient({
+        options: { token: "token-123" },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "discord: gateway metadata lookup failed (startup will continue without Discord): network down",
+      ),
+    );
+  });
 });
