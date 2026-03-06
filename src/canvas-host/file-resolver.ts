@@ -3,7 +3,13 @@ import path from "node:path";
 import { SafeOpenError, openFileWithinRoot, type SafeOpenResult } from "../infra/fs-safe.js";
 
 export function normalizeUrlPath(rawPath: string): string {
-  const decoded = decodeURIComponent(rawPath || "/");
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawPath || "/");
+  } catch {
+    // Malformed percent-encoding (e.g. %ZZ) – treat as literal path
+    decoded = rawPath || "/";
+  }
   const normalized = path.posix.normalize(decoded);
   return normalized.startsWith("/") ? normalized : `/${normalized}`;
 }
