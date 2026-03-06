@@ -17,8 +17,8 @@ import { normalizeAlias } from "./models/shared.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
-const DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_HARD_MIN_TOKENS;
-const DEFAULT_MAX_TOKENS = 4096;
+const DEFAULT_CONTEXT_WINDOW = 128_000;
+const DEFAULT_MAX_TOKENS = 16_384;
 const VERIFY_TIMEOUT_MS = 30_000;
 
 function normalizeContextWindowForCustomModel(value: unknown): number {
@@ -78,6 +78,8 @@ export type ApplyCustomApiConfigParams = {
   apiKey?: SecretInput;
   providerId?: string;
   alias?: string;
+  contextWindow?: number;
+  maxTokens?: number;
 };
 
 export type ParseNonInteractiveCustomApiFlagsParams = {
@@ -600,8 +602,8 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const nextModel = {
     id: modelId,
     name: `${modelId} (Custom Provider)`,
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    contextWindow: params.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    maxTokens: params.maxTokens ?? DEFAULT_MAX_TOKENS,
     input: ["text"] as ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     reasoning: false,
@@ -787,6 +789,32 @@ export async function promptCustomApiConfig(params: {
       return undefined;
     },
   });
+  const contextWindowInput = await prompter.text({
+    message: "Context window size (press Enter for default)",
+    initialValue: String(DEFAULT_CONTEXT_WINDOW),
+    placeholder: "e.g. 128000, 200000",
+    validate: (val) => {
+      const n = Number(val.trim());
+      if (!Number.isInteger(n) || n <= 0) {
+        return "Must be a positive integer";
+      }
+      return undefined;
+    },
+  });
+
+  const maxTokensInput = await prompter.text({
+    message: "Max output tokens (press Enter for default)",
+    initialValue: String(DEFAULT_MAX_TOKENS),
+    placeholder: "e.g. 4096, 8192, 16384",
+    validate: (val) => {
+      const n = Number(val.trim());
+      if (!Number.isInteger(n) || n <= 0) {
+        return "Must be a positive integer";
+      }
+      return undefined;
+    },
+  });
+
   const aliasInput = await prompter.text({
     message: "Model alias (optional)",
     placeholder: "e.g. local, ollama",
@@ -811,6 +839,8 @@ export async function promptCustomApiConfig(params: {
     apiKey,
     providerId: providerIdInput,
     alias: aliasInput,
+    contextWindow: Number(contextWindowInput.trim()),
+    maxTokens: Number(maxTokensInput.trim()),
   });
 
   if (result.providerIdRenamedFrom && result.providerId) {
