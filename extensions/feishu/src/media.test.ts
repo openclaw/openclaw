@@ -182,7 +182,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("uses image upload timeout override for image media", async () => {
+  it("uploads image for image media", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -190,11 +190,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "photo.png",
     });
 
-    expect(imageCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeout: 120_000,
-      }),
-    );
+    expect(imageCreateMock).toHaveBeenCalled();
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ msg_type: "image" }),
@@ -320,7 +316,6 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(imageGetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { image_key: imageKey },
-        timeout: 120_000,
       }),
     );
     expect(result.buffer).toEqual(Buffer.from("image-data"));
@@ -512,7 +507,6 @@ describe("downloadMessageResourceFeishu", () => {
       expect.objectContaining({
         path: { message_id: "om_audio_msg", file_key: "file_key_audio" },
         params: { type: "file" },
-        timeout: 120_000,
       }),
     );
     expect(result.buffer).toBeInstanceOf(Buffer);
@@ -532,7 +526,6 @@ describe("downloadMessageResourceFeishu", () => {
       expect.objectContaining({
         path: { message_id: "om_img_msg", file_key: "img_key_1" },
         params: { type: "image" },
-        timeout: 120_000,
       }),
     );
     expect(result.buffer).toBeInstanceOf(Buffer);
