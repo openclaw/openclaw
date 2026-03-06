@@ -357,6 +357,37 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     },
   },
   {
+    id: "gateway.controlUi.strip-deprecated-device-auth-keys",
+    describe:
+      "Remove gateway.controlUi.autoApproveDevices and gateway.controlUi.requirePairing (removed in v2026.3.3)",
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway) {
+        return;
+      }
+      const controlUi = getRecord(gateway.controlUi);
+      if (!controlUi) {
+        return;
+      }
+      if ("autoApproveDevices" in controlUi) {
+        delete controlUi.autoApproveDevices;
+        gateway.controlUi = controlUi;
+        raw.gateway = gateway;
+        changes.push(
+          "Removed gateway.controlUi.autoApproveDevices (deprecated in v2026.3.3; use dangerouslyDisableDeviceAuth if device auth bypass is still needed).",
+        );
+      }
+      if ("requirePairing" in controlUi) {
+        delete controlUi.requirePairing;
+        gateway.controlUi = controlUi;
+        raw.gateway = gateway;
+        changes.push(
+          "Removed gateway.controlUi.requirePairing (deprecated in v2026.3.3; device pairing is now controlled via dangerouslyDisableDeviceAuth).",
+        );
+      }
+    },
+  },
+  {
     id: "identity->agents.list",
     describe: "Move identity to agents.list[].identity",
     apply: (raw, changes) => {

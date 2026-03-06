@@ -344,4 +344,23 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://127.0.0.1:18789",
     ]);
   });
+
+  // Issue #35957: autoApproveDevices and requirePairing were removed in v2026.3.3
+  // and caused gateway startup failures when upgrading from v2026.3.2.
+  it("strips deprecated gateway.controlUi.autoApproveDevices and requirePairing on upgrade", () => {
+    const res = migrateLegacyConfig({
+      gateway: {
+        controlUi: {
+          enabled: true,
+          autoApproveDevices: true,
+          requirePairing: false,
+        },
+      },
+    });
+    expect(res.config?.gateway?.controlUi).not.toHaveProperty("autoApproveDevices");
+    expect(res.config?.gateway?.controlUi).not.toHaveProperty("requirePairing");
+    expect((res.config?.gateway?.controlUi as Record<string, unknown>)?.enabled).toBe(true);
+    expect(res.changes.some((c) => c.includes("autoApproveDevices"))).toBe(true);
+    expect(res.changes.some((c) => c.includes("requirePairing"))).toBe(true);
+  });
 });
