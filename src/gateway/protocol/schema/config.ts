@@ -1,6 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
+const NonWhitespaceString = Type.String({ minLength: 1, pattern: ".*\\S.*" });
+
 export const ConfigGetParamsSchema = Type.Object({}, { additionalProperties: false });
 
 export const ConfigSetParamsSchema = Type.Object(
@@ -29,7 +31,7 @@ export const ConfigSchemaParamsSchema = Type.Object({}, { additionalProperties: 
 
 export const ConfigSchemaLookupParamsSchema = Type.Object(
   {
-    path: NonEmptyString,
+    path: NonWhitespaceString,
   },
   { additionalProperties: false },
 );

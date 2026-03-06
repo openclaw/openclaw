@@ -229,6 +229,35 @@ describe("config schema", () => {
     expect(lookup?.hintPath).toBe("agents.list.*.identity.avatar");
   });
 
+  it("matches ui hints that use empty array brackets", () => {
+    const lookup = lookupConfigSchema(baseSchema, "agents.list.0.runtime");
+    expect(lookup?.path).toBe("agents.list.0.runtime");
+    expect(lookup?.hintPath).toBe("agents.list[].runtime");
+    expect(lookup?.hint?.label).toBe("Agent Runtime");
+  });
+
+  it("uses the indexed tuple item schema for positional array lookups", () => {
+    const tupleSchema: Parameters<typeof lookupConfigSchema>[0] = {
+      schema: {
+        type: "object",
+        properties: {
+          pair: {
+            type: "array",
+            items: [{ type: "string" }, { type: "number" }],
+          },
+        },
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "test",
+    };
+
+    const lookup = lookupConfigSchema(tupleSchema, "pair.1");
+    expect(lookup?.path).toBe("pair.1");
+    expect(lookup?.schema).toMatchObject({ type: "number" });
+    expect((lookup?.schema as { items?: unknown } | undefined)?.items).toBeUndefined();
+  });
+
   it("returns null for missing config schema paths", () => {
     expect(lookupConfigSchema(baseSchema, "gateway.notReal.path")).toBeNull();
   });

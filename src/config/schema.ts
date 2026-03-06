@@ -453,7 +453,7 @@ export function buildConfigSchema(params?: {
 function normalizeLookupPath(path: string): string {
   return path
     .trim()
-    .replace(/\[(\*|\d+)\]/g, ".$1")
+    .replace(/\[(\*|\d*)\]/g, (_match, segment: string) => `.${segment || "*"}`)
     .replace(/^\.+|\.+$/g, "")
     .replace(/\.+/g, ".");
 }
@@ -515,9 +515,13 @@ function schemaHasChildren(schema: JsonSchemaObject): boolean {
   return Boolean(schema.items && typeof schema.items === "object");
 }
 
-function resolveItemsSchema(schema: JsonSchemaObject): JsonSchemaObject | null {
+function resolveItemsSchema(schema: JsonSchemaObject, index?: number): JsonSchemaObject | null {
   if (Array.isArray(schema.items)) {
-    return schema.items.find((entry) => typeof entry === "object" && entry !== null) ?? null;
+    const entry =
+      index === undefined
+        ? schema.items.find((candidate) => typeof candidate === "object" && candidate !== null)
+        : schema.items[index];
+    return entry && typeof entry === "object" ? entry : null;
   }
   return schema.items && typeof schema.items === "object" ? schema.items : null;
 }
@@ -531,8 +535,9 @@ function resolveLookupChildSchema(
     return explicit;
   }
 
-  const items = resolveItemsSchema(schema);
-  if ((segment === "*" || /^\d+$/.test(segment)) && items) {
+  const itemIndex = /^\d+$/.test(segment) ? Number.parseInt(segment, 10) : undefined;
+  const items = resolveItemsSchema(schema, itemIndex);
+  if ((segment === "*" || itemIndex !== undefined) && items) {
     return items;
   }
 
@@ -549,7 +554,7 @@ function stripNestedSchema(schema: JsonSchemaObject): JsonSchemaNode {
   if (next.additionalProperties && typeof next.additionalProperties === "object") {
     delete next.additionalProperties;
   }
-  if (next.items && typeof next.items === "object") {
+  if (next.items !== undefined) {
     delete next.items;
   }
   return next;

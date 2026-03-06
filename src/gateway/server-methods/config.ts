@@ -40,6 +40,7 @@ import {
 import {
   ErrorCodes,
   errorShape,
+  formatValidationErrors,
   validateConfigApplyParams,
   validateConfigGetParams,
   validateConfigPatchParams,
@@ -264,7 +265,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     respond(true, loadSchemaWithPlugins(), undefined);
   },
-  "config.schema.lookup": ({ params, respond }) => {
+  "config.schema.lookup": ({ params, respond, context }) => {
     if (
       !assertValidParams(params, validateConfigSchemaLookupParams, "config.schema.lookup", respond)
     ) {
@@ -282,10 +283,16 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     if (!validateConfigSchemaLookupResult(result)) {
+      const errors = validateConfigSchemaLookupResult.errors ?? [];
+      context.logGateway.warn(
+        `config.schema.lookup produced invalid payload for ${path}: ${formatValidationErrors(errors)}`,
+      );
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "config.schema.lookup returned invalid payload"),
+        errorShape(ErrorCodes.UNAVAILABLE, "config.schema.lookup returned invalid payload", {
+          details: { errors },
+        }),
       );
       return;
     }
