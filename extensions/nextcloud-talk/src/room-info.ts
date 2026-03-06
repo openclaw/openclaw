@@ -105,6 +105,7 @@ export async function resolveNextcloudTalkRoomKind(params: {
           Accept: "application/json",
         },
       },
+      policy: account.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
       auditContext: "nextcloud-talk.room-info",
     });
     try {

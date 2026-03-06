@@ -27,6 +27,7 @@ export const NextcloudTalkAccountSchemaBase = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     markdown: MarkdownConfigSchema,
+    allowPrivateNetwork: z.boolean().optional(),
     baseUrl: z.string().optional(),
     botSecret: buildSecretInputSchema().optional(),
     botSecretFile: z.string().optional(),

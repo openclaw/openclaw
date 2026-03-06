@@ -26,6 +26,7 @@ export type ResolvedNextcloudTalkAccount = {
   accountId: string;
   enabled: boolean;
   name?: string;
+  allowPrivateNetwork: boolean | null;
   baseUrl: string;
   secret: string;
   secretSource: "env" | "secretFile" | "config" | "none";
@@ -155,6 +156,7 @@ export function resolveNextcloudTalkAccount(params: {
       accountId,
       enabled,
       name: merged.name?.trim() || undefined,
+      allowPrivateNetwork: merged.allowPrivateNetwork ?? null,
       baseUrl,
       secret: secretResolution.secret,
       secretSource: secretResolution.source,
