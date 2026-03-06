@@ -1363,7 +1363,9 @@ export class QmdMemoryManager implements MemorySearchManager {
         const timer = opts?.timeoutMs
           ? setTimeout(() => {
               child.kill("SIGKILL");
-              const err = new Error(`mcporter ${args.join(" ")} timed out after ${opts.timeoutMs}ms`);
+              const err = new Error(
+                `mcporter ${args.join(" ")} timed out after ${opts.timeoutMs}ms`,
+              );
               (err as Error & { timedOut: boolean }).timedOut = true;
               reject(err);
             }, opts.timeoutMs)
