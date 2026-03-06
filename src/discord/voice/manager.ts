@@ -33,6 +33,7 @@ import {
   runCapability,
 } from "../../media-understanding/runner.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { parseTtsDirectives } from "../../tts/tts-core.js";
 import {
@@ -88,7 +89,7 @@ type VoiceSessionEntry = {
   stop: () => void;
 };
 
-function resolveVoiceTtsConfig(params: {
+export function resolveVoiceTtsConfig(params: {
   cfg: OpenClawConfig;
   override?: TtsConfig;
   agentId?: string;
@@ -100,8 +101,9 @@ function resolveVoiceTtsConfig(params: {
     return { cfg: params.cfg, resolved: resolveTtsConfig(params.cfg, params.agentId) };
   }
   // Merge order: global → agent → voice channel override
-  const agentTts = params.agentId
-    ? params.cfg.agents?.list?.find((a) => a.id === params.agentId)?.tts
+  const normalizedAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
+  const agentTts = normalizedAgentId
+    ? params.cfg.agents?.list?.find((a) => normalizeAgentId(a.id) === normalizedAgentId)?.tts
     : undefined;
   const base = mergeTtsConfig(params.cfg.messages?.tts ?? {}, agentTts);
   const merged = mergeTtsConfig(base, params.override);
