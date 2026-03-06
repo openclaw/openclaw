@@ -35,6 +35,7 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
             // Labels prefixed with "r:" are auto-response triggers.
+            const activePrLimit = 10;
             const rules = [
               {
                 label: "r: skill",
@@ -47,6 +48,13 @@ jobs:
                 close: true,
                 message:
                   "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck.",
+              },
+              {
+                label: "r: too-many-prs",
+                close: true,
+                message:
+                  `Closing this PR because the author has more than ${activePrLimit} active PRs in this repo. ` +
+                  "Please reduce the active PR queue and reopen or resubmit once it is back under the limit. You can close your own PRs to get back under the limit.",
               },
               {
                 label: "r: testflight",
