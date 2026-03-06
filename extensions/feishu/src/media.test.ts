@@ -588,3 +588,94 @@ describe("detectFileType", () => {
     expect(detectFileType("DOC.PDF")).toBe("pdf");
   });
 });
+
+describe("sendMediaFeishu - audio edge cases", () => {
+  const mockCfg = { feishu: { accounts: [] } } as any;
+  
+  beforeEach(() => {
+    resolveFeishuAccountMock.mockReturnValue({
+      configured: true,
+      accountId: "default",
+      config: { mediaMaxMb: 30 },
+    });
+    createFeishuClientMock.mockReturnValue({
+      im: {
+        file: { create: fileCreateMock },
+        image: { create: imageCreateMock },
+        message: { create: messageCreateMock },
+      },
+    });
+    fileCreateMock.mockResolvedValue({
+      code: 0,
+      data: { file_key: "file_abc123" },
+    });
+    messageCreateMock.mockResolvedValue({
+      code: 0,
+      data: { message_id: "om_test" },
+    });
+  });
+
+  it("warns when mediaBuffer lacks fileName extension (audio detection fails)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const audioBuffer = Buffer.from("fake-mp3-data");
+
+    await sendMediaFeishu({
+      cfg: mockCfg,
+      to: "user@example.com",
+      mediaBuffer: audioBuffer,
+      fileName: null, // No extension → can't detect as audio
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("mediaBuffer provided without fileName extension")
+    );
+    
+    // Verify it was sent as generic "file" type (not "audio")
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          msg_type: "file", // Not "audio" because no extension
+        }),
+      })
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it("detects audio format correctly when fileName is provided", async () => {
+    const audioBuffer = Buffer.from("fake-mp3-data");
+
+    await sendMediaFeishu({
+      cfg: mockCfg,
+      to: "user@example.com",
+      mediaBuffer: audioBuffer,
+      fileName: "voice.mp3", // Extension provided → detected as audio
+    });
+
+    // Verify it was sent as "audio" type
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          msg_type: "audio", // Correct audio type
+        }),
+      })
+    );
+  });
+
+  it("handles empty mediaBuffer gracefully", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const emptyBuffer = Buffer.from("");
+
+    await sendMediaFeishu({
+      cfg: mockCfg,
+      to: "user@example.com",
+      mediaBuffer: emptyBuffer,
+      fileName: null,
+    });
+
+    // No warning for empty buffer (mediaBuffer.length === 0)
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+});
