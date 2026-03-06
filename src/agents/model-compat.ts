@@ -37,6 +37,8 @@ function normalizeAnthropicBaseUrl(baseUrl: string): string {
   const stripped = baseUrl.replace(/\/v1\/?$/, "");
   try {
     const parsed = new URL(stripped);
+    // Root-origin URLs (`/`) don't need a trailing slash for relative resolution,
+    // but path-prefixed base URLs do (for example `/coding`) or the prefix can be dropped.
     if (parsed.pathname !== "/" && !parsed.pathname.endsWith("/")) {
       parsed.pathname = `${parsed.pathname}/`;
       return parsed.toString();
