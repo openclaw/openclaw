@@ -204,7 +204,43 @@ describe("venice-models", () => {
     const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
     const newModel = models.find((m) => m.id === "new-model-2026");
     expect(newModel?.maxTokens).toBe(50000);
+    expect(newModel?.maxTokens).toBeLessThanOrEqual(newModel?.contextWindow ?? Infinity);
     expect(newModel?.compat?.supportsTools).toBe(false);
+  });
+
+  it("caps new-model maxTokens to the fallback context window when API context is missing", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "new-model-without-context",
+                model_spec: {
+                  name: "new-model-without-context",
+                  privacy: "private",
+                  maxCompletionTokens: 200_000,
+                  capabilities: {
+                    supportsReasoning: false,
+                    supportsVision: false,
+                    supportsFunctionCalling: true,
+                  },
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const newModel = models.find((m) => m.id === "new-model-without-context");
+    expect(newModel?.contextWindow).toBe(128000);
+    expect(newModel?.maxTokens).toBe(128000);
   });
 
   it("falls back to static catalog after retry budget is exhausted", async () => {

@@ -17,6 +17,7 @@ export const VENICE_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const VENICE_DEFAULT_CONTEXT_WINDOW = 128_000;
 const VENICE_DEFAULT_MAX_TOKENS = 4096;
 const VENICE_DISCOVERY_HARD_MAX_TOKENS = 131_072;
 const VENICE_DISCOVERY_TIMEOUT_MS = 10_000;
@@ -582,7 +583,8 @@ function resolveApiMaxCompletionTokens(params: {
       ? Math.floor(params.knownMaxTokens)
       : undefined;
   const hardCap = knownMaxTokens ?? VENICE_DISCOVERY_HARD_MAX_TOKENS;
-  return Math.min(raw, contextWindow ?? hardCap, hardCap);
+  const fallbackContextWindow = knownMaxTokens ?? VENICE_DEFAULT_CONTEXT_WINDOW;
+  return Math.min(raw, contextWindow ?? fallbackContextWindow, hardCap);
 }
 
 function resolveApiSupportsTools(apiModel: VeniceModel): boolean | undefined {
@@ -656,6 +658,9 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
         if (apiMaxTokens !== undefined) {
           definition.maxTokens = apiMaxTokens;
         }
+        // We only let live discovery disable tools. Re-enabling tool support still
+        // requires a catalog update so a transient/bad /models response cannot
+        // silently expand the tool execution surface for known models.
         if (apiSupportsTools === false) {
           definition.compat = {
             ...definition.compat,
@@ -679,7 +684,9 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
           reasoning: isReasoning,
           input: hasVision ? ["text", "image"] : ["text"],
           cost: VENICE_DEFAULT_COST,
-          contextWindow: apiModel.model_spec.availableContextTokens || 128000,
+          contextWindow:
+            normalizePositiveInt(apiModel.model_spec.availableContextTokens) ??
+            VENICE_DEFAULT_CONTEXT_WINDOW,
           maxTokens: apiMaxTokens ?? VENICE_DEFAULT_MAX_TOKENS,
           // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
           compat: {
