@@ -30,6 +30,7 @@ import { getSessionBindingService } from "../../../infra/outbound/session-bindin
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import {
+  buildAgentMainSessionKey,
   resolveAgentIdFromSessionKey,
   resolveThreadSessionKeys,
 } from "../../../routing/session-key.js";
@@ -384,10 +385,14 @@ export async function prepareSlackMessage(params: {
         boundThreadBindingId = threadBinding.bindingId;
         sessionKey = boundSessionKey;
         const boundAgentId = resolveAgentIdFromSessionKey(boundSessionKey);
+        const resolvedAgentId = boundAgentId ?? route.agentId;
         route = {
           ...route,
           sessionKey: boundSessionKey,
-          agentId: boundAgentId ?? route.agentId,
+          agentId: resolvedAgentId,
+          mainSessionKey: boundAgentId
+            ? buildAgentMainSessionKey({ agentId: resolvedAgentId })
+            : route.mainSessionKey,
         };
       }
     }

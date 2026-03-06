@@ -1,6 +1,12 @@
 import type { App } from "@slack/bolt";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  __testing as sessionBindingTesting,
+  registerSessionBindingAdapter,
+  type SessionBindingRecord,
+} from "../../../infra/outbound/session-binding-service.js";
+import { buildAgentMainSessionKey } from "../../../routing/session-key.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { prepareSlackMessage } from "./prepare.js";
 import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
@@ -31,6 +37,14 @@ function buildChannelMessage(overrides?: Partial<SlackMessageEvent>): SlackMessa
 }
 
 describe("thread-level session keys", () => {
+  beforeEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  });
+
+  afterEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  });
+
   it("keeps top-level channel turns in one session when replyToMode=off", async () => {
     const ctx = buildCtx({ replyToMode: "off" });
     ctx.resolveUserName = async () => ({ name: "Alice" });
@@ -135,5 +149,59 @@ describe("thread-level session keys", () => {
     // DMs should NOT have :thread: in the session key
     const sessionKey = prepared!.ctxPayload.SessionKey as string;
     expect(sessionKey).not.toContain(":thread:");
+  });
+
+  it("keeps route mainSessionKey aligned with bound thread session agent", async () => {
+    const boundSessionKey = "agent:codex:acp:66f59af8-119a-41bb-befe-f2536602aa6b";
+    const bindingRecord: SessionBindingRecord = {
+      bindingId: "bind-1",
+      targetSessionKey: boundSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "1770408518.451689",
+        parentConversationId: "D456",
+      },
+      status: "active",
+      boundAt: Date.now(),
+    };
+    registerSessionBindingAdapter({
+      channel: "slack",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) => {
+        if (
+          ref.conversationId === bindingRecord.conversation.conversationId &&
+          ref.parentConversationId === bindingRecord.conversation.parentConversationId
+        ) {
+          return bindingRecord;
+        }
+        return null;
+      },
+    });
+
+    const ctx = buildCtx({ replyToMode: "off" });
+    ctx.resolveUserName = async () => ({ name: "Carol" });
+    const account = createSlackTestAccount({ replyToMode: "off" });
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "dm reply",
+        ts: "1770408522.168859",
+        thread_ts: "1770408518.451689",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.route.agentId).toBe("codex");
+    expect(prepared!.route.sessionKey).toBe(boundSessionKey);
+    expect(prepared!.route.mainSessionKey).toBe(buildAgentMainSessionKey({ agentId: "codex" }));
   });
 });
