@@ -73,6 +73,23 @@ describe("flushAllActiveSessionGuards", () => {
     expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant", "toolResult"]);
   });
 
+  it("deregisters from global registry when clearPendingToolResults is called (memory-leak fix)", () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const append = sm.appendMessage.bind(sm) as unknown as (msg: AgentMessage) => void;
+    append(assistantToolCall("call_d"));
+
+    // Discard path (session ends without persisting tool result).
+    sm.clearPendingToolResults?.();
+
+    // Global flush must not invoke an already-cleared session.
+    // If the registry leaked the closure, flushAllActiveSessionGuards would
+    // try to write a synthetic result into a discarded session.
+    const msgsBefore = getMessages(sm).length;
+    flushAllActiveSessionGuards();
+    // No new messages should appear — the session was already cleared.
+    expect(getMessages(sm).length).toBe(msgsBefore);
+  });
+
   it("is a no-op when no sessions are active", () => {
     expect(() => flushAllActiveSessionGuards()).not.toThrow();
   });

@@ -128,12 +128,14 @@ export async function runGatewayLoop(params: {
               gatewayLog.warn("drain timeout reached; proceeding with restart");
             }
           }
-          // Flush any tool calls still in-flight so the JSONL transcript does
-          // not contain orphaned tool_use blocks.  This prevents the next
-          // gateway boot from synthesising a result and delivering a silent
-          // turn with no assistant reply.
-          flushAllActiveSessionGuards();
         }
+
+        // Flush any tool calls still in-flight so the JSONL transcript does
+        // not contain orphaned tool_use blocks on the next boot.  Runs on both
+        // restart and SIGTERM stop — rolling-update deployments send SIGTERM
+        // before launching a new instance, so in-flight calls must be resolved
+        // in both paths.
+        flushAllActiveSessionGuards();
 
         await server?.close({
           reason: isRestart ? "gateway restarting" : "gateway stopping",

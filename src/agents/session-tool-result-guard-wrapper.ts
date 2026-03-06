@@ -114,6 +114,18 @@ export function guardSessionManager(
   activeSessionGuardFlushes.add(wrappedFlush);
 
   (sessionManager as GuardedSessionManager).flushPendingToolResults = wrappedFlush;
-  (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;
+
+  // Wrap clearPendingToolResults symmetrically so sessions that discard (instead
+  // of flush) also deregister from the global restart registry — prevents the
+  // set from accumulating closures indefinitely in long-running gateways.
+  const rawClear = guard.clearPendingToolResults;
+  (sessionManager as GuardedSessionManager).clearPendingToolResults = rawClear
+    ? () => {
+        activeSessionGuardFlushes.delete(wrappedFlush);
+        rawClear();
+      }
+    : () => {
+        activeSessionGuardFlushes.delete(wrappedFlush);
+      };
   return sessionManager as GuardedSessionManager;
 }
