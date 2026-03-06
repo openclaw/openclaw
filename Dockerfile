@@ -1,4 +1,36 @@
+# Opt-in extension dependencies at build time (space-separated directory names).
+# Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel matrix" .
+#
+# A multi-stage build is used instead of `RUN --mount=type=bind` because
+# bind mounts require BuildKit, which is not available in plain Docker.
+# This stage extracts only the package.json files we need from extensions/,
+# so the main build layer is not invalidated by unrelated extension source changes.
+ARG OPENCLAW_EXTENSIONS=""
+FROM node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935 AS ext-deps
+ARG OPENCLAW_EXTENSIONS
+COPY extensions /tmp/extensions
+RUN mkdir -p /out && \
+    for ext in $OPENCLAW_EXTENSIONS; do \
+      if [ -f "/tmp/extensions/$ext/package.json" ]; then \
+        mkdir -p "/out/$ext" && \
+        cp "/tmp/extensions/$ext/package.json" "/out/$ext/package.json"; \
+      fi; \
+    done
+
 FROM node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935
+
+# OCI base-image metadata for downstream image consumers.
+# If you change these annotations, also update:
+# - docs/install/docker.md ("Base image metadata" section)
+# - https://docs.openclaw.ai/install/docker
+LABEL org.opencontainers.image.base.name="docker.io/library/node:22-bookworm" \
+  org.opencontainers.image.base.digest="sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935" \
+  org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
+  org.opencontainers.image.url="https://openclaw.ai" \
+  org.opencontainers.image.documentation="https://docs.openclaw.ai/install/docker" \
+  org.opencontainers.image.licenses="MIT" \
+  org.opencontainers.image.title="OpenClaw" \
+  org.opencontainers.image.description="OpenClaw gateway and CLI runtime container image"
 
 # Install Bun (required for build scripts)
 RUN curl -fsSL https://bun.sh/install | bash
@@ -22,6 +54,8 @@ COPY --chown=node:node ui/package.json ./ui/package.json
 COPY --chown=node:node patches ./patches
 COPY --chown=node:node scripts ./scripts
 
+COPY --from=ext-deps --chown=node:node /out/ ./extensions/
+
 USER node
 # Reduce OOM risk on low-memory hosts during dependency installation.
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
@@ -44,8 +78,48 @@ RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     fi
 
+# Optionally install Docker CLI for sandbox container management.
+# Build with: docker build --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1 ...
+# Adds ~50MB. Only the CLI is installed — no Docker daemon.
+# Required for agents.defaults.sandbox to function in Docker deployments.
+ARG OPENCLAW_INSTALL_DOCKER_CLI=""
+ARG OPENCLAW_DOCKER_GPG_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+RUN if [ -n "$OPENCLAW_INSTALL_DOCKER_CLI" ]; then \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg && \
+      install -m 0755 -d /etc/apt/keyrings && \
+      # Verify Docker apt signing key fingerprint before trusting it as a root key.
+      # Update OPENCLAW_DOCKER_GPG_FINGERPRINT when Docker rotates release keys.
+      curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc && \
+      expected_fingerprint="$(printf '%s' "$OPENCLAW_DOCKER_GPG_FINGERPRINT" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')" && \
+      actual_fingerprint="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == "fpr" { print toupper($10); exit }')" && \
+      if [ -z "$actual_fingerprint" ] || [ "$actual_fingerprint" != "$expected_fingerprint" ]; then \
+        echo "ERROR: Docker apt key fingerprint mismatch (expected $expected_fingerprint, got ${actual_fingerprint:-<empty>})" >&2; \
+        exit 1; \
+      fi && \
+      gpg --dearmor -o /etc/apt/keyrings/docker.gpg /tmp/docker.gpg.asc && \
+      rm -f /tmp/docker.gpg.asc && \
+      chmod a+r /etc/apt/keyrings/docker.gpg && \
+      printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable\n' \
+        "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/docker.list && \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        docker-ce-cli docker-compose-plugin && \
+      apt-get clean && \
+      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
+    fi
+
 USER node
 COPY --chown=node:node . .
+# Normalize copied plugin/agent paths so plugin safety checks do not reject
+# world-writable directories inherited from source file modes.
+RUN for dir in /app/extensions /app/.agent /app/.agents; do \
+      if [ -d "$dir" ]; then \
+        find "$dir" -type d -exec chmod 755 {} +; \
+        find "$dir" -type f -exec chmod 644 {} +; \
+      fi; \
+    done
 RUN pnpm build
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
@@ -66,7 +140,15 @@ USER node
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
 #
-# For container platforms requiring external health checks:
-#   1. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD env var
-#   2. Override CMD: ["node","openclaw.mjs","gateway","--allow-unconfigured","--bind","lan"]
+# IMPORTANT: With Docker bridge networking (-p 18789:18789), loopback bind
+# makes the gateway unreachable from the host. Either:
+#   - Use --network host, OR
+#   - Override --bind to "lan" (0.0.0.0) and set auth credentials
+#
+# Built-in probe endpoints for container health checks:
+#   - GET /healthz (liveness) and GET /readyz (readiness)
+#   - aliases: /health and /ready
+# For external access from host/ingress, override bind to "lan" and set auth.
+HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
