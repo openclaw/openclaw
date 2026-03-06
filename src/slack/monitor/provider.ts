@@ -185,8 +185,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   // at ~1.5s intervals on auth failures, flooding logs and bypassing our
   // circuit-breaker.
   if (slackMode === "socket") {
-    const smClient = (app as unknown as { receiver?: { client?: { autoReconnectEnabled?: boolean } } })
-      .receiver?.client;
+    const smClient = (
+      app as unknown as { receiver?: { client?: { autoReconnectEnabled?: boolean } } }
+    ).receiver?.client;
     if (smClient && "autoReconnectEnabled" in smClient) {
       smClient.autoReconnectEnabled = false;
     }
