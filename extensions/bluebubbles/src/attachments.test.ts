@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
 import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
@@ -267,6 +267,67 @@ describe("downloadBlueBubblesAttachment", () => {
     expect(calledUrl).toContain("config-server:5678");
     expect(calledUrl).toContain("password=config-password");
     expect(result.buffer).toEqual(new Uint8Array([1]));
+  });
+
+  it("passes ssrfPolicy with allowPrivateNetwork when config enables it", async () => {
+    const mockBuffer = new Uint8Array([1]);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
+    });
+
+    const attachment: BlueBubblesAttachment = { guid: "att-ssrf" };
+    await downloadBlueBubblesAttachment(attachment, {
+      cfg: {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+            allowPrivateNetwork: true,
+          },
+        },
+      },
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
+  });
+
+  it("auto-allowlists serverUrl hostname when allowPrivateNetwork is not set", async () => {
+    const mockBuffer = new Uint8Array([1]);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
+    });
+
+    const attachment: BlueBubblesAttachment = { guid: "att-no-ssrf" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "http://localhost:1234",
+      password: "test",
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["localhost"] });
+  });
+
+  it("auto-allowlists private IP serverUrl hostname when allowPrivateNetwork is not set", async () => {
+    const mockBuffer = new Uint8Array([1]);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
+    });
+
+    const attachment: BlueBubblesAttachment = { guid: "att-private-ip" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "http://192.168.1.5:1234",
+      password: "test",
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["192.168.1.5"] });
   });
 });
 

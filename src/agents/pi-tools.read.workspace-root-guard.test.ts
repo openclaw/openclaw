@@ -61,6 +61,36 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     });
   });
 
+  it("maps @-prefixed container workspace paths to host workspace root", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-at-container", { path: "@/workspace/docs/readme.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(root, "docs", "readme.md"),
+      cwd: root,
+      root,
+    });
+  });
+
+  it("normalizes @-prefixed absolute paths before guard checks", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-at-absolute", { path: "@/etc/passwd" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "/etc/passwd",
+      cwd: root,
+      root,
+    });
+  });
+
   it("does not remap absolute paths outside the configured container workdir", async () => {
     const { tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {

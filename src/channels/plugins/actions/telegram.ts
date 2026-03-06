@@ -6,13 +6,17 @@ import {
 } from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
 import type { TelegramActionConfig } from "../../../config/types.telegram.js";
+import { readBooleanParam } from "../../../plugin-sdk/boolean-param.js";
 import { extractToolSend } from "../../../plugin-sdk/tool-send.js";
+import { resolveTelegramPollVisibility } from "../../../poll-params.js";
 import {
   createTelegramActionGate,
   listEnabledTelegramAccounts,
+  resolveTelegramPollActionGateState,
 } from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
+import { resolveReactionMessageId } from "./reaction-message-id.js";
 import { createUnionActionGate, listTokenSourcedAccounts } from "./shared.js";
 
 const providerId = "telegram";
@@ -26,8 +30,8 @@ function readTelegramSendParams(params: Record<string, unknown>) {
   const replyTo = readStringParam(params, "replyTo");
   const threadId = readStringParam(params, "threadId");
   const buttons = params.buttons;
-  const asVoice = typeof params.asVoice === "boolean" ? params.asVoice : undefined;
-  const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+  const asVoice = readBooleanParam(params, "asVoice");
+  const silent = readBooleanParam(params, "silent");
   const quoteText = readStringParam(params, "quoteText");
   return {
     to,
@@ -77,6 +81,16 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     const isEnabled = (key: keyof TelegramActionConfig, defaultValue = true) =>
       gate(key, defaultValue);
     const actions = new Set<ChannelMessageActionName>(["send"]);
+    const pollEnabledForAnyAccount = accounts.some((account) => {
+      const accountGate = createTelegramActionGate({
+        cfg,
+        accountId: account.accountId,
+      });
+      return resolveTelegramPollActionGateState(accountGate).enabled;
+    });
+    if (pollEnabledForAnyAccount) {
+      actions.add("poll");
+    }
     if (isEnabled("reactions")) {
       actions.add("react");
     }
@@ -122,10 +136,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "react") {
-      const messageId =
-        readStringOrNumberParam(params, "messageId") ?? toolContext?.currentMessageId;
+      const messageId = resolveReactionMessageId({ args: params, toolContext });
       const emoji = readStringParam(params, "emoji", { allowEmpty: true });
-      const remove = typeof params.remove === "boolean" ? params.remove : undefined;
+      const remove = readBooleanParam(params, "remove");
       return await handleTelegramAction(
         {
           action: "react",
@@ -133,6 +146,45 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           messageId,
           emoji,
           remove,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+        { mediaLocalRoots },
+      );
+    }
+
+    if (action === "poll") {
+      const to = readStringParam(params, "to", { required: true });
+      const question = readStringParam(params, "pollQuestion", { required: true });
+      const answers = readStringArrayParam(params, "pollOption", { required: true });
+      const durationHours = readNumberParam(params, "pollDurationHours", {
+        integer: true,
+        strict: true,
+      });
+      const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
+        integer: true,
+        strict: true,
+      });
+      const replyToMessageId = readNumberParam(params, "replyTo", { integer: true });
+      const messageThreadId = readNumberParam(params, "threadId", { integer: true });
+      const allowMultiselect = readBooleanParam(params, "pollMulti");
+      const pollAnonymous = readBooleanParam(params, "pollAnonymous");
+      const pollPublic = readBooleanParam(params, "pollPublic");
+      const isAnonymous = resolveTelegramPollVisibility({ pollAnonymous, pollPublic });
+      const silent = readBooleanParam(params, "silent");
+      return await handleTelegramAction(
+        {
+          action: "poll",
+          to,
+          question,
+          answers,
+          allowMultiselect,
+          durationHours: durationHours ?? undefined,
+          durationSeconds: durationSeconds ?? undefined,
+          replyToMessageId: replyToMessageId ?? undefined,
+          messageThreadId: messageThreadId ?? undefined,
+          isAnonymous,
+          silent,
           accountId: accountId ?? undefined,
         },
         cfg,

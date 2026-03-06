@@ -1,35 +1,8 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createMediaAttachmentCache, normalizeMediaAttachments, runCapability } from "./runner.js";
-
-async function withVideoFixture(
-  filePrefix: string,
-  run: (params: {
-    ctx: { MediaPath: string; MediaType: string };
-    media: ReturnType<typeof normalizeMediaAttachments>;
-    cache: ReturnType<typeof createMediaAttachmentCache>;
-  }) => Promise<void>,
-) {
-  const tmpPath = path.join(os.tmpdir(), `${filePrefix}-${Date.now().toString()}.mp4`);
-  await fs.writeFile(tmpPath, Buffer.from("video"));
-  const ctx = { MediaPath: tmpPath, MediaType: "video/mp4" };
-  const media = normalizeMediaAttachments(ctx);
-  const cache = createMediaAttachmentCache(media, {
-    localPathRoots: [path.dirname(tmpPath)],
-  });
-  try {
-    await withEnvAsync({ PATH: "" }, async () => {
-      await run({ ctx, media, cache });
-    });
-  } finally {
-    await cache.cleanup();
-    await fs.unlink(tmpPath).catch(() => {});
-  }
-}
+import { runCapability } from "./runner.js";
+import { withVideoFixture } from "./runner.test-utils.js";
 
 describe("runCapability video provider wiring", () => {
   it("merges video baseUrl and headers with entry precedence", async () => {

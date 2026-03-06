@@ -383,12 +383,12 @@ final class ExecApprovalsSettingsModel {
     func addEntry(_ pattern: String) -> ExecAllowlistPatternValidationReason? {
         guard !self.isDefaultsScope else { return nil }
         switch ExecApprovalHelpers.validateAllowlistPattern(pattern) {
-        case .valid(let normalizedPattern):
+        case let .valid(normalizedPattern):
             self.entries.append(ExecAllowlistEntry(pattern: normalizedPattern, lastUsedAt: nil))
             let rejected = ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
             self.allowlistValidationMessage = rejected.first?.reason.message
             return rejected.first?.reason
-        case .invalid(let reason):
+        case let .invalid(reason):
             self.allowlistValidationMessage = reason.message
             return reason
         }
@@ -400,9 +400,9 @@ final class ExecApprovalsSettingsModel {
         guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return nil }
         var next = entry
         switch ExecApprovalHelpers.validateAllowlistPattern(next.pattern) {
-        case .valid(let normalizedPattern):
+        case let .valid(normalizedPattern):
             next.pattern = normalizedPattern
-        case .invalid(let reason):
+        case let .invalid(reason):
             self.allowlistValidationMessage = reason.message
             return reason
         }

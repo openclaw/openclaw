@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { canonicalizeBase64 } from "../media/base64.js";
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
@@ -296,13 +297,21 @@ export async function sanitizeContentBlocksImages(
       } satisfies TextContentBlock);
       continue;
     }
+    const canonicalData = canonicalizeBase64(data);
+    if (!canonicalData) {
+      out.push({
+        type: "text",
+        text: `[${label}] omitted image payload: invalid base64`,
+      } satisfies TextContentBlock);
+      continue;
+    }
 
     try {
-      const inferredMimeType = inferMimeTypeFromBase64(data);
+      const inferredMimeType = inferMimeTypeFromBase64(canonicalData);
       const mimeType = inferredMimeType ?? block.mimeType;
       const fileName = inferImageFileName({ block, label, mediaPathHint });
       const resized = await resizeImageBase64IfNeeded({
-        base64: data,
+        base64: canonicalData,
         mimeType,
         maxDimensionPx,
         maxBytes,

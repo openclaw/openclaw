@@ -1,6 +1,5 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -13,28 +12,50 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
+const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
+const configState = vi.hoisted(() => ({
+  cfg: {} as Record<string, unknown>,
+  snapshot: { exists: false } as Record<string, unknown>,
+}));
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
-  loadConfig: () => ({}),
-  readConfigFileSnapshot: async () => ({ exists: false }),
+  loadConfig: () => configState.cfg,
+  readConfigFileSnapshot: async () => configState.snapshot,
   resolveStateDir: () => "/tmp",
   resolveGatewayPort: () => 18789,
 }));
 
 vi.mock("../../gateway/auth.js", () => ({
-  resolveGatewayAuth: (params: { authConfig?: { token?: string }; env?: NodeJS.ProcessEnv }) => ({
-    mode: "token",
-    token: params.authConfig?.token ?? params.env?.OPENCLAW_GATEWAY_TOKEN,
-    password: undefined,
-    allowTailscale: false,
-  }),
+  resolveGatewayAuth: (params: {
+    authConfig?: { mode?: string; token?: unknown; password?: unknown };
+    authOverride?: { mode?: string; token?: unknown; password?: unknown };
+    env?: NodeJS.ProcessEnv;
+  }) => {
+    const mode = params.authOverride?.mode ?? params.authConfig?.mode ?? "token";
+    const token =
+      (typeof params.authOverride?.token === "string" ? params.authOverride.token : undefined) ??
+      (typeof params.authConfig?.token === "string" ? params.authConfig.token : undefined) ??
+      params.env?.OPENCLAW_GATEWAY_TOKEN;
+    const password =
+      (typeof params.authOverride?.password === "string"
+        ? params.authOverride.password
+        : undefined) ??
+      (typeof params.authConfig?.password === "string" ? params.authConfig.password : undefined) ??
+      params.env?.OPENCLAW_GATEWAY_PASSWORD;
+    return {
+      mode,
+      token,
+      password,
+      allowTailscale: false,
+    };
+  },
 }));
 
 vi.mock("../../gateway/server.js", () => ({
@@ -81,6 +102,7 @@ vi.mock("../command-format.js", () => ({
 
 vi.mock("../ports.js", () => ({
   forceFreePortAndWait: (port: number, opts: unknown) => forceFreePortAndWait(port, opts),
+  waitForPortBindable: (port: number, opts?: unknown) => waitForPortBindable(port, opts),
 }));
 
 vi.mock("./dev.js", () => ({
@@ -93,29 +115,42 @@ vi.mock("./run-loop.js", () => ({
 
 describe("gateway run option collisions", () => {
   let addGatewayRunCommand: typeof import("./run.js").addGatewayRunCommand;
+  let sharedProgram: Command;
 
   beforeAll(async () => {
     ({ addGatewayRunCommand } = await import("./run.js"));
+    sharedProgram = new Command();
+    sharedProgram.exitOverride();
+    const gateway = addGatewayRunCommand(sharedProgram.command("gateway"));
+    addGatewayRunCommand(gateway.command("run"));
   });
 
   beforeEach(() => {
     resetRuntimeCapture();
+    configState.cfg = {};
+    configState.snapshot = { exists: false };
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
     setVerbose.mockClear();
     forceFreePortAndWait.mockClear();
+    waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
   });
 
   async function runGatewayCli(argv: string[]) {
-    await runRegisteredCli({
-      register: ((program: Command) => {
-        const gateway = addGatewayRunCommand(program.command("gateway"));
-        addGatewayRunCommand(gateway.command("run"));
-      }) as (program: Command) => void,
-      argv,
-    });
+    await sharedProgram.parseAsync(argv, { from: "user" });
+  }
+
+  function expectAuthOverrideMode(mode: string) {
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          mode,
+        }),
+      }),
+    );
   }
 
   it("forwards parent-captured options to `gateway run` subcommand", async () => {
@@ -131,6 +166,10 @@ describe("gateway run option collisions", () => {
     ]);
 
     expect(forceFreePortAndWait).toHaveBeenCalledWith(18789, expect.anything());
+    expect(waitForPortBindable).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({ host: "127.0.0.1" }),
+    );
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
     expect(startGatewayServer).toHaveBeenCalledWith(
       18789,
@@ -143,6 +182,54 @@ describe("gateway run option collisions", () => {
   });
 
   it("starts gateway when token mode has no configured token (startup bootstrap path)", async () => {
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        bind: "loopback",
+      }),
+    );
+  });
+
+  it("accepts --auth none override", async () => {
+    await runGatewayCli(["gateway", "run", "--auth", "none", "--allow-unconfigured"]);
+
+    expectAuthOverrideMode("none");
+  });
+
+  it("accepts --auth trusted-proxy override", async () => {
+    await runGatewayCli(["gateway", "run", "--auth", "trusted-proxy", "--allow-unconfigured"]);
+
+    expectAuthOverrideMode("trusted-proxy");
+  });
+
+  it("prints all supported modes on invalid --auth value", async () => {
+    await expect(
+      runGatewayCli(["gateway", "run", "--auth", "bad-mode", "--allow-unconfigured"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      'Invalid --auth (use "none", "token", "password", or "trusted-proxy")',
+    );
+  });
+
+  it("allows password mode preflight when password is configured via SecretRef", async () => {
+    configState.cfg = {
+      gateway: {
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+        },
+      },
+      secrets: {
+        defaults: {
+          env: "default",
+        },
+      },
+    };
+    configState.snapshot = { exists: true, parsed: configState.cfg };
+
     await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
 
     expect(startGatewayServer).toHaveBeenCalledWith(

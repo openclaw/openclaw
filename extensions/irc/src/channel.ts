@@ -1,15 +1,17 @@
 import {
+  buildBaseAccountStatusSnapshot,
+  buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
+  deleteAccountFromConfigSection,
   formatPairingApproveHint,
   getChatChannelMeta,
   PAIRING_APPROVED_MESSAGE,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
-  deleteAccountFromConfigSection,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/irc";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,
@@ -294,16 +296,18 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
     chunker: (text, limit) => getIrcRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 350,
-    sendText: async ({ to, text, accountId, replyToId }) => {
+    sendText: async ({ cfg, to, text, accountId, replyToId }) => {
       const result = await sendMessageIrc(to, text, {
+        cfg: cfg as CoreConfig,
         accountId: accountId ?? undefined,
         replyTo: replyToId ?? undefined,
       });
       return { channel: "irc", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) => {
       const combined = mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text;
       const result = await sendMessageIrc(to, combined, {
+        cfg: cfg as CoreConfig,
         accountId: accountId ?? undefined,
         replyTo: replyToId ?? undefined,
       });
@@ -319,37 +323,23 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
       lastError: null,
     },
     buildChannelSummary: ({ account, snapshot }) => ({
-      configured: snapshot.configured ?? false,
+      ...buildBaseChannelStatusSummary(snapshot),
       host: account.host,
       port: snapshot.port,
       tls: account.tls,
       nick: account.nick,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
       probe: snapshot.probe,
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
     probeAccount: async ({ cfg, account, timeoutMs }) =>
       probeIrc(cfg as CoreConfig, { accountId: account.accountId, timeoutMs }),
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
+      ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),
       host: account.host,
       port: account.port,
       tls: account.tls,
       nick: account.nick,
       passwordSource: account.passwordSource,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      probe,
-      lastInboundAt: runtime?.lastInboundAt ?? null,
-      lastOutboundAt: runtime?.lastOutboundAt ?? null,
     }),
   },
   gateway: {

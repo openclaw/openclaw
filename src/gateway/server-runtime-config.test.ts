@@ -27,6 +27,7 @@ describe("resolveGatewayRuntimeConfig", () => {
             bind: "lan" as const,
             auth: TRUSTED_PROXY_AUTH,
             trustedProxies: ["192.168.1.1"],
+            controlUi: { allowedOrigins: ["https://control.example.com"] },
           },
         },
         expectedBindHost: "0.0.0.0",
@@ -90,7 +91,12 @@ describe("resolveGatewayRuntimeConfig", () => {
       {
         name: "lan binding without trusted proxies",
         cfg: {
-          gateway: { bind: "lan" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: [] },
+          gateway: {
+            bind: "lan" as const,
+            auth: TRUSTED_PROXY_AUTH,
+            trustedProxies: [],
+            controlUi: { allowedOrigins: ["https://control.example.com"] },
+          },
         },
         expectedMessage:
           "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
@@ -121,7 +127,13 @@ describe("resolveGatewayRuntimeConfig", () => {
     it.each([
       {
         name: "lan binding with token",
-        cfg: { gateway: { bind: "lan" as const, auth: TOKEN_AUTH } },
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: TOKEN_AUTH,
+            controlUi: { allowedOrigins: ["https://control.example.com"] },
+          },
+        },
         expectedAuthMode: "token",
         expectedBindHost: "0.0.0.0",
       },
@@ -187,6 +199,36 @@ describe("resolveGatewayRuntimeConfig", () => {
       await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789, host })).rejects.toThrow(
         expectedMessage,
       );
+    });
+
+    it("rejects non-loopback control UI when allowed origins are missing", async () => {
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: {
+              bind: "lan",
+              auth: TOKEN_AUTH,
+            },
+          },
+          port: 18789,
+        }),
+      ).rejects.toThrow("non-loopback Control UI requires gateway.controlUi.allowedOrigins");
+    });
+
+    it("allows non-loopback control UI without allowed origins when dangerous fallback is enabled", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "lan",
+            auth: TOKEN_AUTH,
+            controlUi: {
+              dangerouslyAllowHostHeaderOriginFallback: true,
+            },
+          },
+        },
+        port: 18789,
+      });
+      expect(result.bindHost).toBe("0.0.0.0");
     });
   });
 

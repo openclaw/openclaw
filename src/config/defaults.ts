@@ -2,9 +2,15 @@ import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { resolveAgentModelPrimaryValue } from "./model-input.js";
-import { resolveTalkApiKey } from "./talk.js";
+import {
+  DEFAULT_TALK_PROVIDER,
+  normalizeTalkConfig,
+  resolveActiveTalkProviderConfig,
+  resolveTalkApiKey,
+} from "./talk.js";
 import type { OpenClawConfig } from "./types.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
+import { hasConfiguredSecretInput } from "./types.secrets.js";
 
 type WarnState = { warned: boolean };
 
@@ -163,21 +169,44 @@ export function applySessionDefaults(
 }
 
 export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
+  const normalized = normalizeTalkConfig(config);
   const resolved = resolveTalkApiKey();
   if (!resolved) {
-    return config;
+    return normalized;
   }
-  const existing = config.talk?.apiKey?.trim();
-  if (existing) {
-    return config;
+
+  const talk = normalized.talk;
+  const active = resolveActiveTalkProviderConfig(talk);
+  if (active.provider && active.provider !== DEFAULT_TALK_PROVIDER) {
+    return normalized;
   }
-  return {
-    ...config,
-    talk: {
-      ...config.talk,
-      apiKey: resolved,
-    },
+
+  const existingProviderApiKeyConfigured = hasConfiguredSecretInput(active.config?.apiKey);
+  const existingLegacyApiKeyConfigured = hasConfiguredSecretInput(talk?.apiKey);
+  if (existingProviderApiKeyConfigured || existingLegacyApiKeyConfigured) {
+    return normalized;
+  }
+
+  const providerId = active.provider ?? DEFAULT_TALK_PROVIDER;
+  const providers = { ...talk?.providers };
+  const providerConfig = { ...providers[providerId], apiKey: resolved };
+  providers[providerId] = providerConfig;
+
+  const nextTalk = {
+    ...talk,
+    apiKey: resolved,
+    provider: talk?.provider ?? providerId,
+    providers,
   };
+
+  return {
+    ...normalized,
+    talk: nextTalk,
+  };
+}
+
+export function applyTalkConfigNormalization(config: OpenClawConfig): OpenClawConfig {
+  return normalizeTalkConfig(config);
 }
 
 export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
