@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => {
   const printModelTable = vi.fn();
   return {
     loadConfig: vi.fn().mockReturnValue({
-      agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
+      agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
       models: { providers: {} },
     }),
     ensureAuthProfileStore: vi.fn().mockReturnValue({ version: 1, profiles: {}, order: {} }),
@@ -14,18 +14,19 @@ const mocks = vi.hoisted(() => {
     resolveConfiguredEntries: vi.fn().mockReturnValue({
       entries: [
         {
-          key: "openai-codex/gpt-5.3-codex",
-          ref: { provider: "openai-codex", model: "gpt-5.3-codex" },
+          key: "openai-codex/gpt-5.4",
+          ref: { provider: "openai-codex", model: "gpt-5.4" },
           tags: new Set(["configured"]),
           aliases: [],
         },
       ],
     }),
     printModelTable,
-    resolveForwardCompatModel: vi.fn().mockReturnValue({
+    listProfilesForProvider: vi.fn().mockReturnValue([]),
+    resolveModelWithRegistry: vi.fn().mockReturnValue({
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
-      name: "GPT-5.3 Codex",
+      id: "gpt-5.4",
+      name: "GPT-5.4",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       input: ["text"],
@@ -45,7 +46,7 @@ vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
   return {
     ...actual,
     ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-    listProfilesForProvider: vi.fn().mockReturnValue([]),
+    listProfilesForProvider: mocks.listProfilesForProvider,
   };
 });
 
@@ -65,11 +66,11 @@ vi.mock("./list.table.js", () => ({
   printModelTable: mocks.printModelTable,
 }));
 
-vi.mock("../../agents/model-forward-compat.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/model-forward-compat.js")>();
+vi.mock("../../agents/pi-embedded-runner/model.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/pi-embedded-runner/model.js")>();
   return {
     ...actual,
-    resolveForwardCompatModel: mocks.resolveForwardCompatModel,
+    resolveModelWithRegistry: mocks.resolveModelWithRegistry,
   };
 });
 
@@ -88,9 +89,95 @@ describe("modelsListCommand forward-compat", () => {
       missing: boolean;
     }>;
 
-    const codex = rows.find((r) => r.key === "openai-codex/gpt-5.3-codex");
+    const codex = rows.find((r) => r.key === "openai-codex/gpt-5.4");
     expect(codex).toBeTruthy();
     expect(codex?.missing).toBe(false);
     expect(codex?.tags).not.toContain("missing");
+  });
+
+  it("keeps configured local openai gpt-5.4 entries visible in --local output", async () => {
+    mocks.resolveConfiguredEntries.mockReturnValueOnce({
+      entries: [
+        {
+          key: "openai/gpt-5.4",
+          ref: { provider: "openai", model: "gpt-5.4" },
+          tags: new Set(["configured"]),
+          aliases: [],
+        },
+      ],
+    });
+    mocks.resolveModelWithRegistry.mockReturnValueOnce({
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      baseUrl: "http://localhost:4000/v1",
+      input: ["text", "image"],
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    await modelsListCommand({ json: true, local: true }, runtime as never);
+
+    expect(mocks.printModelTable).toHaveBeenCalled();
+    const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{ key: string }>;
+    expect(rows).toEqual([
+      expect.objectContaining({
+        key: "openai/gpt-5.4",
+      }),
+    ]);
+  });
+
+  it("marks synthetic codex gpt-5.4 rows as available when provider auth exists", async () => {
+    mocks.loadModelRegistry.mockResolvedValueOnce({
+      models: [],
+      availableKeys: new Set(),
+      registry: {},
+    });
+    mocks.listProfilesForProvider.mockImplementationOnce((_: unknown, provider: string) =>
+      provider === "openai-codex" ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>) : [],
+    );
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    await modelsListCommand({ json: true }, runtime as never);
+
+    expect(mocks.printModelTable).toHaveBeenCalled();
+    const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{
+      key: string;
+      available: boolean;
+    }>;
+
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        key: "openai-codex/gpt-5.4",
+        available: true,
+      }),
+    );
+  });
+
+  it("exits with an error when configured-mode listing has no model registry", async () => {
+    vi.clearAllMocks();
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    mocks.loadModelRegistry.mockResolvedValueOnce({
+      models: [],
+      availableKeys: new Set<string>(),
+      registry: undefined,
+    });
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    let observedExitCode: number | undefined;
+
+    try {
+      await modelsListCommand({ json: true }, runtime as never);
+      observedExitCode = process.exitCode;
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+
+    expect(runtime.error).toHaveBeenCalledWith("Model registry unavailable.");
+    expect(observedExitCode).toBe(1);
+    expect(mocks.printModelTable).not.toHaveBeenCalled();
   });
 });
