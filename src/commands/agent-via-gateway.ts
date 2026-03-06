@@ -185,7 +185,6 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
   const localOpts = {
     ...opts,
     agentId: opts.agent,
-    sessionKey: opts.sessionKey,
     replyAccountId: opts.replyAccount,
   };
   if (opts.local === true) {
