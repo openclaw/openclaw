@@ -31,6 +31,13 @@ describe("resolveConversationIdFromTargets", () => {
     expect(resolved).toBe("1475250310120214812");
   });
 
+  it("extracts chat ids from chat: targets (Feishu format)", () => {
+    const resolved = resolveConversationIdFromTargets({
+      targets: ["chat:oc_abc123def456"],
+    });
+    expect(resolved).toBe("oc_abc123def456");
+  });
+
   it("returns undefined for non-channel targets", () => {
     const resolved = resolveConversationIdFromTargets({
       targets: ["user:alice", "general"],

@@ -208,12 +208,20 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return `${statusLine}\n---\n${assistantText}`;
   };
 
+  const TOOL_DISPLAY_NAMES: Record<string, string> = {
+    feishu_chat_history: "聊天记录",
+    feishu_chat_info: "群信息",
+    feishu_chat_members: "群成员",
+    feishu_member_chats: "成员群列表",
+  };
+
   const normalizeToolName = (name: string | undefined): string | undefined => {
     const trimmed = name?.trim();
     if (!trimmed) {
       return undefined;
     }
-    return trimmed.replace(/\s+/g, " ");
+    const stripped = trimmed.replace("mcp__openclaw__", "");
+    return TOOL_DISPLAY_NAMES[stripped] ?? stripped.replace(/\s+/g, " ");
   };
 
   const resolveStatusLine = (): string | undefined => {
@@ -631,8 +639,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // streaming — text arrives as complete chunks via onPartialReply —
             // so the card must be started here. startStreaming() is idempotent
             // (guarded by streamingStartPromise), so calling it here is safe
-            // even when the card was already started by deliver.
-            queueThinkingPrelude();
+            // even when the card was already started by onReplyStart or deliver.
             startStreaming();
             queueStreamingUpdate(payload.text, { dedupeWithLastPartial: true });
           }

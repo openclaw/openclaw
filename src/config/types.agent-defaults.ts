@@ -50,9 +50,9 @@ export type CliBackendConfig = {
   /** Base args applied to every invocation. */
   args?: string[];
   /** Output parsing mode (default: json). */
-  output?: "json" | "text" | "jsonl";
+  output?: "json" | "text" | "jsonl" | "stream-json";
   /** Output parsing mode when resuming a CLI session. */
-  resumeOutput?: "json" | "text" | "jsonl";
+  resumeOutput?: "json" | "text" | "jsonl" | "stream-json";
   /** Prompt input mode (default: arg). */
   input?: "arg" | "stdin";
   /** Max prompt length for arg mode (if exceeded, stdin is used). */

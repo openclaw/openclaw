@@ -5,6 +5,7 @@ import {
   clearHistoryEntriesIfEnabled,
   createScopedPairingAccess,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  getSessionBindingService,
   type HistoryEntry,
   normalizeAgentId,
   recordPendingHistoryEntryIfEnabled,
@@ -1006,6 +1007,7 @@ export async function handleFeishuMessage(params: {
     : null;
 
   let requireMention = false; // DMs never require mention; groups may override below
+  let boundSessionKey: string | undefined;
   if (isGroup) {
     if (groupConfig?.enabled === false) {
       log(`feishu[${account.accountId}]: group ${ctx.chatId} is disabled`);
@@ -1066,7 +1068,25 @@ export async function handleFeishuMessage(params: {
       groupConfig,
     }));
 
-    if (requireMention && !ctx.mentionedBot) {
+    // Check if message is in a topic thread bound to an ACP/subagent session
+    const inboundRootId = ctx.rootId?.trim() || ctx.threadId?.trim();
+    if (inboundRootId) {
+      const binding = getSessionBindingService().resolveByConversation({
+        channel: "feishu",
+        accountId: account.accountId,
+        conversationId: `${ctx.chatId}:${inboundRootId}`,
+      });
+      if (binding?.targetSessionKey) {
+        boundSessionKey = binding.targetSessionKey;
+        getSessionBindingService().touch(binding.bindingId);
+        requireMention = false;
+        log(
+          `feishu[${account.accountId}]: bound thread detected root=${inboundRootId}, routing to session ${boundSessionKey}`,
+        );
+      }
+    }
+
+    if (dispatchMode !== "plugin" && requireMention && !ctx.mentionedBot) {
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
       // Record to pending history for non-broadcast groups only. For broadcast groups,
       // the mentioned handler's broadcast dispatch writes the turn directly into all
@@ -1375,7 +1395,9 @@ export async function handleFeishuMessage(params: {
       isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
-    if (broadcastAgents) {
+    if (broadcastAgents && !boundSessionKey) {
+      // Note: bound thread sessions (ACP/subagent) bypass broadcast dispatch —
+      // bound threads route directly to the single-agent path below.
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
       // event to every bot account in the group. Only one account should handle
       // broadcast dispatch to avoid duplicate agent sessions and race conditions.
@@ -1509,10 +1531,64 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: broadcast dispatch complete for ${broadcastAgents.length} agents`,
       );
-    } else {
-      // --- Single-agent dispatch (existing behavior) ---
+    } else if (isGroup && dispatchMode === "plugin" && !boundSessionKey) {
+      // --- Plugin dispatch mode: run hooks but suppress reply generation ---
       const ctxPayload = buildCtxPayloadForAgent(
         route.sessionKey,
+        route.accountId,
+        ctx.mentionedBot,
+      );
+      const shouldForwardControlCommands = feishuCfg?.pluginMode?.forwardControlCommands ?? true;
+      if (
+        !shouldForwardControlCommands &&
+        core.channel.commands.isControlCommandMessage(ctx.content, effectiveCfg)
+      ) {
+        log(
+          `feishu[${account.accountId}]: skipping control command relay in plugin mode (message=${ctx.messageId})`,
+        );
+        if (isGroup && historyKey && chatHistories) {
+          clearHistoryEntriesIfEnabled({
+            historyMap: chatHistories,
+            historyKey,
+            limit: historyLimit,
+          });
+        }
+        return;
+      }
+
+      const { dispatcher, replyOptions, markDispatchIdle } =
+        core.channel.reply.createReplyDispatcherWithTyping({
+          deliver: async () => {},
+          onIdle: () => {},
+          onError: () => {},
+        });
+
+      log(`feishu[${account.accountId}]: group plugin dispatch mode enabled, skipping auto reply`);
+
+      try {
+        await core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg: effectiveCfg,
+          dispatcher,
+          replyOptions,
+          replyResolver: async () => undefined,
+        });
+      } finally {
+        markDispatchIdle();
+      }
+
+      if (isGroup && historyKey && chatHistories) {
+        clearHistoryEntriesIfEnabled({
+          historyMap: chatHistories,
+          historyKey,
+          limit: historyLimit,
+        });
+      }
+    } else {
+      // --- Single-agent dispatch (existing behavior) ---
+      const effectiveSessionKey = boundSessionKey ?? route.sessionKey;
+      const ctxPayload = buildCtxPayloadForAgent(
+        effectiveSessionKey,
         route.accountId,
         ctx.mentionedBot,
       );
@@ -1522,18 +1598,20 @@ export async function handleFeishuMessage(params: {
         agentId: route.agentId,
         runtime: runtime as RuntimeEnv,
         chatId: ctx.chatId,
-        replyToMessageId: replyTargetMessageId,
+        replyToMessageId: boundSessionKey
+          ? (ctx.rootId ?? replyTargetMessageId)
+          : replyTargetMessageId,
         skipReplyToInMessages: !isGroup,
-        replyInThread,
-        streamingInThread,
-        rootId: ctx.rootId,
-        threadReply,
+        replyInThread: boundSessionKey ? true : replyInThread,
+        streamingInThread: boundSessionKey ? true : streamingInThread,
+        rootId: boundSessionKey ? ctx.rootId : replyInThread ? ctx.rootId : undefined,
+        threadReply: boundSessionKey ? true : replyInThread && threadReply,
         mentionTargets: ctx.mentionTargets,
         accountId: account.accountId,
         messageCreateTimeMs,
       });
 
-      log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
+      log(`feishu[${account.accountId}]: dispatching to agent (session=${effectiveSessionKey})`);
       const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
         dispatcher,
         onSettled: () => {

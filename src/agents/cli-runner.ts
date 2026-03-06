@@ -29,6 +29,7 @@ import {
   buildCliSupervisorScopeKey,
   buildCliArgs,
   buildSystemPrompt,
+  createStreamJsonProcessor,
   enqueueCliRun,
   normalizeCliModel,
   parseCliJson,
@@ -398,17 +399,7 @@ export async function runCliAgent(params: {
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
   onAssistantTurn?: (text: string) => void;
-  onSystemInit?: (payload: { subtype: string; sessionId?: string }) => void;
   onToolUse?: (toolName: string) => void;
-  onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
-  onToolUseEvent?: (payload: { name: string; toolUseId?: string; input?: unknown }) => void;
-  onToolResult?: (payload: { toolUseId?: string; text?: string; isError?: boolean }) => void;
-  abortSignal?: AbortSignal;
-  trigger?: PluginHookAgentContext["trigger"];
-  messageChannel?: string;
-  messageAccountId?: string;
-  messageTo?: string;
-  messageThreadId?: string | number;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -742,12 +733,8 @@ export async function runCliAgent(params: {
         const streamProcessor =
           outputMode === "stream-json"
             ? createStreamJsonProcessor(backend, {
-                onSystemInit: params.onSystemInit,
                 onAssistantTurn: params.onAssistantTurn,
                 onToolUse: params.onToolUse,
-                onThinkingTurn: params.onThinkingTurn,
-                onToolUseEvent: params.onToolUseEvent,
-                onToolResult: params.onToolResult,
               })
             : undefined;
 
@@ -763,6 +750,7 @@ export async function runCliAgent(params: {
           cwd: workspaceDir,
           env,
           input: stdinPayload,
+          ...(streamProcessor ? { onStdout: streamProcessor.feed } : {}),
         });
         const onAbort = () => {
           managedRun.cancel("manual-cancel");
@@ -847,22 +835,14 @@ export async function runCliAgent(params: {
           });
         }
 
-        let output: {
-          text: string;
-          sessionId?: string;
-          usage?: {
-            input?: number;
-            output?: number;
-            cacheRead?: number;
-            cacheWrite?: number;
-            total?: number;
-          };
-        };
         if (streamProcessor) {
-          output = streamProcessor.finish();
-        } else if (outputMode === "text") {
-          output = { text: stdout, sessionId: undefined };
-        } else if (outputMode === "jsonl") {
+          return streamProcessor.finish();
+        }
+
+        if (outputMode === "text") {
+          return { text: stdout, sessionId: undefined };
+        }
+        if (outputMode === "jsonl") {
           const parsed = parseCliJsonl(stdout, backend);
           output = parsed ?? { text: stdout };
         } else {
@@ -1001,17 +981,7 @@ export async function runClaudeCliAgent(params: {
   claudeSessionId?: string;
   images?: ImageContent[];
   onAssistantTurn?: (text: string) => void;
-  onSystemInit?: (payload: { subtype: string; sessionId?: string }) => void;
   onToolUse?: (toolName: string) => void;
-  onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
-  onToolUseEvent?: (payload: { name: string; toolUseId?: string; input?: unknown }) => void;
-  onToolResult?: (payload: { toolUseId?: string; text?: string; isError?: boolean }) => void;
-  abortSignal?: AbortSignal;
-  trigger?: PluginHookAgentContext["trigger"];
-  messageChannel?: string;
-  messageAccountId?: string;
-  messageTo?: string;
-  messageThreadId?: string | number;
 }): Promise<EmbeddedPiRunResult> {
   return runCliAgent({
     sessionId: params.sessionId,
@@ -1032,16 +1002,6 @@ export async function runClaudeCliAgent(params: {
     cliSessionId: params.claudeSessionId,
     images: params.images,
     onAssistantTurn: params.onAssistantTurn,
-    onSystemInit: params.onSystemInit,
     onToolUse: params.onToolUse,
-    onThinkingTurn: params.onThinkingTurn,
-    onToolUseEvent: params.onToolUseEvent,
-    onToolResult: params.onToolResult,
-    abortSignal: params.abortSignal,
-    trigger: params.trigger,
-    messageChannel: params.messageChannel,
-    messageAccountId: params.messageAccountId,
-    messageTo: params.messageTo,
-    messageThreadId: params.messageThreadId,
   });
 }

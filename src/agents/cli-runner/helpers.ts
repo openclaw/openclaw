@@ -7,9 +7,12 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
+
+const log = createSubsystemLogger("agent/claude-cli/stream");
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
@@ -249,280 +252,25 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
 }
 
 export type StreamJsonCallbacks = {
-  onSystemInit?: (payload: { subtype: string; sessionId?: string }) => void;
   onAssistantTurn?: (text: string) => void;
   onToolUse?: (toolName: string) => void;
-  onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
-  onToolUseEvent?: (payload: { name: string; toolUseId?: string; input?: unknown }) => void;
-  onToolResult?: (payload: { toolUseId?: string; text?: string; isError?: boolean }) => void;
 };
 
-const MAX_STREAM_EVENT_DEDUPE_KEYS = 2_048;
-const KNOWN_STREAM_TOP_LEVEL_TYPES = new Set([
-  "assistant",
-  "user",
-  "system",
-  "result",
-  "rate_limit_event",
-]);
-const KNOWN_STREAM_CONTENT_BLOCK_TYPES = new Set([
-  "text",
-  "thinking",
-  "tool_use",
-  "tool_result",
-  "tool_result_error",
-]);
-
-type StreamContentBlock = Record<string, unknown>;
-
-function extractContentBlocks(message: unknown): StreamContentBlock[] {
-  if (!isRecord(message) || !Array.isArray(message.content)) {
+function extractToolUseNames(message: unknown): string[] {
+  if (!isRecord(message)) {
     return [];
   }
-  return message.content.filter((entry): entry is StreamContentBlock => isRecord(entry));
-}
-
-function extractToolUseNames(contentBlocks: StreamContentBlock[]): string[] {
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
   const names: string[] = [];
-  for (const block of contentBlocks) {
-    if (block.type === "tool_use" && typeof block.name === "string") {
+  for (const block of content) {
+    if (isRecord(block) && block.type === "tool_use" && typeof block.name === "string") {
       names.push(block.name);
     }
   }
   return names;
-}
-
-function extractAssistantTextFromBlocks(contentBlocks: StreamContentBlock[]): string {
-  const parts: string[] = [];
-  for (const block of contentBlocks) {
-    if (block.type !== "text") {
-      continue;
-    }
-    if (typeof block.text === "string" && block.text) {
-      parts.push(block.text);
-    }
-  }
-  return parts.join("");
-}
-
-function extractThinkingTextFromBlocks(contentBlocks: StreamContentBlock[]): string {
-  const parts: string[] = [];
-  for (const block of contentBlocks) {
-    if (block.type !== "thinking") {
-      continue;
-    }
-    if (typeof block.thinking === "string" && block.thinking) {
-      parts.push(block.thinking);
-    }
-  }
-  return parts.join("");
-}
-
-type ToolUseBlockEvent = {
-  name: string;
-  toolUseId?: string;
-  input?: unknown;
-};
-
-function extractToolUseEvents(contentBlocks: StreamContentBlock[]): ToolUseBlockEvent[] {
-  const events: ToolUseBlockEvent[] = [];
-  for (const block of contentBlocks) {
-    if (block.type !== "tool_use" || typeof block.name !== "string") {
-      continue;
-    }
-    const toolUseId = typeof block.id === "string" ? block.id : undefined;
-    events.push({
-      name: block.name,
-      toolUseId,
-      input: block.input,
-    });
-  }
-  return events;
-}
-
-type ToolResultBlockEvent = {
-  toolUseId?: string;
-  text?: string;
-  isError?: boolean;
-};
-
-function extractToolResultEvents(contentBlocks: StreamContentBlock[]): ToolResultBlockEvent[] {
-  const events: ToolResultBlockEvent[] = [];
-  for (const block of contentBlocks) {
-    const type = typeof block.type === "string" ? block.type : "";
-    if (type !== "tool_result" && type !== "tool_result_error") {
-      continue;
-    }
-    const text = collectText(block.content ?? block.result ?? block.text).trim();
-    const toolUseId =
-      typeof block.tool_use_id === "string"
-        ? block.tool_use_id
-        : typeof block.toolUseId === "string"
-          ? block.toolUseId
-          : undefined;
-    const isError = block.is_error === true || type === "tool_result_error";
-    events.push({
-      toolUseId,
-      text: text || undefined,
-      isError,
-    });
-  }
-  return events;
-}
-
-function resolveDelta(nextText: string, previousText: string): string | undefined {
-  if (!nextText) {
-    return undefined;
-  }
-  if (!previousText) {
-    return nextText;
-  }
-  if (nextText.startsWith(previousText)) {
-    const delta = nextText.slice(previousText.length);
-    return delta || undefined;
-  }
-  // Non-append rewrites should not be treated as deltas.
-  return undefined;
-}
-
-function addDedupeKey(bucket: Set<string>, order: string[], key: string): boolean {
-  if (bucket.has(key)) {
-    return false;
-  }
-  bucket.add(key);
-  order.push(key);
-  if (order.length > MAX_STREAM_EVENT_DEDUPE_KEYS) {
-    const oldest = order.shift();
-    if (oldest) {
-      bucket.delete(oldest);
-    }
-  }
-  return true;
-}
-
-function stringifyForDedupe(value: unknown): string {
-  if (value === undefined) {
-    return "";
-  }
-  try {
-    return JSON.stringify(value) ?? "";
-  } catch {
-    return "[unserializable]";
-  }
-}
-
-function buildAnonymousToolUseKey(event: ToolUseBlockEvent): string {
-  return `${event.name}:${stringifyForDedupe(event.input)}`;
-}
-
-function buildToolResultDedupeKey(event: ToolResultBlockEvent): string | undefined {
-  if (!event.toolUseId) {
-    return undefined;
-  }
-  return `${event.toolUseId}:${event.isError === true ? "1" : "0"}:${event.text ?? ""}`;
-}
-
-function shouldEmitAnonymousToolUse(
-  event: ToolUseBlockEvent,
-  lastKey: string | undefined,
-): { emit: boolean; key: string } {
-  const key = buildAnonymousToolUseKey(event);
-  return { emit: key !== lastKey, key };
-}
-
-function formatToolResultDedupeKey(event: ToolResultBlockEvent): string | undefined {
-  return buildToolResultDedupeKey(event);
-}
-
-function trackToolResultDedupeKey(
-  emittedToolResultKeys: Set<string>,
-  emittedToolResultOrder: string[],
-  event: ToolResultBlockEvent,
-): boolean {
-  const dedupeKey = formatToolResultDedupeKey(event);
-  if (!dedupeKey) {
-    return true;
-  }
-  return addDedupeKey(emittedToolResultKeys, emittedToolResultOrder, dedupeKey);
-}
-
-function trackToolUseDedupeKey(
-  emittedToolUseKeys: Set<string>,
-  emittedToolUseOrder: string[],
-  event: ToolUseBlockEvent,
-): boolean {
-  if (!event.toolUseId) {
-    return true;
-  }
-  return addDedupeKey(emittedToolUseKeys, emittedToolUseOrder, event.toolUseId);
-}
-
-function shouldEmitToolUse(
-  emittedToolUseKeys: Set<string>,
-  emittedToolUseOrder: string[],
-  event: ToolUseBlockEvent,
-  lastAnonymousToolUseKey: string | undefined,
-): { emit: boolean; nextAnonymousToolUseKey?: string } {
-  if (event.toolUseId) {
-    return {
-      emit: trackToolUseDedupeKey(emittedToolUseKeys, emittedToolUseOrder, event),
-      nextAnonymousToolUseKey: undefined,
-    };
-  }
-  const anonymous = shouldEmitAnonymousToolUse(event, lastAnonymousToolUseKey);
-  return {
-    emit: anonymous.emit,
-    nextAnonymousToolUseKey: anonymous.key,
-  };
-}
-
-function shouldEmitToolResult(
-  emittedToolResultKeys: Set<string>,
-  emittedToolResultOrder: string[],
-  event: ToolResultBlockEvent,
-): boolean {
-  return trackToolResultDedupeKey(emittedToolResultKeys, emittedToolResultOrder, event);
-}
-
-function isToolResultAllowedEnvelope(params: {
-  isAssistantEnvelope: boolean;
-  type: string;
-  messageRole: string;
-}): boolean {
-  if (params.isAssistantEnvelope) {
-    return true;
-  }
-  return (
-    params.type === "user" ||
-    params.type === "tool" ||
-    params.messageRole === "user" ||
-    params.messageRole === "tool"
-  );
-}
-
-function buildFallbackAssistantText(params: {
-  isAssistantEnvelope: boolean;
-  extractedText: string;
-  rawMessage: unknown;
-  message: Record<string, unknown>;
-}): string {
-  if (!params.isAssistantEnvelope || params.extractedText) {
-    return params.extractedText;
-  }
-  return collectText(params.rawMessage) || collectText(params.message);
-}
-
-function logUnknownStreamTypeOnce(params: {
-  seen: Set<string>;
-  value: string;
-  kind: "top-level" | "content-block";
-}): void {
-  const normalized = params.value.trim();
-  if (!normalized || params.seen.has(normalized)) {
-    return;
-  }
-  params.seen.add(normalized);
-  log.debug(`stream-json unknown ${params.kind} type observed: ${normalized}`);
 }
 
 export function createStreamJsonProcessor(
@@ -534,17 +282,9 @@ export function createStreamJsonProcessor(
 } {
   let buffer = "";
   let lastAssistantText = "";
-  let lastThinkingText = "";
   let resultText: string | undefined;
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
-  const emittedToolUseKeys = new Set<string>();
-  const emittedToolUseOrder: string[] = [];
-  const emittedToolResultKeys = new Set<string>();
-  const emittedToolResultOrder: string[] = [];
-  let lastAnonymousToolUseKey: string | undefined;
-  const seenUnknownTopLevelTypes = new Set<string>();
-  const seenUnknownContentBlockTypes = new Set<string>();
 
   const processLine = (line: string) => {
     const trimmed = line.trim();
@@ -562,19 +302,37 @@ export function createStreamJsonProcessor(
     }
 
     const type = typeof parsed.type === "string" ? parsed.type : "";
-    if (type && !KNOWN_STREAM_TOP_LEVEL_TYPES.has(type)) {
-      logUnknownStreamTypeOnce({
-        seen: seenUnknownTopLevelTypes,
-        value: type,
-        kind: "top-level",
-      });
-    }
 
     if (!sessionId) {
       sessionId = pickSessionId(parsed, backend);
     }
 
-    if (type === "result") {
+    if (type === "assistant") {
+      const msg = isRecord(parsed.message) ? parsed.message : parsed;
+      const contentBlocks = Array.isArray(isRecord(msg) ? msg.content : undefined)
+        ? (msg.content as unknown[])
+        : [];
+      const blockTypes = contentBlocks
+        .map((b) => (isRecord(b) && typeof b.type === "string" ? b.type : "?"))
+        .join(",");
+
+      const text = collectText(parsed.message);
+      const toolNames = extractToolUseNames(msg);
+
+      log.debug(
+        `stream-json assistant: blocks=[${blockTypes}] text=${text.length} chars tools=[${toolNames.join(",")}]${text ? ` content=${text.slice(0, 200)}` : ""}`,
+      );
+
+      if (text) {
+        lastAssistantText = text;
+        callbacks?.onAssistantTurn?.(lastAssistantText);
+      }
+      if (callbacks?.onToolUse) {
+        for (const name of toolNames) {
+          callbacks.onToolUse(name);
+        }
+      }
+    } else if (type === "result") {
       resultText =
         (typeof parsed.result === "string" ? parsed.result : undefined) ?? collectText(parsed);
       if (isRecord(parsed.usage)) {
@@ -583,113 +341,9 @@ export function createStreamJsonProcessor(
       log.debug(
         `stream-json result: ${resultText?.length ?? 0} chars, sessionId=${sessionId ?? "none"}`,
       );
-      return;
-    }
-
-    if (type === "system") {
+    } else if (type === "system") {
       const subtype = typeof parsed.subtype === "string" ? parsed.subtype : "";
       log.debug(`stream-json system: subtype=${subtype} sessionId=${sessionId ?? "none"}`);
-      if (subtype === "init") {
-        callbacks?.onSystemInit?.({ subtype, sessionId });
-      }
-      return;
-    }
-    if (type === "rate_limit_event") {
-      return;
-    }
-
-    const rawMessage = parsed.message;
-    const message = isRecord(rawMessage) ? rawMessage : parsed;
-    const messageRole = typeof message.role === "string" ? message.role : "";
-    const isAssistantEnvelope = type === "assistant" || messageRole === "assistant";
-    const contentBlocks = extractContentBlocks(message);
-    if (contentBlocks.length > 0) {
-      for (const block of contentBlocks) {
-        const blockType = typeof block.type === "string" ? block.type : "";
-        if (!blockType || KNOWN_STREAM_CONTENT_BLOCK_TYPES.has(blockType)) {
-          continue;
-        }
-        logUnknownStreamTypeOnce({
-          seen: seenUnknownContentBlockTypes,
-          value: blockType,
-          kind: "content-block",
-        });
-      }
-      const blockTypes = contentBlocks
-        .map((block) => (typeof block.type === "string" ? block.type : "?"))
-        .join(",");
-      const extractedText = isAssistantEnvelope
-        ? extractAssistantTextFromBlocks(contentBlocks)
-        : "";
-      const text = buildFallbackAssistantText({
-        isAssistantEnvelope,
-        extractedText,
-        rawMessage,
-        message,
-      });
-      const thinkingText = isAssistantEnvelope ? extractThinkingTextFromBlocks(contentBlocks) : "";
-      const toolUseEvents = isAssistantEnvelope ? extractToolUseEvents(contentBlocks) : [];
-      const allowToolResultEvents = isToolResultAllowedEnvelope({
-        isAssistantEnvelope,
-        type,
-        messageRole,
-      });
-      const toolResultEvents = allowToolResultEvents ? extractToolResultEvents(contentBlocks) : [];
-      const toolNames = extractToolUseNames(contentBlocks);
-
-      if (isAssistantEnvelope) {
-        log.debug(
-          `stream-json assistant: blocks=[${blockTypes}] text=${text.length} chars thinking=${thinkingText.length} chars tools=[${toolNames.join(",")}]${text ? ` content=${text.slice(0, 200)}` : ""}`,
-        );
-      }
-
-      if (text && text !== lastAssistantText) {
-        lastAssistantText = text;
-        callbacks?.onAssistantTurn?.(lastAssistantText);
-      }
-
-      if (thinkingText && thinkingText !== lastThinkingText) {
-        const delta = resolveDelta(thinkingText, lastThinkingText);
-        lastThinkingText = thinkingText;
-        callbacks?.onThinkingTurn?.({
-          text: thinkingText,
-          ...(delta ? { delta } : {}),
-        });
-      }
-
-      for (const event of toolUseEvents) {
-        const dedupe = shouldEmitToolUse(
-          emittedToolUseKeys,
-          emittedToolUseOrder,
-          event,
-          lastAnonymousToolUseKey,
-        );
-        if (!dedupe.emit) {
-          continue;
-        }
-        if (!event.toolUseId) {
-          lastAnonymousToolUseKey = dedupe.nextAnonymousToolUseKey;
-        } else {
-          lastAnonymousToolUseKey = undefined;
-        }
-        callbacks?.onToolUse?.(event.name);
-        callbacks?.onToolUseEvent?.(event);
-      }
-
-      for (const event of toolResultEvents) {
-        if (!shouldEmitToolResult(emittedToolResultKeys, emittedToolResultOrder, event)) {
-          continue;
-        }
-        callbacks?.onToolResult?.(event);
-      }
-    } else if (isAssistantEnvelope) {
-      // Backward compatibility for custom stream-json backends that emit
-      // assistant content as a string/object instead of typed content blocks.
-      const fallbackText = collectText(rawMessage) || collectText(message);
-      if (fallbackText && fallbackText !== lastAssistantText) {
-        lastAssistantText = fallbackText;
-        callbacks?.onAssistantTurn?.(lastAssistantText);
-      }
     }
   };
 
