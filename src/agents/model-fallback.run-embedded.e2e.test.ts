@@ -199,6 +199,7 @@ async function runEmbeddedFallback(params: {
   workspaceDir: string;
   sessionKey: string;
   runId: string;
+  abortSignal?: AbortSignal;
 }) {
   const cfg = makeConfig();
   return await runWithModelFallback({
@@ -221,6 +222,7 @@ async function runEmbeddedFallback(params: {
         allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
         timeoutMs: 5_000,
         runId: params.runId,
+        abortSignal: params.abortSignal,
       }),
   });
 }
@@ -424,6 +426,37 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(usageStats["openai:p1"]?.failureCounts).toBeUndefined();
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rethrows AbortError during overload backoff instead of falling through fallback", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      const controller = new AbortController();
+      mockPrimaryOverloadedThenFallbackSuccess();
+      sleepWithAbortMock.mockImplementationOnce(async () => {
+        controller.abort();
+        throw new Error("aborted");
+      });
+
+      await expect(
+        runEmbeddedFallback({
+          agentDir,
+          workspaceDir,
+          sessionKey: "agent:test:overloaded-backoff-abort",
+          runId: "run:overloaded-backoff-abort",
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toMatchObject({
+        name: "AbortError",
+        message: "Operation aborted",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as
+        | { provider?: string }
+        | undefined;
+      expect(firstCall?.provider).toBe("openai");
     });
   });
 });
