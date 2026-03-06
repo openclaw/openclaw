@@ -89,5 +89,12 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
   }
 
   const formatted = host.includes(":") ? `[${host}]` : host;
-  return `${scheme}://${formatted}:${exposedPort}`;
+
+  // Omit the port when it matches the scheme default (80 for http, 443 for https)
+  // to avoid origin mismatches in WebSocket upgrades and CORS preflight checks
+  // where browsers normalise the default port away.
+  const isDefaultPort =
+    (scheme === "https" && exposedPort === 443) || (scheme === "http" && exposedPort === 80);
+
+  return isDefaultPort ? `${scheme}://${formatted}` : `${scheme}://${formatted}:${exposedPort}`;
 }
