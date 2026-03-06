@@ -89,7 +89,7 @@ export async function promptAuthConfig(
   });
 
   let next = cfg;
-  if (authChoice === "custom-api-key") {
+  if (authChoice === "custom-api-key" || authChoice === "azure-openai-api-key") {
     const customResult = await promptCustomApiConfig({ prompter, runtime, config: next });
     next = customResult.config;
   } else if (authChoice !== "skip") {
@@ -120,7 +120,7 @@ export async function promptAuthConfig(
   const anthropicOAuth =
     authChoice === "setup-token" || authChoice === "token" || authChoice === "oauth";
 
-  if (authChoice !== "custom-api-key") {
+  if (authChoice !== "custom-api-key" && authChoice !== "azure-openai-api-key") {
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,

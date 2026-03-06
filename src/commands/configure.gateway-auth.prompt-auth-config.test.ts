@@ -120,4 +120,18 @@ describe("promptAuthConfig", () => {
       "MiniMax-M2.5",
     ]);
   });
+
+  it("routes Azure OpenAI auth choice through the custom provider prompt", async () => {
+    mocks.applyAuthChoice.mockClear();
+    mocks.promptModelAllowlist.mockClear();
+    mocks.promptCustomApiConfig.mockClear();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("azure-openai-api-key");
+    mocks.promptCustomApiConfig.mockResolvedValue({ config: { models: { providers: {} } } });
+
+    await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptCustomApiConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.applyAuthChoice).not.toHaveBeenCalled();
+    expect(mocks.promptModelAllowlist).not.toHaveBeenCalled();
+  });
 });

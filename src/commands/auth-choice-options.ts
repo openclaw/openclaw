@@ -26,8 +26,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "openai",
     label: "OpenAI",
-    hint: "Codex OAuth + API key",
-    choices: ["openai-codex", "openai-api-key"],
+    hint: "Codex OAuth + API key + Azure OpenAI",
+    choices: ["openai-codex", "openai-api-key", "azure-openai-api-key"],
   },
   {
     value: "anthropic",
@@ -188,6 +188,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
 ];
 
 const PROVIDER_AUTH_CHOICE_OPTION_HINTS: Partial<Record<AuthChoice, string>> = {
+  "azure-openai-api-key": "Azure OpenAI / Azure AI Foundry endpoint",
   "litellm-api-key": "Unified gateway for 100+ LLM providers",
   "cloudflare-ai-gateway-api-key": "Account ID + Gateway ID + API key",
   "venice-api-key": "Privacy-focused inference (uncensored models)",
@@ -196,6 +197,7 @@ const PROVIDER_AUTH_CHOICE_OPTION_HINTS: Partial<Record<AuthChoice, string>> = {
 };
 
 const PROVIDER_AUTH_CHOICE_OPTION_LABELS: Partial<Record<AuthChoice, string>> = {
+  "azure-openai-api-key": "Azure OpenAI",
   "moonshot-api-key": "Kimi API key (.ai)",
   "moonshot-api-key-cn": "Kimi API key (.cn)",
   "kimi-code-api-key": "Kimi Code API key (subscription)",
@@ -239,6 +241,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     hint: "Uses GitHub device flow",
   },
   { value: "gemini-api-key", label: "Google Gemini API key" },
+  {
+    value: "azure-openai-api-key",
+    label: "Azure OpenAI",
+    hint: "Azure OpenAI / Azure AI Foundry (OpenAI-compatible)",
+  },
   {
     value: "google-gemini-cli",
     label: "Google Gemini CLI OAuth",

@@ -922,12 +922,15 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyHuggingfaceConfig(nextConfig);
   }
 
-  if (authChoice === "custom-api-key") {
+  if (authChoice === "custom-api-key" || authChoice === "azure-openai-api-key") {
     try {
       const customAuth = parseNonInteractiveCustomApiFlags({
         baseUrl: opts.customBaseUrl,
         modelId: opts.customModelId,
-        compatibility: opts.customCompatibility,
+        compatibility:
+          authChoice === "azure-openai-api-key" && !opts.customCompatibility
+            ? "openai"
+            : opts.customCompatibility,
         apiKey: opts.customApiKey,
         providerId: opts.customProviderId,
       });

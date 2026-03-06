@@ -12,6 +12,7 @@ export type AuthChoice =
   | "vllm"
   | "openai-codex"
   | "openai-api-key"
+  | "azure-openai-api-key"
   | "openrouter-api-key"
   | "kilocode-api-key"
   | "litellm-api-key"

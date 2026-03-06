@@ -596,6 +596,30 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("configures Azure OpenAI auth choice through the custom-provider path", async () => {
+    await withOnboardEnv("openclaw-onboard-azure-openai-", async ({ configPath, runtime }) => {
+      await runNonInteractiveOnboardingWithDefaults(runtime, {
+        authChoice: "azure-openai-api-key",
+        customBaseUrl: "https://my-resource.openai.azure.com",
+        customApiKey: "azure-test-key",
+        customModelId: "gpt-4.1",
+        skipSkills: true,
+      });
+
+      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
+      const provider = cfg.models?.providers?.["custom-my-resource-openai-azure-com"];
+
+      expect(provider?.api).toBe("openai-completions");
+      expect(provider?.apiKey).toBe("azure-test-key");
+      expect(provider?.baseUrl).toBe(
+        "https://my-resource.openai.azure.com/openai/deployments/gpt-4.1",
+      );
+      expect(cfg.agents?.defaults?.model?.primary).toBe(
+        "custom-my-resource-openai-azure-com/gpt-4.1",
+      );
+    });
+  });
+
   it("infers custom provider auth choice from custom flags", async () => {
     await withOnboardEnv(
       "openclaw-onboard-custom-provider-infer-",
