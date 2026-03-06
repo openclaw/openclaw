@@ -280,7 +280,7 @@ export function registerGatewayCli(program: Command) {
     });
 
   gateway
-    .command("logs")
+    .command("decisions")
     .description("Tail contextual-activation decision logs in real-time")
     .option("-n, --lines <count>", "Number of initial lines to show", "20")
     .option("--json", "Output raw JSONL (default: human-readable)", false)
