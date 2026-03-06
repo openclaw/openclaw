@@ -77,7 +77,12 @@ function resolveCommand(command: string): string {
   if (ext) {
     return command;
   }
-  const cmdCommands = ["pnpm", "yarn"];
+  // On Windows, most package-manager CLIs are exposed as .cmd shims.
+  // Note: npm/npx are *preferably* handled by resolveNpmArgvForWindows to avoid
+  // spawn EINVAL on newer Node versions (see comment above), but when the npm
+  // cli script isn't found (alt Node installs like nvm-windows/volta/fnm), we
+  // still need to resolve to the .cmd shim so we can run it via cmd.exe wrapper.
+  const cmdCommands = ["npm", "npx", "pnpm", "yarn"];
   if (cmdCommands.includes(basename)) {
     return `${command}.cmd`;
   }
