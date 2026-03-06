@@ -2174,6 +2174,94 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("resolves SecretRef in agents.defaults.sandbox.docker.env", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              env: {
+                API_KEY: { source: "env", provider: "default", id: "SANDBOX_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { SANDBOX_API_KEY: "sk-sandbox-resolved" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.docker?.env?.API_KEY).toBe(
+      "sk-sandbox-resolved",
+    );
+  });
+
+  it("resolves SecretRef in agents.list[].sandbox.docker.env", async () => {
+    const config = asConfig({
+      agents: {
+        list: [
+          {
+            id: "worker",
+            sandbox: {
+              docker: {
+                env: {
+                  DB_PASSWORD: { source: "env", provider: "default", id: "WORKER_DB_PASSWORD" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { WORKER_DB_PASSWORD: "db-secret-resolved" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(
+      (snapshot.config.agents?.list?.[0]?.sandbox?.docker?.env as Record<string, unknown>)
+        ?.DB_PASSWORD,
+    ).toBe("db-secret-resolved");
+  });
+
+  it("resolves mixed plain string and SecretRef values in sandbox.docker.env", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              env: {
+                PLAIN_VAR: "hello-world",
+                SECRET_VAR: { source: "env", provider: "default", id: "SANDBOX_SECRET_VAR" },
+                LANG: "C.UTF-8",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { SANDBOX_SECRET_VAR: "secret-resolved" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const env = snapshot.config.agents?.defaults?.sandbox?.docker?.env as Record<string, unknown>;
+    expect(env?.PLAIN_VAR).toBe("hello-world");
+    expect(env?.SECRET_VAR).toBe("secret-resolved");
+    expect(env?.LANG).toBe("C.UTF-8");
+  });
+
   it("does not write inherited auth stores during runtime secret activation", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-runtime-"));
     const stateDir = path.join(root, ".openclaw");
