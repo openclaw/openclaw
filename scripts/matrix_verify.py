@@ -25,12 +25,18 @@ Flow:
 
 Initiate verification from another client (e.g. Element) by opening the
 bot device's info panel and choosing "Verify".
+
+Limitations:
+    - Only supports the "default" account (multi-account setups need manual
+      path adjustment or a future --account flag).
+    - Does not bootstrap cross-signing keys (see #21023).
 """
 
 import base64
 import hashlib
 import hmac as hmac_mod
 import json
+import os
 import sys
 import time
 import traceback
@@ -52,8 +58,13 @@ OPENCLAW_CONFIG = Path.home() / ".openclaw" / "openclaw.json"
 MATRIX_ACCOUNTS_DIR = Path.home() / ".openclaw" / "matrix" / "accounts" / "default"
 
 
-def find_device_storage() -> Path:
-    """Auto-discover the device storage directory under ~/.openclaw/matrix/accounts/default/."""
+def find_device_storage(access_token: str) -> Path:
+    """Auto-discover the device storage directory under ~/.openclaw/matrix/accounts/default/.
+
+    Store directories are named {serverKey}__{userId}__{tokenHash}/ where
+    tokenHash is the first 16 chars of SHA-256(accessToken).  When multiple
+    stores exist we prefer the one matching the active token.
+    """
     if not MATRIX_ACCOUNTS_DIR.is_dir():
         print(f"ERROR: Matrix accounts directory not found: {MATRIX_ACCOUNTS_DIR}")
         sys.exit(1)
@@ -71,7 +82,12 @@ def find_device_storage() -> Path:
         print(f"ERROR: No device store found in {account_dir}")
         sys.exit(1)
     if len(stores) > 1:
-        print(f"Multiple device stores found, using first: {stores[0].name}")
+        # Match store by token hash (first 16 chars of SHA-256 hex digest)
+        token_hash = hashlib.sha256(access_token.encode("utf-8")).hexdigest()[:16]
+        matching = [d for d in stores if d.name.endswith(token_hash)]
+        if matching:
+            return matching[0]
+        print(f"WARNING: Multiple device stores found but none match active token hash; using first: {stores[0].name}")
     return stores[0]
 
 # ---------------------------------------------------------------------------
@@ -191,14 +207,38 @@ def sas_bytes_to_emojis(sas_bytes: bytes):
 
 
 def load_config():
-    with open(OPENCLAW_CONFIG) as f:
-        cfg = json.load(f)
-    m = cfg["channels"]["matrix"]
-    return {"homeserver": m["homeserver"], "access_token": m["accessToken"]}
+    """Load Matrix credentials from config file, falling back to env vars."""
+    access_token = None
+    homeserver = None
+
+    # Try config file first
+    if OPENCLAW_CONFIG.is_file():
+        try:
+            with open(OPENCLAW_CONFIG) as f:
+                cfg = json.load(f)
+            m = cfg.get("channels", {}).get("matrix", {})
+            access_token = m.get("accessToken")
+            homeserver = m.get("homeserver")
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Fall back to environment variables
+    if not access_token:
+        access_token = os.environ.get("MATRIX_ACCESS_TOKEN")
+    if not homeserver:
+        homeserver = os.environ.get("MATRIX_HOMESERVER")
+
+    if not access_token or not homeserver:
+        print("ERROR: Matrix credentials not found.")
+        print("  Provide them in ~/.openclaw/openclaw.json (channels.matrix.accessToken / homeserver)")
+        print("  or via MATRIX_ACCESS_TOKEN and MATRIX_HOMESERVER env vars.")
+        sys.exit(1)
+
+    return {"homeserver": homeserver, "access_token": access_token}
 
 
-def load_device_id():
-    device_storage = find_device_storage()
+def load_device_id(access_token: str):
+    device_storage = find_device_storage(access_token)
     with open(device_storage / "crypto" / "bot-sdk.json") as f:
         return json.load(f)["deviceId"]
 
@@ -536,7 +576,7 @@ def main():
     print("matrix_verify.py -- OpenClaw device verification\n")
 
     config = load_config()
-    device_id = load_device_id()
+    device_id = load_device_id(config["access_token"])
     api = MatrixAPI(config["homeserver"], config["access_token"])
     user_id = api.whoami()
 
