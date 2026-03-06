@@ -304,6 +304,7 @@ public struct Snapshot: Codable, Sendable {
     public let sessiondefaults: [String: AnyCodable]?
     public let authmode: AnyCodable?
     public let updateavailable: [String: AnyCodable]?
+    public let versionmismatch: [String: AnyCodable]?
 
     public init(
         presence: [PresenceEntry],
@@ -314,7 +315,8 @@ public struct Snapshot: Codable, Sendable {
         statedir: String?,
         sessiondefaults: [String: AnyCodable]?,
         authmode: AnyCodable?,
-        updateavailable: [String: AnyCodable]?)
+        updateavailable: [String: AnyCodable]?,
+        versionmismatch: [String: AnyCodable]?)
     {
         self.presence = presence
         self.health = health
@@ -325,6 +327,7 @@ public struct Snapshot: Codable, Sendable {
         self.sessiondefaults = sessiondefaults
         self.authmode = authmode
         self.updateavailable = updateavailable
+        self.versionmismatch = versionmismatch
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -337,6 +340,7 @@ public struct Snapshot: Codable, Sendable {
         case sessiondefaults = "sessionDefaults"
         case authmode = "authMode"
         case updateavailable = "updateAvailable"
+        case versionmismatch = "versionMismatch"
     }
 }
 
@@ -1460,6 +1464,20 @@ public struct ConfigPatchParams: Codable, Sendable {
 
 public struct ConfigSchemaParams: Codable, Sendable {}
 
+public struct ConfigSchemaLookupParams: Codable, Sendable {
+    public let path: String
+
+    public init(
+        path: String)
+    {
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+    }
+}
+
 public struct ConfigSchemaResponse: Codable, Sendable {
     public let schema: AnyCodable
     public let uihints: [String: AnyCodable]
@@ -1483,6 +1501,36 @@ public struct ConfigSchemaResponse: Codable, Sendable {
         case uihints = "uiHints"
         case version
         case generatedat = "generatedAt"
+    }
+}
+
+public struct ConfigSchemaLookupResult: Codable, Sendable {
+    public let path: String
+    public let schema: AnyCodable
+    public let hint: [String: AnyCodable]?
+    public let hintpath: String?
+    public let children: [[String: AnyCodable]]
+
+    public init(
+        path: String,
+        schema: AnyCodable,
+        hint: [String: AnyCodable]?,
+        hintpath: String?,
+        children: [[String: AnyCodable]])
+    {
+        self.path = path
+        self.schema = schema
+        self.hint = hint
+        self.hintpath = hintpath
+        self.children = children
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case schema
+        case hint
+        case hintpath = "hintPath"
+        case children
     }
 }
 
