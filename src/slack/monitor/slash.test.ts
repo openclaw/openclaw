@@ -80,71 +80,91 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
     findCommandByNativeName: (
       name: string,
       _provider?: string,
-      params?: { nativePrefix?: string },
+      params?: { nativePrefix?: string; nativeNames?: Record<string, string> },
     ) => {
       const normalized = stripPrefix(name.trim().toLowerCase(), params?.nativePrefix);
-      if (normalized === "usage") {
+      const reverseNativeNames = new Map<string, string>();
+      for (const [key, mapped] of Object.entries(params?.nativeNames ?? {})) {
+        const trimmed = mapped.trim().toLowerCase();
+        if (trimmed) {
+          reverseNativeNames.set(trimmed, key);
+        }
+      }
+      const resolved = reverseNativeNames.get(normalized) ?? normalized;
+      if (resolved === "usage") {
         return usageCommand;
       }
-      if (normalized === "report") {
+      if (resolved === "report") {
         return reportCommand;
       }
-      if (normalized === "reportcompact") {
+      if (resolved === "reportcompact") {
         return reportCompactCommand;
       }
-      if (normalized === "reportexternal") {
+      if (resolved === "reportexternal") {
         return reportExternalCommand;
       }
-      if (normalized === "reportlong") {
+      if (resolved === "reportlong") {
         return reportLongCommand;
       }
-      if (normalized === "unsafeconfirm") {
+      if (resolved === "unsafeconfirm") {
         return unsafeConfirmCommand;
       }
-      if (normalized === "agentstatus") {
+      if (resolved === "agentstatus" || resolved === "status") {
         return statusAliasCommand;
       }
       return undefined;
     },
-    listNativeCommandSpecsForConfig: (_cfg?: unknown, params?: { nativePrefix?: string }) => [
+    listNativeCommandSpecsForConfig: (
+      _cfg?: unknown,
+      params?: { nativePrefix?: string; nativeNames?: Record<string, string> },
+    ) => [
       {
-        name: withPrefix("usage", params?.nativePrefix),
+        name: withPrefix(params?.nativeNames?.usage ?? "usage", params?.nativePrefix),
         description: "Usage",
         acceptsArgs: true,
         args: [],
       },
       {
-        name: withPrefix("report", params?.nativePrefix),
+        name: withPrefix(params?.nativeNames?.report ?? "report", params?.nativePrefix),
         description: "Report",
         acceptsArgs: true,
         args: [],
       },
       {
-        name: withPrefix("reportcompact", params?.nativePrefix),
+        name: withPrefix(
+          params?.nativeNames?.reportcompact ?? "reportcompact",
+          params?.nativePrefix,
+        ),
         description: "ReportCompact",
         acceptsArgs: true,
         args: [],
       },
       {
-        name: withPrefix("reportexternal", params?.nativePrefix),
+        name: withPrefix(
+          params?.nativeNames?.reportexternal ?? "reportexternal",
+          params?.nativePrefix,
+        ),
         description: "ReportExternal",
         acceptsArgs: true,
         args: [],
       },
       {
-        name: withPrefix("reportlong", params?.nativePrefix),
+        name: withPrefix(params?.nativeNames?.reportlong ?? "reportlong", params?.nativePrefix),
         description: "ReportLong",
         acceptsArgs: true,
         args: [],
       },
       {
-        name: withPrefix("unsafeconfirm", params?.nativePrefix),
+        name: withPrefix(
+          params?.nativeNames?.unsafeconfirm ?? "unsafeconfirm",
+          params?.nativePrefix,
+        ),
         description: "UnsafeConfirm",
         acceptsArgs: true,
         args: [],
       },
       {
-        name: withPrefix("agentstatus", params?.nativePrefix),
+        name: withPrefix(params?.nativeNames?.status ?? "agentstatus", params?.nativePrefix),
         description: "Status",
         acceptsArgs: false,
         args: [],
@@ -252,6 +272,8 @@ function createDeferred<T>() {
 function createArgMenusHarness(overrides?: {
   nativePrefix?: string;
   accountNativePrefix?: string;
+  nativeNames?: Record<string, string>;
+  accountNativeNames?: Record<string, string>;
 }) {
   const commands = new Map<string, (args: unknown) => Promise<void>>();
   const actions = new Map<string, (args: unknown) => Promise<void>>();
@@ -294,6 +316,7 @@ function createArgMenusHarness(overrides?: {
       ephemeral: true,
       sessionPrefix: "slack:slash",
       nativePrefix: overrides?.nativePrefix,
+      nativeNames: overrides?.nativeNames,
     },
     textLimit: 4000,
     app,
@@ -307,9 +330,12 @@ function createArgMenusHarness(overrides?: {
     config: {
       commands: { native: true, nativeSkills: false },
       slashCommand:
-        overrides?.accountNativePrefix === undefined
+        overrides?.accountNativePrefix === undefined && overrides?.accountNativeNames === undefined
           ? undefined
-          : { nativePrefix: overrides.accountNativePrefix },
+          : {
+              nativePrefix: overrides.accountNativePrefix,
+              nativeNames: overrides.accountNativeNames,
+            },
     },
   } as unknown;
 
@@ -730,41 +756,47 @@ describe("Slack native command argument menus", () => {
   });
 });
 
-describe("Slack native command prefix wiring", () => {
-  it("registers prefixed native slash commands using account nativePrefix", async () => {
+describe("Slack native command name mapping wiring", () => {
+  it("registers custom native slash command names from account nativeNames", async () => {
     const harness = createArgMenusHarness({
-      nativePrefix: "ctxprefix",
-      accountNativePrefix: "acctprefix",
+      accountNativeNames: {
+        usage: "oz-usage",
+        status: "ozstatus",
+      },
     });
     await registerCommands(harness.ctx, harness.account);
 
-    expect(harness.commands.has("/acctprefix-usage")).toBe(true);
-    expect(harness.commands.has("/acctprefix-agentstatus")).toBe(true);
-    expect(harness.commands.has("/ctxprefix-usage")).toBe(false);
+    expect(harness.commands.has("/oz-usage")).toBe(true);
+    expect(harness.commands.has("/ozstatus")).toBe(true);
+    expect(harness.commands.has("/usage")).toBe(false);
+    expect(harness.commands.has("/agentstatus")).toBe(false);
   });
 
-  it("dispatches prefixed native slash commands to internal command keys", async () => {
-    const harness = createArgMenusHarness({ accountNativePrefix: "acctprefix" });
+  it("dispatches custom native slash command names to canonical internal commands", async () => {
+    const harness = createArgMenusHarness({
+      accountNativeNames: { status: "ozstatus" },
+    });
     await registerCommands(harness.ctx, harness.account);
 
-    const statusHandler = requireHandler(
-      harness.commands,
-      "/acctprefix-agentstatus",
-      "/acctprefix-agentstatus",
-    );
+    const statusHandler = requireHandler(harness.commands, "/ozstatus", "/ozstatus");
     await runCommandHandler(statusHandler);
     expectSingleDispatchedSlashBody("/status");
   });
 
-  it("resolves prefixed arg-menu command names during dispatch", async () => {
-    const harness = createArgMenusHarness({ accountNativePrefix: "acctprefix" });
+  it("supports partial nativeNames mapping (mapped and default names together)", async () => {
+    const harness = createArgMenusHarness({
+      accountNativeNames: { usage: "ozusage" },
+    });
     await registerCommands(harness.ctx, harness.account);
+
+    expect(harness.commands.has("/ozusage")).toBe(true);
+    expect(harness.commands.has("/agentstatus")).toBe(true);
 
     const argMenuHandler = requireHandler(harness.actions, "openclaw_cmdarg", "arg-menu action");
     await runArgMenuAction(argMenuHandler, {
       action: {
         value: encodeValue({
-          command: "acctprefix-usage",
+          command: "ozusage",
           arg: "mode",
           value: "tokens",
           userId: "U1",
@@ -774,7 +806,7 @@ describe("Slack native command prefix wiring", () => {
     expectSingleDispatchedSlashBody("/usage tokens");
   });
 
-  it("keeps no-prefix native slash behavior unchanged", async () => {
+  it("keeps default native slash behavior unchanged when nativeNames is not configured", async () => {
     const harness = createArgMenusHarness();
     await registerCommands(harness.ctx, harness.account);
 
