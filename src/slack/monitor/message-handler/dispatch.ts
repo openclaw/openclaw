@@ -14,6 +14,7 @@ import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-poli
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
+import { normalizeSlackIconEmoji } from "../../send.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
 import {
   applyAppendOnlyStreamUpdate,
@@ -81,7 +82,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ? {
         username: outboundIdentity.name,
         iconUrl: outboundIdentity.avatarUrl,
-        iconEmoji: outboundIdentity.emoji,
+        iconEmoji: normalizeSlackIconEmoji(outboundIdentity.emoji),
       }
     : undefined;
 

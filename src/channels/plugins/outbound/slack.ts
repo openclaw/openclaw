@@ -1,6 +1,10 @@
 import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import { sendMessageSlack, type SlackSendIdentity } from "../../../slack/send.js";
+import {
+  normalizeSlackIconEmoji,
+  sendMessageSlack,
+  type SlackSendIdentity,
+} from "../../../slack/send.js";
 import type { ChannelOutboundAdapter } from "../types.js";
 import { sendTextMediaPayload } from "./direct-text-media.js";
 
@@ -11,7 +15,7 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
   const username = identity.name?.trim() || undefined;
   const iconUrl = identity.avatarUrl?.trim() || undefined;
   const rawEmoji = identity.emoji?.trim();
-  const iconEmoji = !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
+  const iconEmoji = !iconUrl && rawEmoji ? normalizeSlackIconEmoji(rawEmoji) : undefined;
   if (!username && !iconUrl && !iconEmoji) {
     return undefined;
   }

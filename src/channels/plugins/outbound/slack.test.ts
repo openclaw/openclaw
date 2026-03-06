@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 
-vi.mock("../../../slack/send.js", () => ({
-  sendMessageSlack: vi.fn().mockResolvedValue({ messageId: "1234.5678", channelId: "C123" }),
-}));
+vi.mock("../../../slack/send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../slack/send.js")>();
+  return {
+    ...actual,
+    sendMessageSlack: vi.fn().mockResolvedValue({ messageId: "1234.5678", channelId: "C123" }),
+  };
+});
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(),

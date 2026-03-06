@@ -44,6 +44,27 @@ export type SlackSendIdentity = {
   iconEmoji?: string;
 };
 
+/**
+ * Normalize an emoji string into the `:name:` format required by the Slack API
+ * for `icon_emoji`.  Returns `undefined` for blank/whitespace-only input.
+ */
+export function normalizeSlackIconEmoji(raw: string | undefined | null): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // Already in :name: format
+  if (/^:[^:\s]+:$/.test(trimmed)) {
+    return trimmed;
+  }
+  // Strip any stray colons and whitespace, then wrap
+  const bare = trimmed.replace(/^:+|:+$/g, "").trim();
+  if (!bare || /\s/.test(bare)) {
+    return undefined;
+  }
+  return `:${bare}:`;
+}
+
 type SlackSendOpts = {
   cfg?: OpenClawConfig;
   token?: string;

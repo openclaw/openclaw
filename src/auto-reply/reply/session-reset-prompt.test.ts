@@ -5,8 +5,8 @@ import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 describe("buildBareSessionResetPrompt", () => {
   it("includes the core session startup instruction", () => {
     const prompt = buildBareSessionResetPrompt();
-    expect(prompt).toContain("Execute your Session Startup sequence now");
-    expect(prompt).toContain("read the required files before responding to the user");
+    expect(prompt).toContain("Follow the startup instructions in your system prompt above");
+    expect(prompt).toContain("Do NOT invent or guess file paths");
   });
 
   it("appends current time line so agents know the date", () => {
