@@ -195,14 +195,27 @@ export async function handleInlineActions(params: {
     const dispatch = skillInvocation.command.dispatch;
     if (dispatch?.kind === "tool" && dispatch.commandExec) {
       // command-exec: run a fixed shell command directly (no tool lookup).
+      // Args are passed as $1 to avoid shell injection from user input.
       const rawArgs = (skillInvocation.args ?? "").trim();
-      const fullCommand = rawArgs ? `${dispatch.commandExec} ${rawArgs}` : dispatch.commandExec;
+      const spawnArgs = ["sh", "-c", dispatch.commandExec, "--"];
+      if (rawArgs) {
+        spawnArgs.push(rawArgs);
+      }
       try {
-        const result = spawnSync("sh", ["-c", fullCommand], {
+        const result = spawnSync(spawnArgs[0], spawnArgs.slice(1), {
           encoding: "utf-8",
           timeout: 15_000,
           env: { ...process.env },
         });
+        if (result.error) {
+          const isTimeout =
+            result.error.message.includes("ETIMEDOUT") || result.signal === "SIGTERM";
+          typing.cleanup();
+          return {
+            kind: "reply",
+            reply: { text: isTimeout ? "❌ Command timed out." : `❌ ${result.error.message}` },
+          };
+        }
         const text = (result.stdout ?? "").trim() || (result.stderr ?? "").trim() || "✅ Done.";
         if (result.status !== 0) {
           typing.cleanup();
