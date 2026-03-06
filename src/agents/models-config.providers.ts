@@ -1087,6 +1087,24 @@ export async function resolveImplicitProviders(params: {
     }
   }
 
+  // LM Studio provider - OpenAI-compatible local server.
+  // Auto-discover if explicitly configured or if a known LM Studio instance is running.
+  if (!params.explicitProviders?.lmstudio) {
+    const lmstudioKey =
+      resolveEnvApiKeyVarName("lmstudio") ??
+      resolveApiKeyFromProfiles({ provider: "lmstudio", store: authStore });
+    if (lmstudioKey) {
+      const lmstudioBaseUrl =
+        params.explicitProviders?.lmstudio?.baseUrl ?? "http://127.0.0.1:1234/v1";
+      providers.lmstudio = {
+        baseUrl: lmstudioBaseUrl,
+        api: "openai-completions",
+        apiKey: lmstudioKey,
+        models: [],
+      };
+    }
+  }
+
   const togetherKey =
     resolveEnvApiKeyVarName("together") ??
     resolveApiKeyFromProfiles({ provider: "together", store: authStore });

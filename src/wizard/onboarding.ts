@@ -484,6 +484,13 @@ export async function runOnboardingWizard(
   nextConfig = gateway.nextConfig;
   const settings = gateway.settings;
 
+  // Pre-apply channel tokens if provided via CLI flags.
+  if (opts.discordToken?.trim() || opts.telegramToken?.trim()) {
+    const { applyNonInteractiveChannelTokens } =
+      await import("../commands/onboard-non-interactive/local/channel-auto-setup.js");
+    nextConfig = applyNonInteractiveChannelTokens({ nextConfig, opts, runtime });
+  }
+
   if (opts.skipChannels ?? opts.skipProviders) {
     await prompter.note("Skipping channel setup.", "Channels");
   } else {

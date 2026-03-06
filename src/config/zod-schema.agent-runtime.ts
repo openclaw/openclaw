@@ -730,6 +730,7 @@ export const AgentEntrySchema = z
               .object({
                 primary: z.string().optional(),
                 fallbacks: z.array(z.string()).optional(),
+                fallbackStrategy: z.enum(["ordered", "cost", "round-robin"]).optional(),
               })
               .strict(),
           ])

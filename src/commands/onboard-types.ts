@@ -49,6 +49,7 @@ export type AuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "lmstudio"
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
@@ -56,6 +57,7 @@ export type AuthChoiceGroupId =
   | "anthropic"
   | "chutes"
   | "vllm"
+  | "lmstudio"
   | "google"
   | "copilot"
   | "openrouter"
@@ -150,6 +152,10 @@ export type OnboardOptions = {
   tailscaleResetOnExit?: boolean;
   installDaemon?: boolean;
   daemonRuntime?: GatewayDaemonRuntime;
+  /** Discord bot token — when provided, auto-configures the Discord channel. */
+  discordToken?: string;
+  /** Telegram bot token — when provided, auto-configures the Telegram channel. */
+  telegramToken?: string;
   skipChannels?: boolean;
   /** @deprecated Legacy alias for `skipChannels`. */
   skipProviders?: boolean;
