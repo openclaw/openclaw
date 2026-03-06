@@ -59,6 +59,35 @@ describe("provider stall diagnostics", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("advances the warning baseline so the same gap is not warned twice", () => {
+    const warn = vi.fn();
+    const ctx = {
+      params: {
+        runId: "run-dup",
+        provider: "google-gemini-cli",
+        modelId: "gemini-2.5-flash",
+      },
+      state: {},
+      log: { warn },
+    };
+
+    noteProviderProgress(ctx, "tool_result", 1_000);
+    maybeWarnProviderStall(ctx, {
+      phase: "before_tool",
+      toolName: "read",
+      toolCallId: "tool-dup",
+      nowMs: 47_250,
+    });
+    maybeWarnProviderStall(ctx, {
+      phase: "before_agent_end",
+      nowMs: 90_000,
+    });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(ctx.state.lastProviderProgressAtMs).toBe(47_250);
+    expect(ctx.state.lastProviderProgressPhase).toBe("stall_warning");
+  });
+
   it("ignores non-google providers", () => {
     const warn = vi.fn();
     const ctx = {

@@ -78,7 +78,7 @@ export type EmbeddedPiSubscribeState = {
   pendingMessagingMediaUrls: Map<string, string[]>;
   lastAssistant?: AgentMessage;
   lastProviderProgressAtMs?: number;
-  lastProviderProgressPhase?: "agent_start" | "tool_result";
+  lastProviderProgressPhase?: "agent_start" | "tool_result" | "stall_warning";
 };
 
 export type EmbeddedPiSubscribeContext = {

@@ -3,7 +3,7 @@ const GOOGLE_GEMINI_CLI_PROVIDER = "google-gemini-cli";
 
 type ProviderProgressState = {
   lastProviderProgressAtMs?: number;
-  lastProviderProgressPhase?: "agent_start" | "tool_result";
+  lastProviderProgressPhase?: "agent_start" | "tool_result" | "stall_warning";
 };
 
 type ProviderProgressParams = {
@@ -55,12 +55,14 @@ export function maybeWarnProviderStall(
     return;
   }
 
+  const sincePhase = ctx.state.lastProviderProgressPhase ?? "unknown";
+
   const parts = [
     `embedded run provider stall: runId=${ctx.params.runId}`,
     `provider=${ctx.params.provider}`,
     `model=${ctx.params.modelId ?? "unknown"}`,
     `gapMs=${Math.round(gapMs)}`,
-    `since=${ctx.state.lastProviderProgressPhase ?? "unknown"}`,
+    `since=${sincePhase}`,
     `phase=${params.phase}`,
   ];
   if (params.toolName) {
@@ -72,6 +74,9 @@ export function maybeWarnProviderStall(
   parts.push(
     "hint=possible upstream google-gemini-cli retry/backoff (for example HTTP 429) before OpenClaw received the next lifecycle event",
   );
+
+  ctx.state.lastProviderProgressAtMs = nowMs;
+  ctx.state.lastProviderProgressPhase = "stall_warning";
 
   ctx.log.warn(parts.join(" "));
 }
