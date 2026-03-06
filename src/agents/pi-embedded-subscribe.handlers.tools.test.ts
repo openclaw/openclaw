@@ -17,13 +17,19 @@ function createTestContext(): {
   ctx: ToolHandlerContext;
   warn: ReturnType<typeof vi.fn>;
   onBlockReplyFlush: ReturnType<typeof vi.fn>;
+  onBlockReplyHold: ReturnType<typeof vi.fn>;
+  onBlockReplyResume: ReturnType<typeof vi.fn>;
 } {
   const onBlockReplyFlush = vi.fn();
+  const onBlockReplyHold = vi.fn();
+  const onBlockReplyResume = vi.fn();
   const warn = vi.fn();
   const ctx: ToolHandlerContext = {
     params: {
       runId: "run-test",
       onBlockReplyFlush,
+      onBlockReplyHold,
+      onBlockReplyResume,
       onAgentEvent: undefined,
       onToolResult: undefined,
     },
@@ -53,12 +59,12 @@ function createTestContext(): {
     trimMessagingToolSent: vi.fn(),
   };
 
-  return { ctx, warn, onBlockReplyFlush };
+  return { ctx, warn, onBlockReplyFlush, onBlockReplyHold, onBlockReplyResume };
 }
 
 describe("handleToolExecutionStart read path checks", () => {
   it("does not warn when read tool uses file_path alias", async () => {
-    const { ctx, warn, onBlockReplyFlush } = createTestContext();
+    const { ctx, warn, onBlockReplyHold } = createTestContext();
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",
@@ -69,7 +75,7 @@ describe("handleToolExecutionStart read path checks", () => {
 
     await handleToolExecutionStart(ctx, evt);
 
-    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+    expect(onBlockReplyHold).toHaveBeenCalledTimes(1);
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -89,41 +95,49 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("read tool called without path");
   });
 
-  it("awaits onBlockReplyFlush before continuing tool start processing", async () => {
-    const { ctx, onBlockReplyFlush } = createTestContext();
-    let releaseFlush: (() => void) | undefined;
-    onBlockReplyFlush.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseFlush = resolve;
-        }),
-    );
+  it("holds before draining block buffer and skips force flush when hold callback exists", async () => {
+    const { ctx, onBlockReplyHold, onBlockReplyFlush } = createTestContext();
+    const flushBlockReplyBuffer = vi.fn();
+    ctx.flushBlockReplyBuffer = flushBlockReplyBuffer;
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",
-      toolName: "exec",
-      toolCallId: "tool-await-flush",
-      args: { command: "echo hi" },
+      toolName: "bash",
+      toolCallId: "tool-3",
+      args: { command: "echo test" },
     };
 
-    const pending = handleToolExecutionStart(ctx, evt);
-    // Let the async function reach the awaited flush Promise.
-    await Promise.resolve();
+    await handleToolExecutionStart(ctx, evt);
 
-    // If flush isn't awaited, tool metadata would already be recorded here.
-    expect(ctx.state.toolMetaById.has("tool-await-flush")).toBe(false);
-    expect(releaseFlush).toBeTypeOf("function");
+    expect(onBlockReplyHold).toHaveBeenCalledTimes(1);
+    expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(1);
+    expect(onBlockReplyFlush).not.toHaveBeenCalled();
+    expect(onBlockReplyHold.mock.invocationCallOrder[0]).toBeLessThan(
+      flushBlockReplyBuffer.mock.invocationCallOrder[0],
+    );
+  });
 
-    releaseFlush?.();
-    await pending;
+  it("falls back to force flush when hold callback is unavailable", async () => {
+    const { ctx, onBlockReplyFlush } = createTestContext();
+    ctx.params.onBlockReplyHold = undefined;
+    ctx.params.onBlockReplyResume = undefined;
 
-    expect(ctx.state.toolMetaById.has("tool-await-flush")).toBe(true);
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "bash",
+      toolCallId: "tool-4",
+      args: { command: "echo fallback" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("handleToolExecutionEnd cron.add commitment tracking", () => {
   it("increments successfulCronAdds when cron add succeeds", async () => {
-    const { ctx } = createTestContext();
+    const { ctx, onBlockReplyResume } = createTestContext();
     await handleToolExecutionStart(
       ctx as never,
       {
@@ -145,6 +159,7 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
       } as never,
     );
 
+    expect(onBlockReplyResume).toHaveBeenCalledTimes(1);
     expect(ctx.state.successfulCronAdds).toBe(1);
   });
 

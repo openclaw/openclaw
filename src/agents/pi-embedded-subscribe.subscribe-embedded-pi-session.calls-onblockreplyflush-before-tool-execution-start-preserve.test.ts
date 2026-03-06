@@ -6,7 +6,52 @@ import {
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  it("calls onBlockReplyFlush before tool_execution_start to preserve message boundaries", () => {
+  it("calls onBlockReplyHold (not onBlockReplyFlush) before tool_execution_start when available", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onBlockReplyHold = vi.fn();
+    const onBlockReplyFlush = vi.fn();
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-hold-test",
+      onBlockReply,
+      onBlockReplyFlush,
+      onBlockReplyHold,
+      blockReplyBreak: "text_end",
+    });
+
+    // Simulate text arriving before tool
+    emit({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+
+    emitAssistantTextDelta({ emit, delta: "First message before tool." });
+
+    expect(onBlockReplyHold).not.toHaveBeenCalled();
+    expect(onBlockReplyFlush).not.toHaveBeenCalled();
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "bash",
+      toolCallId: "tool-hold-1",
+      args: { command: "echo hello" },
+    });
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-hold-2",
+      args: { path: "/tmp/test.txt" },
+    });
+
+    expect(onBlockReplyHold).toHaveBeenCalledTimes(2);
+    expect(onBlockReplyFlush).not.toHaveBeenCalled();
+  });
+
+  it("falls back to onBlockReplyFlush before tool_execution_start when hold callback is unavailable", () => {
     const { session, emit } = createStubSessionHarness();
 
     const onBlockReplyFlush = vi.fn();
@@ -20,7 +65,6 @@ describe("subscribeEmbeddedPiSession", () => {
       blockReplyBreak: "text_end",
     });
 
-    // Simulate text arriving before tool
     emit({
       type: "message_start",
       message: { role: "assistant" },
@@ -28,9 +72,6 @@ describe("subscribeEmbeddedPiSession", () => {
 
     emitAssistantTextDelta({ emit, delta: "First message before tool." });
 
-    expect(onBlockReplyFlush).not.toHaveBeenCalled();
-
-    // Tool execution starts - should trigger flush
     emit({
       type: "tool_execution_start",
       toolName: "bash",
@@ -39,18 +80,9 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
-
-    // Another tool - should flush again
-    emit({
-      type: "tool_execution_start",
-      toolName: "read",
-      toolCallId: "tool-flush-2",
-      args: { path: "/tmp/test.txt" },
-    });
-
-    expect(onBlockReplyFlush).toHaveBeenCalledTimes(2);
   });
-  it("flushes buffered block chunks before tool execution", () => {
+
+  it("drains buffered block chunks before invoking onBlockReplyFlush fallback", () => {
     const { session, emit } = createStubSessionHarness();
 
     const onBlockReply = vi.fn();
