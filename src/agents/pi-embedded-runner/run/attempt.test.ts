@@ -279,6 +279,38 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBeUndefined();
   });
 
+  it("does not override explicit non-blank tool names with inferred ids", async () => {
+    const finalToolCall = { type: "toolCall", id: "functionswrite4", name: "someOtherTool" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("someOtherTool");
+  });
+
+  it("fails closed when malformed ids could map to multiple allowlisted tools", async () => {
+    const finalToolCall = { type: "toolCall", id: "functions.exec2", name: "" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["exec", "exec2"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("");
+  });
+
   it("does not collapse whitespace-only tool names to empty strings", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };

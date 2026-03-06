@@ -300,14 +300,18 @@ function inferToolNameFromToolCallId(
     }
   }
 
+  let singleMatch: string | null = null;
   for (const candidate of candidates) {
     const matched = resolveAllowedToolName(candidate, allowedToolNames);
     if (matched) {
-      return matched;
+      if (singleMatch && singleMatch !== matched) {
+        return null;
+      }
+      singleMatch = matched;
     }
   }
 
-  return null;
+  return singleMatch;
 }
 
 function normalizeToolCallNameForDispatch(
@@ -328,7 +332,7 @@ function normalizeToolCallNameForDispatch(
   if (direct) {
     return direct;
   }
-  return inferToolNameFromToolCallId(rawToolCallId, allowedToolNames) ?? trimmed;
+  return trimmed;
 }
 
 function isToolCallBlockType(type: unknown): boolean {
