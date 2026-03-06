@@ -441,8 +441,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
-      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+      /** Search provider ("brave", "perplexity", "grok", "gemini", "kimi", or "openrouter"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "openrouter";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -483,6 +483,15 @@ export type ToolsConfig = {
         /** Base URL for API requests (defaults to "https://api.moonshot.ai/v1"). */
         baseUrl?: string;
         /** Model to use (defaults to "moonshot-v1-128k"). */
+        model?: string;
+      };
+      /** OpenRouter-specific configuration (used when provider="openrouter"). */
+      openrouter?: {
+        /** OpenRouter API key (defaults to OPENROUTER_API_KEY env var). */
+        apiKey?: string;
+        /** Base URL for API requests (defaults to "https://openrouter.ai/api/v1"). */
+        baseUrl?: string;
+        /** Model to use (defaults to "perplexity/sonar-pro"). */
         model?: string;
       };
     };

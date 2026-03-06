@@ -95,6 +95,21 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts openrouter provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "openrouter",
+        providerConfig: {
+          apiKey: "sk-or-test-key",
+          baseUrl: "https://openrouter.ai/api/v1",
+          model: "perplexity/sonar-pro",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("talk.voiceAliases", () => {
