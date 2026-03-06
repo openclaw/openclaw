@@ -104,6 +104,42 @@ describe("loginOpenAICodexOAuth", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
+  it("augments OAuth authorize URL with required OpenAI API scopes", async () => {
+    const creds = {
+      provider: "openai-codex" as const,
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    const onAuthSpy = vi.fn();
+    mocks.createVpsAwareOAuthHandlers.mockReturnValue({
+      onAuth: onAuthSpy,
+      onPrompt: vi.fn(),
+    });
+    mocks.loginOpenAICodex.mockImplementation(
+      async (opts: { onAuth: (event: { url: string }) => Promise<void> }) => {
+        await opts.onAuth({
+          url: "https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
+        });
+        return creds;
+      },
+    );
+
+    await runCodexOAuth({ isRemote: false });
+
+    expect(onAuthSpy).toHaveBeenCalledTimes(1);
+    const event = onAuthSpy.mock.calls[0]?.[0] as { url: string };
+    const scopes = new Set((new URL(event.url).searchParams.get("scope") ?? "").split(/\s+/));
+    expect(scopes.has("openid")).toBe(true);
+    expect(scopes.has("profile")).toBe(true);
+    expect(scopes.has("email")).toBe(true);
+    expect(scopes.has("offline_access")).toBe(true);
+    expect(scopes.has("api.responses.write")).toBe(true);
+    expect(scopes.has("model.request")).toBe(true);
+    expect(scopes.has("api.model.read")).toBe(true);
+  });
+
   it("reports oauth errors and rethrows", async () => {
     mocks.createVpsAwareOAuthHandlers.mockReturnValue({
       onAuth: vi.fn(),
