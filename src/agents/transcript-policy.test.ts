@@ -120,6 +120,57 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.preserveSignatures).toBe(false);
   });
 
+  it("drops thinking blocks for non-Anthropic providers (#37314)", () => {
+    const google = resolveTranscriptPolicy({
+      provider: "google",
+      modelId: "gemini-2.0-flash",
+      modelApi: "google-generative-ai",
+    });
+    expect(google.dropThinkingBlocks).toBe(true);
+
+    const openai = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "gpt-4o",
+      modelApi: "openai",
+    });
+    expect(openai.dropThinkingBlocks).toBe(true);
+
+    const mistral = resolveTranscriptPolicy({
+      provider: "mistral",
+      modelId: "mistral-large-latest",
+    });
+    expect(mistral.dropThinkingBlocks).toBe(true);
+
+    const copilotClaude = resolveTranscriptPolicy({
+      provider: "github-copilot",
+      modelId: "claude-opus-4-5",
+    });
+    expect(copilotClaude.dropThinkingBlocks).toBe(true);
+
+    const openrouterGemini = resolveTranscriptPolicy({
+      provider: "openrouter",
+      modelId: "google/gemini-3-flash-preview",
+      modelApi: "openai-completions",
+    });
+    expect(openrouterGemini.dropThinkingBlocks).toBe(true);
+  });
+
+  it("preserves thinking blocks for Anthropic providers (#37314)", () => {
+    const anthropic = resolveTranscriptPolicy({
+      provider: "anthropic",
+      modelId: "claude-opus-4-5",
+      modelApi: "anthropic-messages",
+    });
+    expect(anthropic.dropThinkingBlocks).toBe(false);
+
+    const bedrock = resolveTranscriptPolicy({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      modelApi: "bedrock-converse-stream",
+    });
+    expect(bedrock.dropThinkingBlocks).toBe(false);
+  });
+
   it("keeps OpenRouter on its existing turn-validation path", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openrouter",
