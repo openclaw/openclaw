@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   const printModelTable = vi.fn();
@@ -77,7 +77,41 @@ vi.mock("../../agents/pi-embedded-runner/model.js", async (importOriginal) => {
 import { modelsListCommand } from "./list.list-command.js";
 
 describe("modelsListCommand forward-compat", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.resolveConfiguredEntries.mockReturnValue({
+      entries: [
+        {
+          key: "openai-codex/gpt-5.4",
+          ref: { provider: "openai-codex", model: "gpt-5.4" },
+          tags: new Set(["configured"]),
+          aliases: [],
+        },
+      ],
+    });
+    mocks.resolveModelWithRegistry.mockReturnValue({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      input: ["text"],
+      contextWindow: 272000,
+      maxTokens: 128000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+    mocks.loadModelRegistry.mockResolvedValue({
+      models: [],
+      availableKeys: new Set(),
+      registry: {},
+    });
+  });
+
   it("does not mark configured codex model as missing when forward-compat can build a fallback", async () => {
+    mocks.listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
+      provider === "openai-codex" ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>) : [],
+    );
+
     const runtime = { log: vi.fn(), error: vi.fn() };
 
     await modelsListCommand({ json: true }, runtime as never);
@@ -103,8 +137,14 @@ describe("modelsListCommand forward-compat", () => {
     expect(mocks.printModelTable).toHaveBeenCalled();
     const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{
       key: string;
+      available: boolean | null;
     }>;
-    expect(rows.some((row) => row.key === "openai-codex/gpt-5.4")).toBe(true);
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        key: "openai-codex/gpt-5.4",
+        available: true,
+      }),
+    );
   });
 
   it("keeps configured local openai gpt-5.4 entries visible in --local output", async () => {

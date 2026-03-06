@@ -81,22 +81,23 @@ export async function modelsListCommand(
       }
     }
 
-    const sorted = [...modelByKey.values()].toSorted((a, b) => {
-      const p = a.provider.localeCompare(b.provider);
-      if (p !== 0) {
-        return p;
-      }
-      return a.id.localeCompare(b.id);
-    });
+    const sorted = [...modelByKey.entries()]
+      .map(([key, model]) => ({ key, model }))
+      .toSorted((a, b) => {
+        const p = a.model.provider.localeCompare(b.model.provider);
+        if (p !== 0) {
+          return p;
+        }
+        return a.model.id.localeCompare(b.model.id);
+      });
 
-    for (const model of sorted) {
+    for (const { key, model } of sorted) {
       if (providerFilter && model.provider.toLowerCase() !== providerFilter) {
         continue;
       }
       if (opts.local && !isLocalBaseUrl(model.baseUrl)) {
         continue;
       }
-      const key = modelKey(model.provider, model.id);
       const configured = configuredByKey.get(key);
       rows.push(
         toModelRow({
@@ -107,6 +108,7 @@ export async function modelsListCommand(
           availableKeys,
           cfg,
           authStore,
+          allowProviderAvailabilityFallback: !discoveredKeys.has(key),
         }),
       );
     }
