@@ -92,6 +92,12 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.mentionedBot).toBe(false);
   });
 
+  it("returns mentionedBot=false for Feishu @all broadcasts", () => {
+    const event = makeEvent("group", [], "@_all");
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
   it("returns mentionedBot=false when botOpenId is undefined (unknown bot)", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
