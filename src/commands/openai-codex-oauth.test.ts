@@ -104,7 +104,7 @@ describe("loginOpenAICodexOAuth", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("augments OAuth authorize URL with required OpenAI API scopes", async () => {
+  it("passes through Pi-provided OAuth authorize URL without mutation", async () => {
     const creds = {
       provider: "openai-codex" as const,
       access: "access-token",
@@ -130,14 +130,9 @@ describe("loginOpenAICodexOAuth", () => {
 
     expect(onAuthSpy).toHaveBeenCalledTimes(1);
     const event = onAuthSpy.mock.calls[0]?.[0] as { url: string };
-    const scopes = new Set((new URL(event.url).searchParams.get("scope") ?? "").split(/\s+/));
-    expect(scopes.has("openid")).toBe(true);
-    expect(scopes.has("profile")).toBe(true);
-    expect(scopes.has("email")).toBe(true);
-    expect(scopes.has("offline_access")).toBe(true);
-    expect(scopes.has("api.responses.write")).toBe(true);
-    expect(scopes.has("model.request")).toBe(true);
-    expect(scopes.has("api.model.read")).toBe(true);
+    expect(event.url).toBe(
+      "https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
+    );
   });
 
   it("reports oauth errors and rethrows", async () => {
