@@ -4,12 +4,14 @@ import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   GATEWAY_SYSTEMD_SERVICE_NAME,
   GATEWAY_WINDOWS_TASK_NAME,
+  LAUNCHD_LABEL_MAX_BYTES,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   normalizeGatewayProfile,
   resolveGatewayLaunchAgentLabel,
   resolveGatewayProfileSuffix,
   resolveGatewayServiceDescription,
   resolveGatewaySystemdServiceName,
+  truncateLaunchdLabel,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
 
@@ -38,6 +40,28 @@ describe("resolveGatewayLaunchAgentLabel", () => {
   it("returns profile-specific label when profile is set", () => {
     const result = resolveGatewayLaunchAgentLabel("dev");
     expect(result).toBe("ai.openclaw.dev");
+  });
+
+  it("truncates long profile labels to launchd byte limit", () => {
+    const longProfile = "x".repeat(120);
+    const result = resolveGatewayLaunchAgentLabel(longProfile);
+    expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(LAUNCHD_LABEL_MAX_BYTES);
+    expect(result).toMatch(/^ai\.openclaw\./);
+  });
+});
+
+describe("truncateLaunchdLabel", () => {
+  it("keeps short labels unchanged", () => {
+    expect(truncateLaunchdLabel("ai.openclaw.gateway")).toBe("ai.openclaw.gateway");
+  });
+
+  it("truncates long labels deterministically with hash suffix", () => {
+    const longLabel = "ai.openclaw." + "x".repeat(200);
+    const resultA = truncateLaunchdLabel(longLabel);
+    const resultB = truncateLaunchdLabel(longLabel);
+    expect(resultA).toBe(resultB);
+    expect(Buffer.byteLength(resultA, "utf8")).toBeLessThanOrEqual(LAUNCHD_LABEL_MAX_BYTES);
+    expect(resultA).toMatch(/-[0-9a-f]{8}$/);
   });
 });
 

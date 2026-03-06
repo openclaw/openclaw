@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 // Default service labels (canonical + legacy compatibility)
 export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
 export const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
@@ -16,6 +18,31 @@ export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = [
   "moltbot-gateway",
 ];
 export const LEGACY_GATEWAY_WINDOWS_TASK_NAMES: string[] = [];
+export const LAUNCHD_LABEL_MAX_BYTES = 63;
+
+function truncateUtf8ToByteLength(value: string, maxBytes: number): string {
+  let truncated = "";
+  let usedBytes = 0;
+  for (const char of value) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    if (usedBytes + charBytes > maxBytes) {
+      break;
+    }
+    truncated += char;
+    usedBytes += charBytes;
+  }
+  return truncated;
+}
+
+export function truncateLaunchdLabel(label: string): string {
+  const trimmed = label.trim();
+  if (Buffer.byteLength(trimmed, "utf8") <= LAUNCHD_LABEL_MAX_BYTES) {
+    return trimmed;
+  }
+  const hashSuffix = `-${createHash("sha256").update(trimmed).digest("hex").slice(0, 8)}`;
+  const maxPrefixBytes = Math.max(0, LAUNCHD_LABEL_MAX_BYTES - Buffer.byteLength(hashSuffix, "utf8"));
+  return `${truncateUtf8ToByteLength(trimmed, maxPrefixBytes)}${hashSuffix}`;
+}
 
 export function normalizeGatewayProfile(profile?: string): string | null {
   const trimmed = profile?.trim();
@@ -35,7 +62,7 @@ export function resolveGatewayLaunchAgentLabel(profile?: string): string {
   if (!normalized) {
     return GATEWAY_LAUNCH_AGENT_LABEL;
   }
-  return `ai.openclaw.${normalized}`;
+  return truncateLaunchdLabel(`ai.openclaw.${normalized}`);
 }
 
 export function resolveLegacyGatewayLaunchAgentLabels(profile?: string): string[] {

@@ -344,4 +344,16 @@ describe("resolveLaunchAgentPlistPath", () => {
   ])("$name", ({ env, expected }) => {
     expect(resolveLaunchAgentPlistPath(env)).toBe(expected);
   });
+
+  it("truncates overlong OPENCLAW_LAUNCHD_LABEL values to launchd-safe length", () => {
+    const longLabel = `com.custom.${"x".repeat(200)}`;
+    const resolved = resolveLaunchAgentPlistPath({
+      HOME: "/Users/test",
+      OPENCLAW_LAUNCHD_LABEL: longLabel,
+    });
+    const fileName = resolved.split("/").at(-1) ?? "";
+    const label = fileName.replace(/\.plist$/, "");
+    expect(Buffer.byteLength(label, "utf8")).toBeLessThanOrEqual(63);
+    expect(label).toMatch(/-[0-9a-f]{8}$/);
+  });
 });

@@ -5,6 +5,7 @@ import {
   resolveGatewayServiceDescription,
   resolveGatewayLaunchAgentLabel,
   resolveLegacyGatewayLaunchAgentLabels,
+  truncateLaunchdLabel,
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
 import {
@@ -27,7 +28,7 @@ import type {
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
   const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (envLabel) {
-    return envLabel;
+    return truncateLaunchdLabel(envLabel);
   }
   return resolveGatewayLaunchAgentLabel(args?.env?.OPENCLAW_PROFILE);
 }
