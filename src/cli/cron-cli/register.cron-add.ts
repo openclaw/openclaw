@@ -5,6 +5,7 @@ import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
+
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import {
   getCronChannelOptions,
@@ -49,7 +50,11 @@ export function registerCronListCommand(cron: Command) {
             defaultRuntime.log(JSON.stringify(res, null, 2));
             return;
           }
-          const jobs = (res as { jobs?: CronJob[] } | null)?.jobs ?? [];
+          // Gateway returns a paginated response: { jobs, total, ... }.
+          // Be defensive in case older gateways return a raw array.
+          const jobs = Array.isArray(res)
+            ? (res as CronJob[])
+            : ((res as { jobs?: CronJob[] } | null)?.jobs ?? []);
           printCronList(jobs, defaultRuntime);
         } catch (err) {
           defaultRuntime.error(danger(String(err)));
