@@ -43,6 +43,7 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import { loadWorkspaceDotEnvForExec } from "./bash-tools.exec.workspace-env.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -362,7 +363,15 @@ export function createExecTool(
       }
 
       const inheritedBaseEnv = coerceEnv(process.env);
-      const baseEnv = host === "sandbox" ? inheritedBaseEnv : sanitizeHostBaseEnv(inheritedBaseEnv);
+      const workspaceEnv = loadWorkspaceDotEnvForExec({
+        workspaceDir: defaults?.cwd,
+        baseEnv: inheritedBaseEnv,
+      });
+      const inheritedWithWorkspaceEnv = { ...inheritedBaseEnv, ...workspaceEnv };
+      const baseEnv =
+        host === "sandbox"
+          ? inheritedWithWorkspaceEnv
+          : sanitizeHostBaseEnv(inheritedWithWorkspaceEnv);
 
       // Logic: Sandbox gets raw env. Host (gateway/node) must pass validation.
       // We validate BEFORE merging to prevent any dangerous vars from entering the stream.
