@@ -4,6 +4,7 @@ import path from "node:path";
 import type { App } from "@slack/bolt";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
+import * as mediaStore from "../../../media/store.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
@@ -512,6 +513,72 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("follow-up question");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("hydrates media from a file-only thread starter", async () => {
+    const { storePath } = makeTmpStorePath();
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            text: "",
+            user: "U2",
+            ts: "300.000",
+            files: [{ name: "upload-300.png", url_private: "https://files.slack.com/file.png" }],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: "", user: "U2", ts: "300.000" },
+          { text: "current message", user: "U1", ts: "301.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+    const slackCtx = createThreadSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      replies,
+    });
+    slackCtx.resolveUserName = async (id: string) => ({
+      name: id === "U1" ? "Alice" : "Bob",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () =>
+      new Response(Buffer.from("image"), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    const saveMediaBufferSpy = vi
+      .spyOn(mediaStore, "saveMediaBuffer")
+      .mockResolvedValue({
+        id: "thread-starter-image.png",
+        path: "/tmp/thread-starter-image.png",
+        size: 5,
+        contentType: "image/png",
+      });
+
+    try {
+      const prepared = await prepareThreadMessage(slackCtx, {
+        text: "please analyze this",
+        ts: "301.000",
+        thread_ts: "300.000",
+      });
+
+      expect(prepared).toBeTruthy();
+      expect(prepared!.ctxPayload.MediaPath).toBe("/tmp/thread-starter-image.png");
+      expect(prepared!.ctxPayload.MediaPaths).toEqual(["/tmp/thread-starter-image.png"]);
+      expect(saveMediaBufferSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      saveMediaBufferSpy.mockRestore();
+    }
   });
 
   it("keeps loading thread history when thread session already exists in store", async () => {

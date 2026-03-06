@@ -482,27 +482,26 @@ export async function prepareSlackMessage(params: {
       threadTs,
       client: ctx.app.client,
     });
-    if (starter?.text) {
+    if (starter) {
       // Keep thread starter as raw text; metadata is provided out-of-band in the system prompt.
-      threadStarterBody = starter.text;
-      const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
+      threadStarterBody = starter.text || undefined;
+      const snippet = (starter.text ?? "").replace(/\s+/g, " ").slice(0, 80);
       threadLabel = `Slack thread ${roomLabel}${snippet ? `: ${snippet}` : ""}`;
-      // If current message has no files but thread starter does, fetch starter's files
-      if (!effectiveDirectMedia && starter.files && starter.files.length > 0) {
-        threadStarterMedia = await resolveSlackMedia({
-          files: starter.files,
-          token: ctx.botToken,
-          maxBytes: ctx.mediaMaxBytes,
-        });
-        if (threadStarterMedia) {
-          const starterPlaceholders = threadStarterMedia.map((m) => m.placeholder).join(", ");
-          logVerbose(
-            `slack: hydrated thread starter file ${starterPlaceholders} from root message`,
-          );
-        }
-      }
     } else {
       threadLabel = `Slack thread ${roomLabel}`;
+    }
+    // If current message has no files but thread starter does, fetch starter's files.
+    // This also supports file-only starter messages with empty text.
+    if (!effectiveDirectMedia && starter?.files && starter.files.length > 0) {
+      threadStarterMedia = await resolveSlackMedia({
+        files: starter.files,
+        token: ctx.botToken,
+        maxBytes: ctx.mediaMaxBytes,
+      });
+      if (threadStarterMedia) {
+        const starterPlaceholders = threadStarterMedia.map((m) => m.placeholder).join(", ");
+        logVerbose(`slack: hydrated thread starter file ${starterPlaceholders} from root message`);
+      }
     }
 
     // Fetch full thread history for new thread sessions

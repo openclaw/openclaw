@@ -374,15 +374,20 @@ export async function resolveSlackThreadStarter(params: {
       inclusive: true,
     })) as { messages?: Array<{ text?: string; user?: string; ts?: string; files?: SlackFile[] }> };
     const message = response?.messages?.[0];
-    const text = (message?.text ?? "").trim();
-    if (!message || !text) {
+    if (!message) {
+      return null;
+    }
+    const text = (message.text ?? "").trim();
+    const files = Array.isArray(message.files) ? message.files : undefined;
+    // Keep file-only thread starters so we can hydrate starter media for mentions in replies.
+    if (!text && (!files || files.length === 0)) {
       return null;
     }
     const starter: SlackThreadStarter = {
       text,
       userId: message.user,
       ts: message.ts,
-      files: message.files,
+      files,
     };
     if (THREAD_STARTER_CACHE.has(cacheKey)) {
       THREAD_STARTER_CACHE.delete(cacheKey);

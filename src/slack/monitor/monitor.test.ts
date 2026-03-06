@@ -124,7 +124,14 @@ const baseParams = () => ({
 type ThreadStarterClient = Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
 function createThreadStarterRepliesClient(
-  response: { messages?: Array<{ text?: string; user?: string; ts?: string }> } = {
+  response: {
+    messages?: Array<{
+      text?: string;
+      user?: string;
+      ts?: string;
+      files?: Array<{ name?: string }>;
+    }>;
+  } = {
     messages: [{ text: "root message", user: "U1", ts: "1000.1" }],
   },
 ): { replies: ReturnType<typeof vi.fn>; client: ThreadStarterClient } {
@@ -296,6 +303,28 @@ describe("resolveSlackThreadStarter cache", () => {
     expect(first).toBeNull();
     expect(second).toBeNull();
     expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns file-only starters even when text is empty", async () => {
+    const { replies, client } = createThreadStarterRepliesClient({
+      messages: [{ text: "   ", user: "U1", ts: "1000.1", files: [{ name: "image.png" }] }],
+    });
+
+    const first = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client,
+    });
+    const second = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client,
+    });
+
+    expect(first).toMatchObject({ text: "", userId: "U1", ts: "1000.1" });
+    expect(first?.files).toHaveLength(1);
+    expect(second).toEqual(first);
+    expect(replies).toHaveBeenCalledTimes(1);
   });
 
   it("evicts oldest entries once cache exceeds bounded size", async () => {
