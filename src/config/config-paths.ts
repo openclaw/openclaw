@@ -69,16 +69,22 @@ export function parseConfigPath(raw: string): {
   const parts: Path = [];
   let currentSegment = "";
   let state: "bare" | "bracket_unquoted" | "bracket_single" | "bracket_double" = "bare";
+  let justClosedBracket = false;
 
   for (let i = 0; i < trimmed.length; i++) {
     const char = trimmed[i];
 
     if (state === "bare") {
+      if (justClosedBracket && char !== "." && char !== "[") {
+        return { ok: false, error: "Invalid path. Use dot notation (e.g. foo.bar)." };
+      }
+
       if (char === "[") {
         if (currentSegment.trim()) {
           parts.push(currentSegment.trim());
         }
         currentSegment = "";
+        justClosedBracket = false;
         if (trimmed[i + 1] === '"') {
           state = "bracket_double";
           i++;
@@ -89,6 +95,7 @@ export function parseConfigPath(raw: string): {
           state = "bracket_unquoted";
         }
       } else if (char === ".") {
+        justClosedBracket = false;
         if (currentSegment.trim()) {
           parts.push(currentSegment.trim());
           currentSegment = "";
@@ -107,6 +114,7 @@ export function parseConfigPath(raw: string): {
         parts.push(currentSegment);
         currentSegment = "";
         state = "bare";
+        justClosedBracket = true;
         i++;
       } else {
         currentSegment += char;
@@ -116,6 +124,7 @@ export function parseConfigPath(raw: string): {
         parts.push(currentSegment);
         currentSegment = "";
         state = "bare";
+        justClosedBracket = true;
         i++;
       } else {
         currentSegment += char;
@@ -134,6 +143,7 @@ export function parseConfigPath(raw: string): {
         }
         currentSegment = "";
         state = "bare";
+        justClosedBracket = true;
       } else {
         currentSegment += char;
       }

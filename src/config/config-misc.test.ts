@@ -352,6 +352,8 @@ describe("config paths", () => {
     expect(parseConfigPath("foo. .bar").ok).toBe(false);
     expect(parseConfigPath("foo.bar.").ok).toBe(false);
     expect(parseConfigPath('foo["bar').ok).toBe(false);
+    expect(parseConfigPath('models.providers["llama.cpp"]baseUrl').ok).toBe(false);
+    expect(parseConfigPath("foo[bar]baz").ok).toBe(false);
     expect(parseConfigPath("foo[]").ok).toBe(false);
     expect(parseConfigPath(".foo").ok).toBe(false);
     expect(parseConfigPath("agents.list[10001].id")).toEqual({
