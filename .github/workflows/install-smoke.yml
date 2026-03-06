@@ -19,8 +19,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 50
+          fetch-depth: 1
           fetch-tags: false
+
+      - name: Ensure docs-scope base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
         id: check
