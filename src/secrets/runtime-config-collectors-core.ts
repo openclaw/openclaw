@@ -295,6 +295,7 @@ function collectToolsWebSearchAssignments(params: {
       : undefined;
   const paths = [
     "apiKey",
+    "exa.apiKey",
     "gemini.apiKey",
     "grok.apiKey",
     "kimi.apiKey",

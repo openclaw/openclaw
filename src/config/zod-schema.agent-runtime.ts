@@ -269,6 +269,7 @@ export const ToolsWebSearchSchema = z
         z.literal("grok"),
         z.literal("gemini"),
         z.literal("kimi"),
+        z.literal("exa"),
       ])
       .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
@@ -305,6 +306,14 @@ export const ToolsWebSearchSchema = z
         apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    exa: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        numResults: z.number().int().positive().max(10).optional(),
+        highlightsMaxChars: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),
