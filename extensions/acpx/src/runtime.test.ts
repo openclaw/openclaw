@@ -224,6 +224,42 @@ describe("AcpxRuntime", () => {
     });
   });
 
+  it("maps acpx permission-denied exits to actionable guidance", async () => {
+    const runtime = sharedFixture?.runtime;
+    expect(runtime).toBeDefined();
+    if (!runtime) {
+      throw new Error("shared runtime fixture missing");
+    }
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:permission-denied",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    const events = [];
+    for await (const event of runtime.runTurn({
+      handle,
+      text: "permission-denied",
+      mode: "prompt",
+      requestId: "req-perm",
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("Permission denied by ACP runtime (acpx)."),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("approve-reads, approve-all, deny-all"),
+      }),
+    );
+  });
+
   it("supports cancel and close using encoded runtime handle state", async () => {
     const { runtime, logPath, config } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({

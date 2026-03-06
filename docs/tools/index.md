@@ -453,14 +453,17 @@ Restart or apply updates to the running Gateway process (in-place).
 Core actions:
 
 - `restart` (authorizes + sends `SIGUSR1` for in-process restart; `openclaw gateway` restart in-place)
-- `config.get` / `config.schema`
+- `config.schema.lookup` (inspect one config path at a time without loading the full schema into prompt context)
+- `config.get`
 - `config.apply` (validate + write config + restart + wake)
 - `config.patch` (merge partial update + restart + wake)
 - `update.run` (run update + restart + wake)
 
 Notes:
 
+- `config.schema.lookup` expects a targeted dot path such as `gateway.auth` or `agents.list.*.heartbeat`.
 - Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.
+- `config.schema` remains available to internal Control UI flows and is not exposed through the agent `gateway` tool.
 - `restart` is enabled by default; set `commands.restart: false` to disable it.
 
 ### `sessions_list` / `sessions_history` / `sessions_send` / `sessions_spawn` / `session_status`
