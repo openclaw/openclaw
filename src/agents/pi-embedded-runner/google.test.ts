@@ -42,6 +42,28 @@ describe("sanitizeToolsForGoogle", () => {
     expectFormatRemoved(sanitized, "additionalProperties");
   });
 
+  it("strips unsupported schema keywords for google-generative-ai", () => {
+    const tool = createTool({
+      type: "object",
+      patternProperties: {
+        "^x-": {
+          type: "string",
+        },
+      },
+      properties: {
+        foo: {
+          type: "string",
+          format: "uuid",
+        },
+      },
+    });
+    const [sanitized] = sanitizeToolsForGoogle({
+      tools: [tool],
+      provider: "google-generative-ai",
+    });
+    expectFormatRemoved(sanitized, "patternProperties");
+  });
+
   it("returns original tools for non-google providers", () => {
     const tool = createTool({
       type: "object",
