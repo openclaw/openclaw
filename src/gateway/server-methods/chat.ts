@@ -249,6 +249,14 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
   return texts.length > 0 ? texts.join("\n") : undefined;
 }
 
+function isDeliveryMirrorMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as { model?: unknown; provider?: unknown };
+  return entry.model === "delivery-mirror" && entry.provider === "openclaw";
+}
+
 function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -256,6 +264,10 @@ function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   let changed = false;
   const next: unknown[] = [];
   for (const message of messages) {
+    if (isDeliveryMirrorMessage(message)) {
+      changed = true;
+      continue;
+    }
     const res = sanitizeChatHistoryMessage(message);
     changed ||= res.changed;
     // Drop assistant messages whose entire visible text is the silent reply token.
@@ -1173,4 +1185,9 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, messageId: appended.messageId });
   },
+};
+
+export const __testing = {
+  isDeliveryMirrorMessage,
+  sanitizeChatHistoryMessages,
 };
