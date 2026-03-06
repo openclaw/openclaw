@@ -720,9 +720,9 @@ async function getVosk() {
   try {
     console.log("Loading Vosk model...");
     const { createModel } = await import("vosk-browser");
-    // 使用本地模型以避免 CORS 问题
+    // 使用本地英文模型
     const model = (await createModel(
-      "/models/vosk-model-small-cn-0.22.zip",
+      "/models/vosk-model-small-en-us-0.15.zip",
     )) as unknown as VoskModel;
     voskModel = model;
     console.log("Vosk model loaded successfully");
