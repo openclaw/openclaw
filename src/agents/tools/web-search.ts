@@ -977,13 +977,13 @@ async function runSearxngSearch(params: {
     endpoint.searchParams.set("engines", params.engines.join(","));
   }
 
-  return withWebToolsNetworkGuard(
+  return withTrustedWebToolsEndpoint(
     {
       url: endpoint.toString(),
       timeoutSeconds: params.timeoutSeconds,
-      // SearXNG is a user-configured self-hosted endpoint (may be localhost or LAN IP),
-      // so we apply the trusted SSRF policy the same way other user-endpoint providers do.
-      policy: WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
+      // SearXNG is a user-configured self-hosted endpoint (may be localhost or LAN IP);
+      // withTrustedWebToolsEndpoint applies the trusted SSRF policy used by all
+      // user-configured providers (Kimi, etc.).
       init: {
         method: "GET",
         headers: {
