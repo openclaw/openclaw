@@ -473,10 +473,13 @@ export async function finalizeOnboardingWizard(
   }
 
   const webSearchProvider = nextConfig.tools?.web?.search?.provider ?? "brave";
-  const webSearchKey =
+  const rawApiKey =
     webSearchProvider === "perplexity"
-      ? (nextConfig.tools?.web?.search?.perplexity?.apiKey ?? "").trim()
-      : (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
+      ? nextConfig.tools?.web?.search?.perplexity?.apiKey
+      : nextConfig.tools?.web?.search?.apiKey;
+  // apiKey may be a string or a SecretRef object; treat SecretRef as "key present"
+  const webSearchKey =
+    typeof rawApiKey === "string" ? rawApiKey.trim() : rawApiKey != null ? "secretref" : "";
   const webSearchEnv =
     webSearchProvider === "perplexity"
       ? (process.env.PERPLEXITY_API_KEY ?? "").trim()
