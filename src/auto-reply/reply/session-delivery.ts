@@ -1,6 +1,6 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { deriveSessionChatType, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   deliveryContextFromSession,
   deliveryContextKey,
@@ -38,6 +38,10 @@ function isMainSessionKey(sessionKey?: string): boolean {
   return parsed.rest.trim().toLowerCase() === "main";
 }
 
+function isDirectSessionKey(sessionKey?: string): boolean {
+  return deriveSessionChatType(sessionKey) === "direct";
+}
+
 function isExternalRoutingChannel(channel?: string): channel is string {
   return Boolean(
     channel && channel !== INTERNAL_MESSAGE_CHANNEL && isDeliverableMessageChannel(channel),
@@ -50,7 +54,12 @@ export function resolveLastChannelRaw(params: {
   sessionKey?: string;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
-  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL && isMainSessionKey(params.sessionKey)) {
+  // WebChat should own reply routing for direct-session UI turns, even when the
+  // session previously replied through an external channel like iMessage.
+  if (
+    originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
+    (isMainSessionKey(params.sessionKey) || isDirectSessionKey(params.sessionKey))
+  ) {
     return params.originatingChannelRaw;
   }
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
@@ -77,7 +86,10 @@ export function resolveLastToRaw(params: {
   sessionKey?: string;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
-  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL && isMainSessionKey(params.sessionKey)) {
+  if (
+    originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
+    (isMainSessionKey(params.sessionKey) || isDirectSessionKey(params.sessionKey))
+  ) {
     return params.originatingToRaw || params.toRaw;
   }
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
