@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.fn();
 const convertHeicToJpegMock = vi.fn();
+const detectMimeMock = vi.fn();
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
@@ -9,6 +10,10 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 
 vi.mock("./image-ops.js", () => ({
   convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
+}));
+
+vi.mock("./mime.js", () => ({
+  detectMime: (...args: unknown[]) => detectMimeMock(...args),
 }));
 
 async function waitForMicrotaskTurn(): Promise<void> {
@@ -31,6 +36,7 @@ beforeEach(() => {
 describe("HEIC input image normalization", () => {
   it("converts base64 HEIC images to JPEG before returning them", async () => {
     const normalized = Buffer.from("jpeg-normalized");
+    detectMimeMock.mockResolvedValueOnce("image/heic");
     convertHeicToJpegMock.mockResolvedValueOnce(normalized);
 
     const image = await extractImageContentFromSource(
@@ -67,6 +73,7 @@ describe("HEIC input image normalization", () => {
       finalUrl: "https://example.com/photo.heic",
     });
     const normalized = Buffer.from("jpeg-url-normalized");
+    detectMimeMock.mockResolvedValueOnce("image/heic");
     convertHeicToJpegMock.mockResolvedValueOnce(normalized);
 
     const image = await extractImageContentFromSource(
@@ -90,6 +97,31 @@ describe("HEIC input image normalization", () => {
       mimeType: "image/jpeg",
     });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps declared MIME for non-HEIC images without sniffing", async () => {
+    const image = await extractImageContentFromSource(
+      {
+        type: "base64",
+        data: Buffer.from("png-like").toString("base64"),
+        mediaType: "image/png",
+      },
+      {
+        allowUrl: false,
+        allowedMimes: new Set(["image/png"]),
+        maxBytes: 1024 * 1024,
+        maxRedirects: 0,
+        timeoutMs: 1,
+      },
+    );
+
+    expect(detectMimeMock).not.toHaveBeenCalled();
+    expect(convertHeicToJpegMock).not.toHaveBeenCalled();
+    expect(image).toEqual({
+      type: "image",
+      data: Buffer.from("png-like").toString("base64"),
+      mimeType: "image/png",
+    });
   });
 });
 
