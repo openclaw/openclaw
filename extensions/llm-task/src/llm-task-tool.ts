@@ -25,15 +25,23 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   }
 
   // Bundled install (built)
-  // NOTE: there is no src/ tree in a packaged install. Prefer a stable internal entrypoint.
-  const distExtensionApi = "../../../dist/extensionAPI.js";
-  const mod = (await import(distExtensionApi)) as { runEmbeddedPiAgent?: unknown };
-  // oxlint-disable-next-line typescript/no-explicit-any
-  const fn = (mod as any).runEmbeddedPiAgent;
-  if (typeof fn !== "function") {
-    throw new Error("Internal error: runEmbeddedPiAgent not available");
+  // NOTE: there is no src/ tree in a packaged install.
+  // In CI/source checkouts there may also be no dist/ tree yet.
+  // Keep this fallback lazy and provide a clear error if dist artifacts are missing.
+  try {
+    const distExtensionApi = "../../../dist/extensionAPI.js";
+    const mod = (await import(distExtensionApi)) as { runEmbeddedPiAgent?: unknown };
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const fn = (mod as any).runEmbeddedPiAgent;
+    if (typeof fn !== "function") {
+      throw new Error("Internal error: runEmbeddedPiAgent not available");
+    }
+    return fn as RunEmbeddedPiAgentFn;
+  } catch (err) {
+    throw new Error(
+      `Failed to load embedded Pi runner (src or dist). In dev/CI, build artifacts may be missing: ${String(err)}`,
+    );
   }
-  return fn as RunEmbeddedPiAgentFn;
 }
 
 function stripCodeFences(s: string): string {
