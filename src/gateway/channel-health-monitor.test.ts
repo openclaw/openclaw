@@ -489,11 +489,24 @@ describe("channel-health-monitor", () => {
       await expectNoRestart(manager);
     });
 
-    it("restarts a channel that never received any event past the stale threshold", async () => {
+    it("does not restart a channel that never received any event (no stale baseline)", async () => {
       const now = Date.now();
       const manager = createSlackSnapshotManager(
         runningConnectedSlackAccount({
           lastStartAt: now - STALE_THRESHOLD - 60_000,
+        }),
+      );
+      const monitor = await startAndRunCheck(manager);
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("restarts a channel whose last event exceeds stale threshold", async () => {
+      const now = Date.now();
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - STALE_THRESHOLD - 60_000,
+          lastEventAt: now - STALE_THRESHOLD - 30_000,
         }),
       );
       await expectRestartedChannel(manager, "slack");

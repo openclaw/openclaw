@@ -98,7 +98,26 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
   });
 
-  it("flags stale sockets when no events arrive beyond threshold", () => {
+  it("flags stale sockets when last event exceeds threshold", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: 50_000,
+      },
+      {
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+
+  it("stays healthy when lastEventAt is null (no events ever received)", () => {
     const evaluation = evaluateChannelHealth(
       {
         running: true,
@@ -114,7 +133,7 @@ describe("evaluateChannelHealth", () => {
         staleEventThresholdMs: 30_000,
       },
     );
-    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 });
 
