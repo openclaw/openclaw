@@ -47,7 +47,9 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
   });
 }
 
-function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
+function createProviderSearchTool(
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "exa",
+) {
   const searchConfig =
     provider === "perplexity"
       ? { provider, perplexity: { apiKey: "pplx-config-test" } }
@@ -57,7 +59,9 @@ function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "g
           ? { provider, gemini: { apiKey: "gemini-config-test" } }
           : provider === "kimi"
             ? { provider, kimi: { apiKey: "moonshot-config-test" } }
-            : { provider, apiKey: "brave-config-test" };
+            : provider === "exa"
+              ? { provider, exa: { apiKey: "exa-config-test" } }
+              : { provider, apiKey: "brave-config-test" };
   return createWebSearchTool({
     config: {
       tools: {
@@ -93,7 +97,7 @@ function installPerplexitySearchApiFetch(results?: Array<Record<string, unknown>
 }
 
 function createProviderSuccessPayload(
-  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi",
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "exa",
 ) {
   if (provider === "brave") {
     return { web: { results: [] } };
@@ -103,6 +107,9 @@ function createProviderSuccessPayload(
   }
   if (provider === "grok") {
     return { output_text: "ok", citations: [] };
+  }
+  if (provider === "exa") {
+    return { results: [] };
   }
   if (provider === "gemini") {
     return {
@@ -216,7 +223,7 @@ describe("web_search provider proxy dispatch", () => {
     global.fetch = priorFetch;
   });
 
-  it.each(["brave", "perplexity", "grok", "gemini", "kimi"] as const)(
+  it.each(["brave", "perplexity", "grok", "gemini", "kimi", "exa"] as const)(
     "uses proxy-aware dispatcher for %s provider when HTTP_PROXY is configured",
     async (provider) => {
       vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
@@ -368,6 +375,62 @@ describe("web_search perplexity Search API", () => {
     expect(body.search_recency_filter).toBe("month");
     expect(body.search_domain_filter).toEqual(["nature.com", ".gov"]);
     expect(body.search_language_filter).toEqual(["en"]);
+  });
+});
+
+describe("web_search exa provider", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+    webSearchTesting.SEARCH_CACHE.clear();
+  });
+
+  it("returns a setup hint when Exa key is missing", async () => {
+    vi.stubEnv("EXA_API_KEY", "");
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "exa" } } } },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", { query: "test" });
+    expect(result?.details).toMatchObject({ error: "missing_exa_api_key" });
+  });
+
+  it("calls Exa Search API and maps results", async () => {
+    vi.stubEnv("EXA_API_KEY", "exa-test");
+    const mockFetch = installMockFetch({
+      results: [
+        {
+          title: "OpenClaw",
+          url: "https://docs.openclaw.ai/tools/web",
+          text: "Web tools docs",
+          publishedDate: "2026-03-04",
+        },
+      ],
+    });
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "exa" } } } },
+      sandboxed: true,
+    });
+
+    const result = await tool?.execute?.("call-1", { query: "openclaw web tools", count: 1 });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://api.exa.ai/search");
+    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(request?.method).toBe("POST");
+    const headers = request?.headers as Record<string, string> | undefined;
+    expect(headers?.["x-api-key"]).toBe("exa-test");
+    expect(result?.details).toMatchObject({
+      provider: "exa",
+      results: [
+        expect.objectContaining({
+          url: "https://docs.openclaw.ai/tools/web",
+          published: "2026-03-04",
+        }),
+      ],
+    });
   });
 });
 

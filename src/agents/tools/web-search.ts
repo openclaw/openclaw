@@ -21,12 +21,13 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi", "exa"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
+const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
@@ -191,6 +192,10 @@ type PerplexityConfig = {
   apiKey?: string;
 };
 
+type ExaConfig = {
+  apiKey?: string;
+};
+
 type PerplexityApiKeySource = "config" | "perplexity_env" | "none";
 
 type GrokConfig = {
@@ -275,6 +280,17 @@ type PerplexitySearchApiResult = {
 type PerplexitySearchApiResponse = {
   results?: PerplexitySearchApiResult[];
   id?: string;
+};
+
+type ExaSearchResult = {
+  title?: string;
+  url?: string;
+  text?: string;
+  publishedDate?: string;
+};
+
+type ExaSearchApiResponse = {
+  results?: ExaSearchResult[];
 };
 
 function extractGrokContent(data: GrokSearchResponse): {
@@ -399,6 +415,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "exa") {
+    return {
+      error: "missing_exa_api_key",
+      message:
+        "web_search (exa) needs an Exa API key. Set EXA_API_KEY in the Gateway environment, or configure tools.web.search.exa.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   if (provider === "gemini") {
     return {
       error: "missing_gemini_api_key",
@@ -439,6 +463,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   if (raw === "kimi") {
     return "kimi";
   }
+  if (raw === "exa") {
+    return "exa";
+  }
   if (raw === "brave") {
     return "brave";
   }
@@ -452,7 +479,13 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "brave";
     }
-    // 2. Gemini
+    // 2. Exa
+    const exaConfig = resolveExaConfig(search);
+    if (resolveExaApiKey(exaConfig)) {
+      logVerbose('web_search: no provider configured, auto-detected "exa" from available API keys');
+      return "exa";
+    }
+    // 3. Gemini
     const geminiConfig = resolveGeminiConfig(search);
     if (resolveGeminiApiKey(geminiConfig)) {
       logVerbose(
@@ -499,6 +532,26 @@ function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
     return {};
   }
   return perplexity as PerplexityConfig;
+}
+
+function resolveExaConfig(search?: WebSearchConfig): ExaConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const exa = "exa" in search ? search.exa : undefined;
+  if (!exa || typeof exa !== "object") {
+    return {};
+  }
+  return exa as ExaConfig;
+}
+
+function resolveExaApiKey(exa?: ExaConfig): string | undefined {
+  const fromConfig = normalizeApiKey(exa?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.EXA_API_KEY);
+  return fromEnv || undefined;
 }
 
 function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
@@ -941,6 +994,55 @@ async function runPerplexitySearchApi(params: {
   );
 }
 
+async function runExaSearch(params: {
+  query: string;
+  apiKey: string;
+  count: number;
+  timeoutSeconds: number;
+}): Promise<
+  Array<{ title: string; url: string; description: string; published?: string; siteName?: string }>
+> {
+  return withTrustedWebSearchEndpoint(
+    {
+      url: EXA_SEARCH_ENDPOINT,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": params.apiKey,
+        },
+        body: JSON.stringify({
+          query: params.query,
+          numResults: params.count,
+          type: "auto",
+          text: true,
+        }),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "Exa Search");
+      }
+
+      const data = (await res.json()) as ExaSearchApiResponse;
+      const results = Array.isArray(data.results) ? data.results : [];
+      return results.map((entry) => {
+        const title = entry.title ?? "";
+        const url = entry.url ?? "";
+        const text = entry.text ?? "";
+        return {
+          title: title ? wrapWebContent(title, "web_search") : "",
+          url,
+          description: text ? wrapWebContent(text, "web_search") : "",
+          published: entry.publishedDate ?? undefined,
+          siteName: resolveSiteName(url) || undefined,
+        };
+      });
+    },
+  );
+}
+
 async function runGrokSearch(params: {
   query: string;
   apiKey: string;
@@ -1223,6 +1325,31 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "exa") {
+    const results = await runExaSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: results.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider === "grok") {
     const { content, citations, inlineCitations } = await runGrokSearch({
       query: params.query,
@@ -1401,17 +1528,20 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const exaConfig = resolveExaConfig(search);
 
   const description =
     provider === "perplexity"
       ? "Search the web using the Perplexity Search API. Returns structured results (title, URL, snippet) for fast research. Supports domain, region, language, and freshness filtering."
       : provider === "grok"
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : provider === "kimi"
-          ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
-          : provider === "gemini"
-            ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+        : provider === "exa"
+          ? "Search the web using Exa AI Search API. Returns titles, URLs, and text snippets for fast research."
+          : provider === "kimi"
+            ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
+            : provider === "gemini"
+              ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
+              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1426,11 +1556,13 @@ export function createWebSearchTool(options?: {
           ? perplexityAuth?.apiKey
           : provider === "grok"
             ? resolveGrokApiKey(grokConfig)
-            : provider === "kimi"
-              ? resolveKimiApiKey(kimiConfig)
-              : provider === "gemini"
-                ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+            : provider === "exa"
+              ? resolveExaApiKey(exaConfig)
+              : provider === "kimi"
+                ? resolveKimiApiKey(kimiConfig)
+                : provider === "gemini"
+                  ? resolveGeminiApiKey(geminiConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));

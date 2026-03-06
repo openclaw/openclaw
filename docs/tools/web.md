@@ -1,5 +1,5 @@
 ---
-summary: "Web search + fetch tools (Perplexity Search API, Brave, Gemini, Grok, and Kimi providers)"
+summary: "Web search + fetch tools (Perplexity Search API, Brave, Exa, Gemini, Grok, and Kimi providers)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need Perplexity or Brave Search API key setup
@@ -33,6 +33,7 @@ See [Perplexity Search setup](/perplexity) and [Brave Search setup](/brave-searc
 | ------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------- |
 | **Perplexity Search API** | Fast, structured results; domain, language, region, and freshness filters; content extraction | —                                           | `PERPLEXITY_API_KEY`                |
 | **Brave Search API**      | Fast, structured results                                                                      | Fewer filtering options; AI-use terms apply | `BRAVE_API_KEY`                     |
+| **Exa Search API**        | Strong semantic search with rich snippets                                                     | Requires Exa API key                        | `EXA_API_KEY`                       |
 | **Gemini**                | Google Search grounding, AI-synthesized                                                       | Requires Gemini API key                     | `GEMINI_API_KEY`                    |
 | **Grok**                  | xAI web-grounded responses                                                                    | Requires xAI API key                        | `XAI_API_KEY`                       |
 | **Kimi**                  | Moonshot web search capability                                                                | Requires Moonshot API key                   | `KIMI_API_KEY` / `MOONSHOT_API_KEY` |
@@ -42,10 +43,11 @@ See [Perplexity Search setup](/perplexity) and [Brave Search setup](/brave-searc
 If no `provider` is explicitly set, OpenClaw auto-detects which provider to use based on available API keys, checking in this order:
 
 1. **Brave** — `BRAVE_API_KEY` env var or `tools.web.search.apiKey` config
-2. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
-3. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
-4. **Perplexity** — `PERPLEXITY_API_KEY` env var or `tools.web.search.perplexity.apiKey` config
-5. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
+2. **Exa** — `EXA_API_KEY` env var or `tools.web.search.exa.apiKey` config
+3. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
+4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
+5. **Perplexity** — `PERPLEXITY_API_KEY` env var or `tools.web.search.perplexity.apiKey` config
+6. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -164,6 +166,7 @@ Search the web using your configured provider.
 - API key for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
   - **Perplexity**: `PERPLEXITY_API_KEY` or `tools.web.search.perplexity.apiKey`
+  - **Exa**: `EXA_API_KEY` or `tools.web.search.exa.apiKey`
   - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
