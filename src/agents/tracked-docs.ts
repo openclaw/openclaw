@@ -63,7 +63,7 @@ export type DocSessionParams = {
  * with a single provenance record.
  *
  * Usage:
- *   const session = await beginDocSession(workspaceDir, { sessionKey, agentLabel });
+ *   const session = await beginDocSession({ workspaceDir, sessionKey, agentLabel });
  *   // ... make changes however you want ...
  *   await session.commit('Added disk hygiene rule');
  */
@@ -106,6 +106,7 @@ async function hasGitRepo(dir: string): Promise<boolean> {
 export async function beginDocSession(params: DocSessionParams): Promise<DocSession> {
   const resolvedDir = resolveUserPath(params.workspaceDir);
   const gitAvailable = await hasGitRepo(resolvedDir);
+  let _discarded = false;
 
   const buildBody = (): string =>
     [`Session: ${params.sessionKey}`, params.agentLabel ? `Agent: ${params.agentLabel}` : null]
@@ -113,6 +114,9 @@ export async function beginDocSession(params: DocSessionParams): Promise<DocSess
       .join("\n");
 
   async function commit(reason: string): Promise<WriteTrackedDocResult> {
+    if (_discarded) {
+      return { committed: false };
+    }
     if (!gitAvailable) {
       return {
         committed: false,
@@ -120,10 +124,10 @@ export async function beginDocSession(params: DocSessionParams): Promise<DocSess
       };
     }
 
-    // Stage only tracked doc filenames that are present and modified.
+    // Stage only tracked doc filenames. `git add` on a modified or deleted tracked file
+    // stages the change (including staged deletions). Untracked/absent files are ignored.
     const trackedFiles = [...TRACKED_DOC_FILENAMES];
     for (const filename of trackedFiles) {
-      // `git add` on a missing file is a no-op — safe to call unconditionally.
       await gitCommand(["add", filename], resolvedDir);
     }
 
@@ -152,7 +156,7 @@ export async function beginDocSession(params: DocSessionParams): Promise<DocSess
   }
 
   function discard(): void {
-    // No-op: files stay as-is, nothing committed.
+    _discarded = true;
   }
 
   return { commit, discard };
