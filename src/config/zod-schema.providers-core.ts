@@ -75,6 +75,7 @@ export const ContextualActivationSchema = z
     contextMessages: z.number().int().min(1).max(50).optional(),
     baseRate: z.number().min(0).max(1).optional(),
     schedule: z.array(ScheduleRuleSchema).optional(),
+    timezone: z.string().optional(),
     engagedTimeout: z.number().int().min(10).max(3600).optional(),
   })
   .strict();
