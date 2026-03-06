@@ -37,6 +37,7 @@ export type SlackActionContext = {
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading. */
   currentThreadTs?: string;
+  mediaLocalRoots?: readonly string[];
   /** Reply-to mode for auto-threading. */
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -196,6 +197,7 @@ export async function handleSlackAction(
         const result = await sendSlackMessage(to, content ?? "", {
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
+          mediaLocalRoots: context?.mediaLocalRoots,
           threadTs: threadTs ?? undefined,
           blocks,
         });

@@ -41,6 +41,35 @@ describe("slackPlugin actions", () => {
       undefined,
     );
   });
+
+  it("forwards trusted mediaLocalRoots for send actions", async () => {
+    handleSlackActionMock.mockResolvedValueOnce({ details: { ok: true } });
+    const handleAction = slackPlugin.actions?.handleAction;
+    expect(handleAction).toBeDefined();
+    const mediaLocalRoots = ["/tmp/workspace-agent"] as const;
+
+    await handleAction!({
+      action: "send",
+      channel: "slack",
+      accountId: "default",
+      cfg: {},
+      mediaLocalRoots,
+      params: {
+        to: "channel:C123",
+        media: "/tmp/workspace-agent/report.pdf",
+      },
+    });
+
+    expect(handleSlackActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:C123",
+        mediaUrl: "/tmp/workspace-agent/report.pdf",
+      }),
+      {},
+      expect.objectContaining({ mediaLocalRoots }),
+    );
+  });
 });
 
 describe("slackPlugin outbound", () => {

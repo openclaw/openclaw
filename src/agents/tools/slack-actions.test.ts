@@ -194,6 +194,28 @@ describe("handleSlackAction", () => {
     });
   });
 
+  it("passes mediaLocalRoots to sendSlackMessage for media sends", async () => {
+    const mediaLocalRoots = ["/tmp/workspace-agent"] as const;
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "Hello file",
+        mediaUrl: "/tmp/workspace-agent/report.pdf",
+      },
+      slackConfig(),
+      { mediaLocalRoots } as Parameters<typeof handleSlackAction>[2],
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Hello file", {
+      mediaUrl: "/tmp/workspace-agent/report.pdf",
+      mediaLocalRoots,
+      threadTs: undefined,
+      blocks: undefined,
+    });
+  });
+
   it.each([
     {
       name: "JSON blocks",
