@@ -580,6 +580,7 @@ describe("Cron issue regressions", () => {
     const runRetryScenario = async (params: {
       id: string;
       deleteAfterRun: boolean;
+      firstError?: string;
     }): Promise<{
       state: ReturnType<typeof createCronServiceState>;
       runIsolatedAgentJob: ReturnType<typeof vi.fn>;
@@ -600,7 +601,10 @@ describe("Cron issue regressions", () => {
       let now = scheduledAt;
       const runIsolatedAgentJob = vi
         .fn()
-        .mockResolvedValueOnce({ status: "error", error: "429 rate limit exceeded" })
+        .mockResolvedValueOnce({
+          status: "error",
+          error: params.firstError ?? "429 rate limit exceeded",
+        })
         .mockResolvedValueOnce({ status: "ok", summary: "done" });
       const state = createCronServiceState({
         cronEnabled: true,
@@ -644,6 +648,19 @@ describe("Cron issue regressions", () => {
     );
     expect(deletedJob).toBeUndefined();
     expect(deleteResult.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+
+    const overloadedResult = await runRetryScenario({
+      id: "oneshot-overloaded-retry",
+      deleteAfterRun: false,
+      firstError:
+        "All models failed (2): anthropic/claude-3-5-sonnet: LLM error overloaded_error: overloaded (overloaded); openai/gpt-5.3-codex: LLM error overloaded_error: overloaded (overloaded)",
+    });
+    const overloadedJob = overloadedResult.state.store?.jobs.find(
+      (j) => j.id === "oneshot-overloaded-retry",
+    );
+    expect(overloadedJob).toBeDefined();
+    expect(overloadedJob!.state.lastStatus).toBe("ok");
+    expect(overloadedResult.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
   });
 
   it("#24355: one-shot job disabled after max transient retries", async () => {
