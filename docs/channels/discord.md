@@ -685,6 +685,71 @@ Default slash command settings:
 
   </Accordion>
 
+  <Accordion title="Persistent ACP channel bindings">
+    For stable "always-on" ACP workspaces, configure top-level typed ACP bindings targeting Discord conversations.
+
+    Config path:
+
+    - `bindings[]` with `type: "acp"` and `match.channel: "discord"`
+
+    Example:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "codex",
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "codex",
+            backend: "acpx",
+            mode: "persistent",
+            cwd: "/workspace/openclaw",
+          },
+        },
+      },
+    ],
+  },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "channel", id: "222222222222222222" },
+      },
+      acp: { label: "codex-main" },
+    },
+  ],
+  channels: {
+    discord: {
+      guilds: {
+        "111111111111111111": {
+          channels: {
+            "222222222222222222": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+    Notes:
+
+    - Thread messages can inherit the parent channel ACP binding.
+    - In a bound channel or thread, `/new` and `/reset` reset the same ACP session in place.
+    - Temporary thread bindings still work and can override target resolution while active.
+
+    See [ACP Agents](/tools/acp-agents) for binding behavior details.
+
+  </Accordion>
+
   <Accordion title="Reaction notifications">
     Per-guild reaction notification mode:
 
@@ -1037,11 +1102,18 @@ openclaw logs --follow
 
     - `Listener DiscordMessageListener timed out after 30000ms for event MESSAGE_CREATE`
     - `Slow listener detected ...`
+    - `discord inbound worker timed out after ...`
 
-    Canonical knob:
+    Listener budget knob:
 
     - single-account: `channels.discord.eventQueue.listenerTimeout`
     - multi-account: `channels.discord.accounts.<accountId>.eventQueue.listenerTimeout`
+
+    Worker run timeout knob:
+
+    - single-account: `channels.discord.inboundWorker.runTimeoutMs`
+    - multi-account: `channels.discord.accounts.<accountId>.inboundWorker.runTimeoutMs`
+    - default: `1800000` (30 minutes); set `0` to disable
 
     Recommended baseline:
 
@@ -1054,6 +1126,9 @@ openclaw logs --follow
           eventQueue: {
             listenerTimeout: 120000,
           },
+          inboundWorker: {
+            runTimeoutMs: 1800000,
+          },
         },
       },
     },
@@ -1061,7 +1136,8 @@ openclaw logs --follow
 }
 ```
 
-    Tune this first before adding alternate timeout controls elsewhere.
+    Use `eventQueue.listenerTimeout` for slow listener setup and `inboundWorker.runTimeoutMs`
+    only if you want a separate safety valve for queued agent turns.
 
   </Accordion>
 
@@ -1112,15 +1188,17 @@ High-signal Discord fields:
 - startup/auth: `enabled`, `token`, `accounts.*`, `allowBots`
 - policy: `groupPolicy`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
 - command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
-- event queue: `eventQueue.listenerTimeout` (canonical), `eventQueue.maxQueueSize`, `eventQueue.maxConcurrency`
+- event queue: `eventQueue.listenerTimeout` (listener budget), `eventQueue.maxQueueSize`, `eventQueue.maxConcurrency`
+- inbound worker: `inboundWorker.runTimeoutMs`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - streaming: `streaming` (legacy alias: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
+  - `mediaMaxMb` caps outbound Discord uploads (default: `8MB`)
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`
 - UI: `ui.components.accentColor`
-- features: `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
+- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
 
 ## Safety and operations
 
