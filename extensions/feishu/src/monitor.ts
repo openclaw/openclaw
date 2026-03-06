@@ -5,7 +5,7 @@ import {
   resolveReactionSyntheticEvent,
   type FeishuReactionCreatedEvent,
 } from "./monitor.account.js";
-import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
+import { fetchBotOpenIdForMonitor } from "./monitor.startup.js";
 import {
   clearFeishuWebhookRateLimitStateForTest,
   getFeishuWebhookRateLimitStateSizeForTest,
@@ -13,11 +13,27 @@ import {
   stopFeishuMonitorState,
 } from "./monitor.state.js";
 
+export type FeishuGatewayStatusPatch = {
+  connected?: boolean;
+  lastEventAt?: number | null;
+  lastInboundAt?: number | null;
+  lastOutboundAt?: number | null;
+};
+
+export type FeishuGatewayStatusSink = (patch: FeishuGatewayStatusPatch) => void;
+
+export type FeishuRunStateMachine = {
+  onRunStart: () => void;
+  onRunEnd: () => void;
+};
+
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   accountId?: string;
+  statusSink?: FeishuGatewayStatusSink;
+  runStateMachine?: FeishuRunStateMachine;
 };
 
 export {
@@ -46,6 +62,8 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
       account,
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
+      statusSink: opts.statusSink,
+      runStateMachine: opts.runStateMachine,
     });
   }
 
@@ -66,7 +84,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     }
 
     // Probe sequentially so large multi-account startups do not burst Feishu's bot-info endpoint.
-    const { botOpenId, botName } = await fetchBotIdentityForMonitor(account, {
+    const botOpenId = await fetchBotOpenIdForMonitor(account, {
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
     });
@@ -82,7 +100,9 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
         account,
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
-        botOpenIdSource: { kind: "prefetched", botOpenId, botName },
+        botOpenIdSource: { kind: "prefetched", botOpenId },
+        statusSink: opts.statusSink,
+        runStateMachine: opts.runStateMachine,
       }),
     );
   }

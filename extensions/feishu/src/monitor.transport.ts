@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/feishu";
 import { createFeishuWSClient } from "./client.js";
 import {
-  botNames,
   botOpenIds,
   FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
   FEISHU_WEBHOOK_MAX_BODY_BYTES,
@@ -18,12 +17,20 @@ import {
 } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
+type FeishuGatewayStatusPatch = {
+  connected?: boolean;
+  lastEventAt?: number | null;
+};
+
+type FeishuGatewayStatusSink = (patch: FeishuGatewayStatusPatch) => void;
+
 export type MonitorTransportParams = {
   account: ResolvedFeishuAccount;
   accountId: string;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   eventDispatcher: Lark.EventDispatcher;
+  statusSink?: FeishuGatewayStatusSink;
 };
 
 export async function monitorWebSocket({
@@ -32,6 +39,7 @@ export async function monitorWebSocket({
   runtime,
   abortSignal,
   eventDispatcher,
+  statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
   log(`feishu[${accountId}]: starting WebSocket connection...`);
@@ -43,7 +51,7 @@ export async function monitorWebSocket({
     const cleanup = () => {
       wsClients.delete(accountId);
       botOpenIds.delete(accountId);
-      botNames.delete(accountId);
+      statusSink?.({ connected: false });
     };
 
     const handleAbort = () => {
@@ -62,6 +70,7 @@ export async function monitorWebSocket({
 
     try {
       wsClient.start({ eventDispatcher });
+      statusSink?.({ connected: true, lastEventAt: Date.now() });
       log(`feishu[${accountId}]: WebSocket client started`);
     } catch (err) {
       cleanup();
@@ -77,6 +86,7 @@ export async function monitorWebhook({
   runtime,
   abortSignal,
   eventDispatcher,
+  statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -136,7 +146,7 @@ export async function monitorWebhook({
       server.close();
       httpServers.delete(accountId);
       botOpenIds.delete(accountId);
-      botNames.delete(accountId);
+      statusSink?.({ connected: false });
     };
 
     const handleAbort = () => {
@@ -155,10 +165,12 @@ export async function monitorWebhook({
 
     server.listen(port, host, () => {
       log(`feishu[${accountId}]: Webhook server listening on ${host}:${port}`);
+      statusSink?.({ connected: true, lastEventAt: Date.now() });
     });
 
     server.on("error", (err) => {
       error(`feishu[${accountId}]: Webhook server error: ${err}`);
+      statusSink?.({ connected: false });
       abortSignal?.removeEventListener("abort", handleAbort);
       reject(err);
     });
