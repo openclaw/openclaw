@@ -419,28 +419,40 @@ describe("cron cli", () => {
     const nowMs = Date.parse("2026-03-06T11:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(nowMs);
-    callGatewayFromCli.mockResolvedValueOnce({ enabled: true } as never).mockResolvedValueOnce({
-      id: "job-1",
-      state: {
-        nextRunAtMs: nowMs + 26 * 60 * 60 * 1000,
-        lastRunAtMs: nowMs - 2 * 60 * 60 * 1000,
-      },
-    } as never);
 
-    const program = buildProgram();
-    await program.parseAsync(["cron", "edit", "job-1", "--name", "Updated"], { from: "user" });
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.status") {
+        return { enabled: true };
+      }
+      if (method === "cron.update") {
+        return {
+          id: "job-1",
+          state: {
+            nextRunAtMs: nowMs + 26 * 60 * 60 * 1000,
+            lastRunAtMs: nowMs - 2 * 60 * 60 * 1000,
+          },
+        };
+      }
+      return { ok: true };
+    });
 
-    const runtimeModule = await import("../runtime.js");
-    const runtime = runtimeModule.defaultRuntime as unknown as {
-      log: { mock: { calls: unknown[][] } };
-    };
-    const output = JSON.stringify(runtime.log.mock.calls.at(-1)?.[0] ?? "");
-    expect(output).toContain('"nextRunAtDateTime": "2026-03-07 13:00:00Z"');
-    expect(output).toContain('"lastRunAtDateTime": "2026-03-06 09:00:00Z"');
-    expect(output).toContain('"nextRunInRemainingTime": "in 1d"');
-    expect(output).toContain('"lastRunElapsedTime": "2h ago"');
+    try {
+      const program = buildProgram();
+      await program.parseAsync(["cron", "edit", "job-1", "--name", "Updated"], { from: "user" });
 
-    vi.useRealTimers();
+      const runtimeModule = await import("../runtime.js");
+      const runtime = runtimeModule.defaultRuntime as unknown as {
+        log: { mock: { calls: unknown[][] } };
+      };
+      const outputArg = runtime.log.mock.calls.at(-1)?.[0] ?? "";
+      const output = typeof outputArg === "string" ? outputArg : JSON.stringify(outputArg);
+      expect(output).toContain('"nextRunAtDateTime": "2026-03-07 13:00:00Z"');
+      expect(output).toContain('"lastRunAtDateTime": "2026-03-06 09:00:00Z"');
+      expect(output).toContain('"nextRunInRemainingTime": "in 1d"');
+      expect(output).toContain('"lastRunElapsedTime": "2h ago"');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("allows model/thinking updates without --message", async () => {
