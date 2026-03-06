@@ -33,14 +33,24 @@ const TRUSTED_BASE = new Set([
   "system",
   "builtin\\administrators",
   "creator owner",
-  // Localized SYSTEM account names (French, German, Spanish, Portuguese)
-  "autorite nt\\système",
-  "nt-autorität\\system",
-  "autoridad nt\\system",
-  "autoridade nt\\system",
+  // Localized SYSTEM account names
+  "autorite nt\\système", // French
+  "nt-autorität\\system", // German
+  "autoridad nt\\system", // Spanish
+  "autoridade nt\\system", // Portuguese
+  "nt authority\\система", // Russian
 ]);
 const WORLD_SUFFIXES = ["\\users", "\\authenticated users"];
-const TRUSTED_SUFFIXES = ["\\administrators", "\\system", "\\système"];
+const TRUSTED_SUFFIXES = [
+  "\\administrators",
+  "\\system",
+  "\\système", // French
+  "\\система", // Russian
+  "\\sistema", // Italian / Spanish / Portuguese
+  "\\systeem", // Dutch
+  "\\sistem", // Turkish / Romanian
+  "\\systém", // Czech
+];
 
 const SID_RE = /^s-\d+-\d+(-\d+)+$/i;
 const TRUSTED_SIDS = new Set([

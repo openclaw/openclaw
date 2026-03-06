@@ -492,6 +492,32 @@ Successfully processed 1 files`;
       expectTrustedOnly([aclEntry({ principal: "AUTORIDAD NT\\SYSTEM" })]);
     });
 
+    it("classifies Russian SYSTEM (NT AUTHORITY\\СИСТЕМА) as trusted", () => {
+      expectTrustedOnly([
+        aclEntry({ principal: "NT AUTHORITY\\\u0421\u0418\u0421\u0422\u0415\u041c\u0410" }),
+      ]);
+    });
+
+    it("classifies Italian/Spanish SYSTEM via \\sistema suffix as trusted", () => {
+      expectTrustedOnly([aclEntry({ principal: "NT AUTHORITY\\sistema" })]);
+    });
+
+    it("classifies Dutch SYSTEM via \\systeem suffix as trusted", () => {
+      expectTrustedOnly([aclEntry({ principal: "NT AUTHORITY\\systeem" })]);
+    });
+
+    it("Russian Windows full scenario: user + СИСТЕМА only → no untrusted", () => {
+      const entries: WindowsAclEntry[] = [
+        aclEntry({ principal: "MYPC\\karte" }),
+        aclEntry({ principal: "NT AUTHORITY\\\u0421\u0418\u0421\u0422\u0415\u041c\u0410" }),
+      ];
+      const env = { USERNAME: "karte", USERDOMAIN: "MYPC" };
+      const { trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, env);
+      expect(trusted).toHaveLength(2);
+      expect(untrustedWorld).toHaveLength(0);
+      expect(untrustedGroup).toHaveLength(0);
+    });
+
     it("French Windows full scenario: user + Système only → no untrusted", () => {
       const entries: WindowsAclEntry[] = [
         aclEntry({ principal: "MYPC\\Pierre" }),
