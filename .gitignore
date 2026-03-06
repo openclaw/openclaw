@@ -121,3 +121,6 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+.env.bak.*
+docker-compose.yml.bak.*
+.gitignore.bak.*
