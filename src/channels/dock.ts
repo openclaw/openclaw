@@ -520,6 +520,9 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveDefaultTo: ({ cfg, accountId }) =>
         resolveSignalAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
     },
+    mentions: {
+      stripPatterns: () => ["\uFFFC"],
+    },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
         buildSignalThreadToolContext({ context, hasRepliedRef }),

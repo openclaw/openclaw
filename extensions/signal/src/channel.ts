@@ -110,6 +110,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
+  mentions: {
+    stripPatterns: () => ["\uFFFC"],
+  },
   reload: { configPrefixes: ["channels.signal"] },
   configSchema: buildChannelConfigSchema(SignalConfigSchema),
   config: {
