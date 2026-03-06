@@ -362,11 +362,20 @@ export default function register(api: any) {
       lastUpdatedAt: number;
     }
   >();
+  const outboundSeenAtByChat = new Map<string, number>();
+  const lastVoiceSentByChat = new Map<string, { text: string; at: number }>();
 
   function extractChatIdFromTo(to: string): string | null {
-    // Accept: "850..." or "telegram:850..." or "telegram:direct:850..." etc.
-    const m = String(to).match(/(\d+)$/);
+    // Accept: "850..." / "-100..." or "telegram:850..." / "telegram:-100..." etc.
+    const m = String(to).match(/(-?\d+)$/);
     return m?.[1] ?? null;
+  }
+
+  function isLikelyGroupTarget(to: string, chatId: string | null): boolean {
+    if (String(to).includes(":group:")) return true;
+    if (!chatId) return false;
+    // Telegram groups/supergroups are negative chat ids (commonly -100...)
+    return chatId.startsWith("-");
   }
 
   function resolveSendMessageTelegram() {
@@ -390,6 +399,7 @@ export default function register(api: any) {
     maxChars: number;
     textLen: number;
     tipText: string;
+    accountId?: string;
   }) {
     // Avoid loops and avoid spamming when multiple hooks fire.
     const now = nowMs();
@@ -401,7 +411,9 @@ export default function register(api: any) {
 
     try {
       const sendMessageTelegram = resolveSendMessageTelegram();
-      await sendMessageTelegram(params.to, tipText, {});
+      await sendMessageTelegram(params.to, tipText, {
+        ...(params.accountId ? { accountId: params.accountId } : {}),
+      });
       logger.info?.(
         `[${PLUGIN_ID}] too-long tip sent (chatId=${params.chatId} len=${params.textLen} max=${params.maxChars})`,
       );
@@ -416,6 +428,7 @@ export default function register(api: any) {
     to: string;
     text: string;
     maxChars: number;
+    accountId?: string;
   }) {
     const textRaw = (params.text ?? "").trim();
     const text = stripMarkdownForTTS(textRaw);
@@ -503,6 +516,7 @@ export default function register(api: any) {
       await sendMessageTelegram(params.to, "", {
         mediaUrl: oggPath,
         asVoice: true,
+        ...(params.accountId ? { accountId: params.accountId } : {}),
       });
     } finally {
       // Best-effort cleanup to avoid unbounded media growth.
@@ -525,13 +539,13 @@ export default function register(api: any) {
 
       const pluginCfg = getPluginConfig(api);
 
-      // Only act on configured outbound channels that succeeded (for sent phase).
+      // Only act on configured outbound channels after successful delivery.
       if (!isChannelAllowed(pluginCfg, channelId)) return;
-      if (phase === "sent" && !event?.success) return;
-      if (pluginCfg.access.directOnly && String(to).includes(":group:")) return;
+      if (!event?.success) return;
 
       const chatId = extractChatIdFromTo(to);
       if (!chatId) return;
+      if (pluginCfg.access.directOnly && isLikelyGroupTarget(to, chatId)) return;
       if (!isUserAllowed(pluginCfg, chatId)) return;
 
       const sessionKey = `agent:main:telegram:direct:${chatId}`;
@@ -555,11 +569,14 @@ export default function register(api: any) {
           maxChars,
           textLen: trimmed.length,
           tipText: pluginCfg.tooLongTip,
+          accountId: String(ctx?.accountId ?? "") || undefined,
         });
         return;
       }
 
       const key = chatId;
+      outboundSeenAtByChat.set(key, nowMs());
+
       const prev = pendingByChat.get(key);
       if (prev) clearTimeout(prev.timer);
 
@@ -568,7 +585,18 @@ export default function register(api: any) {
         if (!cur) return;
         pendingByChat.delete(key);
         try {
-          await synthAndSendVoice({ to, text: cur.lastText, maxChars });
+          const lastSent = lastVoiceSentByChat.get(key);
+          if (lastSent && lastSent.text === cur.lastText && nowMs() - lastSent.at < 10_000) {
+            return;
+          }
+
+          await synthAndSendVoice({
+            to,
+            text: cur.lastText,
+            maxChars,
+            accountId: String(ctx?.accountId ?? "") || undefined,
+          });
+          lastVoiceSentByChat.set(key, { text: cur.lastText, at: nowMs() });
           logger.info?.(`[${PLUGIN_ID}] voice-sent ok (to=${to})`);
         } catch (err: any) {
           logger.warn?.(
@@ -589,12 +617,8 @@ export default function register(api: any) {
     }
   }
 
-  // NOTE: In some gateway paths, outbound message hooks may not fire for agent replies.
-  // Keep them registered (useful for message tool sends), but also add an agent_end fallback.
-  api.on("message_sending", async (event: any, ctx: any) => {
-    await handleOutboundHook("sending", event, ctx);
-  });
-
+  // NOTE: Prefer message_sent (post-delivery) to avoid speaking messages that later fail/cancel.
+  // Keep agent_end as a guarded fallback for paths where outbound hooks may not fire.
   api.on("message_sent", async (event: any, ctx: any) => {
     await handleOutboundHook("sent", event, ctx);
   });
@@ -602,6 +626,8 @@ export default function register(api: any) {
   api.on("agent_end", async (event: any, ctx: any) => {
     try {
       const pluginCfg = getPluginConfig(api);
+      if (event?.success === false) return;
+
       const sessionKey = String(ctx?.sessionKey ?? "");
       if (!isTelegramDirectSessionKey(sessionKey)) return;
       if (pluginCfg.access.directOnly && !sessionKey.includes(":direct:")) return;
@@ -609,6 +635,10 @@ export default function register(api: any) {
       const chatId = sessionKeyToChatId(sessionKey);
       if (!chatId) return;
       if (!isUserAllowed(pluginCfg, chatId)) return;
+
+      // If outbound hook already observed this chat very recently, skip fallback to avoid duplicate voice sends.
+      const outboundSeenAt = outboundSeenAtByChat.get(chatId) ?? 0;
+      if (nowMs() - outboundSeenAt < 4_000) return;
 
       const entry = await getBySessionKey(sessionKey);
       const enabled = entry?.enabled ?? pluginCfg.enabledByDefault;
@@ -670,6 +700,7 @@ export default function register(api: any) {
           maxChars,
           textLen: trimmed.length,
           tipText: pluginCfg.tooLongTip,
+          accountId: String(ctx?.accountId ?? "") || undefined,
         });
         return;
       }
@@ -684,7 +715,18 @@ export default function register(api: any) {
         if (!cur) return;
         pendingByChat.delete(key);
         try {
-          await synthAndSendVoice({ to: chatId, text: cur.lastText, maxChars });
+          const lastSent = lastVoiceSentByChat.get(key);
+          if (lastSent && lastSent.text === cur.lastText && nowMs() - lastSent.at < 10_000) {
+            return;
+          }
+
+          await synthAndSendVoice({
+            to: chatId,
+            text: cur.lastText,
+            maxChars,
+            accountId: String(ctx?.accountId ?? "") || undefined,
+          });
+          lastVoiceSentByChat.set(key, { text: cur.lastText, at: nowMs() });
           logger.info?.(
             `[${PLUGIN_ID}] voice-sent ok (agent_end to=${chatId})`,
           );
