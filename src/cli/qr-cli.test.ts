@@ -293,6 +293,30 @@ describe("registerQrCli", () => {
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
+  it("fails when token and password SecretRefs are both configured with inferred mode", async () => {
+    vi.stubEnv("QR_INFERRED_GATEWAY_TOKEN", "inferred-token");
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      gateway: {
+        bind: "custom",
+        customBindHost: "gateway.local",
+        auth: {
+          token: { source: "env", provider: "default", id: "QR_INFERRED_GATEWAY_TOKEN" },
+          password: { source: "env", provider: "default", id: "MISSING_LOCAL_GATEWAY_PASSWORD" },
+        },
+      },
+    });
+
+    await expectQrExit(["--setup-code-only"]);
+    const output = runtime.error.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(output).toContain("gateway.auth.mode is unset");
+    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+  });
+
   it("exits with error when gateway config is not pairable", async () => {
     loadConfig.mockReturnValue({
       gateway: {

@@ -76,6 +76,50 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.sanitizeMode).toBe("full");
   });
 
+  it("preserves thinking signatures for Anthropic provider (#32526)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "anthropic",
+      modelId: "claude-opus-4-5",
+      modelApi: "anthropic-messages",
+    });
+    expect(policy.preserveSignatures).toBe(true);
+  });
+
+  it("preserves thinking signatures for Bedrock Anthropic (#32526)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      modelApi: "bedrock-converse-stream",
+    });
+    expect(policy.preserveSignatures).toBe(true);
+  });
+
+  it("does not preserve signatures for Google provider (#32526)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "google",
+      modelId: "gemini-2.0-flash",
+      modelApi: "google-generative-ai",
+    });
+    expect(policy.preserveSignatures).toBe(false);
+  });
+
+  it("does not preserve signatures for OpenAI provider (#32526)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "gpt-4o",
+      modelApi: "openai",
+    });
+    expect(policy.preserveSignatures).toBe(false);
+  });
+
+  it("does not preserve signatures for Mistral provider (#32526)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "mistral",
+      modelId: "mistral-large-latest",
+    });
+    expect(policy.preserveSignatures).toBe(false);
+  });
+
   it("keeps OpenRouter on its existing turn-validation path", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openrouter",

@@ -4,7 +4,6 @@ const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests|429/,
     "model_cooldown",
-    "cooling down",
     "exceeded your current quota",
     "resource has been exhausted",
     "quota exceeded",
@@ -16,12 +15,16 @@ const ERROR_PATTERNS = {
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
     "overloaded",
-    "service unavailable",
+    // Match "service unavailable" only when combined with an explicit overload
+    // indicator — a generic 503 from a proxy/CDN should not be classified as
+    // provider-overload (#32828).
+    /service[_ ]unavailable.*(?:overload|capacity|high[_ ]demand)|(?:overload|capacity|high[_ ]demand).*service[_ ]unavailable/i,
     "high demand",
   ],
   timeout: [
     "timeout",
     "timed out",
+    "service unavailable",
     "deadline exceeded",
     "context deadline exceeded",
     "connection error",
@@ -41,6 +44,7 @@ const ERROR_PATTERNS = {
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
     "payment required",
     "insufficient credits",
+    /insufficient[_ ]quota/i,
     "credit balance",
     "plans & billing",
     "insufficient balance",
