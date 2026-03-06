@@ -261,6 +261,24 @@ export function classifyFailoverReasonFromHttpStatus(
   }
 
   if (status === 402) {
+    // Some providers (e.g. Anthropic Claude Max plan) surface temporary
+    // usage/rate-limit failures as HTTP 402. Use a narrow matcher for
+    // temporary limits to avoid misclassifying billing failures (#30484).
+    if (message) {
+      const lower = message.toLowerCase();
+      // Temporary usage limit signals: retry language + usage/limit terminology
+      const hasTemporarySignal =
+        (lower.includes("try again") ||
+          lower.includes("retry") ||
+          lower.includes("temporary") ||
+          lower.includes("cooldown")) &&
+        (lower.includes("usage limit") ||
+          lower.includes("rate limit") ||
+          lower.includes("organization usage"));
+      if (hasTemporarySignal) {
+        return "rate_limit";
+      }
+    }
     return "billing";
   }
   if (status === 429) {
