@@ -24,18 +24,13 @@ type DaemonLifecycleOptions = {
 };
 
 type RestartPostCheckContext = {
+  serviceCommand?: Awaited<ReturnType<GatewayService["readCommand"]>>;
   json: boolean;
   stdout: Writable;
   warnings: string[];
   fail: (message: string, hints?: string[]) => void;
 };
-
-type RestartPreCheckContext = {
-  json: boolean;
-  stdout: Writable;
-  warnings: string[];
-  fail: (message: string, hints?: string[]) => void;
-};
+type RestartCheckContext = RestartPostCheckContext;
 
 async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
   if (process.platform !== "linux") {
@@ -259,7 +254,7 @@ export async function runServiceRestart(params: {
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
-  preRestartCheck?: (ctx: RestartPreCheckContext) => Promise<void>;
+  preRestartCheck?: (ctx: RestartCheckContext) => Promise<void>;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
@@ -286,11 +281,12 @@ export async function runServiceRestart(params: {
   }
 
   const warnings: string[] = [];
+  let serviceCommand: Awaited<ReturnType<GatewayService["readCommand"]>> | undefined;
   if (params.checkTokenDrift) {
     // Check for token drift before restart (service token vs config token)
     try {
-      const command = await params.service.readCommand(process.env);
-      const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
+      serviceCommand = await params.service.readCommand(process.env);
+      const serviceToken = serviceCommand?.environment?.OPENCLAW_GATEWAY_TOKEN;
       const cfg = loadConfig();
       const configToken = resolveGatewayCredentialsFromConfig({
         cfg,
@@ -324,11 +320,11 @@ export async function runServiceRestart(params: {
 
   try {
     if (params.preRestartCheck) {
-      await params.preRestartCheck({ json, stdout, warnings, fail });
+      await params.preRestartCheck({ json, stdout, warnings, fail, serviceCommand });
     }
     await params.service.restart({ env: process.env, stdout });
     if (params.postRestartCheck) {
-      await params.postRestartCheck({ json, stdout, warnings, fail });
+      await params.postRestartCheck({ json, stdout, warnings, fail, serviceCommand });
     }
     let restarted = true;
     try {

@@ -11,6 +11,7 @@ import {
   runServiceStop,
   runServiceUninstall,
 } from "./lifecycle-core.js";
+import { createNullWriter } from "./response.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -83,6 +84,7 @@ function areServiceEnvironmentsEqual(
 async function maybeRefreshLaunchAgentEnvironment(params: {
   service: ReturnType<typeof resolveGatewayService>;
   port: number;
+  command?: Awaited<ReturnType<ReturnType<typeof resolveGatewayService>["readCommand"]>>;
   json: boolean;
   warnings: string[];
 }): Promise<void> {
@@ -90,7 +92,8 @@ async function maybeRefreshLaunchAgentEnvironment(params: {
     return;
   }
 
-  const command = await params.service.readCommand(process.env).catch(() => null);
+  const command =
+    params.command ?? (await params.service.readCommand(process.env).catch(() => null));
   if (!command?.programArguments?.length) {
     return;
   }
@@ -110,11 +113,10 @@ async function maybeRefreshLaunchAgentEnvironment(params: {
     return;
   }
 
-  const silentStdout = { write: () => true } as unknown as NodeJS.WritableStream;
   try {
     await params.service.install({
       env: process.env as Record<string, string | undefined>,
-      stdout: silentStdout,
+      stdout: createNullWriter(),
       programArguments: command.programArguments,
       workingDirectory: command.workingDirectory,
       environment: refreshedEnvironment,
@@ -175,10 +177,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     renderStartHints: renderGatewayServiceStartHints,
     opts,
     checkTokenDrift: true,
-    preRestartCheck: async ({ warnings }) => {
+    preRestartCheck: async ({ warnings, serviceCommand }) => {
       await maybeRefreshLaunchAgentEnvironment({
         service,
         port: restartPort,
+        command: serviceCommand,
         json,
         warnings,
       });
