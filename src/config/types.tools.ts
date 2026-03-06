@@ -510,7 +510,7 @@ export type ToolsConfig = {
       exa?: {
         /** Exa API key (defaults to EXA_API_KEY env var). */
         apiKey?: SecretInput;
-        /** Default number of results from Exa (clamped to 1-100 by the tool schema). */
+        /** Default number of results from Exa (1-100). */
         numResults?: number;
         /** Exa search type: "auto" (default), "neural", or "keyword". */
         type?: "auto" | "neural" | "keyword";
