@@ -4,6 +4,9 @@ import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { normalizeModelCompat } from "./model-compat.js";
 import { normalizeProviderId } from "./model-selection.js";
 
+const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
+const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
+
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
@@ -48,7 +51,47 @@ function cloneFirstTemplateModel(params: {
   return undefined;
 }
 
-const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+const CODEX_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+
+function resolveOpenAICodexGpt54FallbackModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  const trimmedModelId = modelId.trim();
+  if (!CODEX_ELIGIBLE_PROVIDERS.has(normalizedProvider)) {
+    return undefined;
+  }
+  if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_54_MODEL_ID) {
+    return undefined;
+  }
+
+  for (const templateId of OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS) {
+    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
+    if (!template) {
+      continue;
+    }
+    return normalizeModelCompat({
+      ...template,
+      id: trimmedModelId,
+      name: trimmedModelId,
+    } as Model<Api>);
+  }
+
+  return normalizeModelCompat({
+    id: trimmedModelId,
+    name: trimmedModelId,
+    api: "openai-codex-responses",
+    provider: normalizedProvider,
+    baseUrl: "https://chatgpt.com/backend-api",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: DEFAULT_CONTEXT_TOKENS,
+    maxTokens: DEFAULT_CONTEXT_TOKENS,
+  } as Model<Api>);
+}
 
 function resolveOpenAICodexGpt53FallbackModel(
   provider: string,
@@ -57,7 +100,7 @@ function resolveOpenAICodexGpt53FallbackModel(
 ): Model<Api> | undefined {
   const normalizedProvider = normalizeProviderId(provider);
   const trimmedModelId = modelId.trim();
-  if (!CODEX_GPT53_ELIGIBLE_PROVIDERS.has(normalizedProvider)) {
+  if (!CODEX_ELIGIBLE_PROVIDERS.has(normalizedProvider)) {
     return undefined;
   }
   if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_53_MODEL_ID) {
@@ -248,6 +291,7 @@ export function resolveForwardCompatModel(
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   return (
+    resolveOpenAICodexGpt54FallbackModel(provider, modelId, modelRegistry) ??
     resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
