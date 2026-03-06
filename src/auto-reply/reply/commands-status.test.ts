@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { MsgContext } from "../templating.js";
 import { buildStatusReply } from "./commands-status.js";
 import { buildCommandContext } from "./commands.js";
 
@@ -31,7 +32,7 @@ describe("buildStatusReply", () => {
         CommandAuthorized: true,
         Provider: "whatsapp",
         Surface: "whatsapp",
-      } as any,
+      } as MsgContext,
       cfg,
       isGroup: false,
       triggerBodyNormalized: "/status",
