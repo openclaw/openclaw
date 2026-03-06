@@ -11,6 +11,7 @@ import {
   GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
   GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
   makeModel,
+  mockDiscoveredModel,
   mockGoogleGeminiCliFlashTemplateModel,
   mockGoogleGeminiCliProTemplateModel,
   mockOpenAICodexTemplateModel,
@@ -47,6 +48,38 @@ describe("pi embedded model e2e smoke", () => {
     const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"));
+  });
+
+  it("builds an openai forward-compat fallback for gpt-5.4", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.2",
+      templateModel: {
+        id: "gpt-5.2",
+        name: "GPT-5.2",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"] as const,
+        cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      },
+    });
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      contextWindow: 400000,
+      maxTokens: 128000,
+    });
   });
 
   it("keeps unknown-model errors for non-forward-compat IDs", () => {

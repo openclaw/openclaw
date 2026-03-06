@@ -35,7 +35,7 @@ describe("applyModelDefaults", () => {
         defaults: {
           models: {
             "anthropic/claude-opus-4-6": {},
-            "openai/gpt-5.2": {},
+            "openai/gpt-5.4": {},
           },
         },
       },
@@ -43,6 +43,22 @@ describe("applyModelDefaults", () => {
     const next = applyModelDefaults(cfg);
 
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBe("gpt");
+  });
+
+  it("keeps legacy gpt alias on gpt-5.2 when gpt-5.4 is absent", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.2": {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
     expect(next.agents?.defaults?.models?.["openai/gpt-5.2"]?.alias).toBe("gpt");
   });
 

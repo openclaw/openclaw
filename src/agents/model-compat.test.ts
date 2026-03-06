@@ -235,6 +235,10 @@ describe("normalizeModelCompat", () => {
 });
 
 describe("isModernModelRef", () => {
+  it("includes openai gpt-5.4 in modern selection", () => {
+    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(true);
+  });
+
   it("excludes opencode minimax variants from modern selection", () => {
     expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
     expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
@@ -247,6 +251,25 @@ describe("isModernModelRef", () => {
 });
 
 describe("resolveForwardCompatModel", () => {
+  it("resolves openai gpt-5.4 via gpt-5.2 template", () => {
+    const registry = createRegistry({
+      "openai/gpt-5.2": {
+        id: "gpt-5.2",
+        name: "gpt-5.2",
+        provider: "openai",
+        api: "openai-responses",
+        input: ["text", "image"],
+        reasoning: true,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+      } as Model<Api>,
+    });
+    const model = resolveForwardCompatModel("openai", "gpt-5.4", registry);
+    expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-5.4" });
+    expect(model?.api).toBe("openai-responses");
+  });
+
   it("resolves anthropic opus 4.6 via 4.5 template", () => {
     const registry = createRegistry({
       "anthropic/claude-opus-4-5": createTemplateModel("anthropic", "claude-opus-4-5"),

@@ -18,18 +18,18 @@ let defaultWarnState: WarnState = { warned: false };
 
 type AnthropicAuthDefaultsMode = "api_key" | "oauth";
 
-const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
+const DEFAULT_MODEL_ALIAS_TARGETS: Readonly<Record<string, readonly string[]>> = {
   // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
-  opus: "anthropic/claude-opus-4-6",
-  sonnet: "anthropic/claude-sonnet-4-6",
+  opus: ["anthropic/claude-opus-4-6"],
+  sonnet: ["anthropic/claude-sonnet-4-6"],
 
   // OpenAI
-  gpt: "openai/gpt-5.2",
-  "gpt-mini": "openai/gpt-5-mini",
+  gpt: ["openai/gpt-5.4", "openai/gpt-5.2"],
+  "gpt-mini": ["openai/gpt-5-mini"],
 
   // Google Gemini (3.x are preview ids in the catalog)
-  gemini: "google/gemini-3-pro-preview",
-  "gemini-flash": "google/gemini-3-flash-preview",
+  gemini: ["google/gemini-3-pro-preview"],
+  "gemini-flash": ["google/gemini-3-flash-preview"],
 };
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
@@ -119,7 +119,7 @@ function resolvePrimaryModelRef(raw?: string): string | null {
     return null;
   }
   const aliasKey = trimmed.toLowerCase();
-  return DEFAULT_MODEL_ALIASES[aliasKey] ?? trimmed;
+  return DEFAULT_MODEL_ALIAS_TARGETS[aliasKey]?.[0] ?? trimmed;
 }
 
 export type SessionDefaultsOptions = {
@@ -320,7 +320,11 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
     ...existingModels,
   };
 
-  for (const [alias, target] of Object.entries(DEFAULT_MODEL_ALIASES)) {
+  for (const [alias, targets] of Object.entries(DEFAULT_MODEL_ALIAS_TARGETS)) {
+    const target = targets.find((candidate) => Boolean(nextModels[candidate]));
+    if (!target) {
+      continue;
+    }
     const entry = nextModels[target];
     if (!entry) {
       continue;
