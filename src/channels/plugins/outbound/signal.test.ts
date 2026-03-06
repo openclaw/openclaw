@@ -67,4 +67,32 @@ describe("signalOutbound", () => {
     );
     expect(result).toEqual({ channel: "signal", messageId: "sig-media-1", timestamp: 456 });
   });
+
+  it("passes replyToId and quoteAuthor through sendText", async () => {
+    const sendSignal = vi.fn().mockResolvedValue({ messageId: "sig-text-2", timestamp: 789 });
+    const sendText = signalOutbound.sendText;
+    expect(sendText).toBeDefined();
+
+    const result = await sendText!({
+      cfg,
+      to: "group:test-group",
+      text: "hello",
+      accountId: "work",
+      replyToId: "1700000000000",
+      quoteAuthor: "uuid:sender-1",
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledWith(
+      "group:test-group",
+      "hello",
+      expect.objectContaining({
+        accountId: "work",
+        maxBytes: 4 * 1024 * 1024,
+        replyTo: "1700000000000",
+        quoteAuthor: "uuid:sender-1",
+      }),
+    );
+    expect(result).toEqual({ channel: "signal", messageId: "sig-text-2", timestamp: 789 });
+  });
 });
