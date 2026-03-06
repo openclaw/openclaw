@@ -208,6 +208,40 @@ export class CommonlyClient {
   }
 
   /**
+   * List public pods the agent can discover and potentially join
+   */
+  async listPods(limit = 20): Promise<unknown[]> {
+    const url = new URL(`${this.config.baseUrl}/api/agents/runtime/pods`);
+    url.searchParams.append('limit', limit.toString());
+
+    const res = await fetch(url.toString(), { headers: this.runtimeHeaders });
+    if (!res.ok) {
+      console.warn(`Failed to list pods: ${res.status}`);
+      return [];
+    }
+    const data = await res.json();
+    return data.pods || [];
+  }
+
+  /**
+   * Get recent posts in a pod with comment data
+   */
+  async getPosts(podId: string, limit = 5): Promise<unknown[]> {
+    const url = new URL(
+      `${this.config.baseUrl}/api/agents/runtime/pods/${podId}/posts`,
+    );
+    url.searchParams.append('limit', limit.toString());
+
+    const res = await fetch(url.toString(), { headers: this.runtimeHeaders });
+    if (!res.ok) {
+      console.warn(`Failed to get posts: ${res.status}`);
+      return [];
+    }
+    const data = await res.json();
+    return data.posts || [];
+  }
+
+  /**
    * Search pod memory and assets
    */
   async search(podId: string, query: string): Promise<unknown[]> {
@@ -290,6 +324,92 @@ export class CommonlyClient {
     }
     const data = await res.json();
     return data.summaries || [];
+  }
+
+  /**
+   * Create a new pod
+   */
+  async createPod(
+    name: string,
+    type: 'chat' | 'study' | 'games' | 'agent-ensemble' | 'agent-admin',
+    description?: string,
+  ): Promise<{ _id: string; name: string; type: string }> {
+    const res = await fetch(`${this.config.baseUrl}/api/agents/runtime/pods`, {
+      method: 'POST',
+      headers: this.runtimeHeaders,
+      body: JSON.stringify({ name, type, description }),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to create pod: ${res.status}`);
+    }
+    return res.json();
+  }
+
+  /**
+   * Create a post in a pod's feed
+   */
+  async createPost(
+    content: string,
+    options: {
+      podId: string;
+      category?: string;
+      tags?: string[];
+      sourceUrl?: string;
+    },
+  ): Promise<{ _id: string; content: string; podId: string }> {
+    const body: Record<string, unknown> = {
+      content,
+      podId: options.podId,
+      category: options.category || 'General',
+      tags: options.tags || [],
+    };
+    if (options.sourceUrl) {
+      body.source = { type: 'web', provider: 'web', url: options.sourceUrl };
+    }
+    const res = await fetch(`${this.config.baseUrl}/api/agents/runtime/posts`, {
+      method: 'POST',
+      headers: this.runtimeHeaders,
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`Failed to create post: ${res.status}`);
+    return res.json();
+  }
+
+  /**
+   * Read this agent's personal MEMORY.md (stored in backend, persistent across sessions)
+   */
+  async readAgentMemory(): Promise<{ content: string }> {
+    const res = await fetch(`${this.config.baseUrl}/api/agents/runtime/memory`, {
+      headers: this.runtimeHeaders,
+    });
+    if (!res.ok) throw new Error(`Failed to read agent memory: ${res.status}`);
+    return res.json();
+  }
+
+  /**
+   * Write this agent's personal MEMORY.md (overwrites full content)
+   */
+  async writeAgentMemory(content: string): Promise<void> {
+    const res = await fetch(`${this.config.baseUrl}/api/agents/runtime/memory`, {
+      method: 'PUT',
+      headers: this.runtimeHeaders,
+      body: JSON.stringify({ content }),
+    });
+    if (!res.ok) throw new Error(`Failed to write agent memory: ${res.status}`);
+  }
+
+  /**
+   * Self-install this agent into an agent-owned pod
+   */
+  async selfInstall(podId: string): Promise<{ message: string; podId: string; alreadyInstalled?: boolean }> {
+    const res = await fetch(`${this.config.baseUrl}/api/agents/runtime/pods/${podId}/self-install`, {
+      method: 'POST',
+      headers: this.runtimeHeaders,
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to self-install into pod: ${res.status}`);
+    }
+    return res.json();
   }
 
   /**
