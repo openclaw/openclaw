@@ -1,7 +1,7 @@
 import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverReason,
-  isAuthPermanentErrorMessage,
+  classifyFailoverReasonFromHttpStatus,
   isTimeoutErrorMessage,
   type FailoverReason,
 } from "./pi-embedded-helpers.js";
@@ -152,30 +152,10 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
 
   const status = getStatusCode(err);
-  if (status === 402) {
-    return "billing";
-  }
-  if (status === 429) {
-    return "rate_limit";
-  }
-  if (status === 401 || status === 403) {
-    const msg = getErrorMessage(err);
-    if (msg && isAuthPermanentErrorMessage(msg)) {
-      return "auth_permanent";
-    }
-    return "auth";
-  }
-  if (status === 408) {
-    return "timeout";
-  }
-  if (status === 502 || status === 503 || status === 504) {
-    return "timeout";
-  }
-  if (status === 529) {
-    return "rate_limit";
-  }
-  if (status === 400) {
-    return "format";
+  const message = getErrorMessage(err);
+  const statusReason = classifyFailoverReasonFromHttpStatus(status, message);
+  if (statusReason) {
+    return statusReason;
   }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
@@ -197,8 +177,6 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   if (isTimeoutError(err)) {
     return "timeout";
   }
-
-  const message = getErrorMessage(err);
   if (!message) {
     return null;
   }

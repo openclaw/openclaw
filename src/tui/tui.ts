@@ -203,9 +203,9 @@ export function resolveTuiSessionKey(params: {
     return trimmed;
   }
   if (trimmed.startsWith("agent:")) {
-    return trimmed;
+    return trimmed.toLowerCase();
   }
-  return `agent:${params.currentAgentId}:${trimmed}`;
+  return `agent:${params.currentAgentId}:${trimmed.toLowerCase()}`;
 }
 
 export function resolveGatewayDisconnectState(reason?: string): {
@@ -471,7 +471,7 @@ export async function runTui(opts: TuiOptions) {
     localRunIds.clear();
   };
 
-  const client = new GatewayChatClient({
+  const client = await GatewayChatClient.connect({
     url: opts.url,
     token: opts.token,
     password: opts.password,

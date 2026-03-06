@@ -10,6 +10,7 @@ import {
   DiscordConfigSchema,
   formatPairingApproveHint,
   getChatChannelMeta,
+  inspectDiscordAccount,
   listDiscordAccountIds,
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -19,6 +20,8 @@ import {
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
   PAIRING_APPROVED_MESSAGE,
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromCredentialStatuses,
   resolveDiscordAccount,
   resolveDefaultDiscordAccountId,
   resolveDiscordGroupRequireMention,
@@ -80,6 +83,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   config: {
     listAccountIds: (cfg) => listDiscordAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
+    inspectAccount: (cfg, accountId) => inspectDiscordAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultDiscordAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
@@ -302,10 +306,11 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     textChunkLimit: 2000,
     pollMaxOptions: 10,
     resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
-    sendText: async ({ to, text, accountId, deps, replyToId, silent }) => {
+    sendText: async ({ cfg, to, text, accountId, deps, replyToId, silent }) => {
       const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
+        cfg,
         replyTo: replyToId ?? undefined,
         accountId: accountId ?? undefined,
         silent: silent ?? undefined,
@@ -313,6 +318,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       return { channel: "discord", ...result };
     },
     sendMedia: async ({
+      cfg,
       to,
       text,
       mediaUrl,
@@ -325,6 +331,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
+        cfg,
         mediaUrl,
         mediaLocalRoots,
         replyTo: replyToId ?? undefined,
@@ -333,8 +340,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       });
       return { channel: "discord", ...result };
     },
-    sendPoll: async ({ to, poll, accountId, silent }) =>
+    sendPoll: async ({ cfg, to, poll, accountId, silent }) =>
       await getDiscordRuntime().channel.discord.sendPollDiscord(to, poll, {
+        cfg,
         accountId: accountId ?? undefined,
         silent: silent ?? undefined,
       }),
@@ -386,7 +394,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       return { ...audit, unresolvedChannels };
     },
     buildAccountSnapshot: ({ account, runtime, probe, audit }) => {
-      const configured = Boolean(account.token?.trim());
+      const configured =
+        resolveConfiguredFromCredentialStatuses(account) ?? Boolean(account.token?.trim());
       const app = runtime?.application ?? (probe as { application?: unknown })?.application;
       const bot = runtime?.bot ?? (probe as { bot?: unknown })?.bot;
       return {
@@ -394,7 +403,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         name: account.name,
         enabled: account.enabled,
         configured,
-        tokenSource: account.tokenSource,
+        ...projectCredentialSnapshotFields(account),
         running: runtime?.running ?? false,
         lastStartAt: runtime?.lastStartAt ?? null,
         lastStopAt: runtime?.lastStopAt ?? null,

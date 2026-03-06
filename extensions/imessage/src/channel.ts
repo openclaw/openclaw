@@ -69,6 +69,7 @@ async function sendIMessageOutbound(params: {
     accountId: params.accountId,
   });
   return await send(params.to, params.text, {
+    config: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     maxBytes,

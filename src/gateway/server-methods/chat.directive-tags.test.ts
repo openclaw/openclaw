@@ -4,12 +4,13 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { GATEWAY_CLIENT_CAPS } from "../protocol/client-info.js";
+import { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
   transcriptPath: "",
   sessionId: "sess-1",
+  mainSessionKey: "main",
   finalText: "[[reply_to_current]]",
   triggerAgentRunStart: false,
   agentRunId: "run-agent-1",
@@ -31,7 +32,11 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   return {
     ...original,
     loadSessionEntry: (rawKey: string) => ({
-      cfg: {},
+      cfg: {
+        session: {
+          mainKey: mockState.mainSessionKey,
+        },
+      },
       storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
       entry: {
         sessionId: mockState.sessionId,
@@ -148,15 +153,25 @@ async function runNonStreamingChatSend(params: {
   idempotencyKey: string;
   message?: string;
   sessionKey?: string;
+  deliver?: boolean;
   client?: unknown;
   expectBroadcast?: boolean;
 }) {
+  const sendParams: {
+    sessionKey: string;
+    message: string;
+    idempotencyKey: string;
+    deliver?: boolean;
+  } = {
+    sessionKey: params.sessionKey ?? "main",
+    message: params.message ?? "hello",
+    idempotencyKey: params.idempotencyKey,
+  };
+  if (typeof params.deliver === "boolean") {
+    sendParams.deliver = params.deliver;
+  }
   await chatHandlers["chat.send"]({
-    params: {
-      sessionKey: params.sessionKey ?? "main",
-      message: params.message ?? "hello",
-      idempotencyKey: params.idempotencyKey,
-    },
+    params: sendParams,
     respond: params.respond as unknown as Parameters<
       (typeof chatHandlers)["chat.send"]
     >[0]["respond"],
@@ -190,6 +205,7 @@ async function runNonStreamingChatSend(params: {
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   afterEach(() => {
     mockState.finalText = "[[reply_to_current]]";
+    mockState.mainSessionKey = "main";
     mockState.triggerAgentRunStart = false;
     mockState.agentRunId = "run-agent-1";
     mockState.sessionEntry = {};
@@ -369,6 +385,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-origin-routing",
       sessionKey: "agent:main:telegram:direct:6812765697",
+      deliver: true,
       expectBroadcast: false,
     });
 
@@ -376,6 +393,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.objectContaining({
         OriginatingChannel: "telegram",
         OriginatingTo: "telegram:6812765697",
+        ExplicitDeliverRoute: true,
         AccountId: "default",
         MessageThreadId: 42,
       }),
@@ -403,6 +421,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-feishu-origin-routing",
       sessionKey: "agent:main:feishu:direct:ou_feishu_direct_123",
+      deliver: true,
       expectBroadcast: false,
     });
 
@@ -436,6 +455,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-per-account-channel-peer-routing",
       sessionKey: "agent:main:telegram:account-a:direct:6812765697",
+      deliver: true,
       expectBroadcast: false,
     });
 
@@ -469,6 +489,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-legacy-channel-peer-routing",
       sessionKey: "agent:main:telegram:6812765697",
+      deliver: true,
       expectBroadcast: false,
     });
 
@@ -504,6 +525,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-legacy-thread-channel-peer-routing",
       sessionKey: "agent:main:telegram:6812765697:thread:42",
+      deliver: true,
       expectBroadcast: false,
     });
 
@@ -545,7 +567,92 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.objectContaining({
         OriginatingChannel: "webchat",
         OriginatingTo: undefined,
+        ExplicitDeliverRoute: false,
         AccountId: undefined,
+      }),
+    );
+  });
+
+  it("chat.send does not inherit external delivery context for UI clients on main sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-main-ui-routes-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "whatsapp:+8613800138000",
+        accountId: "default",
+      },
+      lastChannel: "whatsapp",
+      lastTo: "whatsapp:+8613800138000",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-main-ui-routes",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.UI,
+            id: "openclaw-tui",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:main",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+      }),
+    );
+  });
+
+  it("chat.send inherits external delivery context for CLI clients on configured main sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-config-main-cli-routes-");
+    mockState.mainSessionKey = "work";
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "whatsapp:+8613800138000",
+        accountId: "default",
+      },
+      lastChannel: "whatsapp",
+      lastTo: "whatsapp:+8613800138000",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-config-main-cli-routes",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.CLI,
+            id: "cli",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:work",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "whatsapp:+8613800138000",
+        AccountId: "default",
       }),
     );
   });
@@ -573,6 +680,40 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       // Keep a second custom scope token so legacy-shape detection is exercised.
       // "agent:main:work" only yields one rest token and does not hit that path.
       sessionKey: "agent:main:work:ticket-123",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+      }),
+    );
+  });
+
+  it("chat.send keeps replies on the internal surface when deliver is not enabled", async () => {
+    createTranscriptFixture("openclaw-chat-send-no-deliver-internal-surface-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "discord",
+        to: "user:1234567890",
+        accountId: "default",
+      },
+      lastChannel: "discord",
+      lastTo: "user:1234567890",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-no-deliver-internal-surface",
+      sessionKey: "agent:main:discord:direct:1234567890",
+      deliver: false,
       expectBroadcast: false,
     });
 

@@ -113,4 +113,12 @@ export type RunEmbeddedPiAgentParams = {
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
+  /**
+   * Allow a single run attempt even when all auth profiles are in cooldown,
+   * but only for inferred `rate_limit` cooldowns.
+   *
+   * This is used by model fallback when trying sibling models on providers
+   * where rate limits are often model-scoped.
+   */
+  allowRateLimitCooldownProbe?: boolean;
 };
