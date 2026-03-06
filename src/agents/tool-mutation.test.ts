@@ -65,6 +65,48 @@ describe("tool mutation helpers", () => {
     ).toBe(false);
   });
 
+  it("uses file_path (snake_case) as stable target for edit fingerprints", () => {
+    // When the model uses file_path instead of path, the fingerprint should
+    // still capture a stable target so that a retry on the same file matches.
+    const failed = buildToolActionFingerprint("edit", {
+      file_path: "/src/app.ts",
+      oldText: "wrong",
+      newText: "right",
+    });
+    const retried = buildToolActionFingerprint("edit", {
+      file_path: "/src/app.ts",
+      oldText: "correct old text",
+      newText: "right",
+    });
+    expect(failed).toBeDefined();
+    expect(retried).toBeDefined();
+    expect(failed).toBe(retried);
+    expect(failed).toContain("file_path=/src/app.ts");
+    expect(failed).not.toContain("meta=");
+  });
+
+  it("clears lastToolError when edit retry succeeds on same file_path", () => {
+    const failedState = buildToolMutationState("edit", { file_path: "/src/app.ts", oldText: "a" });
+    const retryState = buildToolMutationState("edit", {
+      file_path: "/src/app.ts",
+      oldText: "correct",
+    });
+    expect(failedState.mutatingAction).toBe(true);
+    expect(retryState.mutatingAction).toBe(true);
+    expect(
+      isSameToolMutationAction(
+        {
+          toolName: "edit",
+          actionFingerprint: failedState.actionFingerprint,
+        },
+        {
+          toolName: "edit",
+          actionFingerprint: retryState.actionFingerprint,
+        },
+      ),
+    ).toBe(true);
+  });
+
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
     expect(isLikelyMutatingToolName("sessions_send")).toBe(true);
     expect(isLikelyMutatingToolName("browser_actions")).toBe(true);
