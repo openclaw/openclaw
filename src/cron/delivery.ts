@@ -48,7 +48,7 @@ function normalizeAccountId(value: unknown): string | undefined {
 }
 
 export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
-  const payload = job.payload.kind === "agentTurn" ? job.payload : null;
+  const payload = job.payload?.kind === "agentTurn" ? job.payload : null;
   const delivery = job.delivery;
   const hasDelivery = delivery && typeof delivery === "object";
   const rawMode = hasDelivery ? (delivery as { mode?: unknown }).mode : undefined;

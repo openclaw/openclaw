@@ -149,14 +149,36 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   return delta >= 0 ? `in ${label}` : `${label} ago`;
 };
 
-const formatSchedule = (schedule: CronSchedule) => {
-  if (schedule.kind === "at") {
-    return `at ${formatIsoMinute(schedule.at)}`;
+const isAtSchedule = (schedule: unknown): schedule is Extract<CronSchedule, { kind: "at" }> =>
+  (schedule as { kind?: unknown } | null | undefined)?.kind === "at";
+
+const isEverySchedule = (schedule: unknown): schedule is Extract<CronSchedule, { kind: "every" }> =>
+  (schedule as { kind?: unknown } | null | undefined)?.kind === "every";
+
+const isCronSchedule = (schedule: unknown): schedule is Extract<CronSchedule, { kind: "cron" }> =>
+  (schedule as { kind?: unknown } | null | undefined)?.kind === "cron";
+
+const isAgentTurnPayload = (
+  payload: CronJob["payload"] | undefined,
+): payload is Extract<CronJob["payload"], { kind: "agentTurn" }> => payload?.kind === "agentTurn";
+
+const formatSchedule = (schedule: CronSchedule | undefined) => {
+  if (isAtSchedule(schedule)) {
+    const at = typeof schedule.at === "string" ? schedule.at : "";
+    return at ? `at ${formatIsoMinute(at)}` : "at -";
   }
-  if (schedule.kind === "every") {
-    return `every ${formatDurationHuman(schedule.everyMs)}`;
+  if (isEverySchedule(schedule)) {
+    const everyMs = typeof schedule.everyMs === "number" ? schedule.everyMs : null;
+    return everyMs && Number.isFinite(everyMs)
+      ? `every ${formatDurationHuman(everyMs)}`
+      : "every -";
   }
-  const base = schedule.tz ? `cron ${schedule.expr} @ ${schedule.tz}` : `cron ${schedule.expr}`;
+  if (!isCronSchedule(schedule)) {
+    return "invalid";
+  }
+  const expr = typeof schedule.expr === "string" && schedule.expr.trim() ? schedule.expr : "?";
+  const tz = typeof schedule.tz === "string" && schedule.tz.trim() ? schedule.tz : undefined;
+  const base = tz ? `cron ${expr} @ ${tz}` : `cron ${expr}`;
   const staggerMs = resolveCronStaggerMs(schedule);
   if (staggerMs <= 0) {
     return `${base} (exact)`;
@@ -165,13 +187,14 @@ const formatSchedule = (schedule: CronSchedule) => {
 };
 
 const formatStatus = (job: CronJob) => {
+  const state = job.state ?? {};
   if (!job.enabled) {
     return "disabled";
   }
-  if (job.state.runningAtMs) {
+  if (state.runningAtMs) {
     return "running";
   }
-  return job.state.lastStatus ?? "idle";
+  return state.lastStatus ?? "idle";
 };
 
 export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
@@ -197,6 +220,8 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
   const now = Date.now();
 
   for (const job of jobs) {
+    const state = job.state ?? {};
+    const agentPayload = isAgentTurnPayload(job.payload) ? job.payload : undefined;
     const idLabel = pad(job.id, CRON_ID_PAD);
     const nameLabel = pad(truncate(job.name, CRON_NAME_PAD), CRON_NAME_PAD);
     const scheduleLabel = pad(
@@ -204,21 +229,15 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
       CRON_SCHEDULE_PAD,
     );
     const nextLabel = pad(
-      job.enabled ? formatRelative(job.state.nextRunAtMs, now) : "-",
+      job.enabled ? formatRelative(state.nextRunAtMs, now) : "-",
       CRON_NEXT_PAD,
     );
-    const lastLabel = pad(formatRelative(job.state.lastRunAtMs, now), CRON_LAST_PAD);
+    const lastLabel = pad(formatRelative(state.lastRunAtMs, now), CRON_LAST_PAD);
     const statusRaw = formatStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
-    const modelLabel = pad(
-      truncate(
-        (job.payload.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
-        CRON_MODEL_PAD,
-      ),
-      CRON_MODEL_PAD,
-    );
+    const modelLabel = pad(truncate(agentPayload?.model ?? "-", CRON_MODEL_PAD), CRON_MODEL_PAD);
 
     const coloredStatus = (() => {
       if (statusRaw === "ok") {
@@ -253,7 +272,7 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
       coloredStatus,
       coloredTarget,
       coloredAgent,
-      job.payload.kind === "agentTurn" && job.payload.model
+      agentPayload?.model
         ? colorize(rich, theme.info, modelLabel)
         : colorize(rich, theme.muted, modelLabel),
     ].join(" ");

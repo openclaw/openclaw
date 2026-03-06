@@ -1295,6 +1295,37 @@ describe("Cron issue regressions", () => {
     );
   });
 
+  it("skips malformed main-job payloads during manual run instead of throwing (#37299)", async () => {
+    const store = makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "malformed-main",
+        name: "malformed main",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(now - 1000).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        state: { nextRunAtMs: now - 1000 },
+      },
+    ]);
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+
+    await expect(run(state, "malformed-main", "force")).resolves.toEqual({ ok: true, ran: true });
+    expect(state.store?.jobs.find((job) => job.id === "malformed-main")?.state.lastError).toBe(
+      'main job requires payload.kind="systemEvent"',
+    );
+  });
+
   it("honors cron maxConcurrentRuns for due jobs", async () => {
     vi.useRealTimers();
     const store = makeStorePath();

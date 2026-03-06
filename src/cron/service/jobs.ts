@@ -26,7 +26,6 @@ import {
   normalizeOptionalAgentId,
   normalizeOptionalSessionKey,
   normalizeOptionalText,
-  normalizePayloadToSystemText,
   normalizeRequiredName,
 } from "./normalize.js";
 import type { CronServiceState } from "./state.js";
@@ -891,9 +890,9 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
 }
 
 export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {
-  if (job.payload.kind !== "systemEvent") {
+  if (job.payload?.kind !== "systemEvent") {
     return undefined;
   }
-  const text = normalizePayloadToSystemText(job.payload);
+  const text = typeof job.payload.text === "string" ? job.payload.text.trim() : "";
   return text.trim() ? text : undefined;
 }

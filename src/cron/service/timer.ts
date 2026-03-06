@@ -322,7 +322,7 @@ export function applyJobResult(
     if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
       const isBestEffort =
         job.delivery?.bestEffort === true ||
-        (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
+        (job.payload?.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
       if (!isBestEffort) {
         const now = state.deps.nowMs();
         const lastAlert = job.state.lastFailureAlertAtMs;
@@ -956,7 +956,7 @@ export async function executeJobCore(
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {
-      const kind = job.payload.kind;
+      const kind = job.payload?.kind;
       return {
         status: "skipped",
         error:
@@ -1038,7 +1038,8 @@ export async function executeJobCore(
     }
   }
 
-  if (job.payload.kind !== "agentTurn") {
+  const agentPayload = job.payload?.kind === "agentTurn" ? job.payload : null;
+  if (!agentPayload) {
     return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
   }
   if (abortSignal?.aborted) {
@@ -1047,7 +1048,7 @@ export async function executeJobCore(
 
   const res = await state.deps.runIsolatedAgentJob({
     job,
-    message: job.payload.message,
+    message: agentPayload.message,
     abortSignal,
   });
 

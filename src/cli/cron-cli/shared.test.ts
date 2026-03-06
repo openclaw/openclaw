@@ -166,4 +166,19 @@ describe("printCronList", () => {
     printCronList([job], runtime);
     expect(logs.some((line) => line.includes("(exact)"))).toBe(true);
   });
+
+  it("guards malformed jobs that are missing schedule/payload kind metadata (#37299)", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "malformed-job",
+      name: "Malformed",
+      schedule: { at: new Date(Date.now() + 3600000).toISOString() } as CronJob["schedule"],
+      payload: { text: "legacy payload" } as CronJob["payload"],
+      state: {},
+    });
+
+    expect(() => printCronList([job], runtime)).not.toThrow();
+    expect(logs.some((line) => line.includes("malformed-job"))).toBe(true);
+    expect(logs.some((line) => line.includes("invalid"))).toBe(true);
+  });
 });
