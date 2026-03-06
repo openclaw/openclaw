@@ -101,6 +101,36 @@ describe("ensureOggOpus", () => {
     expect(execCalls).toHaveLength(0);
   });
 
+  it("rejects URL/protocol input even with surrounding whitespace", async () => {
+    await expect(ensureOggOpus("  https://example.com/audio.ogg  ")).rejects.toThrow(
+      /local file path/i,
+    );
+    expect(execCalls).toHaveLength(0);
+  });
+
+  it("trims whitespace from file path before passing to ffprobe/ffmpeg", async () => {
+    mockExecResults.push({ stdout: "opus,48000\n" });
+
+    const result = await ensureOggOpus("  /tmp/input.ogg  ");
+
+    expect(result).toEqual({ path: "/tmp/input.ogg", cleanup: false });
+    expect(execCalls).toHaveLength(1);
+    const ffprobeArgs = execCalls[0].args;
+    expect(ffprobeArgs[ffprobeArgs.length - 1]).toBe("/tmp/input.ogg");
+  });
+
+  it("uses trimmed path for ffmpeg conversion", async () => {
+    mockExecResults.push({ stdout: "" });
+
+    const result = await ensureOggOpus("  /tmp/input.mp3  ");
+
+    expect(result.cleanup).toBe(true);
+    const ffmpegCall = execCalls.find((call) => call.command === "ffmpeg");
+    expect(ffmpegCall).toBeDefined();
+    const inputIdx = ffmpegCall!.args.indexOf("-i");
+    expect(ffmpegCall!.args[inputIdx + 1]).toBe("/tmp/input.mp3");
+  });
+
   it("keeps .ogg only when codec is opus and sample rate is 48kHz", async () => {
     mockExecResults.push({ stdout: "opus,48000\n" });
 

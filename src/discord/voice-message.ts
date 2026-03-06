@@ -156,7 +156,7 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
     );
   }
 
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = path.extname(trimmed).toLowerCase();
 
   // Check if already OGG
   if (ext === ".ogg") {
@@ -171,11 +171,11 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
         "stream=codec_name,sample_rate",
         "-of",
         "csv=p=0",
-        filePath,
+        trimmed,
       ]);
       const { codec, sampleRateHz } = parseFfprobeCodecAndSampleRate(stdout);
       if (codec === "opus" && sampleRateHz === DISCORD_OPUS_SAMPLE_RATE_HZ) {
-        return { path: filePath, cleanup: false };
+        return { path: trimmed, cleanup: false };
       }
     } catch {
       // If probe fails, convert anyway
@@ -191,7 +191,7 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
   await runFfmpeg([
     "-y",
     "-i",
-    filePath,
+    trimmed,
     "-vn",
     "-sn",
     "-dn",
