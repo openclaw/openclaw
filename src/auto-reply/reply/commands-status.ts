@@ -15,7 +15,7 @@ import {
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
+import { normalizeProviderId, resolveReasoningDefault } from "../../agents/model-selection.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import {
   resolveInternalSessionKey,
@@ -112,9 +112,10 @@ export async function buildStatusReply(params: {
   contextTokens: number;
   resolvedThinkLevel?: ThinkLevel;
   resolvedVerboseLevel: VerboseLevel;
-  resolvedReasoningLevel: ReasoningLevel;
+  resolvedReasoningLevel?: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+  resolveDefaultReasoningLevel: () => Promise<ReasoningLevel>;
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];
@@ -134,6 +135,7 @@ export async function buildStatusReply(params: {
     resolvedReasoningLevel,
     resolvedElevatedLevel,
     resolveDefaultThinkingLevel,
+    resolveDefaultReasoningLevel,
     isGroup,
     defaultGroupActivation,
   } = params;
@@ -232,7 +234,7 @@ export async function buildStatusReply(params: {
     groupActivation,
     resolvedThink: resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
     resolvedVerbose: resolvedVerboseLevel,
-    resolvedReasoning: resolvedReasoningLevel,
+    resolvedReasoning: resolvedReasoningLevel ?? (await resolveDefaultReasoningLevel()),
     resolvedElevated: resolvedElevatedLevel,
     modelAuth: resolveModelAuthLabel(provider, cfg, sessionEntry, statusAgentDir),
     usageLine: usageLine ?? undefined,

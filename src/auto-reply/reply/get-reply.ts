@@ -272,6 +272,7 @@ export async function getReplyFromConfig(
     resolvedReasoningLevel,
     resolvedElevatedLevel,
     resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+    resolveDefaultReasoningLevel: modelState.resolveDefaultReasoningLevel,
     provider,
     model,
     contextTokens,

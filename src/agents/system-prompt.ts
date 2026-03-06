@@ -401,6 +401,7 @@ export function buildAgentSystemPrompt(params: {
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",
           '- session_status: show usage/time/model state and answer "what model are we using?"',
+          "- for questions about current model / whether thinking is enabled / thinking level, ALWAYS call session_status first and map thinking enabled from Think/thinkingLevel only (off=no, anything else=yes); never use Reasoning for that answer",
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     "If a task is more complex or takes longer, spawn a sub-agent. It will do the work for you and ping you when it's done. You can always check up on it.",

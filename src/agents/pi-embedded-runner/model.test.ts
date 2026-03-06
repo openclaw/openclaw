@@ -209,6 +209,43 @@ describe("resolveModel", () => {
     });
   });
 
+  it("builds an openai-codex fallback for gpt-5.4", () => {
+    const templateModel = {
+      id: "gpt-5.2-codex",
+      name: "GPT-5.2 Codex",
+      provider: "openai-codex",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+      contextWindow: 272000,
+      maxTokens: 128000,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "openai-codex" && modelId === "gpt-5.2-codex") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      contextWindow: 272000,
+      maxTokens: 128000,
+    });
+  });
+
   it("builds an anthropic forward-compat fallback for claude-opus-4-6", () => {
     const templateModel = {
       id: "claude-opus-4-5",
