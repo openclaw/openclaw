@@ -406,8 +406,17 @@ export class DiscordExecApprovalHandler {
       url: this.opts.gatewayUrl,
     });
 
+    const gatewayAuth = this.opts.cfg.gateway?.auth;
+    const rawToken =
+      gatewayAuth && typeof gatewayAuth === "object" && "token" in gatewayAuth
+        ? (gatewayAuth as { token?: string }).token
+        : undefined;
+    const gatewayToken =
+      typeof rawToken === "string" && rawToken.trim().length > 0 ? rawToken.trim() : undefined;
+
     this.gatewayClient = new GatewayClient({
       url: gatewayUrl,
+      token: gatewayToken,
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: "Discord Exec Approvals",
       mode: GATEWAY_CLIENT_MODES.BACKEND,
