@@ -113,7 +113,7 @@ export async function createWaSocket(
     version,
     logger,
     printQRInTerminal: false,
-    browser: ["openclaw", "cli", VERSION],
+    browser: ["Vida Operator", "web", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
   });
@@ -186,6 +186,9 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 export function getStatusCode(err: unknown) {
   return (
     (err as { output?: { statusCode?: number } })?.output?.statusCode ??
+    (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode ??
+    (err as { lastDisconnect?: { error?: { output?: { statusCode?: number } } } })?.lastDisconnect
+      ?.error?.output?.statusCode ??
     (err as { status?: number })?.status
   );
 }
