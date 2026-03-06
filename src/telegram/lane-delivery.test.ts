@@ -233,8 +233,8 @@ describe("createLaneTextDeliverer", () => {
     });
 
     expect(result).toBe("preview-finalized");
-    expect(harness.flushDraftLane).toHaveBeenCalled();
-    expect(answerStream.materialize).toHaveBeenCalledTimes(1);
+    expect(harness.flushDraftLane).not.toHaveBeenCalled();
+    expect(answerStream.materialize).toHaveBeenCalledWith("Hello final");
     expect(harness.sendPayload).not.toHaveBeenCalled();
     expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
@@ -262,7 +262,8 @@ describe("createLaneTextDeliverer", () => {
     });
 
     expect(result).toBe("preview-finalized");
-    expect(answerStream.materialize).toHaveBeenCalledTimes(1);
+    expect(harness.flushDraftLane).not.toHaveBeenCalled();
+    expect(answerStream.materialize).toHaveBeenCalledWith("Final answer");
     expect(harness.sendPayload).not.toHaveBeenCalled();
     expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });

@@ -239,6 +239,23 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
+  it("materializes dm draft finals without sending an extra draft update", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+    });
+
+    stream.update("Partial text");
+    await stream.flush();
+    await stream.materialize?.("Final text");
+
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Final text", {
+      message_thread_id: 42,
+    });
+  });
+
   it("retries materialize send without thread when dm thread lookup fails", async () => {
     const api = createMockDraftApi();
     api.sendMessage

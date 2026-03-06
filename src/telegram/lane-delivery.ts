@@ -179,8 +179,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
     // Draft previews have no message_id to edit; materialize the final text
     // into a real message and treat that as the finalized delivery.
-    stream.update(args.text);
-    const materializedMessageId = await stream.materialize?.();
+    const materializedMessageId = await stream.materialize?.(args.text);
     if (typeof materializedMessageId !== "number") {
       params.log(
         `telegram: ${args.laneName} draft preview materialize produced no message id; falling back to standard send`,
@@ -385,6 +384,17 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         }
       }
       if (canEditViaPreview && !params.finalizedPreviewByLane[laneName]) {
+        if (canMaterializeDraftFinal(lane, previewButtons)) {
+          const materialized = await tryMaterializeDraftPreviewForFinal({
+            lane,
+            laneName,
+            text,
+          });
+          if (materialized) {
+            params.finalizedPreviewByLane[laneName] = true;
+            return "preview-finalized";
+          }
+        }
         await params.flushDraftLane(lane);
         if (laneName === "answer") {
           const archivedResultAfterFlush = await consumeArchivedAnswerPreviewForFinal({
@@ -396,17 +406,6 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           });
           if (archivedResultAfterFlush) {
             return archivedResultAfterFlush;
-          }
-        }
-        if (canMaterializeDraftFinal(lane, previewButtons)) {
-          const materialized = await tryMaterializeDraftPreviewForFinal({
-            lane,
-            laneName,
-            text,
-          });
-          if (materialized) {
-            params.finalizedPreviewByLane[laneName] = true;
-            return "preview-finalized";
           }
         }
         const finalized = await tryUpdatePreviewForLane({

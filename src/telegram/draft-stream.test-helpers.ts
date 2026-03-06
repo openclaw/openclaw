@@ -11,7 +11,7 @@ export type TestDraftStream = {
   lastDeliveredText: ReturnType<typeof vi.fn<() => string>>;
   clear: ReturnType<typeof vi.fn<() => Promise<void>>>;
   stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
-  materialize: ReturnType<typeof vi.fn<() => Promise<number | undefined>>>;
+  materialize: ReturnType<typeof vi.fn<(text?: string) => Promise<number | undefined>>>;
   forceNewMessage: ReturnType<typeof vi.fn<() => void>>;
   setMessageId: (value: number | undefined) => void;
 };

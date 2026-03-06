@@ -63,7 +63,7 @@ export type TelegramDraftStream = {
   clear: () => Promise<void>;
   stop: () => Promise<void>;
   /** Convert the current draft preview into a permanent message (sendMessage). */
-  materialize?: () => Promise<number | undefined>;
+  materialize?: (finalText?: string) => Promise<number | undefined>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
 };
@@ -355,7 +355,40 @@ export function createTelegramDraftStream(params: {
    * For message transport: the message is already permanent (noop).
    * Returns the permanent message id, or undefined if nothing to materialize.
    */
-  const materialize = async (): Promise<number | undefined> => {
+  const materialize = async (finalText?: string): Promise<number | undefined> => {
+    if (previewTransport === "draft" && typeof finalText === "string") {
+      streamState.final = true;
+      loop.stop();
+      await loop.waitForInFlight();
+      const rendered = params.renderText?.(finalText.trimEnd()) ?? { text: finalText.trimEnd() };
+      const renderedText = rendered.text.trimEnd();
+      if (!renderedText) {
+        return undefined;
+      }
+      const renderedParseMode = rendered.parseMode;
+      try {
+        const sent = await sendRenderedMessageWithThreadFallback({
+          renderedText,
+          renderedParseMode,
+          fallbackWarnMessage:
+            "telegram stream preview materialize send failed with message_thread_id, retrying without thread",
+        });
+        const sentId = sent?.message_id;
+        if (typeof sentId === "number" && Number.isFinite(sentId)) {
+          streamMessageId = Math.trunc(sentId);
+          lastSentText = renderedText;
+          lastSentParseMode = renderedParseMode;
+          lastDeliveredText = finalText.trimEnd();
+          return streamMessageId;
+        }
+      } catch (err) {
+        params.warn?.(
+          `telegram stream preview materialize failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return undefined;
+    }
+
     await stop();
     // If using message transport, the streamMessageId is already a real message.
     if (previewTransport === "message" && typeof streamMessageId === "number") {
