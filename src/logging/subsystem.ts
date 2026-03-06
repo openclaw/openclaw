@@ -9,7 +9,7 @@ import {
   shouldLogSubsystemToConsole,
 } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
-import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
+import { getChildLogger, getLogger, isFileLogLevelEnabled } from "./logger.js";
 import { loggingState } from "./state.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -274,10 +274,17 @@ function logToFile(
 }
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
+  // Cache the child logger alongside its parent so we can detect when the base logger
+  // is rebuilt (e.g. when the log file rolls over at midnight). Without this, the
+  // cached child logger continues writing to the previous day's log file even after
+  // getLogger() switches to a new file. See: fix/issue-37388-log-date-rotation
   let fileLogger: TsLogger<LogObj> | null = null;
+  let fileLoggerBaseRef: TsLogger<LogObj> | null = null;
   const getFileLogger = () => {
-    if (!fileLogger) {
+    const base = getLogger();
+    if (fileLogger === null || fileLoggerBaseRef !== base) {
       fileLogger = getChildLogger({ subsystem });
+      fileLoggerBaseRef = base;
     }
     return fileLogger;
   };
