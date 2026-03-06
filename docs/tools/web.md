@@ -36,6 +36,7 @@ See [Perplexity Search setup](/perplexity) and [Brave Search setup](/brave-searc
 | **Gemini**                | Google Search grounding, AI-synthesized                                                       | Requires Gemini API key                     | `GEMINI_API_KEY`                    |
 | **Grok**                  | xAI web-grounded responses                                                                    | Requires xAI API key                        | `XAI_API_KEY`                       |
 | **Kimi**                  | Moonshot web search capability                                                                | Requires Moonshot API key                   | `KIMI_API_KEY` / `MOONSHOT_API_KEY` |
+| **OpenRouter**            | Routes to any OpenRouter model (e.g. Perplexity Sonar); AI-synthesized answers with citations | Requires OpenRouter API key                 | `OPENROUTER_API_KEY`                |
 
 ### Auto-detection
 
@@ -44,8 +45,9 @@ If no `provider` is explicitly set, OpenClaw auto-detects which provider to use 
 1. **Brave** — `BRAVE_API_KEY` env var or `tools.web.search.apiKey` config
 2. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
 3. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
-4. **Perplexity** — `PERPLEXITY_API_KEY` env var or `tools.web.search.perplexity.apiKey` config
-5. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
+4. **OpenRouter** — `OPENROUTER_API_KEY` env var or `tools.web.search.openrouter.apiKey` config _(sets `provider: "openrouter"` explicitly to suppress the auto-detect warning)_
+5. **Perplexity** — `PERPLEXITY_API_KEY` env var or `tools.web.search.perplexity.apiKey` config
+6. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -111,6 +113,24 @@ Brave provides paid plans; check the Brave API portal for the current limits and
 }
 ```
 
+**OpenRouter:**
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "openrouter",
+        openrouter: {
+          apiKey: "sk-or-...", // optional if OPENROUTER_API_KEY is set
+          model: "perplexity/sonar-pro", // default; any OpenRouter chat model works
+        },
+      },
+    },
+  },
+}
+```
+
 ## Using Gemini (Google Search grounding)
 
 Gemini models support built-in [Google Search grounding](https://ai.google.dev/gemini-api/docs/grounding),
@@ -167,6 +187,7 @@ Search the web using your configured provider.
   - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
+  - **OpenRouter**: `OPENROUTER_API_KEY` or `tools.web.search.openrouter.apiKey`
 
 ### Config
 

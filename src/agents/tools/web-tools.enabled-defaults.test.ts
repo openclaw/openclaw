@@ -47,7 +47,29 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
   });
 }
 
-function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
+function createOpenRouterSearchTool(openRouterConfig?: {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}) {
+  return createWebSearchTool({
+    config: {
+      tools: {
+        web: {
+          search: {
+            provider: "openrouter",
+            ...(openRouterConfig ? { openrouter: openRouterConfig } : {}),
+          },
+        },
+      },
+    },
+    sandboxed: true,
+  });
+}
+
+function createProviderSearchTool(
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "openrouter",
+) {
   const searchConfig =
     provider === "perplexity"
       ? { provider, perplexity: { apiKey: "pplx-config-test" } }
@@ -57,7 +79,9 @@ function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "g
           ? { provider, gemini: { apiKey: "gemini-config-test" } }
           : provider === "kimi"
             ? { provider, kimi: { apiKey: "moonshot-config-test" } }
-            : { provider, apiKey: "brave-config-test" };
+            : provider === "openrouter"
+              ? { provider, openrouter: { apiKey: "sk-or-config-test" } }
+              : { provider, apiKey: "brave-config-test" };
   return createWebSearchTool({
     config: {
       tools: {
@@ -93,7 +117,7 @@ function installPerplexitySearchApiFetch(results?: Array<Record<string, unknown>
 }
 
 function createProviderSuccessPayload(
-  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi",
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "openrouter",
 ) {
   if (provider === "brave") {
     return { web: { results: [] } };
@@ -114,6 +138,7 @@ function createProviderSuccessPayload(
       ],
     };
   }
+  // kimi and openrouter both use chat completions format
   return {
     choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
     search_results: [],
@@ -242,7 +267,7 @@ describe("web_search provider proxy dispatch", () => {
     global.fetch = priorFetch;
   });
 
-  it.each(["brave", "perplexity", "grok", "gemini", "kimi"] as const)(
+  it.each(["brave", "perplexity", "grok", "gemini", "kimi", "openrouter"] as const)(
     "uses proxy-aware dispatcher for %s provider when HTTP_PROXY is configured",
     async (provider) => {
       vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
@@ -487,6 +512,73 @@ describe("web_search kimi provider", () => {
     expect(details.provider).toBe("kimi");
     expect(details.citations).toEqual(["https://openclaw.ai/docs"]);
     expect(details.content).toContain("final answer");
+  });
+});
+
+describe("web_search openrouter provider", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+
+  it("returns a setup hint when OpenRouter key is missing", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    const tool = createOpenRouterSearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+    expect(result?.details).toMatchObject({ error: "missing_openrouter_api_key" });
+  });
+
+  it("calls the OpenRouter chat completions endpoint and returns content + citations", async () => {
+    const mockFetch = installMockFetch({
+      choices: [
+        {
+          finish_reason: "stop",
+          message: { role: "assistant", content: "answer from openrouter" },
+        },
+      ],
+      citations: ["https://example.com/source"],
+    });
+
+    const tool = createOpenRouterSearchTool({
+      apiKey: "sk-or-config-key",
+      model: "perplexity/sonar-pro",
+    });
+    const result = await tool?.execute?.("call-1", { query: "latest openclaw release" });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const body = parseFirstRequestBody(mockFetch);
+    expect(body.model).toBe("perplexity/sonar-pro");
+    expect(body.messages).toMatchObject([{ role: "user", content: "latest openclaw release" }]);
+
+    const details = result?.details as {
+      citations?: string[];
+      content?: string;
+      provider?: string;
+      model?: string;
+    };
+    expect(details.provider).toBe("openrouter");
+    expect(details.model).toBe("perplexity/sonar-pro");
+    expect(details.citations).toEqual(["https://example.com/source"]);
+    expect(details.content).toContain("answer from openrouter");
+  });
+
+  it("uses the configured baseUrl", async () => {
+    const mockFetch = installMockFetch({
+      choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
+    });
+
+    // Use a loopback IP so the SSRF guard skips DNS and the mock intercepts the call.
+    const tool = createOpenRouterSearchTool({
+      apiKey: "sk-or-config-key",
+      baseUrl: "http://127.0.0.1:9999/api/v1",
+    });
+    await tool?.execute?.("call-1", { query: "test" });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const requestUrl = mockFetch.mock.calls[0]?.[0] as string;
+    expect(requestUrl).toContain("127.0.0.1:9999");
   });
 });
 

@@ -269,6 +269,7 @@ export const ToolsWebSearchSchema = z
         z.literal("grok"),
         z.literal("gemini"),
         z.literal("kimi"),
+        z.literal("openrouter"),
       ])
       .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
@@ -301,6 +302,14 @@ export const ToolsWebSearchSchema = z
       .strict()
       .optional(),
     kimi: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    openrouter: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),

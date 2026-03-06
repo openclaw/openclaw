@@ -15,6 +15,11 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveOpenRouterApiKey,
+  resolveOpenRouterModel,
+  resolveOpenRouterBaseUrl,
+  resolveOpenRouterConfig,
+  resolveSearchProvider,
 } = __testing;
 
 describe("web_search brave language param normalization", () => {
@@ -269,5 +274,175 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("web_search openrouter config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveOpenRouterApiKey({ apiKey: "sk-or-config-key" })).toBe("sk-or-config-key");
+  });
+
+  it("falls back to OPENROUTER_API_KEY env var", () => {
+    withEnv({ OPENROUTER_API_KEY: "sk-or-env-key" }, () => {
+      expect(resolveOpenRouterApiKey({})).toBe("sk-or-env-key");
+      expect(resolveOpenRouterApiKey(undefined)).toBe("sk-or-env-key");
+    });
+  });
+
+  it("returns undefined when no key is configured", () => {
+    withEnv({ OPENROUTER_API_KEY: undefined }, () => {
+      expect(resolveOpenRouterApiKey({})).toBeUndefined();
+      expect(resolveOpenRouterApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("resolves default model", () => {
+    expect(resolveOpenRouterModel({})).toBe("perplexity/sonar-pro");
+    expect(resolveOpenRouterModel(undefined)).toBe("perplexity/sonar-pro");
+  });
+
+  it("uses config model when provided", () => {
+    expect(resolveOpenRouterModel({ model: "perplexity/sonar" })).toBe("perplexity/sonar");
+  });
+
+  it("resolves default baseUrl", () => {
+    expect(resolveOpenRouterBaseUrl({})).toBe("https://openrouter.ai/api/v1");
+    expect(resolveOpenRouterBaseUrl(undefined)).toBe("https://openrouter.ai/api/v1");
+  });
+
+  it("uses config baseUrl when provided", () => {
+    expect(resolveOpenRouterBaseUrl({ baseUrl: "https://custom.example.com/api/v1" })).toBe(
+      "https://custom.example.com/api/v1",
+    );
+  });
+});
+
+describe("web_search provider auto-detection for openrouter", () => {
+  it("auto-detects openrouter when OPENROUTER_API_KEY is set and no explicit provider", () => {
+    withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        OPENROUTER_API_KEY: "sk-or-detected",
+        PERPLEXITY_API_KEY: undefined,
+        XAI_API_KEY: undefined,
+      },
+      () => {
+        expect(resolveSearchProvider(undefined)).toBe("openrouter");
+      },
+    );
+  });
+
+  it("auto-detects openrouter when config apiKey is set", () => {
+    withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        OPENROUTER_API_KEY: undefined,
+        PERPLEXITY_API_KEY: undefined,
+        XAI_API_KEY: undefined,
+      },
+      () => {
+        expect(
+          resolveSearchProvider({
+            openrouter: { apiKey: "sk-or-config" },
+          } as Record<string, unknown>),
+        ).toBe("openrouter");
+      },
+    );
+  });
+
+  it("returns openrouter when provider is explicitly set", () => {
+    expect(resolveSearchProvider({ provider: "openrouter" } as Record<string, unknown>)).toBe(
+      "openrouter",
+    );
+  });
+
+  it("prefers explicit brave key over OPENROUTER_API_KEY in auto-detect", () => {
+    withEnv({ BRAVE_API_KEY: "bsa-key", OPENROUTER_API_KEY: "sk-or-key" }, () => {
+      expect(resolveSearchProvider(undefined)).toBe("brave");
+    });
+  });
+
+  it("auto-detects openrouter when PERPLEXITY_API_KEY has sk-or- prefix (legacy config)", () => {
+    withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        OPENROUTER_API_KEY: undefined,
+        PERPLEXITY_API_KEY: "sk-or-v1-abc123",
+        XAI_API_KEY: undefined,
+      },
+      () => {
+        expect(resolveSearchProvider(undefined)).toBe("openrouter");
+      },
+    );
+  });
+
+  it("OPENROUTER_API_KEY takes precedence over legacy PERPLEXITY_API_KEY sk-or-* fallback", () => {
+    withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        OPENROUTER_API_KEY: "sk-or-new-key",
+        PERPLEXITY_API_KEY: "sk-or-old-key",
+        XAI_API_KEY: undefined,
+      },
+      () => {
+        // Auto-detect still picks openrouter.
+        expect(resolveSearchProvider(undefined)).toBe("openrouter");
+        // The dedicated OPENROUTER_API_KEY must win; resolveOpenRouterApiKey with an
+        // empty config (no legacy fallback injected) should return the env key.
+        expect(resolveOpenRouterApiKey({})).toBe("sk-or-new-key");
+      },
+    );
+  });
+
+  it("keeps perplexity provider when PERPLEXITY_API_KEY has native perplexity format", () => {
+    withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        OPENROUTER_API_KEY: undefined,
+        PERPLEXITY_API_KEY: "pplx-abc123",
+        XAI_API_KEY: undefined,
+      },
+      () => {
+        expect(resolveSearchProvider(undefined)).toBe("perplexity");
+      },
+    );
+  });
+
+  it("applies perplexity sk-or-* fallback even when openrouter block exists without apiKey", () => {
+    // P2: user sets openrouter.model but no apiKey, and has PERPLEXITY_API_KEY=sk-or-*
+    withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        OPENROUTER_API_KEY: undefined,
+        PERPLEXITY_API_KEY: "sk-or-legacy-key",
+        XAI_API_KEY: undefined,
+      },
+      () => {
+        const config = resolveOpenRouterConfig({
+          openrouter: { model: "perplexity/sonar-large" },
+        } as never);
+        // The legacy perplexity key should be merged in as apiKey; model is preserved.
+        expect(config.apiKey).toBe("sk-or-legacy-key");
+        expect(config.model).toBe("perplexity/sonar-large");
+      },
+    );
   });
 });

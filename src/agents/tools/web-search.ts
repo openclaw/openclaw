@@ -21,7 +21,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi", "openrouter"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -32,6 +32,8 @@ const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
+const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const DEFAULT_OPENROUTER_MODEL = "perplexity/sonar-pro";
 const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
@@ -224,7 +226,7 @@ function createWebSearchSchema(provider: (typeof SEARCH_PROVIDERS)[number]) {
     });
   }
 
-  // grok, gemini, kimi, etc.
+  // grok, gemini, kimi, openrouter, etc.
   return Type.Object(baseSchema);
 }
 
@@ -263,6 +265,21 @@ type KimiConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+};
+
+type OpenRouterConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+};
+
+type OpenRouterSearchResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
+  }>;
+  citations?: string[];
 };
 
 type GrokSearchResponse = {
@@ -475,6 +492,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "openrouter") {
+    return {
+      error: "missing_openrouter_api_key",
+      message:
+        "web_search (openrouter) needs an OpenRouter API key. Set OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.openrouter.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -488,6 +513,17 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       ? search.provider.trim().toLowerCase()
       : "";
   if (raw === "perplexity") {
+    // If the configured key looks like an OpenRouter key, route there instead.
+    const perplexityConfig = resolvePerplexityConfig(search);
+    const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
+    if (perplexityKey?.startsWith("sk-or-")) {
+      console.warn(
+        "[openclaw] web_search: PERPLEXITY_API_KEY looks like an OpenRouter key (sk-or-*). " +
+          'Routing to "openrouter" provider. ' +
+          'Set tools.web.search.provider to "openrouter" explicitly to suppress this warning.',
+      );
+      return "openrouter";
+    }
     return "perplexity";
   }
   if (raw === "grok") {
@@ -498,6 +534,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "kimi") {
     return "kimi";
+  }
+  if (raw === "openrouter") {
+    return "openrouter";
   }
   if (raw === "brave") {
     return "brave";
@@ -528,7 +567,24 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "kimi";
     }
-    // 4. Perplexity
+    // 4. OpenRouter
+    const openRouterConfig = resolveOpenRouterConfig(search);
+    if (resolveOpenRouterApiKey(openRouterConfig)) {
+      // If no explicit openrouter block was configured, the key came from the perplexity
+      // sk-or-* fallback — warn so users know to migrate their config.
+      if (!("openrouter" in Object(search)) && openRouterConfig.apiKey?.startsWith("sk-or-")) {
+        console.warn(
+          "[openclaw] web_search: PERPLEXITY_API_KEY looks like an OpenRouter key (sk-or-*). " +
+            'Routing to "openrouter" provider. ' +
+            'Set tools.web.search.provider to "openrouter" explicitly to suppress this warning.',
+        );
+      }
+      logVerbose(
+        'web_search: no provider configured, auto-detected "openrouter" from available API keys',
+      );
+      return "openrouter";
+    }
+    // 5. Perplexity
     const perplexityConfig = resolvePerplexityConfig(search);
     const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
     if (perplexityKey) {
@@ -537,7 +593,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "perplexity";
     }
-    // 5. Grok
+    // 6. Grok
     const grokConfig = resolveGrokConfig(search);
     if (resolveGrokApiKey(grokConfig)) {
       logVerbose(
@@ -672,6 +728,61 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
   const fromConfig =
     gemini && "model" in gemini && typeof gemini.model === "string" ? gemini.model.trim() : "";
   return fromConfig || DEFAULT_GEMINI_MODEL;
+}
+
+function resolveOpenRouterConfig(search?: WebSearchConfig): OpenRouterConfig {
+  const openrouter =
+    search && typeof search === "object" && "openrouter" in search
+      ? (search.openrouter as OpenRouterConfig | undefined)
+      : undefined;
+  const hasExplicitBlock = !!openrouter && typeof openrouter === "object";
+  // Explicit openrouter.apiKey in the config block takes top priority.
+  const hasExplicitApiKey = hasExplicitBlock && !!normalizeApiKey(openrouter.apiKey);
+  // Apply the legacy perplexity-key fallback only when no explicit openrouter apiKey
+  // is configured AND the dedicated OPENROUTER_API_KEY env var is not set, so the
+  // dedicated env var always takes precedence over the legacy migration path.
+  let legacyApiKey: string | undefined;
+  if (!hasExplicitApiKey && !normalizeApiKey(process.env.OPENROUTER_API_KEY)) {
+    const perplexityConfig = resolvePerplexityConfig(search);
+    const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
+    if (perplexityKey?.startsWith("sk-or-")) {
+      console.warn(
+        "[openclaw] web_search: Detected OpenRouter-format API key (sk-or-*) in perplexity config. " +
+          "Set OPENROUTER_API_KEY or tools.web.search.openrouter.apiKey to suppress this warning.",
+      );
+      legacyApiKey = perplexityKey;
+    }
+  }
+  if (hasExplicitBlock) {
+    // Preserve the explicit block's model/baseUrl; inject the legacy key if no apiKey was set.
+    return legacyApiKey ? { ...openrouter, apiKey: legacyApiKey } : openrouter;
+  }
+  return legacyApiKey ? { apiKey: legacyApiKey } : {};
+}
+
+function resolveOpenRouterApiKey(openrouter?: OpenRouterConfig): string | undefined {
+  const fromConfig = normalizeApiKey(openrouter?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.OPENROUTER_API_KEY);
+  return fromEnv || undefined;
+}
+
+function resolveOpenRouterModel(openrouter?: OpenRouterConfig): string {
+  const fromConfig =
+    openrouter && "model" in openrouter && typeof openrouter.model === "string"
+      ? openrouter.model.trim()
+      : "";
+  return fromConfig || DEFAULT_OPENROUTER_MODEL;
+}
+
+function resolveOpenRouterBaseUrl(openrouter?: OpenRouterConfig): string {
+  const fromConfig =
+    openrouter && "baseUrl" in openrouter && typeof openrouter.baseUrl === "string"
+      ? openrouter.baseUrl.trim()
+      : "";
+  return fromConfig || DEFAULT_OPENROUTER_BASE_URL;
 }
 
 async function withTrustedWebSearchEndpoint<T>(
@@ -1112,6 +1223,50 @@ function buildKimiToolResultContent(data: KimiSearchResponse): string {
   });
 }
 
+async function runOpenRouterSearch(params: {
+  query: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  timeoutSeconds: number;
+}): Promise<{ content: string; citations: string[] }> {
+  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
+  const endpoint = `${baseUrl}/chat/completions`;
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+          "HTTP-Referer": "https://openclaw.ai",
+          "X-Title": "OpenClaw Web Search",
+        },
+        body: JSON.stringify({
+          model: params.model,
+          messages: [{ role: "user", content: params.query }],
+        }),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "OpenRouter");
+      }
+
+      const data = (await res.json()) as OpenRouterSearchResponse;
+      const content = data.choices?.[0]?.message?.content?.trim() ?? "No response";
+      const citations = Array.isArray(data.citations)
+        ? data.citations.filter((c): c is string => typeof c === "string" && c.trim().length > 0)
+        : [];
+
+      return { content, citations };
+    },
+  );
+}
+
 async function runKimiSearch(params: {
   query: string;
   apiKey: string;
@@ -1235,6 +1390,8 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  openRouterBaseUrl?: string;
+  openRouterModel?: string;
 }): Promise<Record<string, unknown>> {
   const providerSpecificKey =
     params.provider === "grok"
@@ -1243,7 +1400,9 @@ async function runWebSearch(params: {
         ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
         : params.provider === "kimi"
           ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-          : "";
+          : params.provider === "openrouter"
+            ? `${params.openRouterBaseUrl ?? DEFAULT_OPENROUTER_BASE_URL}:${params.openRouterModel ?? DEFAULT_OPENROUTER_MODEL}`
+            : "";
   const cacheKey = normalizeCacheKey(
     `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
   );
@@ -1282,6 +1441,33 @@ async function runWebSearch(params: {
         wrapped: true,
       },
       results,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "openrouter") {
+    const { content, citations } = await runOpenRouterSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      baseUrl: params.openRouterBaseUrl ?? DEFAULT_OPENROUTER_BASE_URL,
+      model: params.openRouterModel ?? DEFAULT_OPENROUTER_MODEL,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      model: params.openRouterModel ?? DEFAULT_OPENROUTER_MODEL,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      content: wrapWebContent(content),
+      citations,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -1465,6 +1651,7 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const openRouterConfig = resolveOpenRouterConfig(search);
 
   const description =
     provider === "perplexity"
@@ -1475,7 +1662,9 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : provider === "openrouter"
+              ? "Search the web using an OpenRouter-hosted model (default: perplexity/sonar-pro). Returns AI-synthesized answers with citations."
+              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1494,7 +1683,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "openrouter"
+                  ? resolveOpenRouterApiKey(openRouterConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -1660,6 +1851,8 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        openRouterBaseUrl: resolveOpenRouterBaseUrl(openRouterConfig),
+        openRouterModel: resolveOpenRouterModel(openRouterConfig),
       });
       return jsonResult(result);
     },
@@ -1683,5 +1876,9 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveOpenRouterApiKey,
+  resolveOpenRouterModel,
+  resolveOpenRouterBaseUrl,
+  resolveOpenRouterConfig,
   resolveRedirectUrl: resolveCitationRedirectUrl,
 } as const;

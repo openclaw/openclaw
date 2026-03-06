@@ -718,6 +718,17 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
+    id: "tools.web.search.openrouter.apiKey",
+    targetType: "tools.web.search.openrouter.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "tools.web.search.openrouter.apiKey",
+    secretShape: "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
     id: "tools.web.search.perplexity.apiKey",
     targetType: "tools.web.search.perplexity.apiKey",
     configFile: "openclaw.json",
