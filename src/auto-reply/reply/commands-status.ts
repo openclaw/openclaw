@@ -43,9 +43,10 @@ export async function buildStatusReply(params: {
   resolvedThinkLevel?: ThinkLevel;
   resolvedFastMode?: boolean;
   resolvedVerboseLevel: VerboseLevel;
-  resolvedReasoningLevel: ReasoningLevel;
+  resolvedReasoningLevel?: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+  resolveDefaultReasoningLevel: () => Promise<ReasoningLevel>;
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];
@@ -67,6 +68,7 @@ export async function buildStatusReply(params: {
     resolvedReasoningLevel,
     resolvedElevatedLevel,
     resolveDefaultThinkingLevel,
+    resolveDefaultReasoningLevel,
     isGroup,
     defaultGroupActivation,
   } = params;
@@ -194,7 +196,7 @@ export async function buildStatusReply(params: {
     resolvedThink: resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
     resolvedFast: effectiveFastMode,
     resolvedVerbose: resolvedVerboseLevel,
-    resolvedReasoning: resolvedReasoningLevel,
+    resolvedReasoning: resolvedReasoningLevel ?? (await resolveDefaultReasoningLevel()),
     resolvedElevated: resolvedElevatedLevel,
     modelAuth: selectedModelAuth,
     activeModelAuth,

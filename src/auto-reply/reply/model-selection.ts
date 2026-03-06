@@ -7,6 +7,7 @@ import {
   type ModelAliasIndex,
   modelKey,
   normalizeProviderId,
+  resolveReasoningDefault,
   resolveModelRefFromString,
   resolveReasoningDefault,
   resolveThinkingDefault,
@@ -382,6 +383,7 @@ export async function createModelSelectionState(params: {
   }
 
   let defaultThinkingLevel: ThinkLevel | undefined;
+  let defaultReasoningLevel: "on" | "off" | undefined;
   const resolveDefaultThinkingLevel = async () => {
     if (defaultThinkingLevel) {
       return defaultThinkingLevel;
@@ -403,16 +405,21 @@ export async function createModelSelectionState(params: {
   };
 
   const resolveDefaultReasoningLevel = async (): Promise<"on" | "off"> => {
+    if (defaultReasoningLevel) {
+      return defaultReasoningLevel;
+    }
     let catalogForReasoning = modelCatalog ?? allowedModelCatalog;
     if (!catalogForReasoning || catalogForReasoning.length === 0) {
       modelCatalog = await loadModelCatalog({ config: cfg });
       catalogForReasoning = modelCatalog;
     }
-    return resolveReasoningDefault({
+    defaultReasoningLevel = resolveReasoningDefault({
+      cfg,
       provider,
       model,
       catalog: catalogForReasoning,
     });
+    return defaultReasoningLevel;
   };
 
   return {
