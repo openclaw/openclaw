@@ -54,6 +54,10 @@ const FAST_TEST_RETRY_INTERVAL_MS = 8;
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 90_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 const GATEWAY_TIMEOUT_PATTERN = /gateway timeout/i;
+
+/** Hard cap on findings text forwarded in completion messages. */
+const MAX_FINDINGS_LENGTH = 2000;
+
 let subagentRegistryRuntimePromise: Promise<
   typeof import("./subagent-registry-runtime.js")
 > | null = null;
@@ -301,9 +305,19 @@ async function readLatestSubagentOutput(sessionKey: string): Promise<string | un
     method: "chat.history",
     params: { sessionKey, limit: 50 },
   });
+  // Security: only extract assistant-role messages in the fallback path.
+  // toolResult/tool content may contain raw source code, API keys, or other
+  // sensitive data that must not be forwarded to the chat channel.
   const messages = Array.isArray(history?.messages) ? history.messages : [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i];
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const role = (msg as { role?: unknown }).role;
+    if (role !== "assistant") {
+      continue;
+    }
     const text = extractSubagentOutputText(msg);
     if (text) {
       return text;
@@ -1354,7 +1368,11 @@ export async function runSubagentAnnounceFlow(params: {
 
     const taskLabel = params.label || params.task || "task";
     const announceSessionId = childSessionId || "unknown";
-    const findings = childCompletionFindings || reply || "(no output)";
+    let findings = childCompletionFindings || reply || "(no output)";
+    // Truncate overly long findings to prevent flooding the chat channel.
+    if (findings.length > MAX_FINDINGS_LENGTH) {
+      findings = findings.slice(0, MAX_FINDINGS_LENGTH) + "\n\n[… output truncated]";
+    }
 
     let requesterIsSubagent = requesterIsInternalSession();
     if (requesterIsSubagent) {
