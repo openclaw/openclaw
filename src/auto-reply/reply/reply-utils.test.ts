@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { parseAudioTag } from "./audio-tags.js";
+import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { createReplyReferencePlanner } from "./reply-reference.js";
+import { sanitizeOutboundText } from "./reply-utils.js";
 import {
   extractShortModelName,
   hasTemplateVariables,
@@ -860,5 +862,132 @@ describe("hasTemplateVariables", () => {
     expect(hasTemplateVariables("[{model}]")).toBe(true);
     expect(hasTemplateVariables("[{model}]")).toBe(true);
     expect(hasTemplateVariables("[Claude]")).toBe(false);
+  });
+});
+
+describe("sanitizeOutboundText", () => {
+  it("suppresses JSON-wrapped NO_REPLY action", () => {
+    expect(sanitizeOutboundText('{"action":"NO_REPLY"}')).toBeNull();
+  });
+
+  it("suppresses lightweight JSON-wrapped NO_REPLY variants", () => {
+    expect(sanitizeOutboundText('{"action":"NO_REPLY","extra":true}')).toBeNull();
+  });
+
+  it("passes through long JSON payloads", () => {
+    const text = `{"action":"NO_REPLY","padding":"${"x".repeat(180)}"}`;
+
+    expect(text.length).toBeGreaterThan(200);
+    expect(sanitizeOutboundText(text)).toBe(text);
+  });
+
+  it("suppresses only the documented bare Reasoning leak", () => {
+    expect(sanitizeOutboundText("Reasoning:")).toBeNull();
+    expect(sanitizeOutboundText("Reasoning:\n")).toBeNull();
+    expect(sanitizeOutboundText("Reasoning:  \n")).toBeNull();
+    expect(sanitizeOutboundText("Reasoning")).toBe("Reasoning");
+    expect(sanitizeOutboundText("reasoning:")).toBe("reasoning:");
+    expect(sanitizeOutboundText("Reasoning: Here is my analysis...")).toBe(
+      "Reasoning: Here is my analysis...",
+    );
+  });
+
+  it("suppresses bare NO_REPLY and preserves normal text", () => {
+    expect(sanitizeOutboundText("NO_REPLY")).toBeNull();
+    expect(sanitizeOutboundText("Normal reply text")).toBe("Normal reply text");
+    expect(sanitizeOutboundText("")).toBe("");
+  });
+});
+
+describe("buildReplyPayloads outbound sanitizer", () => {
+  const build = (
+    payloads: Array<Record<string, unknown>>,
+    overrides: Partial<Parameters<typeof buildReplyPayloads>[0]> = {},
+  ) =>
+    buildReplyPayloads({
+      payloads: payloads as Parameters<typeof buildReplyPayloads>[0]["payloads"],
+      isHeartbeat: false,
+      didLogHeartbeatStrip: false,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      replyToMode: "first",
+      ...overrides,
+    }).replyPayloads;
+
+  it("suppresses text-only NO_REPLY payloads", () => {
+    expect(build([{ text: "NO_REPLY" }])).toEqual([]);
+    expect(build([{ text: '{"action":"NO_REPLY"}' }])).toEqual([]);
+    expect(build([{ text: '{"action":"NO_REPLY","extra":true}' }])).toEqual([]);
+  });
+
+  it("keeps media payloads when NO_REPLY text is stripped", () => {
+    const payloads = build([{ text: "NO_REPLY", mediaUrl: "https://example.com/image.jpg" }]);
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      mediaUrl: "https://example.com/image.jpg",
+    });
+    expect(payloads[0].text).toBeUndefined();
+  });
+
+  it("keeps channelData payloads when bare Reasoning leak text is stripped", () => {
+    const payloads = build([
+      {
+        text: "Reasoning:",
+        channelData: {
+          telegram: {
+            inline_keyboard: [],
+          },
+        },
+      },
+    ]);
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].channelData).toEqual({
+      telegram: {
+        inline_keyboard: [],
+      },
+    });
+    expect(payloads[0].text).toBeUndefined();
+  });
+
+  it("does not suppress non-documented Reasoning variants", () => {
+    expect(build([{ text: "Reasoning" }])).toMatchObject([{ text: "Reasoning" }]);
+    expect(build([{ text: "reasoning:" }])).toMatchObject([{ text: "reasoning:" }]);
+  });
+
+  it("keeps reply threading and inline directives intact for normal text", () => {
+    const payloads = build([{ text: "[[reply_to_current]]Hello there" }], {
+      currentMessageId: "42",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      text: "Hello there",
+      replyToId: "42",
+      replyToTag: true,
+    });
+  });
+
+  it("preserves duplicate suppression for normal replies", () => {
+    const payloads = build([{ text: "hello world" }], {
+      messagingToolSentTexts: ["hello world"],
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
+  it("keeps heartbeat stripping behavior unchanged", () => {
+    const result = buildReplyPayloads({
+      payloads: [{ text: "HEARTBEAT_OK" }],
+      isHeartbeat: false,
+      didLogHeartbeatStrip: false,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      replyToMode: "first",
+    });
+
+    expect(result.replyPayloads).toEqual([]);
+    expect(result.didLogHeartbeatStrip).toBe(true);
   });
 });

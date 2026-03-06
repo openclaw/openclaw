@@ -19,6 +19,7 @@ import {
   isRenderablePayload,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
+import { sanitizeOutboundText } from "./reply-utils.js";
 
 function hasPayloadMedia(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
@@ -145,14 +146,18 @@ export async function buildReplyPayloads(params: {
         replyToChannel: params.replyToChannel,
         currentMessageId: params.currentMessageId,
       }).map(async (payload) => {
-        const parsed = normalizeReplyPayloadDirectives({
+        const normalized = normalizeReplyPayloadDirectives({
           payload,
           currentMessageId: params.currentMessageId,
           silentToken: SILENT_REPLY_TOKEN,
           parseMode: "always",
-        }).payload;
+        });
+        const text = sanitizeOutboundText(normalized.payload.text);
         return await normalizeReplyPayloadMedia({
-          payload: parsed,
+          payload: {
+            ...normalized.payload,
+            text: text ? text : undefined,
+          },
           normalizeMediaPaths: params.normalizeMediaPaths,
         });
       }),
