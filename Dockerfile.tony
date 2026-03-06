@@ -1,0 +1,59 @@
+FROM openclaw:local
+USER root
+
+# ─── Core system tools + Docker CLI ──────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    openssh-client \
+    ca-certificates \
+    gnupg \
+  && install -m 0755 -d /etc/apt/keyrings \
+  && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+  && chmod a+r /etc/apt/keyrings/docker.gpg \
+  && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends docker-ce-cli \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+# ─── Ruby, Python3, and gateway utilities ────────────────────────────────────
+# Ruby   — Deb kanban scripts (deb.rb, sprint-sync.sh etc.)
+# Python3 / pip — slither, utility scripts (Streetlife, Masta Killa)
+# jq     — JSON parsing in shell scripts
+# socat  — port forwarding / debug tunnels
+# make   — Makefile targets (make deb-status, make tests, etc.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ruby \
+    ruby-dev \
+    python3 \
+    python3-pip \
+    jq \
+    socat \
+    make \
+    build-essential \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+# ─── kubectl ─────────────────────────────────────────────────────────────────
+RUN curl -LO "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl" \
+  && install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl \
+  && rm kubectl
+
+# ─── kustomize ───────────────────────────────────────────────────────────────
+RUN curl -Lo kustomize.tar.gz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.1/kustomize_v5.4.1_linux_amd64.tar.gz" \
+  && tar xzf kustomize.tar.gz \
+  && install kustomize /usr/local/bin/kustomize \
+  && rm kustomize kustomize.tar.gz
+
+# =============================================================================
+# TOOL VERIFICATION MAP (for maintainers)
+# =============================================================================
+# Run inside container to confirm gateway tools are present:
+#
+#   docker run --rm openclaw-tony:local \
+#     sh -c 'for t in docker kubectl kustomize ruby python3 pip3 jq socat make; do \
+#       command -v $t && echo "✅ $t" || echo "❌ $t MISSING"; done'
+#
+# Expected output: 9x ✅
+# =============================================================================
