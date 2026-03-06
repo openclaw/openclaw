@@ -7,7 +7,10 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import { logDebug, logError } from "../logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveToolServer } from "../memory/session-sanitization/config.js";
+import {
+  resolveToolServer,
+  UNKNOWN_MCP_SERVER,
+} from "../memory/session-sanitization/config.js";
 import { processMcpToolResult } from "../memory/session-sanitization/service.js";
 import { isPlainObject } from "../utils.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
@@ -228,10 +231,13 @@ export function wrapMcpToolDefinitions(
   let changed = false;
   const next = defs.map((def) => {
     const server = resolveToolServer(params.cfg, def.name);
-    // Wrap all tools — declared (known server) and undeclared ("unknown") alike.
-    // Unknown tools are not trusted and must go through full sanitization.
-    // The trusted-list fast-path inside processMcpToolResult handles declared
-    // trusted servers; everything else, including "unknown", is sanitized.
+    // Only wrap tools declared in mcpServers.  Tools whose names do not appear
+    // in any server entry are native OpenClaw or client tools — they must not
+    // be routed through processMcpToolResult.  The "unknown" sentinel means
+    // "not an MCP tool in this context", not "untrusted MCP tool".
+    if (server === UNKNOWN_MCP_SERVER) {
+      return def;
+    }
     changed = true;
     const originalExecute = def.execute;
     return {
