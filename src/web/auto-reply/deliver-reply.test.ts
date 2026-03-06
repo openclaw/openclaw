@@ -142,6 +142,7 @@ describe("deliverWebReply", () => {
         textLimit: 200,
         replyLogger,
         skipLog: true,
+        retry: { jitter: 0 },
       });
 
       expect(msg.reply).toHaveBeenCalledTimes(2);
@@ -196,6 +197,7 @@ describe("deliverWebReply", () => {
       textLimit: 200,
       replyLogger,
       skipLog: true,
+      retry: { jitter: 0 },
     });
 
     expect(msg.sendMedia).toHaveBeenCalledTimes(2);
@@ -311,5 +313,46 @@ describe("deliverWebReply", () => {
         mimetype: "application/octet-stream",
       }),
     );
+  });
+
+  it("respects custom retry config for attempts and delays", async () => {
+    const msg = makeMsg();
+    (msg.reply as unknown as { mockRejectedValue: (v: unknown) => void }).mockRejectedValue(
+      new Error("connection reset"),
+    );
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+        retry: { attempts: 5, minDelayMs: 100, jitter: 0 },
+      }),
+    ).rejects.toThrow("connection reset");
+
+    expect(msg.reply).toHaveBeenCalledTimes(5);
+  });
+
+  it("does not retry on non-transient errors", async () => {
+    const msg = makeMsg();
+    (msg.reply as unknown as { mockRejectedValue: (v: unknown) => void }).mockRejectedValue(
+      new Error("invalid phone number"),
+    );
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      }),
+    ).rejects.toThrow("invalid phone number");
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
   });
 });

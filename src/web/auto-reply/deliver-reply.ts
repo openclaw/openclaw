@@ -1,10 +1,11 @@
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { MarkdownTableMode, OutboundRetryConfig } from "../../config/types.base.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveRetryConfig, retryAsync } from "../../infra/retry.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { markdownToWhatsApp } from "../../markdown/whatsapp.js";
-import { sleep } from "../../utils.js";
 import { loadWebMedia } from "../media.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
@@ -25,6 +26,15 @@ function shouldSuppressReasoningReply(payload: ReplyPayload): boolean {
   return text.trimStart().toLowerCase().startsWith(REASONING_PREFIX);
 }
 
+const WHATSAPP_RETRY_DEFAULTS = {
+  attempts: 3,
+  minDelayMs: 500,
+  maxDelayMs: 30_000,
+  jitter: 0.1,
+};
+
+const WHATSAPP_RETRY_RE = /closed|reset|timed\s*out|disconnect|408|connection/i;
+
 export async function deliverWebReply(params: {
   replyResult: ReplyPayload;
   msg: WebInboundMsg;
@@ -39,6 +49,7 @@ export async function deliverWebReply(params: {
   connectionId?: string;
   skipLog?: boolean;
   tableMode?: MarkdownTableMode;
+  retry?: OutboundRetryConfig;
 }) {
   const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const replyStarted = Date.now();
@@ -58,28 +69,18 @@ export async function deliverWebReply(params: {
       ? [replyResult.mediaUrl]
       : [];
 
-  const sendWithRetry = async (fn: () => Promise<unknown>, label: string, maxAttempts = 3) => {
-    let lastErr: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        return await fn();
-      } catch (err) {
-        lastErr = err;
-        const errText = formatError(err);
-        const isLast = attempt === maxAttempts;
-        const shouldRetry = /closed|reset|timed\s*out|disconnect/i.test(errText);
-        if (!shouldRetry || isLast) {
-          throw err;
-        }
-        const backoffMs = 500 * attempt;
+  const retryConfig = resolveRetryConfig(WHATSAPP_RETRY_DEFAULTS, params.retry);
+  const sendWithRetry = async (fn: () => Promise<unknown>, label: string) =>
+    retryAsync(fn, {
+      ...retryConfig,
+      label,
+      shouldRetry: (err) => WHATSAPP_RETRY_RE.test(formatErrorMessage(err)),
+      onRetry: (info) => {
         logVerbose(
-          `Retrying ${label} to ${msg.from} after failure (${attempt}/${maxAttempts - 1}) in ${backoffMs}ms: ${errText}`,
+          `Retrying ${label} to ${msg.from} after failure (${info.attempt}/${info.maxAttempts}) in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
         );
-        await sleep(backoffMs);
-      }
-    }
-    throw lastErr;
-  };
+      },
+    });
 
   // Text-only replies
   if (mediaList.length === 0 && textChunks.length) {

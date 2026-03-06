@@ -252,6 +252,10 @@ export async function processMessage(params: {
         })()
       : undefined;
 
+  const whatsAppAccount = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.route.accountId,
+  });
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
   const tableMode = resolveMarkdownTableMode({
@@ -412,6 +416,7 @@ export async function processMessage(params: {
           connectionId: params.connectionId,
           skipLog: false,
           tableMode,
+          retry: whatsAppAccount.retry,
         });
         didSendReply = true;
         const shouldLog = payload.text ? true : undefined;

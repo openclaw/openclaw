@@ -3,6 +3,7 @@ import type {
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
+  OutboundRetryConfig,
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
@@ -78,6 +79,8 @@ type WhatsAppSharedConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Outbound message retry policy (attempts, delays, jitter). */
+  retry?: OutboundRetryConfig;
 };
 
 type WhatsAppConfigCore = {
