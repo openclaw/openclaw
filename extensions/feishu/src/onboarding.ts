@@ -65,6 +65,23 @@ function parseAllowFromInput(raw: string): string[] {
     .filter(Boolean);
 }
 
+function isFeishuAppIdConfigured(value: unknown): boolean {
+  const asString = normalizeString(value);
+  if (asString) {
+    return true;
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const rec = value as Record<string, unknown>;
+  const source = normalizeString(rec.source)?.toLowerCase();
+  const id = normalizeString(rec.id);
+  if (source === "env" && id) {
+    return Boolean(normalizeString(process.env[id]));
+  }
+  return hasConfiguredSecretInput(value);
+}
+
 async function promptFeishuAllowFrom(params: {
   cfg: ClawdbotConfig;
   prompter: WizardPrompter;
@@ -178,25 +195,8 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
   getStatus: async ({ cfg }) => {
     const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
 
-    const isAppIdConfigured = (value: unknown): boolean => {
-      const asString = normalizeString(value);
-      if (asString) {
-        return true;
-      }
-      if (!value || typeof value !== "object") {
-        return false;
-      }
-      const rec = value as Record<string, unknown>;
-      const source = normalizeString(rec.source)?.toLowerCase();
-      const id = normalizeString(rec.id);
-      if (source === "env" && id) {
-        return Boolean(normalizeString(process.env[id]));
-      }
-      return hasConfiguredSecretInput(value);
-    };
-
     const topLevelConfigured = Boolean(
-      isAppIdConfigured(feishuCfg?.appId) && hasConfiguredSecretInput(feishuCfg?.appSecret),
+      isFeishuAppIdConfigured(feishuCfg?.appId) && hasConfiguredSecretInput(feishuCfg?.appSecret),
     );
 
     const accountConfigured = Object.values(feishuCfg?.accounts ?? {}).some((account) => {
@@ -206,8 +206,8 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
       const hasOwnAppId = Object.prototype.hasOwnProperty.call(account, "appId");
       const hasOwnAppSecret = Object.prototype.hasOwnProperty.call(account, "appSecret");
       const accountAppIdConfigured = hasOwnAppId
-        ? isAppIdConfigured((account as Record<string, unknown>).appId)
-        : isAppIdConfigured(feishuCfg?.appId);
+        ? isFeishuAppIdConfigured((account as Record<string, unknown>).appId)
+        : isFeishuAppIdConfigured(feishuCfg?.appId);
       const accountSecretConfigured = hasOwnAppSecret
         ? hasConfiguredSecretInput((account as Record<string, unknown>).appSecret)
         : hasConfiguredSecretInput(feishuCfg?.appSecret);
@@ -255,9 +255,7 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
       allowUnresolvedSecretRef: true,
     });
     const hasConfigSecret = hasConfiguredSecretInput(feishuCfg?.appSecret);
-    const hasConfigCreds = Boolean(
-      typeof feishuCfg?.appId === "string" && feishuCfg.appId.trim() && hasConfigSecret,
-    );
+    const hasConfigCreds = Boolean(isFeishuAppIdConfigured(feishuCfg?.appId) && hasConfigSecret);
     const canUseEnv = Boolean(
       !hasConfigCreds && process.env.FEISHU_APP_ID?.trim() && process.env.FEISHU_APP_SECRET?.trim(),
     );
