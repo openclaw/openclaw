@@ -33,6 +33,8 @@ const RECOVERABLE_ERROR_NAMES = new Set([
 ]);
 
 const ALWAYS_RECOVERABLE_MESSAGES = new Set(["fetch failed", "typeerror: fetch failed"]);
+const GRAMMY_NETWORK_REQUEST_FAILED_RE =
+  /^network request(?:\s+for\s+["']?[^"']+["']?)?\s+failed(?:\s+after\b.*)?[!.]?$/i;
 
 const RECOVERABLE_MESSAGE_SNIPPETS = [
   "undici",
@@ -104,6 +106,9 @@ export function isRecoverableTelegramNetworkError(
 
     const message = formatErrorMessage(candidate).trim().toLowerCase();
     if (message && ALWAYS_RECOVERABLE_MESSAGES.has(message)) {
+      return true;
+    }
+    if (message && GRAMMY_NETWORK_REQUEST_FAILED_RE.test(message)) {
       return true;
     }
     if (allowMessageMatch && message) {
