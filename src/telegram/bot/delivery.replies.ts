@@ -94,6 +94,10 @@ function markDelivered(progress: DeliveryProgress): void {
   progress.deliveredCount += 1;
 }
 
+function shouldSkipTelegramTextChunk(chunk: { html: string; text: string } | undefined): boolean {
+  return !chunk || (!chunk.html.trim() && !chunk.text.trim());
+}
+
 async function deliverTextReply(params: {
   bot: Bot;
   chatId: string;
@@ -112,7 +116,7 @@ async function deliverTextReply(params: {
   const chunks = params.chunkText(params.replyText);
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
-    if (!chunk) {
+    if (shouldSkipTelegramTextChunk(chunk)) {
       continue;
     }
     const shouldAttachButtons = i === 0 && params.replyMarkup;
@@ -161,6 +165,9 @@ async function sendPendingFollowUpText(params: {
   const chunks = params.chunkText(params.text);
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
+    if (shouldSkipTelegramTextChunk(chunk)) {
+      continue;
+    }
     const replyToForFollowUp = resolveReplyToForSend({
       replyToId: params.replyToId,
       replyToMode: params.replyToMode,
@@ -210,6 +217,9 @@ async function sendTelegramVoiceFallbackText(opts: {
   let appliedReplyTo = false;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
+    if (shouldSkipTelegramTextChunk(chunk)) {
+      continue;
+    }
     // Only apply reply reference, quote text, and buttons to the first chunk.
     const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
     const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
@@ -534,16 +544,11 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
-    if (!reply?.text && !hasMedia) {
-      if (reply?.audioAsVoice) {
-        logVerbose("telegram reply has audioAsVoice without media/text; skipping");
-        continue;
-      }
-      params.runtime.error?.(danger("reply missing text/media"));
+    const rawContent = reply?.text || "";
+    if (reply?.audioAsVoice && !rawContent && !hasMedia) {
+      logVerbose("telegram reply has audioAsVoice without media/text; skipping");
       continue;
     }
-
-    const rawContent = reply.text || "";
     if (hasMessageSendingHooks) {
       const hookResult = await hookRunner?.runMessageSending(
         {
@@ -569,7 +574,48 @@ export async function deliverReplies(params: {
       }
     }
 
-    const contentForSentHook = reply.text || "";
+    const replyText = reply?.text;
+    const contentForSentHook = replyText || "";
+    if (!hasMedia) {
+      if (typeof replyText !== "string") {
+        params.runtime.error?.(danger("reply missing text/media"));
+        if (hasMessageSentHooks) {
+          void hookRunner?.runMessageSent(
+            {
+              to: params.chatId,
+              content: contentForSentHook,
+              success: false,
+              error: "reply missing text/media",
+            },
+            {
+              channelId: "telegram",
+              accountId: params.accountId,
+              conversationId: params.chatId,
+            },
+          );
+        }
+        continue;
+      }
+      if (!replyText.trim()) {
+        logVerbose("telegram reply text empty after hooks/normalization; skipping");
+        if (hasMessageSentHooks) {
+          void hookRunner?.runMessageSent(
+            {
+              to: params.chatId,
+              content: contentForSentHook,
+              success: false,
+              error: "telegram reply text empty after hooks/normalization",
+            },
+            {
+              channelId: "telegram",
+              accountId: params.accountId,
+              conversationId: params.chatId,
+            },
+          );
+        }
+        continue;
+      }
+    }
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
@@ -586,7 +632,7 @@ export async function deliverReplies(params: {
           runtime: params.runtime,
           thread: params.thread,
           chunkText,
-          replyText: reply.text || "",
+          replyText: replyText || "",
           replyMarkup,
           replyQuoteText: params.replyQuoteText,
           linkPreview: params.linkPreview,
