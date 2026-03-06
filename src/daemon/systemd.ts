@@ -144,10 +144,13 @@ async function execSystemctl(
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
-  // Concatenate both streams so pattern matchers (isSystemdUnitNotEnabled,
-  // isSystemctlMissing) can see the unit status from stdout even when
-  // execFileUtf8 populates stderr with the Node error message fallback.
-  return `${result.stderr} ${result.stdout}`.trim();
+  const stdout = result.stdout?.trim() ?? "";
+  const stderr = result.stderr?.trim() ?? "";
+  // Prefer stdout if it contains valid systemctl output (not the generic "Command failed" message)
+  if (stdout && !stdout.toLowerCase().includes("command failed")) {
+    return stdout;
+  }
+  return stderr || stdout;
 }
 
 function isSystemctlMissing(detail: string): boolean {
