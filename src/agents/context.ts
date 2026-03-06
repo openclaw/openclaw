@@ -20,6 +20,15 @@ type AgentModelEntry = { params?: Record<string, unknown> };
 
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
+
+function normalizeModelId(modelId: string): string {
+  const normalized = modelId.toLowerCase().trim();
+  const slashIndex = normalized.indexOf("/");
+  if (slashIndex >= 0) {
+    return normalized.slice(slashIndex + 1);
+  }
+  return normalized;
+}
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
@@ -41,20 +50,20 @@ export function applyDiscoveredContextWindows(params: {
       continue;
     }
 
+    const normalizedModelId = normalizeModelId(model.id);
+
     // 1. Scoped lookup (highest precedence)
-    const scopedKey = `${model.provider.toLowerCase().trim()}::${model.id.toLowerCase().trim()}`;
+    const scopedKey = `${model.provider.toLowerCase().trim()}::${normalizedModelId}`;
     const existingScoped = params.cache.get(scopedKey);
     if (existingScoped === undefined || contextWindow < existingScoped) {
       params.cache.set(scopedKey, contextWindow);
     }
 
     // 2. Bare modelId lookup (legacy/fallback precedence)
-    const bareKey = model.id.toLowerCase().trim();
-    const existingBare = params.cache.get(bareKey);
-    // For the global bare-id cache, we continue to prefer the smaller window
-    // so that budgeting remains fail-safe when the provider is unknown.
-    if (existingBare === undefined || contextWindow < existingBare) {
-      params.cache.set(bareKey, contextWindow);
+    const existingBare = params.cache.get(normalizedModelId);
+    // For the global bare-id cache, prefer the largest window to avoid proxy poisoning (V4.2)
+    if (existingBare === undefined || contextWindow > existingBare) {
+      params.cache.set(normalizedModelId, contextWindow);
     }
   }
 }
@@ -80,13 +89,16 @@ export function applyConfiguredContextWindows(params: {
       }
 
       const normalizedProvider = providerId.toLowerCase().trim();
-      const normalizedModelId = modelId.toLowerCase().trim();
+      const normalizedModelId = normalizeModelId(modelId);
 
-      // Set scoped key
+      // Set scoped key (Config overrides discovery)
       params.cache.set(`${normalizedProvider}::${normalizedModelId}`, contextWindow);
 
-      // Set bare key (last one wins or smallest wins? Config should probably override discovery)
-      params.cache.set(normalizedModelId, contextWindow);
+      // Set bare key (Largest wins globally to avoid proxy poisoning)
+      const existingBare = params.cache.get(normalizedModelId);
+      if (existingBare === undefined || contextWindow > existingBare) {
+        params.cache.set(normalizedModelId, contextWindow);
+      }
     }
   }
 }
@@ -203,8 +215,10 @@ export function lookupContextTokens(modelId?: string, provider?: string): number
   // Best-effort: kick off loading, but don't block.
   void ensureContextWindowCacheLoaded();
 
+  const normalizedModelId = normalizeModelId(modelId);
+
   if (provider) {
-    const scopedKey = `${provider.toLowerCase().trim()}::${modelId.toLowerCase().trim()}`;
+    const scopedKey = `${provider.toLowerCase().trim()}::${normalizedModelId}`;
     const scopedLimit = MODEL_CACHE.get(scopedKey);
     if (scopedLimit !== undefined) {
       return scopedLimit;
@@ -213,7 +227,7 @@ export function lookupContextTokens(modelId?: string, provider?: string): number
 
   // Fallback to legacy behavior where we check for a bare modelId match.
   // This supports cases where the provider is not yet known or for generic aliases.
-  return MODEL_CACHE.get(modelId.toLowerCase().trim());
+  return MODEL_CACHE.get(normalizedModelId);
 }
 
 if (!shouldSkipEagerContextWindowWarmup()) {
@@ -251,7 +265,7 @@ function resolveProviderModelRef(params: {
   }
   const providerRaw = params.provider?.trim();
   if (providerRaw) {
-    return { provider: providerRaw.toLowerCase(), model: modelRaw };
+    return { provider: providerRaw.toLowerCase(), model: normalizeModelId(modelRaw) };
   }
   const slash = modelRaw.indexOf("/");
   if (slash <= 0) {
@@ -262,7 +276,7 @@ function resolveProviderModelRef(params: {
   if (!provider || !model) {
     return undefined;
   }
-  return { provider, model };
+  return { provider, model: normalizeModelId(model) };
 }
 
 function isAnthropic1MModel(provider: string, model: string): boolean {
