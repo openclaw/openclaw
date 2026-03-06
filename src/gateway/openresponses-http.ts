@@ -343,12 +343,18 @@ export async function handleOpenResponsesHttpRequest(
               if (sourceType === "url") {
                 markUrlPart();
               }
-              const imageSource: InputImageSource = {
-                type: sourceType,
-                url: source.url,
-                data: source.data,
-                mediaType: source.media_type,
-              };
+              const imageSource: InputImageSource =
+                sourceType === "url"
+                  ? {
+                      type: "url",
+                      url: source.url ?? "",
+                      mediaType: source.media_type,
+                    }
+                  : {
+                      type: "base64",
+                      data: source.data ?? "",
+                      mediaType: source.media_type,
+                    };
               const image = await extractImageContentFromSource(imageSource, limits.images);
               images.push(image);
               continue;
@@ -371,13 +377,20 @@ export async function handleOpenResponsesHttpRequest(
                 markUrlPart();
               }
               const file = await extractFileContentFromSource({
-                source: {
-                  type: sourceType,
-                  url: source.url,
-                  data: source.data,
-                  mediaType: source.media_type,
-                  filename: source.filename,
-                },
+                source:
+                  sourceType === "url"
+                    ? {
+                        type: "url",
+                        url: source.url ?? "",
+                        mediaType: source.media_type,
+                        filename: source.filename,
+                      }
+                    : {
+                        type: "base64",
+                        data: source.data ?? "",
+                        mediaType: source.media_type,
+                        filename: source.filename,
+                      },
                 limits: limits.files,
               });
               if (file.text?.trim()) {

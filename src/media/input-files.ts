@@ -53,20 +53,31 @@ export type InputImageLimits = {
   timeoutMs: number;
 };
 
-export type InputImageSource = {
-  type: "base64" | "url";
-  data?: string;
-  url?: string;
-  mediaType?: string;
-};
+export type InputImageSource =
+  | {
+      type: "base64";
+      data: string;
+      mediaType?: string;
+    }
+  | {
+      type: "url";
+      url: string;
+      mediaType?: string;
+    };
 
-export type InputFileSource = {
-  type: "base64" | "url";
-  data?: string;
-  url?: string;
-  mediaType?: string;
-  filename?: string;
-};
+export type InputFileSource =
+  | {
+      type: "base64";
+      data: string;
+      mediaType?: string;
+      filename?: string;
+    }
+  | {
+      type: "url";
+      url: string;
+      mediaType?: string;
+      filename?: string;
+    };
 
 export type InputFetchResult = {
   buffer: Buffer;
@@ -212,9 +223,6 @@ export async function extractImageContentFromSource(
   limits: InputImageLimits,
 ): Promise<InputImageContent> {
   if (source.type === "base64") {
-    if (!source.data) {
-      throw new Error("input_image base64 source missing 'data' field");
-    }
     rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "Image" });
     const canonicalData = canonicalizeBase64(source.data);
     if (!canonicalData) {
@@ -233,7 +241,7 @@ export async function extractImageContentFromSource(
     return { type: "image", data: canonicalData, mimeType };
   }
 
-  if (source.type === "url" && source.url) {
+  if (source.type === "url") {
     if (!limits.allowUrl) {
       throw new Error("input_image URL sources are disabled by config");
     }
@@ -254,7 +262,7 @@ export async function extractImageContentFromSource(
     return { type: "image", data: result.buffer.toString("base64"), mimeType: result.mimeType };
   }
 
-  throw new Error("input_image must have 'source.url' or 'source.data'");
+  throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
 }
 
 export async function extractFileContentFromSource(params: {
@@ -269,9 +277,6 @@ export async function extractFileContentFromSource(params: {
   let charset: string | undefined;
 
   if (source.type === "base64") {
-    if (!source.data) {
-      throw new Error("input_file base64 source missing 'data' field");
-    }
     rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "File" });
     const canonicalData = canonicalizeBase64(source.data);
     if (!canonicalData) {
@@ -281,7 +286,7 @@ export async function extractFileContentFromSource(params: {
     mimeType = parsed.mimeType;
     charset = parsed.charset;
     buffer = Buffer.from(canonicalData, "base64");
-  } else if (source.type === "url" && source.url) {
+  } else {
     if (!limits.allowUrl) {
       throw new Error("input_file URL sources are disabled by config");
     }
@@ -300,8 +305,6 @@ export async function extractFileContentFromSource(params: {
     mimeType = parsed.mimeType ?? normalizeMimeType(result.mimeType);
     charset = parsed.charset;
     buffer = result.buffer;
-  } else {
-    throw new Error("input_file must have 'source.url' or 'source.data'");
   }
 
   if (buffer.byteLength > limits.maxBytes) {
