@@ -246,9 +246,8 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
     expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
-    expectEnvProxyAgentConstructorCall({ nth: 2, autoSelectFamily: false });
   });
 
   it("retries with ipv4 fallback once per request, not once per process", async () => {

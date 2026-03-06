@@ -13,6 +13,7 @@ import {
 let appliedAutoSelectFamily: boolean | null = null;
 let appliedDnsResultOrder: string | null = null;
 let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
+let skippedGlobalDispatcherAutoSelectFamily: boolean | null = null;
 const log = createSubsystemLogger("telegram/network");
 function isProxyLikeDispatcher(dispatcher: unknown): boolean {
   const ctorName = (dispatcher as { constructor?: { name?: string } })?.constructor?.name;
@@ -51,7 +52,17 @@ const IPV4_FALLBACK_RULES: readonly Ipv4FallbackRule[] = [
 // Node 22 workaround: enable autoSelectFamily to allow IPv4 fallback on broken IPv6 networks.
 // Many networks have IPv6 configured but not routed, causing "Network is unreachable" errors.
 // See: https://github.com/nodejs/node/issues/54359
-function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void {
+
+type TelegramNetworkWorkaroundOptions = {
+  allowGlobalDispatcherUpdate?: boolean;
+};
+
+function applyTelegramNetworkWorkarounds(
+  network?: TelegramNetworkConfig,
+  options: TelegramNetworkWorkaroundOptions = {},
+): void {
+  const allowGlobalDispatcherUpdate = options.allowGlobalDispatcherUpdate !== false;
+
   // Apply autoSelectFamily workaround
   const autoSelectDecision = resolveTelegramAutoSelectFamilyDecision({ network });
   if (autoSelectDecision.value !== null && autoSelectDecision.value !== appliedAutoSelectFamily) {
@@ -78,23 +89,33 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
     autoSelectDecision.value !== null &&
     autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
   ) {
-    const existingGlobalDispatcher = getGlobalDispatcher();
-    const shouldPreserveExistingProxy =
-      isProxyLikeDispatcher(existingGlobalDispatcher) && !hasProxyEnvConfigured();
-    if (!shouldPreserveExistingProxy) {
-      try {
-        setGlobalDispatcher(
-          new EnvHttpProxyAgent({
-            connect: {
-              autoSelectFamily: autoSelectDecision.value,
-              autoSelectFamilyAttemptTimeout: 300,
-            },
-          }),
+    if (!allowGlobalDispatcherUpdate) {
+      if (skippedGlobalDispatcherAutoSelectFamily !== autoSelectDecision.value) {
+        skippedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
+        log.warn(
+          "skip global undici dispatcher reconfigure during live IPv4 fallback; keeping existing dispatcher to avoid destabilizing active polling",
         );
-        appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
-        log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
-      } catch {
-        // ignore if setGlobalDispatcher is unavailable
+      }
+    } else {
+      const existingGlobalDispatcher = getGlobalDispatcher();
+      const shouldPreserveExistingProxy =
+        isProxyLikeDispatcher(existingGlobalDispatcher) && !hasProxyEnvConfigured();
+      if (!shouldPreserveExistingProxy) {
+        try {
+          setGlobalDispatcher(
+            new EnvHttpProxyAgent({
+              connect: {
+                autoSelectFamily: autoSelectDecision.value,
+                autoSelectFamilyAttemptTimeout: 300,
+              },
+            }),
+          );
+          appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
+          skippedGlobalDispatcherAutoSelectFamily = null;
+          log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
+        } catch {
+          // ignore if setGlobalDispatcher is unavailable
+        }
       }
     }
   }
@@ -166,11 +187,18 @@ function shouldRetryWithIpv4Fallback(err: unknown): boolean {
 }
 
 function applyTelegramIpv4Fallback(): void {
-  applyTelegramNetworkWorkarounds({
-    autoSelectFamily: false,
-    dnsResultOrder: "ipv4first",
-  });
-  log.warn("fetch fallback: forcing autoSelectFamily=false + dnsResultOrder=ipv4first");
+  applyTelegramNetworkWorkarounds(
+    {
+      autoSelectFamily: false,
+      dnsResultOrder: "ipv4first",
+    },
+    {
+      allowGlobalDispatcherUpdate: false,
+    },
+  );
+  log.warn(
+    "fetch fallback: forcing autoSelectFamily=false + dnsResultOrder=ipv4first without live dispatcher swap",
+  );
 }
 
 // Prefer wrapped fetch when available to normalize AbortSignal across runtimes.
@@ -205,4 +233,5 @@ export function resetTelegramFetchStateForTests(): void {
   appliedAutoSelectFamily = null;
   appliedDnsResultOrder = null;
   appliedGlobalDispatcherAutoSelectFamily = null;
+  skippedGlobalDispatcherAutoSelectFamily = null;
 }
