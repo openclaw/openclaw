@@ -62,7 +62,26 @@ export async function modelsListCommand(
   const rows: ModelRow[] = [];
 
   if (opts.all) {
-    const sorted = [...models].toSorted((a, b) => {
+    const modelByKey = new Map(models.map((model) => [modelKey(model.provider, model.id), model]));
+
+    if (modelRegistry) {
+      for (const entry of entries) {
+        if (modelByKey.has(entry.key)) {
+          continue;
+        }
+        const resolved = resolveModelWithRegistry({
+          provider: entry.ref.provider,
+          modelId: entry.ref.model,
+          modelRegistry,
+          cfg,
+        });
+        if (resolved) {
+          modelByKey.set(entry.key, resolved);
+        }
+      }
+    }
+
+    const sorted = [...modelByKey.values()].toSorted((a, b) => {
       const p = a.provider.localeCompare(b.provider);
       if (p !== 0) {
         return p;
