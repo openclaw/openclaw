@@ -192,7 +192,7 @@ describe("createCacheTrace", () => {
     const innerStreamFn: import("@mariozechner/pi-agent-core").StreamFn = (() =>
       ({}) as never) as import("@mariozechner/pi-agent-core").StreamFn;
     const wrapped = trace?.wrapStreamFn(innerStreamFn);
-    wrapped?.(
+    void wrapped?.(
       { id: "claude-opus", provider: "anthropic", api: "anthropic-messages" } as never,
       { messages: [{ role: "user" } as never], system: "you are helpful" } as never,
       {},
