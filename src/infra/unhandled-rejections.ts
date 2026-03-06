@@ -279,9 +279,16 @@ export function isRecoverableUncaughtException(error: unknown): boolean {
 
   const name = readErrorName(error);
   const message = "message" in error && typeof error.message === "string" ? error.message : "";
+  const stack = "stack" in error && typeof error.stack === "string" ? error.stack : "";
 
   for (const pattern of RECOVERABLE_UNCAUGHT_PATTERNS) {
     if (name === pattern.errorType && pattern.messagePattern.test(message)) {
+      // Gate to undici-origin errors: only suppress if the stack trace
+      // references undici internals, to avoid swallowing unrelated TypeErrors
+      // from app/plugin code. (#35257)
+      if (!stack.includes("undici")) {
+        continue;
+      }
       return true;
     }
   }
