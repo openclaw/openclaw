@@ -1,9 +1,0 @@
-import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
-export declare function handleAcpStatusAction(params: HandleCommandsParams, restTokens: string[]): Promise<CommandHandlerResult>;
-export declare function handleAcpSetModeAction(params: HandleCommandsParams, restTokens: string[]): Promise<CommandHandlerResult>;
-export declare function handleAcpSetAction(params: HandleCommandsParams, restTokens: string[]): Promise<CommandHandlerResult>;
-export declare function handleAcpCwdAction(params: HandleCommandsParams, restTokens: string[]): Promise<CommandHandlerResult>;
-export declare function handleAcpPermissionsAction(params: HandleCommandsParams, restTokens: string[]): Promise<CommandHandlerResult>;
-export declare function handleAcpTimeoutAction(params: HandleCommandsParams, restTokens: string[]): Promise<CommandHandlerResult>;
-export declare function handleAcpModelAction(params: HandleCommandsParams, restTokens: string[]): Promise<CommandHandlerResult>;
-export declare function handleAcpResetOptionsAction(params: HandleCommandsParams, restTokens: string[]): Promise<CommandHandlerResult>;

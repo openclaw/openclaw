@@ -1,7 +1,0 @@
-export declare function matchesFormatErrorPattern(raw: string): boolean;
-export declare function isRateLimitErrorMessage(raw: string): boolean;
-export declare function isTimeoutErrorMessage(raw: string): boolean;
-export declare function isBillingErrorMessage(raw: string): boolean;
-export declare function isAuthPermanentErrorMessage(raw: string): boolean;
-export declare function isAuthErrorMessage(raw: string): boolean;
-export declare function isOverloadedErrorMessage(raw: string): boolean;
