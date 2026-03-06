@@ -101,7 +101,7 @@ describe("createOpenClawCodingTools", () => {
 
       expect(props.file_path).toEqual(props.path);
       expect(params.required ?? []).not.toContain("path");
-      expect(params.required ?? []).not.toContain("file_path");
+      expect(params.required ?? []).toContain("file_path");
     });
 
     it("normalizes file_path to path and enforces required groups at runtime", async () => {
