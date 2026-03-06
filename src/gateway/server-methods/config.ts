@@ -31,12 +31,15 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import { evaluateConfigMutation } from "../../policy/policy.evaluate.js";
+import { getPolicyManagerState } from "../../policy/policy.manager.js";
 import { diffConfigPaths } from "../config-reload.js";
 import {
   formatControlPlaneActor,
   resolveControlPlaneActor,
   summarizeChangedPaths,
 } from "../control-plane-audit.js";
+import { requestPolicyApproval } from "../policy-approval.js";
 import {
   ErrorCodes,
   errorShape,
@@ -189,6 +192,36 @@ function resolveConfigRestartRequest(params: unknown): {
   };
 }
 
+function resolvePolicySessionKey(params: unknown): string | undefined {
+  if (!params || typeof params !== "object") {
+    return undefined;
+  }
+  const sessionKey = (params as { sessionKey?: unknown }).sessionKey;
+  if (typeof sessionKey !== "string") {
+    return undefined;
+  }
+  const trimmed = sessionKey.trim();
+  return trimmed || undefined;
+}
+
+function denyConfigMutationByPolicy(params: {
+  respond: RespondFn;
+  log?: { warn?: (message: string) => void };
+  action: string;
+  reason: string;
+}) {
+  params.log?.warn?.(
+    `POLICY_DENY kind=config-mutation action=${params.action} reason=${params.reason}`,
+  );
+  params.respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, "Denied by policy", {
+      details: { action: params.action, reason: params.reason },
+    }),
+  );
+}
+
 function buildConfigRestartSentinelPayload(params: {
   kind: RestartSentinelPayload["kind"];
   mode: string;
@@ -306,7 +339,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     respond(true, result, undefined);
   },
-  "config.set": async ({ params, respond }) => {
+  "config.set": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
@@ -317,6 +350,43 @@ export const configHandlers: GatewayRequestHandlers = {
     const parsed = parseValidateConfigFromRawOrRespond(params, "config.set", snapshot, respond);
     if (!parsed) {
       return;
+    }
+    const changedPaths = diffConfigPaths(snapshot.config, parsed.config);
+    const policyState = await getPolicyManagerState({ config: snapshot.config });
+    const policyDecision = evaluateConfigMutation(
+      "config.set",
+      {
+        nextConfig: parsed.config,
+        currentConfig: snapshot.config,
+        changedPaths,
+      },
+      { state: policyState },
+    );
+    if (!policyDecision.allow) {
+      denyConfigMutationByPolicy({
+        respond,
+        log: context.logGateway,
+        action: "config.set",
+        reason: policyDecision.reason ?? "config.set denied",
+      });
+      return;
+    }
+    if (policyDecision.requireApproval) {
+      const approval = await requestPolicyApproval({
+        command: `policy config.set changedPaths=${summarizeChangedPaths(changedPaths)}`,
+        sessionKey: resolvePolicySessionKey(params),
+        context,
+        client,
+      });
+      if (!approval.approved) {
+        denyConfigMutationByPolicy({
+          respond,
+          log: context.logGateway,
+          action: "config.set",
+          reason: approval.reason,
+        });
+        return;
+      }
     }
     await writeConfigFile(parsed.config, writeOptions);
     respond(
@@ -404,6 +474,43 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const changedPaths = diffConfigPaths(snapshot.config, validated.config);
+    const policyState = await getPolicyManagerState({ config: snapshot.config });
+    const policyDecision = evaluateConfigMutation(
+      "config.patch",
+      {
+        rawPatch: parsedRes.parsed,
+        nextConfig: validated.config,
+        currentConfig: snapshot.config,
+        changedPaths,
+      },
+      { state: policyState },
+    );
+    if (!policyDecision.allow) {
+      denyConfigMutationByPolicy({
+        respond,
+        log: context.logGateway,
+        action: "config.patch",
+        reason: policyDecision.reason ?? "config.patch denied",
+      });
+      return;
+    }
+    if (policyDecision.requireApproval) {
+      const approval = await requestPolicyApproval({
+        command: `policy config.patch changedPaths=${summarizeChangedPaths(changedPaths)}`,
+        sessionKey: resolvePolicySessionKey(params),
+        context,
+        client,
+      });
+      if (!approval.approved) {
+        denyConfigMutationByPolicy({
+          respond,
+          log: context.logGateway,
+          action: "config.patch",
+          reason: approval.reason,
+        });
+        return;
+      }
+    }
     const actor = resolveControlPlaneActor(client);
     context?.logGateway?.info(
       `config.patch write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.patch`,
@@ -464,6 +571,42 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const changedPaths = diffConfigPaths(snapshot.config, parsed.config);
+    const policyState = await getPolicyManagerState({ config: snapshot.config });
+    const policyDecision = evaluateConfigMutation(
+      "config.apply",
+      {
+        nextConfig: parsed.config,
+        currentConfig: snapshot.config,
+        changedPaths,
+      },
+      { state: policyState },
+    );
+    if (!policyDecision.allow) {
+      denyConfigMutationByPolicy({
+        respond,
+        log: context.logGateway,
+        action: "config.apply",
+        reason: policyDecision.reason ?? "config.apply denied",
+      });
+      return;
+    }
+    if (policyDecision.requireApproval) {
+      const approval = await requestPolicyApproval({
+        command: `policy config.apply changedPaths=${summarizeChangedPaths(changedPaths)}`,
+        sessionKey: resolvePolicySessionKey(params),
+        context,
+        client,
+      });
+      if (!approval.approved) {
+        denyConfigMutationByPolicy({
+          respond,
+          log: context.logGateway,
+          action: "config.apply",
+          reason: approval.reason,
+        });
+        return;
+      }
+    }
     const actor = resolveControlPlaneActor(client);
     context?.logGateway?.info(
       `config.apply write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.apply`,

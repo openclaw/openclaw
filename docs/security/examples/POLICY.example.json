@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "issuedAt": "2026-02-23T00:00:00Z",
+  "tools": {
+    "allow": ["read", "list", "glob", "grep", "gateway"],
+    "dangerous": [
+      "exec",
+      "bash",
+      "process",
+      "browser",
+      "web_fetch",
+      "web_search",
+      "gateway",
+      "nodes",
+      "sessions_spawn"
+    ],
+    "requireApproval": ["gateway"]
+  },
+  "skillInstalls": {
+    "allow": []
+  },
+  "configMutations": {
+    "allow": []
+  }
+}

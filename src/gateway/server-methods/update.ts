@@ -9,8 +9,11 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
+import { evaluateConfigMutation } from "../../policy/policy.evaluate.js";
+import { getPolicyManagerState } from "../../policy/policy.manager.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
-import { validateUpdateRunParams } from "../protocol/index.js";
+import { requestPolicyApproval } from "../policy-approval.js";
+import { ErrorCodes, errorShape, validateUpdateRunParams } from "../protocol/index.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -28,11 +31,48 @@ export const updateHandlers: GatewayRequestHandlers = {
       typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)
         ? Math.max(1000, Math.floor(timeoutMsRaw))
         : undefined;
+    const currentConfig = loadConfig();
+    const policyState = await getPolicyManagerState({ config: currentConfig });
+    const policyDecision = evaluateConfigMutation("update.run", undefined, { state: policyState });
+    if (!policyDecision.allow) {
+      const reason = policyDecision.reason ?? "update.run denied";
+      context.logGateway?.warn?.(
+        `POLICY_DENY kind=config-mutation action=update.run reason=${reason}`,
+      );
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Denied by policy", {
+          details: { action: "update.run", reason },
+        }),
+      );
+      return;
+    }
+    if (policyDecision.requireApproval) {
+      const approval = await requestPolicyApproval({
+        command: "policy update.run",
+        sessionKey,
+        context,
+        client,
+      });
+      if (!approval.approved) {
+        context.logGateway?.warn?.(
+          `POLICY_DENY kind=config-mutation action=update.run reason=${approval.reason}`,
+        );
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "Denied by policy", {
+            details: { action: "update.run", reason: approval.reason },
+          }),
+        );
+        return;
+      }
+    }
 
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     try {
-      const config = loadConfig();
-      const configChannel = normalizeUpdateChannel(config.update?.channel);
+      const configChannel = normalizeUpdateChannel(currentConfig.update?.channel);
       const root =
         (await resolveOpenClawPackageRoot({
           moduleUrl: import.meta.url,

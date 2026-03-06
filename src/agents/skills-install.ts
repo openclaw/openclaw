@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { evaluateSkillInstall } from "../policy/policy.evaluate.js";
+import { getPolicyManagerState } from "../policy/policy.manager.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { resolveUserPath } from "../utils.js";
@@ -15,6 +18,8 @@ import {
   type SkillInstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
+
+const policyLog = createSubsystemLogger("policy");
 
 export type SkillInstallRequest = {
   workspaceDir: string;
@@ -96,6 +101,45 @@ function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec
     }
   }
   return undefined;
+}
+
+function resolveSkillVersion(entry: SkillEntry): string | undefined {
+  const candidates = [entry.frontmatter.version, entry.frontmatter.Version];
+  for (const candidate of candidates) {
+    const normalized = candidate?.trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
+}
+
+function resolveSkillInstallSource(spec: SkillInstallSpec): string {
+  if (spec.kind === "download") {
+    const url = spec.url?.trim();
+    if (!url) {
+      return "download";
+    }
+    try {
+      const parsed = new URL(url);
+      return `download:${parsed.origin}`;
+    } catch {
+      return `download:${url}`;
+    }
+  }
+  if (spec.kind === "brew") {
+    return spec.formula?.trim() ? `brew:${spec.formula.trim()}` : "brew";
+  }
+  if (spec.kind === "node") {
+    return spec.package?.trim() ? `node:${spec.package.trim()}` : "node";
+  }
+  if (spec.kind === "go") {
+    return spec.module?.trim() ? `go:${spec.module.trim()}` : "go";
+  }
+  if (spec.kind === "uv") {
+    return spec.package?.trim() ? `uv:${spec.package.trim()}` : "uv";
+  }
+  return spec.kind;
 }
 
 function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
@@ -418,6 +462,35 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
       warnings,
     );
   }
+
+  const policyState = await getPolicyManagerState({ config: params.config });
+  const policyDecision = evaluateSkillInstall(
+    {
+      skillId: entry.skill.name,
+      version: resolveSkillVersion(entry),
+      source: resolveSkillInstallSource(spec),
+      installId: params.installId,
+      kind: spec.kind,
+    },
+    { state: policyState },
+  );
+  if (!policyDecision.allow) {
+    const reason = policyDecision.reason ?? "skill install denied by policy";
+    policyLog.warn(
+      `POLICY_DENY kind=skill-install skill=${entry.skill.name} installId=${params.installId} reason=${reason}`,
+    );
+    return withWarnings(
+      {
+        ok: false,
+        message: `Denied by policy: ${reason}`,
+        stdout: "",
+        stderr: "",
+        code: null,
+      },
+      warnings,
+    );
+  }
+
   if (spec.kind === "download") {
     const downloadResult = await installDownloadSpec({ entry, spec, timeoutMs });
     return withWarnings(downloadResult, warnings);

@@ -1,8 +1,12 @@
+import crypto from "node:crypto";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { evaluateToolCall } from "../policy/policy.evaluate.js";
+import { getPolicyManagerState } from "../policy/policy.manager.js";
 import { isPlainObject } from "../utils.js";
+import { requestExecApprovalDecision } from "./bash-tools.exec-approval-request.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -23,6 +27,92 @@ const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+const SENSITIVE_APPROVAL_KEY_RE = /(token|password|secret|api.?key|authorization|cookie)/i;
+const MAX_APPROVAL_PARAM_CHARS = 400;
+const MAX_APPROVAL_SANITIZE_DEPTH = 3;
+const MAX_APPROVAL_ARRAY_ITEMS = 12;
+
+function sanitizeParamsForApproval(value: unknown, depth = 0): unknown {
+  if (depth > MAX_APPROVAL_SANITIZE_DEPTH) {
+    return "[max-depth]";
+  }
+  if (value == null) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value.length > 160 ? `${value.slice(0, 160)}...` : value;
+  }
+  if (typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, MAX_APPROVAL_ARRAY_ITEMS)
+      .map((entry) => sanitizeParamsForApproval(entry, depth + 1));
+  }
+  const output: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (SENSITIVE_APPROVAL_KEY_RE.test(key)) {
+      output[key] = "[redacted]";
+      continue;
+    }
+    output[key] = sanitizeParamsForApproval(raw, depth + 1);
+  }
+  return output;
+}
+
+function toApprovalParamsPreview(params: unknown): string {
+  try {
+    const sanitized = sanitizeParamsForApproval(params);
+    const serialized = JSON.stringify(sanitized);
+    if (!serialized) {
+      return "{}";
+    }
+    if (serialized.length <= MAX_APPROVAL_PARAM_CHARS) {
+      return serialized;
+    }
+    return `${serialized.slice(0, MAX_APPROVAL_PARAM_CHARS)}...`;
+  } catch {
+    return "{}";
+  }
+}
+
+async function requestPolicyToolApproval(args: {
+  toolName: string;
+  params: unknown;
+  reason?: string;
+  ctx?: HookContext;
+}): Promise<{ approved: boolean; reason?: string }> {
+  const command = [
+    `policy tool ${normalizeToolName(args.toolName)}`,
+    args.reason ? `reason=${args.reason}` : null,
+    `params=${toApprovalParamsPreview(args.params)}`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  try {
+    const decision = await requestExecApprovalDecision({
+      id: crypto.randomUUID(),
+      command,
+      cwd: process.cwd(),
+      host: "gateway",
+      security: "allowlist",
+      ask: "always",
+      agentId: args.ctx?.agentId,
+      sessionKey: args.ctx?.sessionKey,
+    });
+    if (decision === "allow-once" || decision === "allow-always") {
+      return { approved: true };
+    }
+    if (decision === "deny") {
+      return { approved: false, reason: "approval denied by operator" };
+    }
+    return { approved: false, reason: "approval timed out or unavailable" };
+  } catch {
+    return { approved: false, reason: "approval request failed" };
+  }
+}
+
 let beforeToolCallRuntimePromise: Promise<
   typeof import("./pi-tools.before-tool-call.runtime.js")
 > | null = null;
@@ -96,6 +186,33 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+
+  const policyState = await getPolicyManagerState();
+  const policyDecision = evaluateToolCall(toolName, params, { state: policyState });
+  if (!policyDecision.allow) {
+    const reason = policyDecision.reason ?? "operation denied by policy";
+    log.warn(`POLICY_DENY tool=${toolName} reason=${reason}`);
+    return {
+      blocked: true,
+      reason: `Denied by policy: ${reason}`,
+    };
+  }
+  if (policyDecision.requireApproval) {
+    const approval = await requestPolicyToolApproval({
+      toolName,
+      params,
+      reason: policyDecision.reason,
+      ctx: args.ctx,
+    });
+    if (!approval.approved) {
+      const reason = approval.reason ?? "approval required";
+      log.warn(`POLICY_DENY tool=${toolName} reason=${reason}`);
+      return {
+        blocked: true,
+        reason: `Denied by policy: ${reason}`,
+      };
+    }
+  }
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =

@@ -48,6 +48,7 @@ import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { refreshPolicyManager } from "../policy/policy.manager.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { CommandSecretAssignment } from "../secrets/command-config.js";
@@ -433,6 +434,20 @@ export async function startGatewayServer(
       activate: true,
     })
   ).config;
+  const policyState = await refreshPolicyManager({ config: cfgAtStart });
+  if (policyState.enabled) {
+    if (policyState.lockdown) {
+      log.warn(
+        `policy guardrails: lockdown mode active (${policyState.reason ?? "policy signature invalid"})`,
+      );
+    } else if (!policyState.valid) {
+      log.warn(
+        `policy guardrails: enabled but invalid policy in fail-open mode (${policyState.reason ?? "invalid policy"})`,
+      );
+    } else {
+      log.info(`policy guardrails: enabled (policy=${policyState.policyPath})`);
+    }
+  }
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat();

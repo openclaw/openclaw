@@ -60,6 +60,14 @@ vi.mock("../../infra/update-runner.js", () => ({
 }));
 
 vi.mock("../protocol/index.js", () => ({
+  ErrorCodes: {
+    INVALID_REQUEST: "INVALID_REQUEST",
+  },
+  errorShape: (_code: unknown, message: string, extra?: unknown) => ({
+    code: "INVALID_REQUEST",
+    message,
+    details: extra,
+  }),
   validateUpdateRunParams: () => true,
 }));
 
