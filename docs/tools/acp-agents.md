@@ -81,7 +81,6 @@ Required feature flags for thread-bound ACP:
   - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
   - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
   - Slack: `channels.slack.threadBindings.spawnAcpSessions=true`
-  - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
 
 ### Thread supporting channels
 

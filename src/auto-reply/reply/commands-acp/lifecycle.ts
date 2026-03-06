@@ -147,7 +147,9 @@ async function bindSpawnedAcpSessionToThread(params: {
   // Slack threads require channel + thread_ts context, and in DM contexts
   // parentConversationId carries the backing D* channel id.
   const channelId =
-    placement === "child" ? bindingContext.parentConversationId || currentConversationId : undefined;
+    placement === "child"
+      ? bindingContext.parentConversationId || currentConversationId
+      : undefined;
 
   if (placement === "child" && !channelId) {
     return {
