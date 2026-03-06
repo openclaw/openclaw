@@ -27,6 +27,8 @@ Scope intent:
 - `skills.entries.*.apiKey`
 - `agents.defaults.memorySearch.remote.apiKey`
 - `agents.list[].memorySearch.remote.apiKey`
+- `agents.defaults.sandbox.docker.env.*`
+- `agents.list[].sandbox.docker.env.*`
 - `talk.apiKey`
 - `talk.providers.*.apiKey`
 - `messages.tts.elevenlabs.apiKey`

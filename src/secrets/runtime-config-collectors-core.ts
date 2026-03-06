@@ -374,6 +374,70 @@ function collectCronAssignments(params: {
   });
 }
 
+function collectSandboxDockerEnvAssignments(params: {
+  env: Record<string, unknown>;
+  pathPrefix: string;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  for (const [key, value] of Object.entries(params.env)) {
+    collectSecretInputAssignment({
+      value,
+      path: `${params.pathPrefix}.${key}`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      apply: (resolved) => {
+        params.env[key] = resolved as string;
+      },
+    });
+  }
+}
+
+function collectAgentSandboxDockerEnvAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const agents = params.config.agents as Record<string, unknown> | undefined;
+  if (!isRecord(agents)) {
+    return;
+  }
+
+  // Collect from agents.defaults.sandbox.docker.env
+  const defaultsConfig = isRecord(agents.defaults) ? agents.defaults : undefined;
+  const defaultsSandbox = isRecord(defaultsConfig?.sandbox) ? defaultsConfig.sandbox : undefined;
+  const defaultsDocker = isRecord(defaultsSandbox?.docker) ? defaultsSandbox.docker : undefined;
+  const defaultsEnv = isRecord(defaultsDocker?.env) ? defaultsDocker.env : undefined;
+  if (defaultsEnv) {
+    collectSandboxDockerEnvAssignments({
+      env: defaultsEnv,
+      pathPrefix: "agents.defaults.sandbox.docker.env",
+      defaults: params.defaults,
+      context: params.context,
+    });
+  }
+
+  // Collect from agents.list[].sandbox.docker.env
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  list.forEach((rawAgent, index) => {
+    if (!isRecord(rawAgent)) {
+      return;
+    }
+    const sandbox = isRecord(rawAgent.sandbox) ? rawAgent.sandbox : undefined;
+    const docker = isRecord(sandbox?.docker) ? sandbox.docker : undefined;
+    const env = isRecord(docker?.env) ? docker.env : undefined;
+    if (env) {
+      collectSandboxDockerEnvAssignments({
+        env,
+        pathPrefix: `agents.list.${index}.sandbox.docker.env`,
+        defaults: params.defaults,
+        context: params.context,
+      });
+    }
+  });
+}
+
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -398,6 +462,7 @@ export function collectCoreConfigAssignments(params: {
   }
 
   collectAgentMemorySearchAssignments(params);
+  collectAgentSandboxDockerEnvAssignments(params);
   collectTalkAssignments(params);
   collectGatewayAssignments(params);
   collectMessagesTtsAssignments(params);
