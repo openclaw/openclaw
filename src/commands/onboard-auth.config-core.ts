@@ -4,6 +4,7 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
 } from "../agents/huggingface-models.js";
 import {
+  buildAvianProvider,
   buildKilocodeProvider,
   buildKimiCodingProvider,
   buildQianfanProvider,
@@ -32,6 +33,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ModelApi } from "../config/types.models.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 import {
+  AVIAN_DEFAULT_MODEL_REF,
   HUGGINGFACE_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
@@ -536,6 +538,37 @@ export function applyAuthProfileConfig(
       ...(order ? { order } : {}),
     },
   };
+}
+
+/**
+ * Apply Avian provider configuration without changing the default model.
+ * Registers Avian models and sets up the provider, but preserves existing model selection.
+ */
+export function applyAvianProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[AVIAN_DEFAULT_MODEL_REF] = {
+    ...models[AVIAN_DEFAULT_MODEL_REF],
+    alias: models[AVIAN_DEFAULT_MODEL_REF]?.alias ?? "Avian",
+  };
+
+  const avianModels = buildAvianProvider().models ?? [];
+
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "avian",
+    api: "openai-completions",
+    baseUrl: "https://api.avian.io/v1",
+    catalogModels: avianModels,
+  });
+}
+
+/**
+ * Apply Avian provider configuration AND set Avian as the default model.
+ * Use this when Avian is the primary provider choice during onboarding.
+ */
+export function applyAvianConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyAvianProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, AVIAN_DEFAULT_MODEL_REF);
 }
 
 export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig {

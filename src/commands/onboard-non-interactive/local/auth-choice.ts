@@ -14,6 +14,7 @@ import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyKilocodeConfig,
+  applyAvianConfig,
   applyQianfanConfig,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
@@ -33,6 +34,7 @@ import {
   applyXaiConfig,
   applyXiaomiConfig,
   applyZaiConfig,
+  setAvianApiKey,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
@@ -495,6 +497,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyQianfanConfig(nextConfig);
+  }
+
+  if (authChoice === "avian-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "avian",
+      cfg: baseConfig,
+      flagValue: opts.avianApiKey,
+      flagName: "--avian-api-key",
+      envVar: "AVIAN_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setAvianApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "avian:default",
+      provider: "avian",
+      mode: "api_key",
+    });
+    return applyAvianConfig(nextConfig);
   }
 
   if (authChoice === "openai-api-key") {
