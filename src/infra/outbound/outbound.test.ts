@@ -371,6 +371,29 @@ describe("delivery-queue", () => {
       expect(entries[0].lastError).toBe("network down");
     });
 
+    it("defers transient startup readiness errors without consuming retries", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
+
+      const deliver = vi
+        .fn()
+        .mockRejectedValue(new Error("No active WhatsApp Web listener (account: default)"));
+      const { result } = await runRecovery({ deliver });
+
+      expect(result.recovered).toBe(0);
+      expect(result.failed).toBe(0);
+      expect(result.deferredBackoff).toBe(1);
+
+      const entries = await loadPendingDeliveries(tmpDir);
+      expect(entries).toHaveLength(1);
+      expect(entries[0].id).toBe(id);
+      expect(entries[0].retryCount).toBe(0);
+      expect(entries[0].lastError).toContain("No active WhatsApp Web listener");
+      expect(entries[0].lastAttemptAt).toBeTypeOf("number");
+    });
+
     it("moves entries to failed/ immediately on permanent delivery errors", async () => {
       const id = await enqueueDelivery(
         { channel: "msteams", to: "user:abc", payloads: [{ text: "hi" }] },

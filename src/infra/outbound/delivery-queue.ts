@@ -140,6 +140,30 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   await fs.promises.rename(tmp, filePath);
 }
 
+/**
+ * Update a queue entry after an attempt that should NOT consume a retry.
+ *
+ * Used for transient startup readiness errors (for example, channels that are
+ * still connecting) so recovery doesn't burn through MAX_RETRIES.
+ */
+async function noteDeliveryAttemptNoRetry(
+  id: string,
+  error: string,
+  stateDir?: string,
+): Promise<void> {
+  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  const raw = await fs.promises.readFile(filePath, "utf-8");
+  const entry: QueuedDelivery = JSON.parse(raw);
+  entry.lastAttemptAt = Date.now();
+  entry.lastError = error;
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await fs.promises.rename(tmp, filePath);
+}
+
 /** Load all pending delivery entries from the queue directory. */
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
   const queueDir = resolveQueueDir(stateDir);
@@ -349,6 +373,18 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+
+      if (isTransientStartupDeliveryError(entry.channel, errMsg)) {
+        deferredBackoff += 1;
+        try {
+          await noteDeliveryAttemptNoRetry(entry.id, errMsg, opts.stateDir);
+        } catch {
+          // Best-effort update.
+        }
+        opts.log.info(`Delivery ${entry.id} deferred (startup/transient): ${errMsg}`);
+        continue;
+      }
+
       if (isPermanentDeliveryError(errMsg)) {
         opts.log.warn(`Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`);
         try {
@@ -388,6 +424,20 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
 ];
+
+const TRANSIENT_STARTUP_ERROR_PATTERNS_BY_CHANNEL: Partial<Record<string, readonly RegExp[]>> = {
+  // WhatsApp outbound sends require an active listener; during gateway startup
+  // we can briefly race the provider connect loop.
+  whatsapp: [/no active whatsapp web listener/i, /whatsapp.*not (connected|ready)/i],
+};
+
+function isTransientStartupDeliveryError(channel: string, error: string): boolean {
+  const patterns = TRANSIENT_STARTUP_ERROR_PATTERNS_BY_CHANNEL[channel];
+  if (!patterns) {
+    return false;
+  }
+  return patterns.some((re) => re.test(error));
+}
 
 export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
