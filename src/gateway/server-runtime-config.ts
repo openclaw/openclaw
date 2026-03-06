@@ -127,26 +127,27 @@ export async function resolveGatewayRuntimeConfig(params: {
 
   const degradedFeatures: Array<{ feature: string; reason: string }> = [];
 
-  // Tailscale funnel requires password auth. This is a hard requirement (security boundary).
-  if (tailscaleMode === "funnel" && authMode !== "password") {
-    throw new Error(
-      "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
-    );
-  }
-
   // Tailscale serve/funnel requires loopback bind. If the bind host is not loopback
   // (e.g. because Tailscale was disabled externally but config still references it),
-  // degrade gracefully: disable Tailscale for this session and log a warning instead
-  // of crashing. This prevents unbounded crash loops when an optional external service
-  // becomes unavailable without a corresponding config change.
+  // degrade gracefully: disable Tailscale for this session instead of crashing.
+  // This prevents unbounded crash loops when an optional external service becomes
+  // unavailable without a corresponding config change.
   let resolvedTailscaleMode = tailscaleMode;
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
     const reason =
       `gateway.tailscale.mode=${tailscaleMode} requires bind=loopback, but bind host is ${bindHost}. ` +
       `Tailscale disabled for this session. To restore: set gateway.bind=loopback or gateway.tailscale.mode=off.`;
-    console.warn(`[gateway] WARN: ${reason}`);
     degradedFeatures.push({ feature: "tailscale", reason });
     resolvedTailscaleMode = "off";
+  }
+
+  // Tailscale funnel requires password auth. This is a hard security boundary.
+  // Check resolvedTailscaleMode (after graceful degradation) so that a non-loopback
+  // bind that already degraded Tailscale to "off" doesn't also throw here.
+  if (resolvedTailscaleMode === "funnel" && authMode !== "password") {
+    throw new Error(
+      "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
+    );
   }
 
   if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
