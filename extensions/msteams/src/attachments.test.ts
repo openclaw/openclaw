@@ -406,6 +406,10 @@ const EMPTY_ATTACHMENT_PLACEHOLDER_CASES: AttachmentPlaceholderCase[] = [
     ],
     expected: "",
   }),
+  withLabel("returns empty string for text/html attachment without inline images", {
+    attachments: [createHtmlAttachment("<p>Hello world</p>")],
+    expected: "",
+  }),
 ];
 const COUNTED_ATTACHMENT_PLACEHOLDER_CASE_DEFS: CountedAttachmentPlaceholderCaseDef[] = [
   withLabel("returns image placeholder for one image attachment", {
