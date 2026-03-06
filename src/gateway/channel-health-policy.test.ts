@@ -116,6 +116,25 @@ describe("evaluateChannelHealth", () => {
     );
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
   });
+
+  it("skips stale-socket check when threshold is Infinity (polling channels)", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: null,
+      },
+      {
+        now: 999_999_999,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: Number.POSITIVE_INFINITY,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
 });
 
 describe("resolveChannelRestartReason", () => {

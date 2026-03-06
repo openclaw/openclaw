@@ -399,4 +399,11 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * How many minutes a connected channel can go without receiving any event
+   * before the health monitor treats it as a stale socket and restarts it.
+   * Set to 0 to disable stale-socket detection (useful for polling-based
+   * channels like Telegram where idle periods are expected). Default: 30.
+   */
+  channelHealthStaleMinutes?: number;
 };
