@@ -846,14 +846,19 @@ fun SettingsSheet(viewModel: MainViewModel) {
           trailingContent = {
             Switch(
               checked = notificationForwardingQuietHoursEnabled,
-              onCheckedChange = {
+              onCheckedChange = { nextEnabled ->
+                if (nextEnabled && !quietHoursInputValid) {
+                  return@Switch
+                }
                 viewModel.setNotificationForwardingQuietHours(
-                  enabled = it,
+                  enabled = nextEnabled,
                   start = notificationQuietStartDraft,
                   end = notificationQuietEndDraft,
                 )
               },
-              enabled = notificationForwardingEnabled,
+              enabled =
+                notificationForwardingEnabled &&
+                  (notificationForwardingQuietHoursEnabled || quietHoursInputValid),
             )
           },
         )
