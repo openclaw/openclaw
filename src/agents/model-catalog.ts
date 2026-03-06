@@ -7,6 +7,7 @@ export type ModelCatalogEntry = {
   name: string;
   provider: string;
   contextWindow?: number;
+  maxTokens?: number;
   reasoning?: boolean;
   input?: Array<"text" | "image">;
 };
@@ -16,6 +17,7 @@ type DiscoveredModel = {
   name?: string;
   provider: string;
   contextWindow?: number;
+  maxTokens?: number;
   reasoning?: boolean;
   input?: Array<"text" | "image">;
 };
@@ -31,6 +33,8 @@ const CODEX_PROVIDER = "openai-codex";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
+const OPENAI_CODEX_GPT54_CONTEXT_TOKENS = 1_050_000;
+const OPENAI_CODEX_GPT54_MAX_TOKENS = 128_000;
 
 function applyOpenAICodexFallbacks(models: ModelCatalogEntry[]): void {
   const hasGpt54 = models.some(
@@ -47,6 +51,8 @@ function applyOpenAICodexFallbacks(models: ModelCatalogEntry[]): void {
         ...baseModel,
         id: OPENAI_CODEX_GPT54_MODEL_ID,
         name: OPENAI_CODEX_GPT54_MODEL_ID,
+        contextWindow: OPENAI_CODEX_GPT54_CONTEXT_TOKENS,
+        maxTokens: OPENAI_CODEX_GPT54_MAX_TOKENS,
       });
     }
   }
@@ -140,9 +146,11 @@ export async function loadModelCatalog(params?: {
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow
             : undefined;
+        const maxTokens =
+          typeof entry?.maxTokens === "number" && entry.maxTokens > 0 ? entry.maxTokens : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
-        models.push({ id, name, provider, contextWindow, reasoning, input });
+        models.push({ id, name, provider, contextWindow, maxTokens, reasoning, input });
       }
       applyOpenAICodexFallbacks(models);
 

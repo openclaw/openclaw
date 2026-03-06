@@ -241,7 +241,7 @@ describe("resolveModel", () => {
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       reasoning: true,
-      contextWindow: 272000,
+      contextWindow: 1_050_000,
       maxTokens: 128000,
     });
   });
