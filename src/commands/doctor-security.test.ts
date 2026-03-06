@@ -153,6 +153,26 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("direct/DM targets by default");
   });
 
+  it("warns when a per-agent heartbeat relies on implicit directPolicy", async () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "ops",
+            heartbeat: {
+              target: "last",
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain('Heartbeat agent "ops"');
+    expect(message).toContain('heartbeat.directPolicy for agent "ops"');
+    expect(message).toContain("direct/DM targets by default");
+  });
+
   it("skips heartbeat directPolicy warning when delivery is internal-only or explicit", async () => {
     const cfg = {
       agents: {
