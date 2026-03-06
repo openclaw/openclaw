@@ -557,7 +557,10 @@ describe("CronService", () => {
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
     expectMainSystemEventPosted(enqueueSystemEvent, "hello");
 
-    (resolveHeartbeat as (res: HeartbeatRunResult) => void)({ status: "ran", durationMs: 123 });
+    if (typeof resolveHeartbeat !== "function") {
+      throw new Error("expected heartbeat resolver to be set");
+    }
+    resolveHeartbeat({ status: "ran", durationMs: 123 });
     await runPromise;
 
     const jobs = await cron.list({ includeDisabled: true });
