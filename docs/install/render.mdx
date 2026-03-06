@@ -32,10 +32,13 @@ services:
     name: openclaw
     runtime: docker
     plan: starter
+    dockerCommand: sh -lc 'node openclaw.mjs gateway --allow-unconfigured --bind lan --port "${PORT:-8080}"'
     healthCheckPath: /health
     envVars:
       - key: PORT
         value: "8080"
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=2048"
       - key: SETUP_PASSWORD
         sync: false # prompts during deploy
       - key: OPENCLAW_STATE_DIR
@@ -54,6 +57,7 @@ Key Blueprint features used:
 
 | Feature               | Purpose                                                    |
 | --------------------- | ---------------------------------------------------------- |
+| `dockerCommand`       | Binds gateway to `0.0.0.0` and Render's `$PORT`            |
 | `runtime: docker`     | Builds from the repo's Dockerfile                          |
 | `healthCheckPath`     | Render monitors `/health` and restarts unhealthy instances |
 | `sync: false`         | Prompts for value during deploy (secrets)                  |
@@ -140,7 +144,7 @@ This downloads a portable backup you can restore on any OpenClaw host.
 Check the deploy logs in the Render Dashboard. Common issues:
 
 - Missing `SETUP_PASSWORD` — the Blueprint prompts for this, but verify it's set
-- Port mismatch — ensure `PORT=8080` matches the Dockerfile's exposed port
+- Port binding mismatch — ensure the process binds `0.0.0.0:$PORT` (the Blueprint `dockerCommand` does this)
 
 ### Slow cold starts (free tier)
 

@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -249,5 +249,47 @@ describe("device pairing tokens", () => {
     await expect(clearDevicePairing("device-1", baseDir)).resolves.toBe(true);
     await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
     await expect(clearDevicePairing("device-1", baseDir)).resolves.toBe(false);
+  });
+
+  test("migrates legacy paired.json array format on approve and persists by device id", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const devicesDir = join(baseDir, "devices");
+    await mkdir(devicesDir, { recursive: true });
+    await writeFile(join(devicesDir, "pending.json"), "{}\n", "utf8");
+    await writeFile(join(devicesDir, "paired.json"), "[]\n", "utf8");
+
+    const request = await requestDevicePairing(
+      {
+        deviceId: "device-legacy",
+        publicKey: "public-key-legacy",
+        role: "operator",
+        scopes: ["operator.admin"],
+      },
+      baseDir,
+    );
+
+    await approveDevicePairing(request.request.requestId, baseDir);
+
+    const paired = await getPairedDevice("device-legacy", baseDir);
+    expect(paired?.deviceId).toBe("device-legacy");
+    expect(paired?.tokens?.operator?.token).toBeTruthy();
+
+    const persisted = JSON.parse(await readFile(join(devicesDir, "paired.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(Array.isArray(persisted)).toBe(false);
+    expect(Object.keys(persisted)).toContain("device-legacy");
+  });
+
+  test("normalizes legacy empty array without approve (read-only path)", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const devicesDir = join(baseDir, "devices");
+    await mkdir(devicesDir, { recursive: true });
+    await writeFile(join(devicesDir, "pending.json"), "{}\n", "utf8");
+    await writeFile(join(devicesDir, "paired.json"), "[]\n", "utf8");
+
+    const paired = await getPairedDevice("device-nonexistent", baseDir);
+    expect(paired).toBeNull();
   });
 });

@@ -61,6 +61,7 @@ export const VENICE_MODEL_CATALOG = [
     input: ["text"],
     contextWindow: 131072,
     maxTokens: 8192,
+    supportsToolCalls: true,
     privacy: "private",
   },
   {
@@ -126,6 +127,7 @@ export const VENICE_MODEL_CATALOG = [
     input: ["text", "image"],
     contextWindow: 262144,
     maxTokens: 8192,
+    supportsToolCalls: true,
     privacy: "private",
   },
   {
@@ -166,6 +168,7 @@ export const VENICE_MODEL_CATALOG = [
     input: ["text", "image"],
     contextWindow: 131072,
     maxTokens: 8192,
+    supportsToolCalls: true,
     privacy: "private",
   },
 
@@ -326,6 +329,9 @@ export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefi
     // See: https://github.com/openclaw/openclaw/issues/15819
     compat: {
       supportsUsageInStreaming: false,
+      // Venice model capability support varies; disable tool calls unless
+      // explicitly known to avoid empty-response runs on unsupported models.
+      supportsToolCalls: entry.supportsToolCalls ?? false,
     },
   };
 }
@@ -480,6 +486,7 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
           apiModel.id.toLowerCase().includes("r1");
 
         const hasVision = apiModel.model_spec.capabilities.supportsVision;
+        const supportsToolCalls = apiModel.model_spec.capabilities.supportsFunctionCalling;
 
         models.push({
           id: apiModel.id,
@@ -492,6 +499,7 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
           // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
           compat: {
             supportsUsageInStreaming: false,
+            supportsToolCalls,
           },
         });
       }
