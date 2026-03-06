@@ -106,23 +106,39 @@ export function filterMessagingToolMediaDuplicates(params: {
   payloads: ReplyPayload[];
   sentMediaUrls: string[];
 }): ReplyPayload[] {
+  const normalizeFilesystemPathForDedupe = (path: string): string => {
+    if (!path) {
+      return "";
+    }
+    let normalized = path.replace(/\\/g, "/");
+    if (/^\/[a-zA-Z]:\//.test(normalized)) {
+      normalized = normalized.slice(1);
+    }
+    if (/^[a-zA-Z]:\//.test(normalized)) {
+      normalized = `${normalized[0]?.toLowerCase()}:${normalized.slice(2)}`;
+    }
+    return normalized;
+  };
+
   const normalizeMediaForDedupe = (value: string): string => {
     const trimmed = value.trim();
     if (!trimmed) {
       return "";
     }
     if (!trimmed.toLowerCase().startsWith("file://")) {
-      return trimmed;
+      return normalizeFilesystemPathForDedupe(trimmed);
     }
     try {
       const parsed = new URL(trimmed);
       if (parsed.protocol === "file:") {
-        return decodeURIComponent(parsed.pathname || "");
+        const pathname = decodeURIComponent(parsed.pathname || "");
+        const filePath = parsed.host ? `//${parsed.host}${pathname}` : pathname;
+        return normalizeFilesystemPathForDedupe(filePath);
       }
     } catch {
       // Keep fallback below for non-URL-like inputs.
     }
-    return trimmed.replace(/^file:\/\//i, "");
+    return normalizeFilesystemPathForDedupe(trimmed.replace(/^file:\/\//i, ""));
   };
 
   const { payloads, sentMediaUrls } = params;

@@ -77,6 +77,22 @@ describe("filterMessagingToolMediaDuplicates", () => {
     });
     expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
   });
+
+  it("dedupes Windows paths against file:// URLs", () => {
+    const result = filterMessagingToolMediaDuplicates({
+      payloads: [{ text: "hello", mediaUrl: "C:\\tmp\\photo one.jpg" }],
+      sentMediaUrls: ["file:///C:/tmp/photo%20one.jpg"],
+    });
+    expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+  });
+
+  it("dedupes Windows paths regardless of drive letter case", () => {
+    const result = filterMessagingToolMediaDuplicates({
+      payloads: [{ text: "hello", mediaUrl: "C:/tmp/photo.jpg" }],
+      sentMediaUrls: ["file:///c:/tmp/photo.jpg"],
+    });
+    expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+  });
 });
 
 describe("shouldSuppressMessagingToolReplies", () => {
