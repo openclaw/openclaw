@@ -22,6 +22,22 @@ describe("stripEnvelopeFromMessage", () => {
     expect(result.content?.[0]?.text).toBe("hi");
   });
 
+  test("removes inbound metadata from input_text content arrays", () => {
+    const input = {
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: 'Conversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nHello there',
+        },
+      ],
+    };
+    const result = stripEnvelopeFromMessage(input) as {
+      content?: Array<{ type: string; text?: string }>;
+    };
+    expect(result.content?.[0]?.text).toBe("Hello there");
+  });
+
   test("does not strip inline message_id text that is part of a line", () => {
     const input = {
       role: "user",
@@ -48,6 +64,22 @@ describe("stripEnvelopeFromMessage", () => {
     };
     const result = stripEnvelopeFromMessage(input) as { content?: string };
     expect(result.content).toBe("Assistant body");
+  });
+
+  test("defensively strips inbound metadata blocks from output_text content arrays", () => {
+    const input = {
+      role: "assistant",
+      content: [
+        {
+          type: "output_text",
+          text: 'Conversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nAssistant body',
+        },
+      ],
+    };
+    const result = stripEnvelopeFromMessage(input) as {
+      content?: Array<{ type: string; text?: string }>;
+    };
+    expect(result.content?.[0]?.text).toBe("Assistant body");
   });
 
   test("removes inbound un-bracketed conversation info blocks from user messages", () => {

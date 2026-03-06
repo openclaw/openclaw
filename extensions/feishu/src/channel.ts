@@ -110,6 +110,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
           ],
         },
         connectionMode: { type: "string", enum: ["websocket", "webhook"] },
+        dispatchMode: { type: "string", enum: ["auto", "plugin"] },
+        pluginMode: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            forwardControlCommands: { type: "boolean" },
+          },
+        },
         webhookPath: { type: "string" },
         webhookHost: { type: "string" },
         webhookPort: { type: "integer", minimum: 1 },

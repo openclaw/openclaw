@@ -9,6 +9,17 @@ import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 const supervisorSpawnMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
+const ensureMcpConfigFileMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-mcp.json"));
+const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn(() => null));
+
+vi.mock("../gateway/mcp-http.js", () => ({
+  MCP_PORT_OFFSET: 1,
+  ensureMcpConfigFile: (...args: unknown[]) => ensureMcpConfigFileMock(...args),
+}));
+
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: (...args: unknown[]) => getGlobalHookRunnerMock(...args),
+}));
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
@@ -57,10 +68,15 @@ function createManagedRun(exit: MockRunExit, pid = 1234) {
 }
 
 describe("runCliAgent with process supervisor", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     supervisorSpawnMock.mockClear();
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
+    ensureMcpConfigFileMock.mockClear();
+    ensureMcpConfigFileMock.mockReturnValue("/tmp/openclaw-mcp.json");
+    getGlobalHookRunnerMock.mockReset();
+    getGlobalHookRunnerMock.mockReturnValue(null);
+    await fs.rm("/tmp/session.jsonl", { force: true }).catch(() => undefined);
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
@@ -105,6 +121,158 @@ describe("runCliAgent with process supervisor", () => {
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
     expect(input.replaceExistingScope).toBe(true);
     expect(input.scopeKey).toContain("thread-123");
+    expect(ensureMcpConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("writes prompt and assistant reply into the OpenClaw session transcript", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-runner-transcript-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "CLI answer",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      await runCliAgent({
+        sessionId: "s-transcript",
+        sessionFile,
+        workspaceDir: tempDir,
+        prompt: "What changed today?",
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-cli-transcript",
+      });
+      const lines = (await fs.readFile(sessionFile, "utf-8")).trim().split("\n");
+      const entries = lines.map((line) => JSON.parse(line));
+      const messages = entries.filter((entry) => entry.type === "message");
+      expect(messages.length).toBe(2);
+      const userLine = messages[0];
+      const assistantLine = messages[1];
+      expect(userLine.message.role).toBe("user");
+      expect(userLine.message.content[0].text).toBe("What changed today?");
+      expect(assistantLine.message.role).toBe("assistant");
+      expect(assistantLine.message.content[0].text).toBe("CLI answer");
+      expect(assistantLine.message.provider).toBe("codex-cli");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not apply skill env overrides for non-claude CLI backends", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-runner-codex-env-"));
+    const skillDir = path.join(tempDir, "skills", "demo-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      ["---", "name: demo-skill", "description: demo", "---", ""].join("\n"),
+      "utf-8",
+    );
+    const envKey = "OPENCLAW_TEST_SKILL_ENV_OVERRIDE";
+    const previous = process.env[envKey];
+    delete process.env[envKey];
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      await runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: tempDir,
+        config: {
+          skills: {
+            entries: {
+              "demo-skill": {
+                env: {
+                  [envKey]: "should-not-be-injected-for-codex",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "hi",
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-codex-skill-env",
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      if (previous === undefined) {
+        delete process.env[envKey];
+      } else {
+        process.env[envKey] = previous;
+      }
+    }
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      env?: Record<string, string | undefined>;
+    };
+    expect(input.env?.[envKey]).toBeUndefined();
+    expect(process.env[envKey]).toBeUndefined();
+  });
+
+  it("adds strict MCP config flags for claude-cli", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: '{"content":[{"type":"text","text":"ok"}]}',
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionKey: "agent:main:main",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: {
+        gateway: {
+          port: 19000,
+        },
+      } as OpenClawConfig,
+      prompt: "hi",
+      provider: "claude-cli",
+      model: "sonnet",
+      timeoutMs: 1_000,
+      runId: "run-claude-mcp",
+    });
+
+    expect(ensureMcpConfigFileMock).toHaveBeenCalledTimes(1);
+    expect(ensureMcpConfigFileMock).toHaveBeenCalledWith(
+      path.join(os.homedir(), ".openclaw"),
+      19001,
+    );
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    expect(input.argv).toContain("--strict-mcp-config");
+    expect(input.argv).toContain("--mcp-config");
+    const mcpConfigIndex = input.argv?.indexOf("--mcp-config") ?? -1;
+    expect(mcpConfigIndex).toBeGreaterThanOrEqual(0);
+    expect(input.argv?.[mcpConfigIndex + 1]).toBe("/tmp/openclaw-mcp.json");
   });
 
   it("omits strict MCP flag when claude-cli backend mcp.strict is false", async () => {
@@ -1160,6 +1328,50 @@ describe("runCliAgent with process supervisor", () => {
 
     const input = supervisorSpawnMock.mock.calls[0]?.[0] as { cwd?: string };
     expect(input.cwd).toBe(path.resolve(fallbackWorkspace));
+  });
+
+  it("cancels running CLI process on abort signal", async () => {
+    const managedRun = createManagedRun({
+      reason: "manual-cancel",
+      exitCode: null,
+      exitSignal: "SIGTERM",
+      durationMs: 25,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+    managedRun.wait = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return {
+        reason: "manual-cancel",
+        exitCode: null,
+        exitSignal: "SIGTERM",
+        durationMs: 25,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      };
+    });
+    supervisorSpawnMock.mockResolvedValueOnce(managedRun);
+    const abortController = new AbortController();
+    const runPromise = runCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      provider: "codex-cli",
+      model: "gpt-5.2-codex",
+      timeoutMs: 1_000,
+      runId: "run-abort",
+      abortSignal: abortController.signal,
+    });
+
+    await vi.waitFor(() => expect(supervisorSpawnMock).toHaveBeenCalledTimes(1));
+    abortController.abort("stop");
+    await expect(runPromise).rejects.toMatchObject({ name: "AbortError" });
+    expect(managedRun.cancel).toHaveBeenCalledWith("manual-cancel");
   });
 });
 

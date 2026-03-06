@@ -1,5 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  registerLiveSessionTranscript,
+  resetLiveSessionTranscriptRegistryForTests,
+} from "../../../src/agents/pi-embedded-runner/live-session-registry.js";
 import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import {
@@ -77,6 +85,39 @@ async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessa
   });
 }
 
+function createSessionTranscriptFixture() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-feishu-bot-"));
+  const storePath = path.join(dir, "sessions.json");
+  const sessionId = "sess-bot-quoted-1";
+  const sessionKey = "agent:main:feishu:dm:ou-attacker";
+  const sessionFile = path.join(dir, `${sessionId}.jsonl`);
+
+  fs.writeFileSync(
+    storePath,
+    JSON.stringify({
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile,
+      },
+    }),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    sessionFile,
+    `${JSON.stringify({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: sessionId,
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+    })}\n`,
+    "utf-8",
+  );
+
+  return { dir, storePath, sessionFile };
+}
+
 describe("buildFeishuAgentBody", () => {
   it("builds message id, speaker, quoted content, mentions, and permission notice in order", () => {
     const body = buildFeishuAgentBody({
@@ -139,6 +180,7 @@ describe("handleFeishuMessage command authorization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetLiveSessionTranscriptRegistryForTests();
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
@@ -184,6 +226,9 @@ describe("handleFeishuMessage command authorization", () => {
           media: {
             saveMediaBuffer:
               mockSaveMediaBuffer as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
+          },
+          session: {
+            resolveStorePath: vi.fn((store?: string) => store ?? "/tmp/sessions.json"),
           },
           pairing: {
             readAllowFromStore: mockReadAllowFromStore,
@@ -385,6 +430,294 @@ describe("handleFeishuMessage command authorization", () => {
         ReplyToBody: "quoted content",
       }),
     );
+  });
+
+  it("prefers the session transcript over Feishu API for DM reply reconstruction", async () => {
+    const fixture = createSessionTranscriptFixture();
+    try {
+      const sessionManager = SessionManager.open(fixture.sessionFile);
+      sessionManager.appendMessage({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: [
+              "Conversation info (untrusted metadata):",
+              "```json",
+              JSON.stringify({ message_id: "om_parent_session_1" }, null, 2),
+              "```",
+              "",
+              "完整 session 原文",
+            ].join("\n"),
+          },
+        ],
+        timestamp: Date.now(),
+      });
+      // SessionManager keeps user-only turns buffered until an assistant message appears.
+      // Append a noop assistant turn so the prior DM reply target is present on disk.
+      sessionManager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "noop" }],
+        api: "openai-responses",
+        provider: "openclaw",
+        model: "test-helper",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+
+      const cfg: ClawdbotConfig = {
+        session: {
+          store: fixture.storePath,
+        },
+        channels: {
+          feishu: {
+            enabled: true,
+            dmPolicy: "open",
+          },
+        },
+      } as ClawdbotConfig;
+
+      const event: FeishuMessageEvent = {
+        sender: {
+          sender_id: {
+            open_id: "ou-attacker",
+          },
+        },
+        message: {
+          message_id: "om_reply_session_1",
+          parent_id: "om_parent_session_1",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "reply text" }),
+        },
+      };
+
+      await dispatchMessage({ cfg, event });
+
+      expect(mockGetMessageFeishu).not.toHaveBeenCalled();
+      expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ReplyToId: "om_parent_session_1",
+          ReplyToBody: "完整 session 原文",
+        }),
+      );
+    } finally {
+      fs.rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the live session over Feishu API for DM reply reconstruction before transcript flush", async () => {
+    const fixture = createSessionTranscriptFixture();
+    try {
+      const sessionManager = SessionManager.open(fixture.sessionFile);
+      sessionManager.appendMessage({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: [
+              "Conversation info (untrusted metadata):",
+              "```json",
+              JSON.stringify({ message_id: "om_parent_live_1" }, null, 2),
+              "```",
+              "",
+              "live session 里的完整原文",
+            ].join("\n"),
+          },
+        ],
+        timestamp: Date.now(),
+      });
+      const unregister = registerLiveSessionTranscript({
+        sessionKey: "agent:main:feishu:dm:ou-attacker",
+        sessionId: "sess-bot-quoted-1",
+        sessionReader: sessionManager,
+      });
+
+      try {
+        const cfg: ClawdbotConfig = {
+          session: {
+            store: fixture.storePath,
+          },
+          channels: {
+            feishu: {
+              enabled: true,
+              dmPolicy: "open",
+            },
+          },
+        } as ClawdbotConfig;
+
+        const event: FeishuMessageEvent = {
+          sender: {
+            sender_id: {
+              open_id: "ou-attacker",
+            },
+          },
+          message: {
+            message_id: "om_reply_live_1",
+            parent_id: "om_parent_live_1",
+            chat_id: "oc-dm",
+            chat_type: "p2p",
+            message_type: "text",
+            content: JSON.stringify({ text: "reply text" }),
+          },
+        };
+
+        await dispatchMessage({ cfg, event });
+
+        expect(mockGetMessageFeishu).not.toHaveBeenCalled();
+        expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ReplyToId: "om_parent_live_1",
+            ReplyToBody: "live session 里的完整原文",
+          }),
+        );
+      } finally {
+        unregister();
+      }
+    } finally {
+      fs.rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("mirrors DM assistant reply ids into the session transcript for quoted reply recovery", async () => {
+    const fixture = createSessionTranscriptFixture();
+    try {
+      const cfg: ClawdbotConfig = {
+        session: {
+          store: fixture.storePath,
+        },
+        channels: {
+          feishu: {
+            enabled: true,
+            dmPolicy: "open",
+          },
+        },
+      } as ClawdbotConfig;
+
+      await dispatchMessage({
+        cfg,
+        event: {
+          sender: {
+            sender_id: {
+              open_id: "ou-attacker",
+            },
+          },
+          message: {
+            message_id: "om_user_1",
+            chat_id: "oc-dm",
+            chat_type: "p2p",
+            message_type: "text",
+            content: JSON.stringify({ text: "hello" }),
+          },
+        },
+      });
+
+      const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls.at(-1)?.[0] as
+        | {
+            onFinalTextDelivered?: (params: {
+              text: string;
+              messageId?: string;
+              messageIds?: string[];
+              chatId: string;
+              accountId?: string;
+            }) => Promise<void>;
+          }
+        | undefined;
+      expect(typeof dispatcherParams?.onFinalTextDelivered).toBe("function");
+
+      await dispatcherParams?.onFinalTextDelivered?.({
+        text: "完整 bot 回复",
+        messageId: "om_bot_2",
+        messageIds: ["om_bot_1", "om_bot_2"],
+        chatId: "oc-dm",
+        accountId: "default",
+      });
+
+      mockFinalizeInboundContext.mockClear();
+      mockGetMessageFeishu.mockClear();
+
+      await dispatchMessage({
+        cfg,
+        event: {
+          sender: {
+            sender_id: {
+              open_id: "ou-attacker",
+            },
+          },
+          message: {
+            message_id: "om_user_2",
+            parent_id: "om_bot_1",
+            chat_id: "oc-dm",
+            chat_type: "p2p",
+            message_type: "text",
+            content: JSON.stringify({ text: "reply to bot" }),
+          },
+        },
+      });
+
+      expect(mockGetMessageFeishu).not.toHaveBeenCalled();
+      expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ReplyToId: "om_bot_1",
+          ReplyToBody: "完整 bot 回复",
+        }),
+      );
+    } finally {
+      fs.rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not attach the direct-reply transcript mirror callback for group dispatches", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou-attacker",
+          },
+        },
+        message: {
+          message_id: "om_group_1",
+          chat_id: "oc-group",
+          chat_type: "group",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello group" }),
+        },
+      },
+    });
+
+    const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls.at(-1)?.[0] as
+      | { onFinalTextDelivered?: unknown }
+      | undefined;
+    expect(dispatcherParams?.onFinalTextDelivered).toBeUndefined();
   });
 
   it("replies pairing challenge to DM chat_id instead of user:sender id", async () => {

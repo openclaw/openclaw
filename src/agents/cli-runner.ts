@@ -1,9 +1,13 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { appendCliTurnToSessionTranscript } from "../config/sessions.js";
+import type { CliBackendConfig } from "../config/types.js";
 import { MCP_PORT_OFFSET, ensureMcpConfigFile } from "../gateway/mcp-http.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -399,7 +403,17 @@ export async function runCliAgent(params: {
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
   onAssistantTurn?: (text: string) => void;
+  onSystemInit?: (payload: { subtype: string; sessionId?: string }) => void;
   onToolUse?: (toolName: string) => void;
+  onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
+  onToolUseEvent?: (payload: { name: string; toolUseId?: string; input?: unknown }) => void;
+  onToolResult?: (payload: { toolUseId?: string; text?: string; isError?: boolean }) => void;
+  abortSignal?: AbortSignal;
+  trigger?: PluginHookAgentContext["trigger"];
+  messageChannel?: string;
+  messageAccountId?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -432,12 +446,15 @@ export async function runCliAgent(params: {
 
   // MCP tool access only for Claude CLI; other backends get a "tools disabled" hint.
   let mcpConfigPath: string | undefined;
+  let useStrictMcp = true;
   if (isClaude) {
     try {
-      const gatewayPort = params.config?.gateway?.port ?? 18789;
-      const mcpPort = gatewayPort + MCP_PORT_OFFSET;
-      const openclawDir = path.join(os.homedir(), ".openclaw");
-      mcpConfigPath = ensureMcpConfigFile(openclawDir, mcpPort);
+      const mcpResolved = await resolveClaudeMcpConfigForRun({
+        backend,
+        config: params.config,
+      });
+      mcpConfigPath = mcpResolved.mcpConfigPath;
+      useStrictMcp = mcpResolved.useStrictMcp;
     } catch (err) {
       log.warn(`mcp config setup failed: ${String(err)}`);
     }
@@ -648,7 +665,7 @@ export async function runCliAgent(params: {
     });
     // --mcp-config is a Claude Code specific flag.
     if (mcpConfigPath && backendResolved.id === "claude-cli") {
-      if (!args.includes("--strict-mcp-config")) {
+      if (useStrictMcp && !args.includes("--strict-mcp-config")) {
         args.push("--strict-mcp-config");
       }
       args.push("--mcp-config", mcpConfigPath);
@@ -733,8 +750,12 @@ export async function runCliAgent(params: {
         const streamProcessor =
           outputMode === "stream-json"
             ? createStreamJsonProcessor(backend, {
+                onSystemInit: params.onSystemInit,
                 onAssistantTurn: params.onAssistantTurn,
                 onToolUse: params.onToolUse,
+                onThinkingTurn: params.onThinkingTurn,
+                onToolUseEvent: params.onToolUseEvent,
+                onToolResult: params.onToolResult,
               })
             : undefined;
 
@@ -835,14 +856,22 @@ export async function runCliAgent(params: {
           });
         }
 
+        let output: {
+          text: string;
+          sessionId?: string;
+          usage?: {
+            input?: number;
+            output?: number;
+            cacheRead?: number;
+            cacheWrite?: number;
+            total?: number;
+          };
+        };
         if (streamProcessor) {
-          return streamProcessor.finish();
-        }
-
-        if (outputMode === "text") {
-          return { text: stdout, sessionId: undefined };
-        }
-        if (outputMode === "jsonl") {
+          output = streamProcessor.finish();
+        } else if (outputMode === "text") {
+          output = { text: stdout, sessionId: undefined };
+        } else if (outputMode === "jsonl") {
           const parsed = parseCliJsonl(stdout, backend);
           output = parsed ?? { text: stdout };
         } else {
@@ -981,7 +1010,17 @@ export async function runClaudeCliAgent(params: {
   claudeSessionId?: string;
   images?: ImageContent[];
   onAssistantTurn?: (text: string) => void;
+  onSystemInit?: (payload: { subtype: string; sessionId?: string }) => void;
   onToolUse?: (toolName: string) => void;
+  onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
+  onToolUseEvent?: (payload: { name: string; toolUseId?: string; input?: unknown }) => void;
+  onToolResult?: (payload: { toolUseId?: string; text?: string; isError?: boolean }) => void;
+  abortSignal?: AbortSignal;
+  trigger?: PluginHookAgentContext["trigger"];
+  messageChannel?: string;
+  messageAccountId?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
 }): Promise<EmbeddedPiRunResult> {
   return runCliAgent({
     sessionId: params.sessionId,
@@ -1002,6 +1041,16 @@ export async function runClaudeCliAgent(params: {
     cliSessionId: params.claudeSessionId,
     images: params.images,
     onAssistantTurn: params.onAssistantTurn,
+    onSystemInit: params.onSystemInit,
     onToolUse: params.onToolUse,
+    onThinkingTurn: params.onThinkingTurn,
+    onToolUseEvent: params.onToolUseEvent,
+    onToolResult: params.onToolResult,
+    abortSignal: params.abortSignal,
+    trigger: params.trigger,
+    messageChannel: params.messageChannel,
+    messageAccountId: params.messageAccountId,
+    messageTo: params.messageTo,
+    messageThreadId: params.messageThreadId,
   });
 }

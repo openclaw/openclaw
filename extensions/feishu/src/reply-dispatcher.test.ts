@@ -67,10 +67,10 @@ vi.mock("./streaming-card.js", () => ({
 
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 
-async function flushAsyncTasks(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+async function flushAsyncTasks(iterations = 8): Promise<void> {
+  for (let i = 0; i < iterations; i += 1) {
+    await Promise.resolve();
+  }
 }
 
 describe("createFeishuReplyDispatcher streaming behavior", () => {
@@ -113,6 +113,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
           createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
           resolveHumanDelayConfig: vi.fn(() => undefined),
         },
+      },
+      hooks: {
+        emitMessageSent: vi.fn(),
       },
     });
   });
@@ -516,11 +519,14 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await flushAsyncTasks();
     expect(streamingInstances[0].update).toHaveBeenLastCalledWith(
       "🔧 已使用 2 个工具，正在处理...\n---\n第一段答案",
+      { mode: "replace" },
     );
 
     await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案\n第二段答案" });
     await flushAsyncTasks();
-    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("第一段答案\n第二段答案");
+    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("第一段答案\n第二段答案", {
+      mode: "replace",
+    });
 
     await options.onIdle?.();
     expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案\n第二段答案");
@@ -876,6 +882,52 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(onFinalTextDelivered).toHaveBeenCalledWith({
       text: "@Trent 请继续",
       messageId: "om_final_1",
+      messageIds: ["om_final_1"],
+      chatId: "oc_chat",
+      accountId: "main",
+    });
+  });
+
+  it("emits every provider message id for chunked non-streaming final text replies", async () => {
+    const onFinalTextDelivered = vi.fn(async () => {});
+    sendMessageFeishuMock
+      .mockResolvedValueOnce({ messageId: "om_chunk_1", chatId: "oc_chat" })
+      .mockResolvedValueOnce({ messageId: "om_chunk_2", chatId: "oc_chat" });
+    getFeishuRuntimeMock.mockReturnValue({
+      channel: {
+        text: {
+          resolveTextChunkLimit: vi.fn(() => 16),
+          resolveChunkMode: vi.fn(() => "line"),
+          resolveMarkdownTableMode: vi.fn(() => "preserve"),
+          convertMarkdownTables: vi.fn((text) => text),
+          chunkTextWithMode: vi.fn(() => ["第一段", "第二段"]),
+        },
+        reply: {
+          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+          resolveHumanDelayConfig: vi.fn(() => undefined),
+        },
+      },
+      hooks: {
+        emitMessageSent: vi.fn(),
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      onFinalTextDelivered,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "第一段\n第二段" }, { kind: "final" });
+
+    expect(onFinalTextDelivered).toHaveBeenCalledTimes(1);
+    expect(onFinalTextDelivered).toHaveBeenCalledWith({
+      text: "第一段\n第二段",
+      messageId: "om_chunk_2",
+      messageIds: ["om_chunk_1", "om_chunk_2"],
       chatId: "oc_chat",
       accountId: "main",
     });

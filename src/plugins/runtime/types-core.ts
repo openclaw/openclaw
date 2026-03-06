@@ -49,6 +49,29 @@ export type PluginRuntimeCore = {
       opts?: { level?: LogLevel },
     ) => RuntimeLogger;
   };
+  hooks: {
+    /**
+     * Emit a message_sent plugin hook event.
+     * Use this from extensions that bypass the core deliverOutboundPayloads pipeline
+     * (e.g. channel-specific reply dispatchers) so downstream plugins (bot-company
+     * journal, analytics, etc.) can still observe outbound messages.
+     */
+    emitMessageSent: (
+      event: {
+        to: string;
+        content: string;
+        success: boolean;
+        messageId?: string;
+        error?: string;
+        metadata?: Record<string, unknown>;
+      },
+      context: {
+        channelId: string;
+        accountId?: string;
+        conversationId?: string;
+      },
+    ) => void;
+  };
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
   };

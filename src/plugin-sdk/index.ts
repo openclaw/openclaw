@@ -718,3 +718,8 @@ export { loadWebMedia, type WebMediaResult } from "../web/media.js";
 
 // Security utilities
 export { redactSensitiveText } from "../logging/redact.js";
+
+// Plugin hooks
+export type { HookRunner } from "../plugins/hooks.js";
+export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+export { emitMessageReceivedHooks } from "../auto-reply/reply/message-received-hooks.js";

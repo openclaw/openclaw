@@ -13,7 +13,10 @@ function stripEnvelopeFromContentWithRole(
       return item;
     }
     const entry = item as Record<string, unknown>;
-    if (entry.type !== "text" || typeof entry.text !== "string") {
+    if (
+      (entry.type !== "text" && entry.type !== "input_text" && entry.type !== "output_text") ||
+      typeof entry.text !== "string"
+    ) {
       return item;
     }
     const inboundStripped = stripInboundMetadata(entry.text);

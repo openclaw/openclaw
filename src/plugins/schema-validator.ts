@@ -1,9 +1,8 @@
-import { createRequire } from "node:module";
+import Ajv from "ajv";
 import type { ErrorObject, ValidateFunction } from "ajv";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 
-const require = createRequire(import.meta.url);
 type AjvLike = {
   compile: (schema: Record<string, unknown>) => ValidateFunction;
 };
@@ -13,17 +12,14 @@ function getAjv(): AjvLike {
   if (ajvSingleton) {
     return ajvSingleton;
   }
-  const ajvModule = require("ajv") as { default?: new (opts?: object) => AjvLike };
-  const AjvCtor =
-    typeof ajvModule.default === "function"
-      ? ajvModule.default
-      : (ajvModule as unknown as new (opts?: object) => AjvLike);
-  ajvSingleton = new AjvCtor({
+  const AjvCtor = Ajv as unknown as new (opts?: object) => AjvLike;
+  const ajv = new AjvCtor({
     allErrors: true,
     strict: false,
     removeAdditional: false,
   });
-  return ajvSingleton;
+  ajvSingleton = ajv;
+  return ajv;
 }
 
 type CachedValidator = {

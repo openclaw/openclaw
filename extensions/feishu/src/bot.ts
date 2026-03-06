@@ -13,6 +13,7 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/feishu";
+import { appendAssistantMessageToSessionTranscript } from "../../../src/config/sessions.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
@@ -27,9 +28,10 @@ import {
   isFeishuGroupAllowed,
 } from "./policy.js";
 import { parsePostContent } from "./post.js";
+import { resolveQuotedFeishuMessageContent } from "./quoted-message.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+import { sendMessageFeishu } from "./send.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
@@ -254,8 +256,7 @@ function resolveFeishuGroupSession(params: {
   const normalizedRootId = rootId?.trim();
   const threadReply = Boolean(normalizedThreadId || normalizedRootId);
   const replyInThread =
-    (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
-    threadReply;
+    (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
   const streamingInThread =
     (groupConfig?.streamingInThread ?? feishuCfg?.streamingInThread ?? "disabled") === "enabled";
 
@@ -876,6 +877,78 @@ export function buildFeishuAgentBody(params: {
   return messageBody;
 }
 
+function collectProviderMessageIds(params: {
+  messageId?: string;
+  messageIds?: string[];
+}): string[] {
+  const ids = new Set<string>();
+  if (typeof params.messageId === "string" && params.messageId.trim()) {
+    ids.add(params.messageId);
+  }
+  if (Array.isArray(params.messageIds)) {
+    for (const value of params.messageIds) {
+      if (typeof value === "string" && value.trim()) {
+        ids.add(value);
+      }
+    }
+  }
+  return [...ids];
+}
+
+function createDirectReplyMirrorHandler(params: {
+  cfg: ClawdbotConfig;
+  agentId: string;
+  sessionKey: string;
+  accountId: string;
+  log: (message: string) => void;
+}) {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  const storePath = getFeishuRuntime().channel.session.resolveStorePath(params.cfg.session?.store, {
+    agentId: params.agentId,
+  });
+  return async (delivery: {
+    text: string;
+    messageId?: string;
+    messageIds?: string[];
+    chatId: string;
+    accountId?: string;
+  }) => {
+    const providerMessageIds = collectProviderMessageIds(delivery);
+    const providerMessageId = providerMessageIds.at(-1);
+    if (!providerMessageId) {
+      return;
+    }
+    try {
+      const result = await appendAssistantMessageToSessionTranscript({
+        agentId: params.agentId,
+        sessionKey,
+        storePath,
+        text: delivery.text,
+        messageMeta: {
+          channel: "feishu",
+          accountId: delivery.accountId ?? params.accountId,
+          chatId: delivery.chatId,
+          chatType: "direct",
+          providerMessageId,
+          providerMessageIds,
+        },
+      });
+      if (!result.ok) {
+        params.log(
+          `feishu[${params.accountId}]: failed to mirror direct reply into session ${sessionKey}: ${result.reason}`,
+        );
+      }
+    } catch (err) {
+      params.log(
+        `feishu[${params.accountId}]: failed to mirror direct reply into session ${sessionKey}: ${String(err)}`,
+      );
+    }
+  };
+}
+
 export async function handleFeishuMessage(params: {
   cfg: ClawdbotConfig;
   event: FeishuMessageEvent;
@@ -983,6 +1056,7 @@ export async function handleFeishuMessage(params: {
     0,
     feishuCfg?.historyLimit ?? cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
+  const dispatchMode = feishuCfg?.dispatchMode ?? "auto";
   const groupConfig = isGroup
     ? resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId })
     : undefined;
@@ -1266,19 +1340,27 @@ export async function handleFeishuMessage(params: {
     });
     const mediaPayload = buildAgentMediaPayload(mediaList);
 
-    // Fetch quoted/replied message content if parentId exists
+    // Resolve quoted/replied message content if parentId exists.
+    // For Feishu DMs prefer the local session transcript first, then Bot-Company DB,
+    // and only call the provider API as the final fallback.
     let quotedContent: string | undefined;
     if (ctx.parentId) {
       try {
-        const quotedMsg = await getMessageFeishu({
+        const quotedMsg = await resolveQuotedFeishuMessageContent({
           cfg,
-          messageId: ctx.parentId,
           accountId: account.accountId,
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
+          chatId: ctx.chatId,
+          parentId: ctx.parentId,
+          isGroup,
         });
-        if (quotedMsg) {
+        if (quotedMsg.content) {
           quotedContent = quotedMsg.content;
           log(
-            `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
+            `feishu[${account.accountId}]: fetched quoted message from ${
+              quotedMsg.source ?? "unknown"
+            }: ${quotedContent.slice(0, 100)}`,
           );
         }
       } catch (err) {
@@ -1439,6 +1521,15 @@ export async function handleFeishuMessage(params: {
         );
 
         if (agentId === activeAgentId) {
+          const onFinalTextDelivered = isGroup
+            ? undefined
+            : createDirectReplyMirrorHandler({
+                cfg: effectiveCfg,
+                agentId,
+                sessionKey: agentSessionKey,
+                accountId: account.accountId,
+                log,
+              });
           // Active agent: real Feishu dispatcher (responds on Feishu)
           const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
             cfg,
@@ -1449,11 +1540,12 @@ export async function handleFeishuMessage(params: {
             skipReplyToInMessages: !isGroup,
             replyInThread,
             streamingInThread,
-            rootId: ctx.rootId,
-            threadReply,
+            rootId: replyInThread ? ctx.rootId : undefined,
+            threadReply: replyInThread && threadReply,
             mentionTargets: ctx.mentionTargets,
             accountId: account.accountId,
             messageCreateTimeMs,
+            onFinalTextDelivered,
           });
 
           log(
@@ -1592,6 +1684,15 @@ export async function handleFeishuMessage(params: {
         route.accountId,
         ctx.mentionedBot,
       );
+      const onFinalTextDelivered = isGroup
+        ? undefined
+        : createDirectReplyMirrorHandler({
+            cfg: effectiveCfg,
+            agentId: route.agentId,
+            sessionKey: effectiveSessionKey,
+            accountId: account.accountId,
+            log,
+          });
 
       const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
         cfg,
@@ -1609,6 +1710,7 @@ export async function handleFeishuMessage(params: {
         mentionTargets: ctx.mentionTargets,
         accountId: account.accountId,
         messageCreateTimeMs,
+        onFinalTextDelivered,
       });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${effectiveSessionKey})`);

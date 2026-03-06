@@ -285,6 +285,19 @@ export class FeishuStreamingSession {
       .catch((error) => onError?.(error));
   }
 
+  private async deleteMessage(messageId: string): Promise<void> {
+    try {
+      const response = await this.client.im.message.delete({
+        path: { message_id: messageId },
+      });
+      if (response.code !== 0) {
+        throw new Error(response.msg || `code ${response.code}`);
+      }
+    } catch (e) {
+      this.log?.(`Delete failed: ${String(e)}`);
+    }
+  }
+
   async update(
     text: string,
     options?: {
