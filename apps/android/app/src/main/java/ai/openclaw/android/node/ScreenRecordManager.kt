@@ -60,6 +60,13 @@ class ScreenRecordManager(private val context: Context) {
       val projection = mgr.getMediaProjection(capture.resultCode, capture.data)
         ?: throw IllegalStateException("UNAVAILABLE: screen capture unavailable")
 
+      // Android 14+ requires registering a callback before createVirtualDisplay
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        projection.registerCallback(object : android.media.projection.MediaProjection.Callback() {
+          override fun onStop() { /* projection stopped */ }
+        }, android.os.Handler(android.os.Looper.getMainLooper()))
+      }
+
       val metrics = context.resources.displayMetrics
       val width = metrics.widthPixels
       val height = metrics.heightPixels
