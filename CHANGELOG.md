@@ -194,6 +194,7 @@ Docs: https://docs.openclaw.ai
 - Memory/flush default prompt: ban timestamped variant filenames during default memory flush runs so durable notes stay in the canonical daily `memory/YYYY-MM-DD.md` file. (#34951) thanks @zerone0x.
 - Agents/reply delivery timing: flush embedded Pi block replies before waiting on compaction retries so already-generated assistant replies reach channels before compaction wait completes. (#35489) thanks @Sid-Qin.
 - Agents/gateway config guidance: stop exposing `config.schema` through the agent `gateway` tool, remove prompt/docs guidance that told agents to call it, and keep agents on `config.get` plus `config.patch`/`config.apply` for config changes. (#7382) thanks @kakuteki.
+- Agents/failover: classify periodic provider limit exhaustion text (for example `Weekly/Monthly Limit Exhausted`) as `rate_limit` while keeping explicit `402 Payment Required` variants in billing, so failover continues without misclassifying billing-wrapped quota errors. (#33813) thanks @zhouhe-xydt.
 
 ## 2026.3.2
 
