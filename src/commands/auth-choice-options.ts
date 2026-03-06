@@ -48,6 +48,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["vllm"],
   },
   {
+    value: "ollama",
+    label: "Ollama",
+    hint: "Local LLM inference (auto-discover models)",
+    choices: ["ollama"],
+  },
+  {
     value: "minimax",
     label: "MiniMax",
     hint: "M2.5 (recommended)",
@@ -227,6 +233,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "vllm",
     label: "vLLM (custom URL + model)",
     hint: "Local/self-hosted OpenAI-compatible server",
+  },
+  {
+    value: "ollama",
+    label: "Ollama (auto-discover)",
+    hint: "Local LLM inference with model auto-discovery",
   },
   ...buildProviderAuthChoiceOptions(),
   {
