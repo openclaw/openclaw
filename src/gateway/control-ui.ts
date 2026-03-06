@@ -427,7 +427,7 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const rejectHardlinks = rootState !== undefined && rootState.kind !== "bundled";
+  const rejectHardlinks = rootState?.kind === "resolved";
   const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
   if (safeFile) {
     try {
