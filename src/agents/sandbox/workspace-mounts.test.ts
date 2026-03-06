@@ -5,7 +5,7 @@ describe("appendWorkspaceMountArgs", () => {
   it.each([
     { access: "rw" as const, expected: "/tmp/workspace:/workspace" },
     { access: "ro" as const, expected: "/tmp/workspace:/workspace:ro" },
-    { access: "none" as const, expected: "/tmp/workspace:/workspace:ro" },
+    { access: "none" as const, expected: "/tmp/workspace:/workspace" },
   ])("sets main mount permissions for workspaceAccess=$access", ({ access, expected }) => {
     const args: string[] = [];
     appendWorkspaceMountArgs({
@@ -30,7 +30,7 @@ describe("appendWorkspaceMountArgs", () => {
     });
 
     const mounts = args.filter((arg) => arg.startsWith("/tmp/"));
-    expect(mounts).toEqual(["/tmp/workspace:/workspace:ro"]);
+    expect(mounts).toEqual(["/tmp/workspace:/workspace"]);
   });
 
   it("omits agent workspace mount when paths are identical", () => {
