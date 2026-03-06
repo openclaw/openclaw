@@ -1,0 +1,9 @@
+{
+  "id": "open-clawchat",
+  "channels": ["open-clawchat"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {}
+  }
+}

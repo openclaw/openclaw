@@ -1,0 +1,40 @@
+{
+  "name": "@openclaw/open-clawchat",
+  "version": "1.0.0",
+  "description": "Open-ClawChat channel plugin for OpenClaw",
+  "type": "module",
+  "main": "index.ts",
+  "types": "index.ts",
+  "keywords": [
+    "openclaw",
+    "open-clawchat",
+    "channel",
+    "websocket",
+    "webhook"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "open-clawchat",
+      "label": "Open-ClawChat",
+      "selectionLabel": "Open-ClawChat (实时聊天)",
+      "docsPath": "/channels/open-clawchat",
+      "docsLabel": "open-clawchat",
+      "blurb": "Open-ClawChat real-time chat integration with WebSocket and Webhook support.",
+      "aliases": ["clawchat"],
+      "order": 40,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/open-clawchat",
+      "localPath": "extensions/open-clawchat",
+      "defaultChoice": "local"
+    }
+  }
+}
