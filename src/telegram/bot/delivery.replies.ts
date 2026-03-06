@@ -58,7 +58,11 @@ function buildChunkTextResolver(params: {
       const nested = markdownToTelegramChunks(chunk, params.textLimit, {
         tableMode: params.tableMode,
       });
-      if (!nested.length && chunk) {
+
+      // If markdownToTelegramChunks returns no chunks, fall back to rendering the raw markdown.
+      // However, drop whitespace-only chunks: Telegram rejects empty text and we should not
+      // crash the channel/provider when an agent emits an empty reply.
+      if (!nested.length && typeof chunk === "string" && chunk.trim().length > 0) {
         chunks.push({
           html: wrapFileReferencesInHtml(
             markdownToTelegramHtml(chunk, { tableMode: params.tableMode, wrapFileRefs: false }),
@@ -136,11 +140,14 @@ async function deliverTextReply(params: {
         replyMarkup: shouldAttachButtons ? params.replyMarkup : undefined,
       },
     );
-    if (firstDeliveredMessageId == null) {
-      firstDeliveredMessageId = messageId;
+    // delivery.send.ts returns -1 when the message is intentionally dropped (empty content)
+    if (messageId >= 0) {
+      if (firstDeliveredMessageId == null) {
+        firstDeliveredMessageId = messageId;
+      }
+      markReplyApplied(params.progress, replyToForChunk);
+      markDelivered(params.progress);
     }
-    markReplyApplied(params.progress, replyToForChunk);
-    markDelivered(params.progress);
   }
   return firstDeliveredMessageId;
 }
@@ -166,7 +173,7 @@ async function sendPendingFollowUpText(params: {
       replyToMode: params.replyToMode,
       progress: params.progress,
     });
-    await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
+    const messageId = await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
       replyToMessageId: replyToForFollowUp,
       thread: params.thread,
       textMode: "html",
@@ -174,8 +181,10 @@ async function sendPendingFollowUpText(params: {
       linkPreview: params.linkPreview,
       replyMarkup: i === 0 ? params.replyMarkup : undefined,
     });
-    markReplyApplied(params.progress, replyToForFollowUp);
-    markDelivered(params.progress);
+    if (messageId >= 0) {
+      markReplyApplied(params.progress, replyToForFollowUp);
+      markDelivered(params.progress);
+    }
   }
 }
 
@@ -221,11 +230,13 @@ async function sendTelegramVoiceFallbackText(opts: {
       linkPreview: opts.linkPreview,
       replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
     });
-    if (firstDeliveredMessageId == null) {
-      firstDeliveredMessageId = messageId;
-    }
-    if (replyToForChunk) {
-      appliedReplyTo = true;
+    if (messageId >= 0) {
+      if (firstDeliveredMessageId == null) {
+        firstDeliveredMessageId = messageId;
+      }
+      if (replyToForChunk) {
+        appliedReplyTo = true;
+      }
     }
   }
   return firstDeliveredMessageId;

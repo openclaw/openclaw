@@ -132,9 +132,13 @@ export async function sendTelegramText(
   };
 
   // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
+  // If both formatted and fallback text are empty, silently drop the message.
   if (!htmlText.trim()) {
     if (!hasFallbackText) {
-      throw new Error("telegram sendMessage failed: empty formatted text and empty plain fallback");
+      runtime.log?.(
+        `telegram sendMessage skipped chat=${chatId}: empty formatted text and empty plain fallback`,
+      );
+      return -1;
     }
     return await sendPlainFallback();
   }
@@ -162,7 +166,10 @@ export async function sendTelegramText(
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText) || EMPTY_TEXT_ERR_RE.test(errText)) {
       if (!hasFallbackText) {
-        throw err;
+        runtime.log?.(
+          `telegram sendMessage skipped chat=${chatId}: empty formatted text and empty plain fallback (${errText})`,
+        );
+        return -1;
       }
       runtime.log?.(`telegram formatted send failed; retrying without formatting: ${errText}`);
       return await sendPlainFallback();
