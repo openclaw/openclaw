@@ -186,7 +186,6 @@ describe("resolveGatewayConnection", () => {
 
     await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "env-pass" }, async () => {
       // pragma: allowlist secret
-      // pragma: allowlist secret
       const result = await resolveGatewayConnection({});
       expect(result.password).toBe("env-pass");
     });
