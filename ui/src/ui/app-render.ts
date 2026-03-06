@@ -650,7 +650,7 @@ export function renderApp(state: AppViewState) {
                   if (activeFile && currentAgentId === agentId) {
                     await loadAgentFileContent(state, agentId, activeFile, {
                       force: true,
-                      preserveDraft: false,
+                      preserveDraft: true,
                     });
                   }
                 },
