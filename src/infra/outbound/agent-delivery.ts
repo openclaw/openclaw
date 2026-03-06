@@ -66,9 +66,10 @@ export function resolveAgentDeliveryPlan(params: {
     typeof params.turnSourceChannel === "string" ? params.turnSourceChannel.trim() : undefined;
 
   // Heartbeat detection: webchat + "heartbeat" target
+  // P2 fix: Use case-insensitive comparison to catch "WebChat", "WEBCHAT", etc.
   const isWebchatHeartbeat =
-    (rawRequestedChannel === "webchat" && rawExplicitTo === "heartbeat") ||
-    (rawTurnSourceChannel === "webchat" && rawExplicitTo === "heartbeat");
+    (rawRequestedChannel.toLowerCase() === "webchat" && rawExplicitTo === "heartbeat") ||
+    (rawTurnSourceChannel?.toLowerCase() === "webchat" && rawExplicitTo === "heartbeat");
 
   const requestedRaw =
     typeof params.requestedChannel === "string" ? params.requestedChannel.trim() : "";
