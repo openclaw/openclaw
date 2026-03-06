@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { resolveFetch } from "../infra/fetch.js";
-import { generateSecureUuid } from "../infra/secure-random.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 
 export type SignalRpcOptions = {
@@ -7,7 +8,7 @@ export type SignalRpcOptions = {
   timeoutMs?: number;
 };
 
-export type SignalRpcError = {
+export type SignalRpcErrorPayload = {
   code?: number;
   message?: string;
   data?: unknown;
@@ -16,7 +17,7 @@ export type SignalRpcError = {
 export type SignalRpcResponse<T> = {
   jsonrpc?: string;
   result?: T;
-  error?: SignalRpcError;
+  error?: SignalRpcErrorPayload;
   id?: string | number | null;
 };
 
@@ -27,6 +28,81 @@ export type SignalSseEvent = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_RETRY_ATTEMPTS = 3;
+const DEFAULT_RETRY_MIN_DELAY_MS = 500;
+const DEFAULT_RETRY_MAX_DELAY_MS = 10_000;
+const DEFAULT_RETRY_JITTER = 0.2;
+
+export class SignalRpcError extends Error {
+  readonly code: number | string;
+  readonly data?: unknown;
+
+  constructor(code: number | string, message: string, data?: unknown) {
+    super(`Signal RPC ${code}: ${message}`);
+    this.name = "SignalRpcError";
+    this.code = code;
+    this.data = data;
+  }
+}
+
+export class SignalHttpError extends Error {
+  readonly status: number;
+  readonly statusText?: string;
+  readonly body?: string;
+
+  constructor(status: number, statusText?: string, body?: string) {
+    super(`Signal RPC HTTP ${status}${statusText ? ` ${statusText}` : ""}`);
+    this.name = "SignalHttpError";
+    this.status = status;
+    this.statusText = statusText;
+    this.body = body;
+  }
+}
+
+export class SignalNetworkError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message);
+    this.name = "SignalNetworkError";
+    if (options?.cause !== undefined) {
+      this.cause = options.cause;
+    }
+  }
+}
+
+export class SignalTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number, options?: { cause?: unknown }) {
+    super(`Signal RPC timed out after ${timeoutMs}ms`);
+    this.name = "SignalTimeoutError";
+    this.timeoutMs = timeoutMs;
+    if (options?.cause !== undefined) {
+      this.cause = options.cause;
+    }
+  }
+}
+
+type SignalRetryConfig = {
+  attempts?: number;
+  minDelayMs?: number;
+  maxDelayMs?: number;
+  jitter?: number;
+};
+
+export type SignalRetryAttemptInfo = {
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  error: Error;
+  method: string;
+};
+
+export type SignalRpcRetryOptions = SignalRpcOptions & {
+  retry?: SignalRetryConfig;
+  isRecoverable?: (error: Error) => boolean;
+  onRetry?: (info: SignalRetryAttemptInfo) => void;
+  abortSignal?: AbortSignal;
+};
 
 function normalizeBaseUrl(url: string): string {
   const trimmed = url.trim();
@@ -47,24 +123,100 @@ function getRequiredFetch(): typeof fetch {
   return fetchImpl;
 }
 
-function parseSignalRpcResponse<T>(text: string, status: number): SignalRpcResponse<T> {
+function isTimeoutLikeError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("timed out") ||
+    message.includes("timeout") ||
+    message.includes("aborted due to timeout")
+  );
+}
+
+function normalizeError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  return new Error(String(error));
+}
+
+function resolveSignalRetryConfig(retry?: SignalRetryConfig): Required<SignalRetryConfig> {
+  const attempts = Math.max(
+    1,
+    Math.trunc(
+      typeof retry?.attempts === "number" && Number.isFinite(retry.attempts)
+        ? retry.attempts
+        : DEFAULT_RETRY_ATTEMPTS,
+    ),
+  );
+  const minDelayMs = Math.max(
+    0,
+    Math.trunc(
+      typeof retry?.minDelayMs === "number" && Number.isFinite(retry.minDelayMs)
+        ? retry.minDelayMs
+        : DEFAULT_RETRY_MIN_DELAY_MS,
+    ),
+  );
+  const maxDelayMs = Math.max(
+    minDelayMs,
+    Math.trunc(
+      typeof retry?.maxDelayMs === "number" && Number.isFinite(retry.maxDelayMs)
+        ? retry.maxDelayMs
+        : DEFAULT_RETRY_MAX_DELAY_MS,
+    ),
+  );
+  const jitterRaw =
+    typeof retry?.jitter === "number" && Number.isFinite(retry.jitter)
+      ? retry.jitter
+      : DEFAULT_RETRY_JITTER;
+  const jitter = Math.min(1, Math.max(0, jitterRaw));
+  return {
+    attempts,
+    minDelayMs,
+    maxDelayMs,
+    jitter,
+  };
+}
+
+function parseSignalRpcResponse<T>(text: string): SignalRpcResponse<T> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
-  } catch (err) {
-    throw new Error(`Signal RPC returned malformed JSON (status ${status})`, { cause: err });
+  } catch (error) {
+    throw new SignalNetworkError("Signal RPC returned invalid JSON", { cause: error });
   }
-
   if (!parsed || typeof parsed !== "object") {
-    throw new Error(`Signal RPC returned invalid response envelope (status ${status})`);
+    throw new SignalNetworkError("Signal RPC returned invalid response envelope");
   }
+  const envelope = parsed as SignalRpcResponse<T>;
+  const hasResult = Object.hasOwn(envelope, "result");
+  if (!envelope.error && !hasResult) {
+    throw new SignalNetworkError("Signal RPC returned invalid response envelope");
+  }
+  return envelope;
+}
 
-  const rpc = parsed as SignalRpcResponse<T>;
-  const hasResult = Object.hasOwn(rpc, "result");
-  if (!rpc.error && !hasResult) {
-    throw new Error(`Signal RPC returned invalid response envelope (status ${status})`);
+export function isRecoverableSignalError(error: Error): boolean {
+  if (error instanceof SignalTimeoutError || error instanceof SignalNetworkError) {
+    return true;
   }
-  return rpc;
+  if (error instanceof SignalHttpError) {
+    return (
+      error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500
+    );
+  }
+  if (error instanceof SignalRpcError) {
+    const msg = error.message.toLowerCase();
+    return (
+      msg.includes("rate limit") ||
+      msg.includes("timeout") ||
+      msg.includes("temporar") ||
+      msg.includes("unavailable")
+    );
+  }
+  return false;
 }
 
 export async function signalRpcRequest<T = unknown>(
@@ -73,37 +225,89 @@ export async function signalRpcRequest<T = unknown>(
   opts: SignalRpcOptions,
 ): Promise<T> {
   const baseUrl = normalizeBaseUrl(opts.baseUrl);
-  const id = generateSecureUuid();
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const id = randomUUID();
   const body = JSON.stringify({
     jsonrpc: "2.0",
     method,
     params,
     id,
   });
-  const res = await fetchWithTimeout(
-    `${baseUrl}/api/v1/rpc`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    },
-    opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    getRequiredFetch(),
-  );
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(
+      `${baseUrl}/api/v1/rpc`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      },
+      timeoutMs,
+      getRequiredFetch(),
+    );
+  } catch (error) {
+    if (isTimeoutLikeError(error)) {
+      throw new SignalTimeoutError(timeoutMs, { cause: error });
+    }
+    throw new SignalNetworkError(`Signal RPC request failed: ${String(error)}`, { cause: error });
+  }
   if (res.status === 201) {
     return undefined as T;
   }
   const text = await res.text();
-  if (!text) {
-    throw new Error(`Signal RPC empty response (status ${res.status})`);
+  if (!res.ok) {
+    throw new SignalHttpError(res.status, res.statusText || undefined, text || undefined);
   }
-  const parsed = parseSignalRpcResponse<T>(text, res.status);
+  if (!text) {
+    return undefined as T;
+  }
+  const parsed = parseSignalRpcResponse<T>(text);
   if (parsed.error) {
     const code = parsed.error.code ?? "unknown";
     const msg = parsed.error.message ?? "Signal RPC error";
-    throw new Error(`Signal RPC ${code}: ${msg}`);
+    throw new SignalRpcError(code, msg, parsed.error.data);
   }
   return parsed.result as T;
+}
+
+export async function signalRpcRequestWithRetry<T = unknown>(
+  method: string,
+  params: Record<string, unknown> | undefined,
+  opts: SignalRpcRetryOptions,
+): Promise<T> {
+  const retryCfg = resolveSignalRetryConfig(opts.retry);
+  const isRecoverable = opts.isRecoverable ?? isRecoverableSignalError;
+  let attempt = 0;
+  while (attempt < retryCfg.attempts) {
+    attempt += 1;
+    try {
+      return await signalRpcRequest<T>(method, params, opts);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      const canRetry = attempt < retryCfg.attempts && isRecoverable(normalized);
+      if (!canRetry) {
+        throw normalized;
+      }
+      const delayMs = computeBackoff(
+        {
+          initialMs: retryCfg.minDelayMs,
+          maxMs: retryCfg.maxDelayMs,
+          factor: 2,
+          jitter: retryCfg.jitter,
+        },
+        attempt,
+      );
+      opts.onRetry?.({
+        attempt,
+        maxAttempts: retryCfg.attempts,
+        delayMs,
+        error: normalized,
+        method,
+      });
+      await sleepWithAbort(delayMs, opts.abortSignal);
+    }
+  }
+  throw new Error("Signal RPC retry exhausted");
 }
 
 export async function signalCheck(

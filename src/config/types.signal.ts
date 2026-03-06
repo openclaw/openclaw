@@ -1,3 +1,4 @@
+import type { OutboundRetryConfig } from "./types.base.js";
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -20,6 +21,10 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   autoStart?: boolean;
   /** Max time to wait for signal-cli daemon startup (ms, cap 120000). */
   startupTimeoutMs?: number;
+  /** Reconnect SSE stream when no events arrive for this many ms (default: 60000, 0 disables idle watchdog). */
+  sseIdleTimeoutMs?: number;
+  /** Retry policy for outbound Signal RPC sends/edits/deletes/polls/reactions. */
+  retry?: OutboundRetryConfig;
   receiveMode?: "on-start" | "manual";
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;

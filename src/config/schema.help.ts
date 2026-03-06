@@ -1477,6 +1477,13 @@ export const FIELD_HELP: Record<string, string> = {
     "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",
   "channels.signal.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.signal.allowFrom=["*"].',
+  "channels.signal.sseIdleTimeoutMs":
+    "Reconnect idle Signal SSE streams after this many ms without events (default: 60000, 0 disables).",
+  "channels.signal.retry.attempts":
+    "Max retry attempts for outbound Signal RPC calls (default: 3).",
+  "channels.signal.retry.minDelayMs": "Minimum retry delay in ms for Signal outbound calls.",
+  "channels.signal.retry.maxDelayMs": "Maximum retry delay cap in ms for Signal outbound calls.",
+  "channels.signal.retry.jitter": "Jitter factor (0-1) applied to Signal retry delays.",
   "channels.imessage.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
   "channels.bluebubbles.dmPolicy":

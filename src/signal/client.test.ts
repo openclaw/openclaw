@@ -1,67 +1,105 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithTimeoutMock = vi.fn();
-const resolveFetchMock = vi.fn();
+const fetchImpl = vi.fn();
 
 vi.mock("../infra/fetch.js", () => ({
-  resolveFetch: (...args: unknown[]) => resolveFetchMock(...args),
-}));
-
-vi.mock("../infra/secure-random.js", () => ({
-  generateSecureUuid: () => "test-id",
+  resolveFetch: () => fetchImpl,
 }));
 
 vi.mock("../utils/fetch-timeout.js", () => ({
   fetchWithTimeout: (...args: unknown[]) => fetchWithTimeoutMock(...args),
 }));
 
-import { signalRpcRequest } from "./client.js";
-
-function rpcResponse(body: unknown, status = 200): Response {
-  if (typeof body === "string") {
-    return new Response(body, { status });
-  }
-  return new Response(JSON.stringify(body), { status });
+function makeResponse(params: {
+  status?: number;
+  ok?: boolean;
+  statusText?: string;
+  text: string;
+}) {
+  return {
+    status: params.status ?? 200,
+    ok: params.ok ?? true,
+    statusText: params.statusText ?? "OK",
+    text: async () => params.text,
+  };
 }
 
-describe("signalRpcRequest", () => {
+describe("signal client typed errors and retry", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    resolveFetchMock.mockReturnValue(vi.fn());
+    fetchWithTimeoutMock.mockReset();
+    fetchImpl.mockReset();
   });
 
-  it("returns parsed RPC result", async () => {
+  it("throws SignalRpcError for JSON-RPC errors", async () => {
+    const { signalRpcRequest, SignalRpcError } = await import("./client.js");
     fetchWithTimeoutMock.mockResolvedValueOnce(
-      rpcResponse({ jsonrpc: "2.0", result: { version: "0.13.22" }, id: "test-id" }),
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "boom" },
+        }),
+      }),
     );
 
-    const result = await signalRpcRequest<{ version: string }>("version", undefined, {
-      baseUrl: "http://127.0.0.1:8080",
-    });
-
-    expect(result).toEqual({ version: "0.13.22" });
+    await expect(
+      signalRpcRequest("send", { recipient: ["+15550001111"] }, { baseUrl: "http://signal.local" }),
+    ).rejects.toBeInstanceOf(SignalRpcError);
   });
 
-  it("throws a wrapped error when RPC response JSON is malformed", async () => {
-    fetchWithTimeoutMock.mockResolvedValueOnce(rpcResponse("not-json", 502));
+  it("throws SignalHttpError for non-2xx responses", async () => {
+    const { signalRpcRequest, SignalHttpError } = await import("./client.js");
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      makeResponse({
+        status: 503,
+        ok: false,
+        statusText: "Service Unavailable",
+        text: "unavailable",
+      }),
+    );
 
     await expect(
-      signalRpcRequest("version", undefined, {
-        baseUrl: "http://127.0.0.1:8080",
-      }),
-    ).rejects.toMatchObject({
-      message: "Signal RPC returned malformed JSON (status 502)",
-      cause: expect.any(SyntaxError),
-    });
+      signalRpcRequest("send", { recipient: ["+15550001111"] }, { baseUrl: "http://signal.local" }),
+    ).rejects.toBeInstanceOf(SignalHttpError);
   });
 
-  it("throws when RPC response envelope has neither result nor error", async () => {
-    fetchWithTimeoutMock.mockResolvedValueOnce(rpcResponse({ jsonrpc: "2.0", id: "test-id" }));
+  it("throws SignalNetworkError for malformed RPC envelopes", async () => {
+    const { signalRpcRequest, SignalNetworkError } = await import("./client.js");
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "1",
+        }),
+      }),
+    );
 
     await expect(
-      signalRpcRequest("version", undefined, {
-        baseUrl: "http://127.0.0.1:8080",
+      signalRpcRequest("send", { recipient: ["+15550001111"] }, { baseUrl: "http://signal.local" }),
+    ).rejects.toBeInstanceOf(SignalNetworkError);
+  });
+
+  it("retries recoverable timeouts with backoff", async () => {
+    const { signalRpcRequestWithRetry } = await import("./client.js");
+    fetchWithTimeoutMock.mockRejectedValueOnce(new Error("request timeout")).mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000000001 },
+        }),
       }),
-    ).rejects.toThrow("Signal RPC returned invalid response envelope (status 200)");
+    );
+
+    const result = await signalRpcRequestWithRetry<{ timestamp: number }>(
+      "send",
+      { recipient: ["+15550001111"], message: "hi" },
+      {
+        baseUrl: "http://signal.local",
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      },
+    );
+
+    expect(result.timestamp).toBe(1700000000001);
+    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
   });
 });
