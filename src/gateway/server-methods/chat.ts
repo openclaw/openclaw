@@ -744,6 +744,7 @@ async function injectMediaImagesIntoHistory(messages: unknown[]): Promise<unknow
   let totalInjectedBytes = 0;
 
   let pendingImages: Array<{ type: string; data: string; media_type: string }> = [];
+  let pendingBytes = 0;
   const seenPaths = new Set<string>();
 
   for (let i = 0; i < result.length; i++) {
@@ -762,8 +763,8 @@ async function injectMediaImagesIntoHistory(messages: unknown[]): Promise<unknow
     const isToolResultMsg =
       msgRole === "toolresult" || msgRole === "tool_result" || msgRole === "tool";
 
-    // Skip collecting new images once the total budget is exhausted.
-    if (totalInjectedBytes >= MAX_TOTAL_INJECTED_BYTES) {
+    // Skip collecting new images once the total budget (injected + pending) is exhausted.
+    if (totalInjectedBytes + pendingBytes >= MAX_TOTAL_INJECTED_BYTES) {
       continue;
     }
 
@@ -781,6 +782,7 @@ async function injectMediaImagesIntoHistory(messages: unknown[]): Promise<unknow
             break;
           }
           pendingImages.push(img);
+          pendingBytes += img.data.length;
         }
       }
 
@@ -793,6 +795,7 @@ async function injectMediaImagesIntoHistory(messages: unknown[]): Promise<unknow
             break;
           }
           pendingImages.push(img);
+          pendingBytes += img.data.length;
         }
       }
 
@@ -804,6 +807,7 @@ async function injectMediaImagesIntoHistory(messages: unknown[]): Promise<unknow
             break;
           }
           pendingImages.push(img);
+          pendingBytes += img.data.length;
         }
       }
     }
@@ -858,6 +862,7 @@ async function injectMediaImagesIntoHistory(messages: unknown[]): Promise<unknow
           entry.content = [...content, ...affordable];
         }
         pendingImages = [];
+        pendingBytes = 0;
         // Reset seenPaths so subsequent conversation rounds can re-process
         // the same image paths (dedup only applies within a single round).
         seenPaths.clear();
