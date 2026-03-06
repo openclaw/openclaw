@@ -904,9 +904,14 @@ export type PluginHookContextAssembledEvent = {
   messageCount: number;
   /** Number of images attached to the prompt. */
   imageCount: number;
-  /** Always 1 — this hook fires once per run before the first LLM call.
-   *  Use loop_iteration_start for per-turn iteration tracking. */
+  /** Always 1 within an attempt — this hook fires once per attempt before
+   *  the first LLM call. Use loop_iteration_start for per-turn tracking. */
   iteration: number;
+  /** Zero-based attempt index within the outer run loop. 0 = initial attempt,
+   *  1+ = retry after overflow compaction, auth refresh, or tool result truncation.
+   *  Context (messages, systemPrompt) may differ between attempts due to compaction.
+   *  Plugins needing run-level deduplication should key on runId, not this event. */
+  attemptIndex: number;
 };
 
 // loop_iteration_start hook (void — parallel)
