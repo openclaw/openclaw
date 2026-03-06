@@ -5,7 +5,7 @@ import type {
   ReactionTypeEmoji,
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
@@ -326,7 +326,10 @@ function resolveTelegramApiContext(opts: {
   api?: TelegramApiOverride;
   cfg?: ReturnType<typeof loadConfig>;
 }): TelegramApiContext {
-  const cfg = opts.cfg ?? loadConfig();
+  // Prefer the active secrets runtime snapshot when available so SecretRef-backed
+  // tokens (channels.telegram.botToken) resolve consistently across startup, bot
+  // handlers, and tool-driven outbound sends.
+  const cfg = opts.cfg ?? getRuntimeConfigSnapshot() ?? loadConfig();
   const account = resolveTelegramAccount({
     cfg,
     accountId: opts.accountId,
