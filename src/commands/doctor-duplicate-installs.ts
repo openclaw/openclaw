@@ -105,19 +105,22 @@ export async function findOpenClawInstallations(
   // Determine the "current" binary — what `process.argv[1]` resolves to.
   const currentBin = process.argv[1] ? await resolveRealPath(process.argv[1]) : null;
 
-  for (const dir of candidateDirs) {
-    const candidate = path.join(dir, binName);
-    if (!(await fileExists(candidate))) {
-      continue;
-    }
+  // Probe all candidate dirs in parallel (each probeVersion already has a 5 s timeout).
+  const candidates = candidateDirs.map((dir) => path.join(dir, binName));
+  const probeResults = await Promise.all(
+    candidates.map(async (candidate) => {
+      if (!(await fileExists(candidate))) return null;
+      const realPath = await resolveRealPath(candidate);
+      const version = await probeVersion(candidate);
+      return { candidate, realPath, version };
+    }),
+  );
 
-    const realPath = await resolveRealPath(candidate);
-    if (seen.has(realPath)) {
-      continue;
-    }
+  for (const result of probeResults) {
+    if (!result) continue;
+    const { candidate, realPath, version } = result;
+    if (seen.has(realPath)) continue;
     seen.add(realPath);
-
-    const version = await probeVersion(candidate);
     installations.push({
       binPath: candidate,
       version,
@@ -151,6 +154,17 @@ function buildRemediationHint(install: OpenClawInstallation): string {
   if (p.includes(".volta")) {
     return `volta uninstall openclaw`;
   }
+  // Managed version managers — use their first-class uninstall commands rather than bare rm,
+  // which would leave dangling shims and break the package manager's internal bookkeeping.
+  if (p.includes("pnpm")) {
+    return `pnpm remove -g openclaw`;
+  }
+  if (p.includes(".nvm")) {
+    return `nvm exec node npm uninstall -g openclaw`;
+  }
+  if (p.includes("fnm")) {
+    return `fnm exec -- npm uninstall -g openclaw`;
+  }
   return `rm ${shortenHome(p)}`;
 }
 
@@ -175,13 +189,23 @@ export async function noteDuplicateInstallations(): Promise<DuplicateInstallResu
   lines.push("");
   lines.push("Multiple installations can cause gateway port conflicts and infinite restart loops.");
 
-  // Suggest removing the non-current ones
+  // Suggest removing the non-current ones.
+  // Guard: if no installation is identified as current (process.argv[1] didn't match any
+  // discovered binary), isCurrent will be false for ALL of them. In that case, do NOT
+  // emit removal hints — we can't tell which one is the running binary, so recommending
+  // removal of all of them would be dangerous.
+  const hasCurrent = installations.some((i) => i.isCurrent);
   const stale = installations.filter((i) => !i.isCurrent);
-  if (stale.length > 0) {
+  if (hasCurrent && stale.length > 0) {
     lines.push("Remove the stale installation(s):");
     for (const s of stale) {
       lines.push(`  ${buildRemediationHint(s)}`);
     }
+  } else if (!hasCurrent && stale.length > 0) {
+    lines.push(
+      "Could not identify which installation is currently running. " +
+        "Inspect the list above and manually remove unwanted copies.",
+    );
   }
 
   note(lines.join("\n"), "Duplicate installations");
