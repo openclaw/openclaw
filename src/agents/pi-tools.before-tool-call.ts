@@ -5,6 +5,7 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { requiresUPCVerification, createUPCChallenge, getTaskDescription } from "./upc-verification.js";
 
 export type HookContext = {
   agentId?: string;
@@ -96,6 +97,15 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+
+  // Check UPC requirement for high-risk tasks
+  if (requiresUPCVerification(toolName, args.ctx?.sessionId)) {
+    const challenge = createUPCChallenge(toolName, getTaskDescription(toolName));
+    return {
+      blocked: true,
+      reason: JSON.stringify(challenge),
+    };
+  }
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =

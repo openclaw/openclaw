@@ -35,6 +35,10 @@ export type GatewayRuntimeConfig = {
   tailscaleMode: "off" | "serve" | "funnel";
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   canvasHostEnabled: boolean;
+  upcConfig?: {
+    enabled: boolean;
+    hasUPC: boolean;
+  };
 };
 
 export async function resolveGatewayRuntimeConfig(params: {
