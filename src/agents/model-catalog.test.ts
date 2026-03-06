@@ -41,11 +41,7 @@ describe("loadModelCatalog", () => {
       expect(first).toEqual([]);
 
       const second = await loadModelCatalog({ config: cfg });
-      expect(second).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }),
-        ]),
-      );
+      expect(second).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
       expect(getCallCount()).toBe(2);
       expect(warnSpy).toHaveBeenCalledTimes(1);
     } finally {
@@ -81,11 +77,7 @@ describe("loadModelCatalog", () => {
       );
 
       const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-      expect(result).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }),
-        ]),
-      );
+      expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
       expect(warnSpy).toHaveBeenCalledTimes(1);
     } finally {
       setLoggerOverride(null);
@@ -122,8 +114,24 @@ describe("loadModelCatalog", () => {
     expect(spark?.reasoning).toBe(true);
   });
 
-  it("adds openai-codex/gpt-5.4 when codex models exist", async () => {
+  it("adds gpt-5.4 forward-compat catalog entries when template models exist", async () => {
     mockPiDiscoveryModels([
+      {
+        id: "gpt-5.2",
+        provider: "openai",
+        name: "GPT-5.2",
+        reasoning: true,
+        contextWindow: 1_050_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.2-pro",
+        provider: "openai",
+        name: "GPT-5.2 Pro",
+        reasoning: true,
+        contextWindow: 1_050_000,
+        input: ["text", "image"],
+      },
       {
         id: "gpt-5.3-codex",
         provider: "openai-codex",
@@ -135,46 +143,26 @@ describe("loadModelCatalog", () => {
     ]);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
     expect(result).toContainEqual(
       expect.objectContaining({
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.4",
         name: "gpt-5.4",
-        reasoning: true,
-        contextWindow: 272000,
-      }),
-    );
-  });
-
-  it("adds openai/gpt-5.4 and openai/gpt-5.4-pro when an older openai model exists", async () => {
-    mockPiDiscoveryModels([
-      {
-        id: "gpt-5.2",
-        provider: "openai",
-        name: "GPT-5.2",
-        reasoning: true,
-        contextWindow: 400000,
-        input: ["text", "image"],
-      },
-    ]);
-
-    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        reasoning: true,
-        contextWindow: 1_050_000,
       }),
     );
     expect(result).toContainEqual(
       expect.objectContaining({
         provider: "openai",
         id: "gpt-5.4-pro",
-        name: "GPT-5.4 Pro",
-        reasoning: true,
-        contextWindow: 1_050_000,
+        name: "gpt-5.4-pro",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        name: "gpt-5.4",
       }),
     );
   });

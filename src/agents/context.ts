@@ -1,19 +1,17 @@
 // Lazy-load pi-coding-agent model metadata so we can infer context windows when
 // the agent reports a model id. This includes custom models.json entries.
 
-import type { Api, Model } from "@mariozechner/pi-ai";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
-import { augmentKnownForwardCompatModels } from "./model-forward-compat.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
-type ModelEntry = { id: string; provider?: string; contextWindow?: number };
+type ModelEntry = { id: string; contextWindow?: number };
 type ModelRegistryLike = {
-  getAvailable?: () => Model<Api>[];
-  getAll: () => Model<Api>[];
+  getAvailable?: () => ModelEntry[];
+  getAll: () => ModelEntry[];
 };
 type ConfigModelEntry = { id?: string; contextWindow?: number };
 type ProviderConfigEntry = { models?: ConfigModelEntry[] };
@@ -158,11 +156,10 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
       const agentDir = resolveOpenClawAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir) as unknown as ModelRegistryLike;
-      const models = augmentKnownForwardCompatModels(
+      const models =
         typeof modelRegistry.getAvailable === "function"
           ? modelRegistry.getAvailable()
-          : modelRegistry.getAll(),
-      );
+          : modelRegistry.getAll();
       applyDiscoveredContextWindows({
         cache: MODEL_CACHE,
         models,

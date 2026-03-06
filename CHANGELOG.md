@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - Tools/Diffs guidance: restore a short system-prompt hint for enabled diffs while keeping the detailed instructions in the companion skill, so diffs usage guidance stays out of user-prompt space. (#36904) thanks @gumadeiras.
 - Telegram/ACP topic bindings: accept Telegram Mac Unicode dash option prefixes in `/acp spawn`, support Telegram topic thread binding (`--thread here|auto`), route bound-topic follow-ups to ACP sessions, add actionable Telegram approval buttons with prefixed approval-id resolution, and pin successful bind confirmations in-topic. (#36683) Thanks @huntharo.
 - Hooks/Compaction lifecycle: emit `session:compact:before` and `session:compact:after` internal events plus plugin compaction callbacks with session/count metadata, so automations can react to compaction runs consistently. (#16788) thanks @vincentkoc.
+- CLI: make read-only SecretRef status flows degrade safely (#37023) thanks @joshavant.
 
 ### Breaking
 
@@ -30,6 +31,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Models/openai-completions streaming compatibility: force `compat.supportsUsageInStreaming=false` for non-native OpenAI-compatible endpoints during model normalization, preventing usage-only stream chunks from triggering `choices[0]` parser crashes in provider streams. (#8714) Thanks @nonanon1.
+- TUI/token copy-safety rendering: treat long credential-like mixed alphanumeric tokens (including quoted forms) as copy-sensitive in render sanitization so formatter hard-wrap guards no longer inject visible spaces into auth-style values before display. (#26710) Thanks @jasonthane.
+- WhatsApp/self-chat response prefix fallback: stop forcing `"[openclaw]"` as the implicit outbound response prefix when no identity name or response prefix is configured, so blank/default prefix settings no longer inject branding text unexpectedly in self-chat flows. (#27962) Thanks @ecanmor.
 - Memory/QMD search result decoding: accept `qmd search` hits that only include `file` URIs (for example `qmd://collection/path.md`) without `docid`, resolve them through managed collection roots, and keep multi-collection results keyed by file fallback so valid QMD hits no longer collapse to empty `memory_search` output. (#28181) Thanks @0x76696265.
 - Memory/QMD collection-name conflict recovery: when `qmd collection add` fails because another collection already occupies the same `path + pattern`, detect the conflicting collection from `collection list`, remove it, and retry add so agent-scoped managed collections are created deterministically instead of being silently skipped; also add warning-only fallback when qmd metadata is unavailable to avoid destructive guesses. (#25496) Thanks @Ramsbaby.
 - Slack/app_mention race dedupe: when `app_mention` dispatch wins while same-`ts` `message` prepare is still in-flight, suppress the later message dispatch so near-simultaneous Slack deliveries do not produce duplicate replies; keep single-retry behavior and add regression coverage for both dropped and successful message-prepare outcomes. (#37033) Thanks @Takhoffman.
@@ -179,6 +183,7 @@ Docs: https://docs.openclaw.ai
 - Memory/doctor SecretRef handling: treat SecretRef-backed memory-search API keys as configured, and fail embedding setup with explicit unresolved-secret errors instead of crashing. (#36835) Thanks @joshavant.
 - Memory/flush default prompt: ban timestamped variant filenames during default memory flush runs so durable notes stay in the canonical daily `memory/YYYY-MM-DD.md` file. (#34951) thanks @zerone0x.
 - Agents/reply delivery timing: flush embedded Pi block replies before waiting on compaction retries so already-generated assistant replies reach channels before compaction wait completes. (#35489) thanks @Sid-Qin.
+- Agents/gateway config guidance: stop exposing `config.schema` through the agent `gateway` tool, remove prompt/docs guidance that told agents to call it, and keep agents on `config.get` plus `config.patch`/`config.apply` for config changes. (#7382) thanks @kakuteki.
 
 ## 2026.3.2
 
@@ -530,6 +535,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Docs/Contributing: require before/after screenshots for UI or visual PRs in the pre-PR checklist. (#32206) Thanks @hydro13.
+- Models/OpenAI forward compat: add support for `openai/gpt-5.4`, `openai/gpt-5.4-pro`, and `openai-codex/gpt-5.4`, including direct OpenAI Responses `serviceTier` passthrough safeguards for valid values. (#36590) Thanks @dorukardahan.
 
 ### Fixes
 

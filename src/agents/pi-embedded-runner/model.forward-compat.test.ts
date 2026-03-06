@@ -7,16 +7,13 @@ vi.mock("../pi-model-discovery.js", () => ({
 
 import { buildInlineProviderModels, resolveModel } from "./model.js";
 import {
-  buildOpenAIForwardCompatExpectation,
   buildOpenAICodexForwardCompatExpectation,
   GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
   GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
   makeModel,
   mockGoogleGeminiCliFlashTemplateModel,
   mockGoogleGeminiCliProTemplateModel,
-  mockOpenAITemplateModel,
   mockOpenAICodexTemplateModel,
-  mockOpenAICodex53TemplateModel,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
 
@@ -58,30 +55,6 @@ describe("pi embedded model e2e smoke", () => {
     const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
-  });
-
-  it("builds openai-codex gpt-5.4 fallback from gpt-5.3 template metadata", () => {
-    mockOpenAICodex53TemplateModel();
-
-    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
-  });
-
-  it("builds an openai forward-compat fallback for gpt-5.4", () => {
-    mockOpenAITemplateModel();
-
-    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAIForwardCompatExpectation("gpt-5.4"));
-  });
-
-  it("builds an openai forward-compat fallback for gpt-5.4-pro", () => {
-    mockOpenAITemplateModel();
-
-    const result = resolveModel("openai", "gpt-5.4-pro", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAIForwardCompatExpectation("gpt-5.4-pro"));
   });
 
   it("keeps unknown-model errors for non-forward-compat IDs", () => {
