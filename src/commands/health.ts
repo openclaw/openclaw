@@ -430,7 +430,11 @@ export async function getHealthSnapshot(params?: {
           : true;
       } catch (err) {
         resolutionError = formatErrorMessage(err);
-        debugHealth("resolveAccount-error", { channel: plugin.id, accountId, error: resolutionError });
+        debugHealth("resolveAccount-error", {
+          channel: plugin.id,
+          accountId,
+          error: resolutionError,
+        });
       }
 
       let probe: unknown;
