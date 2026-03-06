@@ -9,11 +9,13 @@
  * it still needs a response.
  */
 
+import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { dispatchInboundMessageWithDispatcher } from "../auto-reply/dispatch.js";
 import { isRoutableChannel } from "../auto-reply/reply/route-reply.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { resolveSessionTranscriptPath } from "../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
@@ -37,14 +39,74 @@ type StartupRecoveryParams = {
 /**
  * Returns true when the session has an unanswered user message:
  * lastUserMessageAt is set and is more recent than lastAgentResponseAt.
+ *
+ * Also checks the session transcript (JSONL file) as a fallback,
+ * because lastAgentResponseAt may not have been persisted if the
+ * gateway restarted mid-turn (e.g. agent triggered a restart via tool).
  */
-function isUnanswered(entry: SessionEntry): boolean {
+function isUnanswered(entry: SessionEntry, agentId?: string): boolean {
   const userAt = entry.lastUserMessageAt;
   if (typeof userAt !== "number" || !Number.isFinite(userAt)) {
     return false;
   }
   const agentAt = entry.lastAgentResponseAt ?? 0;
-  return userAt > agentAt;
+  if (userAt <= agentAt) {
+    return false;
+  }
+
+  // Session store says unanswered, but check the transcript as a
+  // fallback. If the last message in the transcript is from the
+  // assistant, the response was delivered but the store wasn't updated
+  // (common when a restart is triggered mid-turn).
+  if (transcriptShowsAssistantLast(entry, agentId)) {
+    logVerbose(
+      "startup-recovery: session store says unanswered but transcript " +
+        "shows assistant responded last; skipping recovery",
+    );
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Check the session's JSONL transcript to see if the last message
+ * entry is from the assistant. Reads only the tail of the file
+ * for efficiency.
+ */
+function transcriptShowsAssistantLast(entry: SessionEntry, agentId?: string): boolean {
+  const sessionFile =
+    entry.sessionFile?.trim() ||
+    (entry.sessionId ? resolveSessionTranscriptPath(entry.sessionId, agentId) : null);
+  if (!sessionFile) {
+    return false;
+  }
+
+  let content: string;
+  try {
+    content = fs.readFileSync(sessionFile, "utf-8");
+  } catch {
+    return false;
+  }
+
+  // Walk backwards through lines to find the last message entry.
+  const lines = content.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    try {
+      const parsed = JSON.parse(line) as {
+        type?: string;
+        message?: { role?: string };
+      };
+      if (parsed.type === "message" && parsed.message?.role) {
+        return parsed.message.role === "assistant";
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
 }
 
 /**
@@ -87,7 +149,7 @@ export async function runStartupRecovery(params: StartupRecoveryParams): Promise
     const candidates: Array<{ sessionKey: string; entry: SessionEntry }> = [];
 
     for (const [sessionKey, entry] of Object.entries(store)) {
-      if (!entry || !isUnanswered(entry)) {
+      if (!entry || !isUnanswered(entry, agentId)) {
         continue;
       }
 
