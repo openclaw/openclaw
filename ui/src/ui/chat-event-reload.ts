@@ -1,7 +1,9 @@
 import type { ChatEventPayload } from "./controllers/chat.ts";
 
 export function shouldReloadHistoryForFinalEvent(payload?: ChatEventPayload): boolean {
-  if (!payload || payload.state !== "final") {
+  // Also reload for delta (streaming) events - ensures TUI displays content even without <final> tag
+  // This fixes regression where model outputs with thinking don't show in TUI
+  if (!payload || (payload.state !== "final" && payload.state !== "delta")) {
     return false;
   }
   if (!payload.message || typeof payload.message !== "object") {
