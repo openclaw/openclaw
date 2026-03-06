@@ -166,7 +166,8 @@ function mergeWithExistingProviderSecrets(params: {
     // This ensures that updating baseUrl in openclaw.json (or via auto-discovery) is
     // reflected immediately instead of being masked by the stale models.json value.
     // Fixes: kimi-coding ignores custom baseUrl (#36353) and vLLM caches old baseUrl (#37309).
-    const newEntryHasBaseUrl = typeof newEntry.baseUrl === "string" && newEntry.baseUrl.trim() !== "";
+    const newEntryHasBaseUrl =
+      typeof newEntry.baseUrl === "string" && newEntry.baseUrl.trim() !== "";
     if (!newEntryHasBaseUrl && typeof existing.baseUrl === "string" && existing.baseUrl) {
       preserved.baseUrl = existing.baseUrl;
     }
