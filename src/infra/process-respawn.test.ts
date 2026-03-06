@@ -69,6 +69,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
   it("returns supervised when launchd/systemd hints are present", () => {
     process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+    delete process.env.OPENCLAW_LAUNCHD_LABEL;
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
     expect(spawnMock).not.toHaveBeenCalled();
@@ -92,6 +93,18 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
     expect(result.mode).toBe("failed");
     expect(result.detail).toContain("spawn failed");
+  });
+
+  it("returns supervised when launchd kickstart helper returns null", () => {
+    setPlatform("darwin");
+    process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    triggerOpenClawRestartMock.mockReturnValue(null);
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("supervised");
+    expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
   });
 
   it("does not schedule kickstart on non-darwin platforms", () => {
