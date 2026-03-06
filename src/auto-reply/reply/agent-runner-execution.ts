@@ -186,7 +186,7 @@ export async function runAgentTurnWithFallback(params: {
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
-        run: (provider, model) => {
+        run: (provider, model, runOptions) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
           params.opts?.onModelSelected?.({
@@ -304,6 +304,7 @@ export async function runAgentTurnWithFallback(params: {
             model,
             runId,
             authProfile,
+            allowRateLimitCooldownProbe: runOptions?.allowRateLimitCooldownProbe,
           });
           return (async () => {
             const result = await runEmbeddedPiAgent({
