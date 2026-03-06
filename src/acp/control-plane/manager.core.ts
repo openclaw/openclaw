@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -720,6 +722,7 @@ export class AcpSessionManager {
         }
         this.recordTurnCompletion({
           startedAt: turnStartedAt,
+          sessionKey,
         });
         await this.setSessionState({
           cfg: input.cfg,
@@ -735,6 +738,7 @@ export class AcpSessionManager {
         });
         this.recordTurnCompletion({
           startedAt: turnStartedAt,
+          sessionKey,
           errorCode: acpError.code,
         });
         await this.setSessionState({
@@ -1139,16 +1143,31 @@ export class AcpSessionManager {
     }
   }
 
-  private recordTurnCompletion(params: { startedAt: number; errorCode?: AcpRuntimeError["code"] }) {
+  private recordTurnCompletion(params: {
+    startedAt: number;
+    sessionKey: string;
+    errorCode?: AcpRuntimeError["code"];
+  }) {
     const durationMs = Math.max(0, Date.now() - params.startedAt);
     this.turnLatencyStats.totalMs += durationMs;
     this.turnLatencyStats.maxMs = Math.max(this.turnLatencyStats.maxMs, durationMs);
     if (params.errorCode) {
       this.turnLatencyStats.failed += 1;
       this.recordErrorCode(params.errorCode);
-      return;
+    } else {
+      this.turnLatencyStats.completed += 1;
     }
-    this.turnLatencyStats.completed += 1;
+
+    fireAndForgetHook(
+      triggerInternalHook(
+        createInternalHookEvent("agent", "turn:end", params.sessionKey, {
+          success: !params.errorCode,
+          durationMs,
+          errorCode: params.errorCode,
+        }),
+      ),
+      "acp-manager: agent:turn:end internal hook failed",
+    );
   }
 
   private recordErrorCode(code: string): void {

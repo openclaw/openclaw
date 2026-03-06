@@ -27,6 +27,18 @@ export type AgentBootstrapHookEvent = InternalHookEvent & {
   context: AgentBootstrapHookContext;
 };
 
+export type AgentTurnEndHookContext = {
+  success: boolean;
+  durationMs: number;
+  errorCode?: string;
+};
+
+export type AgentTurnEndHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "turn:end";
+  context: AgentTurnEndHookContext;
+};
+
 export type GatewayStartupHookContext = {
   cfg?: OpenClawConfig;
   deps?: CliDeps;

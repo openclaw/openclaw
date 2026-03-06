@@ -9,11 +9,13 @@ const hoisted = vi.hoisted(() => {
   const readAcpSessionEntryMock = vi.fn();
   const upsertAcpSessionMetaMock = vi.fn();
   const requireAcpRuntimeBackendMock = vi.fn();
+  const triggerInternalHookMock = vi.fn().mockResolvedValue(undefined);
   return {
     listAcpSessionEntriesMock,
     readAcpSessionEntryMock,
     upsertAcpSessionMetaMock,
     requireAcpRuntimeBackendMock,
+    triggerInternalHookMock,
   };
 });
 
@@ -29,6 +31,14 @@ vi.mock("../runtime/registry.js", async (importOriginal) => {
     ...actual,
     requireAcpRuntimeBackend: (backendId?: string) =>
       hoisted.requireAcpRuntimeBackendMock(backendId),
+  };
+});
+
+vi.mock("../../hooks/internal-hooks.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../hooks/internal-hooks.js")>();
+  return {
+    ...actual,
+    triggerInternalHook: (...args: unknown[]) => hoisted.triggerInternalHookMock(...args),
   };
 });
 
@@ -1246,5 +1256,85 @@ describe("AcpSessionManager", () => {
         clearMeta: true,
       }),
     ).rejects.toThrow("disk locked");
+  });
+
+  it("emits agent:turn:end hook on successful turn", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    hoisted.triggerInternalHookMock.mockClear();
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg as OpenClawConfig,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "hello",
+    });
+
+    const hookCalls = hoisted.triggerInternalHookMock.mock.calls;
+    const turnEndCall = hookCalls.find(
+      (args: unknown[]) =>
+        (args[0] as { type: string; action: string }).type === "agent" &&
+        (args[0] as { type: string; action: string }).action === "turn:end",
+    );
+    expect(turnEndCall).toBeDefined();
+    const event = turnEndCall![0] as {
+      type: string;
+      action: string;
+      sessionKey: string;
+      context: { success: boolean; durationMs: number; errorCode?: string };
+    };
+    expect(event.context.success).toBe(true);
+    expect(event.context.durationMs).toBeGreaterThanOrEqual(0);
+    expect(event.context.errorCode).toBeUndefined();
+    expect(event.sessionKey).toBe("agent:codex:acp:session-1");
+  });
+
+  it("emits agent:turn:end hook with errorCode on failed turn", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    runtimeState.runTurn.mockImplementation(async function* () {
+      yield { type: "error" as const, code: "ACP_TURN_FAILED", message: "boom" };
+    });
+    hoisted.triggerInternalHookMock.mockClear();
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg as OpenClawConfig,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "hello",
+      }),
+    ).rejects.toThrow();
+
+    const hookCalls = hoisted.triggerInternalHookMock.mock.calls;
+    const turnEndCall = hookCalls.find(
+      (args: unknown[]) =>
+        (args[0] as { type: string; action: string }).type === "agent" &&
+        (args[0] as { type: string; action: string }).action === "turn:end",
+    );
+    expect(turnEndCall).toBeDefined();
+    const event = turnEndCall![0] as {
+      type: string;
+      action: string;
+      context: { success: boolean; durationMs: number; errorCode?: string };
+    };
+    expect(event.context.success).toBe(false);
+    expect(event.context.errorCode).toBe("ACP_TURN_FAILED");
   });
 });
