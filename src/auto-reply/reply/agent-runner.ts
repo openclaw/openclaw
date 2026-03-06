@@ -40,7 +40,7 @@ import {
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import {
-  appendUnscheduledReminderNote,
+  enqueueUnscheduledReminderNote,
   hasSessionRelatedCronJobs,
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
@@ -519,10 +519,10 @@ export async function runReplyAgent(params: {
             sessionKey,
           })
         : false;
-    const guardedReplyPayloads =
-      hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
-        ? appendUnscheduledReminderNote(replyPayloads)
-        : replyPayloads;
+    if (hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron) {
+      enqueueUnscheduledReminderNote(sessionKey);
+    }
+    const guardedReplyPayloads = replyPayloads;
 
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 

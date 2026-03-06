@@ -1,5 +1,5 @@
 import { loadCronStore, resolveCronStorePath } from "../../cron/store.js";
-import type { ReplyPayload } from "../types.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 
 export const UNSCHEDULED_REMINDER_NOTE =
   "Note: I did not schedule a reminder in this turn, so this will not trigger automatically.";
@@ -45,20 +45,10 @@ export async function hasSessionRelatedCronJobs(params: {
   }
 }
 
-export function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPayload[] {
-  let appended = false;
-  return payloads.map((payload) => {
-    if (appended || payload.isError || typeof payload.text !== "string") {
-      return payload;
-    }
-    if (!hasUnbackedReminderCommitment(payload.text)) {
-      return payload;
-    }
-    appended = true;
-    const trimmed = payload.text.trimEnd();
-    return {
-      ...payload,
-      text: `${trimmed}\n\n${UNSCHEDULED_REMINDER_NOTE}`,
-    };
-  });
+export function enqueueUnscheduledReminderNote(sessionKey?: string): boolean {
+  const trimmedSessionKey = sessionKey?.trim();
+  if (!trimmedSessionKey) {
+    return false;
+  }
+  return enqueueSystemEvent(UNSCHEDULED_REMINDER_NOTE, { sessionKey: trimmedSessionKey });
 }
