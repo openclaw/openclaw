@@ -560,6 +560,29 @@ describe("tts", () => {
       expect(agentConfig.elevenlabs.voiceId).toBe(agentVoiceId);
     });
 
+    it("applies agent overrides when the configured agent id is not normalized", () => {
+      const cfgWithMixedCaseId: OpenClawConfig = {
+        ...cfg,
+        agents: {
+          ...cfg.agents!,
+          list: [
+            {
+              id: "VoiceAgent",
+              tts: {
+                elevenlabs: {
+                  voiceId: agentVoiceId,
+                },
+              },
+            },
+          ],
+        },
+      };
+
+      const agentConfig = resolveTtsConfig(cfgWithMixedCaseId, "voiceagent");
+
+      expect(agentConfig.elevenlabs.voiceId).toBe(agentVoiceId);
+    });
+
     it("uses the agent-specific ElevenLabs voice during synthesis", async () => {
       const originalFetch = globalThis.fetch;
       const fetchMock = vi.fn(async () => ({
