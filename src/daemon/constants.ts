@@ -10,7 +10,7 @@ export const NODE_WINDOWS_TASK_NAME = "OpenClaw Node";
 export const NODE_SERVICE_MARKER = "openclaw";
 export const NODE_SERVICE_KIND = "node";
 export const NODE_WINDOWS_TASK_SCRIPT_NAME = "node.cmd";
-export const LEGACY_GATEWAY_LAUNCH_AGENT_LABELS: string[] = [];
+export const LEGACY_GATEWAY_LAUNCH_AGENT_LABELS = ["ai.clawdbot.gateway", "ai.moltbot.gateway"];
 export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = [
   "clawdbot-gateway",
   "moltbot-gateway",
@@ -40,7 +40,8 @@ export function resolveGatewayLaunchAgentLabel(profile?: string): string {
 
 export function resolveLegacyGatewayLaunchAgentLabels(profile?: string): string[] {
   void profile;
-  return [];
+  // Legacy brandings predate named profiles, so they always used fixed labels.
+  return [...LEGACY_GATEWAY_LAUNCH_AGENT_LABELS];
 }
 
 export function resolveGatewaySystemdServiceName(profile?: string): string {

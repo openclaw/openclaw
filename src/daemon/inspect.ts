@@ -14,6 +14,7 @@ export type ExtraGatewayService = {
   label: string;
   detail: string;
   scope: "user" | "system";
+  // "clawdbot" and "moltbot" are legacy markers from previous brandings.
   marker?: "openclaw" | "clawdbot" | "moltbot";
   legacy?: boolean;
 };
