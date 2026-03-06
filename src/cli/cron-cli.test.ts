@@ -159,7 +159,7 @@ async function expectCronEditWithScheduleLookupExit(
 async function runCronRunAndCaptureExit(params: { ran: boolean; args?: string[] }) {
   resetGatewayMock();
   callGatewayFromCli.mockImplementation(
-    async (method: string, _opts: unknown, callParams?: unknown) => {
+    async (method: string, _opts: unknown, callParams?: unknown, _extra?: unknown) => {
       if (method === "cron.status") {
         return { enabled: true };
       }
@@ -188,6 +188,47 @@ async function runCronRunAndCaptureExit(params: { ran: boolean; args?: string[] 
   };
 }
 
+async function runCronRunExpectFinalAndCapture(params: {
+  triggerRequestedAtMs: number;
+  finalEntry: { action: string; runAtMs: number; status: string; summary?: string };
+}) {
+  resetGatewayMock();
+  callGatewayFromCli.mockImplementation(
+    async (method: string, _opts: unknown, callParams?: unknown, _extra?: unknown) => {
+      if (method === "cron.status") {
+        return { enabled: true };
+      }
+      if (method === "cron.run") {
+        return { ok: true, params: callParams, ran: true };
+      }
+      if (method === "cron.runs") {
+        return { entries: [params.finalEntry] };
+      }
+      return { ok: true, params: callParams };
+    },
+  );
+
+  const runtimeModule = await import("../runtime.js");
+  const runtime = runtimeModule.defaultRuntime as {
+    exit: (code: number) => void;
+    log: (msg: string) => void;
+  };
+  const originalExit = runtime.exit;
+  const originalNow = Date.now;
+  const exitSpy = vi.fn();
+  const logSpy = vi.spyOn(runtime, "log");
+  runtime.exit = exitSpy;
+  vi.spyOn(Date, "now").mockImplementation(() => params.triggerRequestedAtMs);
+  try {
+    const program = buildProgram();
+    await program.parseAsync(["cron", "run", "job-1", "--expect-final"], { from: "user" });
+  } finally {
+    runtime.exit = originalExit;
+    Date.now = originalNow;
+  }
+  return { exitSpy, logSpy };
+}
+
 describe("cron cli", () => {
   it.each([
     {
@@ -203,6 +244,28 @@ describe("cron cli", () => {
   ])("$name", async ({ ran, expectedExitCode }) => {
     const { exitSpy } = await runCronRunAndCaptureExit({ ran });
     expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
+  });
+
+  it("prints the final run-log entry when cron run uses --expect-final", async () => {
+    const finalEntry = {
+      action: "finished",
+      runAtMs: 1_000,
+      status: "ok",
+      summary: "done",
+    };
+    const { exitSpy, logSpy } = await runCronRunExpectFinalAndCapture({
+      triggerRequestedAtMs: 1_000,
+      finalEntry,
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.runs",
+      expect.objectContaining({ expectFinal: false }),
+      expect.objectContaining({ id: "job-1", limit: 20 }),
+      expect.objectContaining({ expectFinal: false }),
+    );
+    expect(logSpy).toHaveBeenCalledWith(JSON.stringify(finalEntry, null, 2));
+    expect(exitSpy).toHaveBeenCalledWith(0);
   });
 
   it("trims model and thinking on cron add", { timeout: CRON_CLI_TEST_TIMEOUT_MS }, async () => {
