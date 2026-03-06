@@ -7,6 +7,7 @@ vi.mock("@mariozechner/pi-ai", () => ({
   }),
 }));
 
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
@@ -21,18 +22,30 @@ describe("server-side compaction", () => {
     } as ReturnType<typeof streamSimple>);
   });
 
+  function getLastCallBetaHeader(): string | undefined {
+    const lastCall = mockStreamSimple.mock.calls.at(-1);
+    const opts = lastCall?.[2] as Record<string, unknown> | undefined;
+    const headers = (opts?.headers ?? {}) as Record<string, unknown>;
+    return headers["anthropic-beta"] as string | undefined;
+  }
+
   it("does not apply server-side compaction when not configured", () => {
-    const agent: { streamFn?: unknown } = {};
+    const agent: { streamFn?: StreamFn } = {};
     const cfg: OpenClawConfig = {};
 
     applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-opus-4-5");
 
-    // No streamFn wrapper should be applied
-    expect(agent.streamFn).toBeUndefined();
+    // streamFn may be set by other wrappers, but should not contain
+    // Anthropic context_management headers
+    if (typeof agent.streamFn === "function") {
+      const fn = agent.streamFn as (...args: unknown[]) => unknown;
+      fn("model", { messages: [] }, {});
+      expect(getLastCallBetaHeader()).toBeUndefined();
+    }
   });
 
   it("does not apply server-side compaction when disabled", () => {
-    const agent: { streamFn?: unknown } = {};
+    const agent: { streamFn?: StreamFn } = {};
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -47,11 +60,15 @@ describe("server-side compaction", () => {
 
     applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-opus-4-5");
 
-    expect(agent.streamFn).toBeUndefined();
+    if (typeof agent.streamFn === "function") {
+      const fn = agent.streamFn as (...args: unknown[]) => unknown;
+      fn("model", { messages: [] }, {});
+      expect(getLastCallBetaHeader()).toBeUndefined();
+    }
   });
 
   it("does not apply server-side compaction for non-anthropic providers", () => {
-    const agent: { streamFn?: unknown } = {};
+    const agent: { streamFn?: StreamFn } = {};
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -66,11 +83,16 @@ describe("server-side compaction", () => {
 
     applyExtraParamsToAgent(agent, cfg, "openai", "gpt-4o");
 
-    expect(agent.streamFn).toBeUndefined();
+    if (typeof agent.streamFn === "function") {
+      const fn = agent.streamFn as (...args: unknown[]) => unknown;
+      fn("model", { messages: [] }, {});
+      const beta = getLastCallBetaHeader();
+      expect(beta ?? "").not.toContain("context-management");
+    }
   });
 
   it("applies server-side compaction with default strategy for anthropic provider", async () => {
-    const agent: { streamFn?: unknown } = {};
+    const agent: { streamFn?: StreamFn } = {};
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -113,7 +135,7 @@ describe("server-side compaction", () => {
   });
 
   it("applies server-side compaction with custom strategy", async () => {
-    const agent: { streamFn?: unknown } = {};
+    const agent: { streamFn?: StreamFn } = {};
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -150,7 +172,7 @@ describe("server-side compaction", () => {
   });
 
   it("ignores non-string anthropic-beta header values", async () => {
-    const agent: { streamFn?: unknown } = {};
+    const agent: { streamFn?: StreamFn } = {};
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -187,7 +209,7 @@ describe("server-side compaction", () => {
   });
 
   it("appends to existing anthropic-beta header", async () => {
-    const agent: { streamFn?: unknown } = {};
+    const agent: { streamFn?: StreamFn } = {};
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -224,7 +246,7 @@ describe("server-side compaction", () => {
   });
 
   it("merges with existing context_management fields and appends edits", async () => {
-    const agent: { streamFn?: unknown } = {};
+    const agent: { streamFn?: StreamFn } = {};
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -278,7 +300,7 @@ describe("server-side compaction", () => {
   });
 
   it("preserves existing extraBody properties", async () => {
-    const agent: { streamFn?: unknown } = {};
+    const agent: { streamFn?: StreamFn } = {};
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -314,7 +336,7 @@ describe("server-side compaction", () => {
   });
 
   it("works with other extra params like temperature", async () => {
-    const agent: { streamFn?: unknown } = {};
+    const agent: { streamFn?: StreamFn } = {};
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
