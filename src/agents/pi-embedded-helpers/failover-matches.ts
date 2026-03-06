@@ -155,6 +155,17 @@ export function isAuthErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.auth);
 }
 
+export function isMissingScopeResponsesWrite(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const value = raw.toLowerCase();
+  return (
+    value.includes("missing scopes") &&
+    (value.includes("api.responses.write") || value.includes("responses.write"))
+  );
+}
+
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
 }

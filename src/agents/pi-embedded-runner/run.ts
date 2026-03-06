@@ -45,6 +45,7 @@ import {
   isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isMissingScopeResponsesWrite,
   parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
@@ -722,6 +723,8 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
+      let responsesScopeFallbackRetried = false;
+      let forcedApiModelForRetry: typeof model | undefined;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
@@ -789,6 +792,8 @@ export async function runEmbeddedPiAgent(
 
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+          const modelForAttempt = forcedApiModelForRetry ?? model;
+          forcedApiModelForRetry = undefined;
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -821,7 +826,7 @@ export async function runEmbeddedPiAgent(
             disableTools: params.disableTools,
             provider,
             modelId,
-            model,
+            model: modelForAttempt,
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             authStorage,
@@ -1160,6 +1165,22 @@ export async function runEmbeddedPiAgent(
                 },
               };
             }
+            if (
+              !responsesScopeFallbackRetried &&
+              modelForAttempt.api === "openai-responses" &&
+              isMissingScopeResponsesWrite(errorText)
+            ) {
+              responsesScopeFallbackRetried = true;
+              forcedApiModelForRetry = {
+                ...model,
+                api: "openai-completions",
+              };
+              log.warn(
+                "Retrying with Chat Completions API due to missing api.responses.write scope",
+              );
+              continue;
+            }
+
             const promptFailoverReason = classifyFailoverReason(errorText);
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,

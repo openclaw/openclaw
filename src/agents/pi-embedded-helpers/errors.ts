@@ -9,6 +9,7 @@ import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
+  isMissingScopeResponsesWrite,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
@@ -20,6 +21,7 @@ export {
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
+  isMissingScopeResponsesWrite,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
