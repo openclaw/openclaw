@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi";
+export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi" | "searxng";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -62,6 +62,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     placeholder: "sk-...",
     signupUrl: "https://platform.moonshot.cn/",
   },
+  {
+    value: "searxng",
+    label: "SearXNG (self-hosted)",
+    hint: "No API key · self-hosted metasearch instance",
+    envKeys: [],
+    placeholder: "http://localhost:8080",
+    signupUrl: "https://docs.searxng.org/admin/installation.html",
+  },
 ] as const;
 
 export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
@@ -81,6 +89,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
       return search?.grok?.apiKey;
     case "kimi":
       return search?.kimi?.apiKey;
+    case "searxng":
+      return undefined;
   }
 }
 
@@ -143,6 +153,9 @@ export function applySearchKey(
       break;
     case "kimi":
       search.kimi = { ...search.kimi, apiKey: key };
+      break;
+    case "searxng":
+      // SearXNG has no API key; provider is set above, URL via tools.web.search.searxng.url
       break;
   }
   return {
