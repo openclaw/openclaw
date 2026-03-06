@@ -352,7 +352,7 @@ export async function refreshActiveTab(host: SettingsHost) {
       return;
     case "debug":
       await loadDebug(app);
-      host.eventLog = host.eventLogBuffer;
+      host.eventLog = [...host.eventLogBuffer];
       return;
     case "logs":
       host.logsAtBottom = true;
