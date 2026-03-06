@@ -138,5 +138,10 @@ export function installSignalToolResultTestHooks() {
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
 
     resetSystemEventsForTest();
+    vi.unstubAllGlobals();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("fetch should not be called in tool result tests")),
+    );
   });
 }

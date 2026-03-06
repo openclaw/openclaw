@@ -17,7 +17,7 @@
       "selectionLabel": "Zalo (Bot API)",
       "docsPath": "/channels/zalo",
       "docsLabel": "zalo",
-      "blurb": "Vietnam-focused messaging platform with Bot API.",
+      "blurb": "Vietnam-focused messaging platform with Bot API (direct messages only).",
       "aliases": [
         "zl"
       ],

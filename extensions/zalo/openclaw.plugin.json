@@ -1,5 +1,6 @@
 {
   "id": "zalo",
+  "description": "Zalo Bot API channel plugin (direct messages only).",
   "channels": ["zalo"],
   "configSchema": {
     "type": "object",

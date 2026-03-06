@@ -1,5 +1,5 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/zalo";
-import { getMe, ZaloApiError, type ZaloBotInfo, type ZaloFetch } from "./api.js";
+import { getMe, ZaloApiAbortError, ZaloApiError, type ZaloBotInfo, type ZaloFetch } from "./api.js";
 
 export type ZaloProbeResult = BaseProbeResult<string> & {
   bot?: ZaloBotInfo;
@@ -31,6 +31,10 @@ export async function probeZalo(
 
     if (err instanceof ZaloApiError) {
       return { ok: false, error: err.description ?? err.message, elapsedMs };
+    }
+
+    if (err instanceof ZaloApiAbortError && err.isTimeout) {
+      return { ok: false, error: `Request timed out after ${timeoutMs}ms`, elapsedMs };
     }
 
     if (err instanceof Error) {

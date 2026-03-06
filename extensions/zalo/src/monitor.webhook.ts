@@ -33,6 +33,8 @@ export type ZaloWebhookTarget = {
   mediaMaxMb: number;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   fetcher?: ZaloFetch;
+  abortSignal?: AbortSignal;
+  isStopped?: () => boolean;
 };
 
 export type ZaloWebhookProcessUpdate = (params: {

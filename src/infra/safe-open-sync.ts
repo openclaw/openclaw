@@ -20,6 +20,25 @@ function isExpectedPathError(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
 }
 
+function nodeErrorCode(error: unknown): string {
+  if (!(typeof error === "object" && error !== null && "code" in error)) {
+    return "";
+  }
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string") {
+    return code;
+  }
+  if (typeof code === "number") {
+    return `${code}`;
+  }
+  return "";
+}
+
+function isUnsupportedNoFollowError(error: unknown): boolean {
+  const code = nodeErrorCode(error);
+  return code === "EINVAL" || code === "ENOTSUP";
+}
+
 export function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
   return hasSameFileIdentity(left, right);
 }
@@ -35,10 +54,12 @@ export function openVerifiedFileSync(params: {
 }): SafeOpenSyncResult {
   const ioFs = params.ioFs ?? fs;
   const allowedType = params.allowedType ?? "file";
-  const openReadFlags =
-    ioFs.constants.O_RDONLY |
-    (typeof ioFs.constants.O_NOFOLLOW === "number" ? ioFs.constants.O_NOFOLLOW : 0);
+  const readOnlyFlags = ioFs.constants.O_RDONLY;
+  const noFollowFlag =
+    typeof ioFs.constants.O_NOFOLLOW === "number" ? ioFs.constants.O_NOFOLLOW : 0;
+  const openReadFlags = readOnlyFlags | noFollowFlag;
   let fd: number | null = null;
+  let usedNoFollowFallback = false;
   try {
     if (params.rejectPathSymlink) {
       const candidateStat = ioFs.lstatSync(params.filePath);
@@ -63,7 +84,17 @@ export function openVerifiedFileSync(params: {
       return { ok: false, reason: "validation" };
     }
 
-    fd = ioFs.openSync(realPath, openReadFlags);
+    try {
+      fd = ioFs.openSync(realPath, openReadFlags);
+    } catch (error) {
+      // Some environments expose O_NOFOLLOW but reject it at runtime.
+      if (noFollowFlag !== 0 && isUnsupportedNoFollowError(error)) {
+        usedNoFollowFallback = true;
+        fd = ioFs.openSync(realPath, readOnlyFlags);
+      } else {
+        throw error;
+      }
+    }
     const openedStat = ioFs.fstatSync(fd);
     if (!isAllowedType(openedStat, allowedType)) {
       return { ok: false, reason: "validation" };
@@ -73,6 +104,21 @@ export function openVerifiedFileSync(params: {
     }
     if (params.maxBytes !== undefined && openedStat.isFile() && openedStat.size > params.maxBytes) {
       return { ok: false, reason: "validation" };
+    }
+    if (usedNoFollowFallback) {
+      // Without O_NOFOLLOW support, re-check that the opened path node still
+      // matches the expected type and resolves to the same inode/device as fd.
+      // This closes the obvious rename+symlink race on the fallback path.
+      const postOpenPathStat = ioFs.lstatSync(realPath);
+      if (!isAllowedType(postOpenPathStat, allowedType)) {
+        return { ok: false, reason: "validation" };
+      }
+      if (params.rejectHardlinks && postOpenPathStat.isFile() && postOpenPathStat.nlink > 1) {
+        return { ok: false, reason: "validation" };
+      }
+      if (!sameFileIdentity(postOpenPathStat, openedStat)) {
+        return { ok: false, reason: "validation" };
+      }
     }
     if (!sameFileIdentity(preOpenStat, openedStat)) {
       return { ok: false, reason: "validation" };

@@ -15,8 +15,6 @@ const zaloAccountSchema = z.object({
   webhookPath: z.string().optional(),
   dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
   allowFrom: z.array(allowFromEntry).optional(),
-  groupPolicy: z.enum(["disabled", "allowlist", "open"]).optional(),
-  groupAllowFrom: z.array(allowFromEntry).optional(),
   mediaMaxMb: z.number().optional(),
   proxy: z.string().optional(),
   responsePrefix: z.string().optional(),
