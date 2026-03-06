@@ -188,62 +188,36 @@ Search the web using your configured provider.
 
 ### Tool parameters
 
-All parameters work for both Brave and Perplexity unless noted.
-
-| Parameter             | Description                                           |
-| --------------------- | ----------------------------------------------------- |
-| `query`               | Search query (required)                               |
-| `count`               | Results to return (1-10, default: 5)                  |
-| `country`             | 2-letter ISO country code (e.g., "US", "DE")          |
-| `language`            | ISO 639-1 language code (e.g., "en", "de")            |
-| `freshness`           | Time filter: `day`, `week`, `month`, or `year`        |
-| `date_after`          | Results after this date (YYYY-MM-DD)                  |
-| `date_before`         | Results before this date (YYYY-MM-DD)                 |
-| `ui_lang`             | UI language code (Brave only)                         |
-| `domain_filter`       | Domain allowlist/denylist array (Perplexity only)     |
-| `max_tokens`          | Total content budget, default 25000 (Perplexity only) |
-| `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)  |
+- `query` (required)
+- `count` (1–10; default from config)
+- `country` (optional): 2-letter country code for region-specific results (for example `"DE"`, `"US"`, `"ALL"`)
+- `search_lang` (optional): ISO language code for search results (for example `"de"`, `"en"`, `"fr"`)
+- `ui_lang` (optional): UI locale for provider result formatting (for example `"en-US"`, `"de-DE"`)
+- `freshness` (optional): discovery-time filter (`pd`, `pw`, `pm`, `py`, or `YYYY-MM-DDtoYYYY-MM-DD`)
 
 **Examples:**
 
 ```javascript
-// German-specific search
+// Germany-specific search
 await web_search({
   query: "TV online schauen",
+  count: 10,
   country: "DE",
-  language: "de",
+  search_lang: "de",
+});
+
+// French search with French UI locale
+await web_search({
+  query: "actualités",
+  country: "FR",
+  search_lang: "fr",
+  ui_lang: "fr-FR",
 });
 
 // Recent results (past week)
 await web_search({
   query: "TMBG interview",
-  freshness: "week",
-});
-
-// Date range search
-await web_search({
-  query: "AI developments",
-  date_after: "2024-01-01",
-  date_before: "2024-06-30",
-});
-
-// Domain filtering (Perplexity only)
-await web_search({
-  query: "climate research",
-  domain_filter: ["nature.com", "science.org", ".edu"],
-});
-
-// Exclude domains (Perplexity only)
-await web_search({
-  query: "product reviews",
-  domain_filter: ["-reddit.com", "-pinterest.com"],
-});
-
-// More content extraction (Perplexity only)
-await web_search({
-  query: "detailed AI research",
-  max_tokens: 50000,
-  max_tokens_per_page: 4096,
+  freshness: "pw",
 });
 ```
 
