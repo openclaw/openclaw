@@ -32,6 +32,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       timedOut: false,
       sessionIdUsed: "test-session",
       assistantTexts: ["Response 1", "Response 2"],
+      assistantTextsOverridden: false,
       lastAssistant: {
         usage: { input: 150, output: 50, total: 200 },
         stopReason: "end_turn",

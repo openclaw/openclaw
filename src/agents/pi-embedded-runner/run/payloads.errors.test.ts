@@ -121,6 +121,33 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadText(payloads, errorJsonPretty.trim());
   });
 
+  it("falls back to lastAssistant text when assistantTexts are empty without an explicit override", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [],
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: "final assistant text" }],
+      }),
+    });
+
+    expectSinglePayloadText(payloads, "final assistant text");
+  });
+
+  it("does not fall back to lastAssistant text when llm_output explicitly overrides to empty", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [],
+      assistantTextsOverridden: true,
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: "redacted assistant text" }],
+      }),
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
   it("adds a fallback error when a tool fails and no assistant output exists", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "tab not found" },

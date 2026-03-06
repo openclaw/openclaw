@@ -89,6 +89,7 @@ function resolveToolErrorWarningPolicy(params: {
 
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  assistantTextsOverridden?: boolean;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: LastToolError;
@@ -243,12 +244,16 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
+  // If llm_output explicitly sets assistantTexts (including []), preserve that choice
+  // and do not fall back to lastAssistant text.
   const answerTexts = (
-    params.assistantTexts.length
+    params.assistantTextsOverridden
       ? params.assistantTexts
-      : fallbackAnswerText
-        ? [fallbackAnswerText]
-        : []
+      : params.assistantTexts.length
+        ? params.assistantTexts
+        : fallbackAnswerText
+          ? [fallbackAnswerText]
+          : []
   ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;

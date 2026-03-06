@@ -35,6 +35,7 @@ export type EmbeddedRunAttemptResult = {
   systemPromptReport?: SessionSystemPromptReport;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
+  assistantTextsOverridden: boolean;
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: {

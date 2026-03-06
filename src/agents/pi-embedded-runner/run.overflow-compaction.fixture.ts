@@ -33,6 +33,7 @@ export function makeAttemptResult(
     promptError: null,
     sessionIdUsed: "test-session",
     assistantTexts: ["Hello!"],
+    assistantTextsOverridden: false,
     toolMetas: [],
     lastAssistant: undefined,
     messagesSnapshot: [],

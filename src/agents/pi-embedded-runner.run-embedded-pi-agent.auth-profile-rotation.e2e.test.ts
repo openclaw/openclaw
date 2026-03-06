@@ -75,6 +75,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   systemPromptReport: undefined,
   messagesSnapshot: [],
   assistantTexts: [],
+  assistantTextsOverridden: false,
   toolMetas: [],
   lastAssistant: undefined,
   didSendViaMessagingTool: false,

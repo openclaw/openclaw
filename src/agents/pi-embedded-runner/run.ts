@@ -1323,6 +1323,7 @@ export async function runEmbeddedPiAgent(
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
+            assistantTextsOverridden: attempt.assistantTextsOverridden,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             lastToolError: attempt.lastToolError,

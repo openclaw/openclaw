@@ -1439,6 +1439,7 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
       } = subscription;
       let assistantTexts = rawAssistantTexts;
+      let assistantTextsOverridden = false;
 
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
@@ -1885,8 +1886,9 @@ export async function runEmbeddedAttempt(
               messageProvider: params.messageProvider ?? undefined,
             },
           );
-          if (llmOutputResult?.assistantTexts) {
+          if (Array.isArray(llmOutputResult?.assistantTexts)) {
             assistantTexts = llmOutputResult.assistantTexts;
+            assistantTextsOverridden = true;
           }
         } catch (err) {
           log.warn(`llm_output hook failed: ${String(err)}`);
@@ -1904,6 +1906,7 @@ export async function runEmbeddedAttempt(
         systemPromptReport,
         messagesSnapshot,
         assistantTexts,
+        assistantTextsOverridden,
         toolMetas: toolMetasNormalized,
         lastAssistant,
         lastToolError: getLastToolError?.(),
