@@ -195,10 +195,7 @@ export class AcpxRuntime implements AcpRuntime {
       return await params.exitPromise;
     }
 
-    const gracefulExit = await waitWithTimeout(
-      params.exitPromise,
-      ACPX_PROMPT_DONE_EXIT_GRACE_MS,
-    );
+    const gracefulExit = await waitWithTimeout(params.exitPromise, ACPX_PROMPT_DONE_EXIT_GRACE_MS);
     if (gracefulExit) {
       return gracefulExit;
     }
