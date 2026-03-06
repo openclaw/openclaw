@@ -28,6 +28,23 @@ function getSilentTrailingRegex(token: string): RegExp {
   return regex;
 }
 
+function extractSilentActionDirective(text: string): string | undefined {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const action = (parsed as { action?: unknown }).action;
+    return typeof action === "string" ? action.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function isSilentReplyText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
@@ -37,7 +54,11 @@ export function isSilentReplyText(
   }
   // Match only the exact silent token with optional surrounding whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  return getSilentExactRegex(token).test(text);
+  if (getSilentExactRegex(token).test(text)) {
+    return true;
+  }
+  // Some model/tool paths emit a structured action payload instead of plain token text.
+  return extractSilentActionDirective(text) === token;
 }
 
 /**

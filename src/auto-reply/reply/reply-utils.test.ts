@@ -150,6 +150,16 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toBe("");
     expect(result!.mediaUrl).toBe("https://example.com/img.png");
   });
+
+  it("suppresses structured NO_REPLY action payload", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: '{"action":"NO_REPLY"}' },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
 });
 
 describe("typing controller", () => {

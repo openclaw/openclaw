@@ -30,9 +30,19 @@ describe("isSilentReplyText", () => {
     expect(isSilentReplyText("Please NO_REPLY to this")).toBe(false);
   });
 
+  it("returns true for structured JSON action payload", () => {
+    expect(isSilentReplyText('{"action":"NO_REPLY"}')).toBe(true);
+    expect(isSilentReplyText(' \n { "action": "NO_REPLY" } \n ')).toBe(true);
+  });
+
+  it("returns false for structured JSON with non-silent action", () => {
+    expect(isSilentReplyText('{"action":"REPLY"}')).toBe(false);
+  });
+
   it("works with custom token", () => {
     expect(isSilentReplyText("HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(true);
     expect(isSilentReplyText("Checked inbox. HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(false);
+    expect(isSilentReplyText('{"action":"HEARTBEAT_OK"}', "HEARTBEAT_OK")).toBe(true);
   });
 });
 
