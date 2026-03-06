@@ -25,11 +25,41 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   }
 
   // Bundled install (built)
-  const mod = await import("../../../src/agents/pi-embedded-runner.js");
-  if (typeof mod.runEmbeddedPiAgent !== "function") {
+  // In the bundled distribution there may be no src/ tree. The embedded runner is
+  // bundled into dist with a hashed filename (pi-embedded-*.js).
+  try {
+    // 1) Preferred: dist/agents path if present.
+    // Use a computed import URL so TypeScript does not try to resolve this path in source builds.
+    const agentRunnerUrl = new URL(
+      "../../../dist/agents/pi-embedded-runner.js",
+      import.meta.url,
+    ).toString();
+    const mod = await import(agentRunnerUrl);
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const fn = (mod as any).runEmbeddedPiAgent;
+    if (typeof fn === "function") {
+      return fn as RunEmbeddedPiAgentFn;
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2) Fallback: locate dist/pi-embedded-*.js bundle and import runEmbeddedPiAgent from it.
+  const distDirUrl = new URL("../../../dist/", import.meta.url);
+  const files = await fs.readdir(distDirUrl);
+  const piBundle = files.find((f) => /^pi-embedded-.*\.js$/.test(f));
+  if (!piBundle) {
+    throw new Error("Internal error: could not locate dist pi-embedded bundle");
+  }
+
+  const mod = await import(new URL(piBundle, distDirUrl).toString());
+  // In the bundled build, runEmbeddedPiAgent may be re-exported as `t`.
+  // oxlint-disable-next-line typescript/no-explicit-any
+  const fn = (mod as any).runEmbeddedPiAgent ?? (mod as any).t;
+  if (typeof fn !== "function") {
     throw new Error("Internal error: runEmbeddedPiAgent not available");
   }
-  return mod.runEmbeddedPiAgent as RunEmbeddedPiAgentFn;
+  return fn as RunEmbeddedPiAgentFn;
 }
 
 function stripCodeFences(s: string): string {
