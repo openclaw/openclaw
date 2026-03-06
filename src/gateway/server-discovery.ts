@@ -11,15 +11,35 @@ export type ResolveBonjourCliPathOptions = {
   statSync?: (path: string) => fs.Stats;
 };
 
+/**
+ * mDNS service instance names are single DNS labels limited to 63 bytes
+ * (RFC 6763 §4.1.1). Exceeding this causes @homebridge/ciao to throw an
+ * AssertionError and crash the gateway — common in container environments
+ * where hostnames can be very long (e.g. Kubernetes pod names).
+ */
+const MAX_MDNS_LABEL_BYTES = 63;
+
+function truncateToMdnsLabel(name: string): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(name).byteLength <= MAX_MDNS_LABEL_BYTES) {
+    return name;
+  }
+  // Trim characters from the end until we fit within the byte budget.
+  // This handles multi-byte (UTF-8) characters correctly.
+  let truncated = name;
+  while (encoder.encode(truncated).byteLength > MAX_MDNS_LABEL_BYTES) {
+    truncated = truncated.slice(0, -1);
+  }
+  return truncated.trimEnd();
+}
+
 export function formatBonjourInstanceName(displayName: string) {
   const trimmed = displayName.trim();
   if (!trimmed) {
     return "OpenClaw";
   }
-  if (/openclaw/i.test(trimmed)) {
-    return trimmed;
-  }
-  return `${trimmed} (OpenClaw)`;
+  const raw = /openclaw/i.test(trimmed) ? trimmed : `${trimmed} (OpenClaw)`;
+  return truncateToMdnsLabel(raw);
 }
 
 export function resolveBonjourCliPath(opts: ResolveBonjourCliPathOptions = {}): string | undefined {
