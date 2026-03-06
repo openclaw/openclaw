@@ -701,6 +701,9 @@ async function agentCommandInternal(
           !allowAnyModel &&
           !allowedModelKeys.has(key)
         ) {
+          log.warn(
+            `session model override ${normalizedOverride.provider}/${normalizedOverride.model} is not in the allowed model set; clearing override and falling back to default. Add it to models.allowed or set models.allowAny=true.`,
+          );
           const { updated } = applyModelOverrideToSessionEntry({
             entry,
             selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
@@ -730,6 +733,13 @@ async function agentCommandInternal(
       ) {
         provider = normalizedStored.provider;
         model = normalizedStored.model;
+      } else {
+        // The stored model override is not in the configured allowlist; log a warning
+        // so callers (e.g. sessions_spawn) can diagnose why modelApplied=true did not
+        // take effect at runtime.
+        log.warn(
+          `session model override ${normalizedStored.provider}/${normalizedStored.model} is not in the allowed model set; running on default model instead. Add it to models.allowed or set models.allowAny=true.`,
+        );
       }
     }
     if (sessionEntry) {
