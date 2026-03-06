@@ -51,7 +51,9 @@ export async function uploadLanxinMedia(
     size: params.data.length,
   });
   const form = new FormData();
-  const blob = new Blob([params.data], { type: params.contentType || "application/octet-stream" });
+  const blob = new Blob([Uint8Array.from(params.data)], {
+    type: params.contentType || "application/octet-stream",
+  });
   form.set("media", blob, params.fileName || "upload.bin");
 
   const response = await lanxinApiPost<UploadLanxinMediaApiData>({

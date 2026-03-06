@@ -34,6 +34,31 @@ function writeJson(res: ServerResponse, status: number, payload: Record<string, 
   res.end(JSON.stringify(payload));
 }
 
+function resolveWebhookTimestampMs(raw: string): number | null {
+  if (!/^\d+$/.test(raw)) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  // Lanxin deployments may provide timestamp in seconds or milliseconds.
+  return value < 1_000_000_000_000 ? value * 1000 : value;
+}
+
+function validateWebhookSignatureParams(params: {
+  timestamp: string;
+  nonce: string;
+  signature: string;
+}): { ok: true } | { ok: false; message: string } {
+  if (resolveWebhookTimestampMs(params.timestamp) == null) {
+    return { ok: false, message: "Invalid timestamp" };
+  }
+  if (!params.nonce || params.nonce.length > 256) {
+    return { ok: false, message: "Invalid nonce" };
+  }
+  if (!params.signature || params.signature.length > 512) {
+    return { ok: false, message: "Invalid signature" };
+  }
+  return { ok: true };
+}
+
 function readLanxinMessageText(data: Record<string, unknown>, msgType: string): string {
   const msgData = data.msgData as Record<string, unknown> | undefined;
   const block = msgData?.[msgType] as Record<string, unknown> | undefined;
@@ -116,11 +141,12 @@ export async function monitorLanxinProvider(opts: MonitorLanxinOpts = {}): Promi
       `Lanxin account "${account.accountId}" missing aesKey (required to decrypt webhook payloads)`,
     );
   }
+  const aesKey = account.aesKey;
 
   const port = account.config.webhookPort ?? DEFAULT_WEBHOOK_PORT;
   const host = account.config.webhookHost ?? DEFAULT_WEBHOOK_HOST;
   const path = account.config.webhookPath ?? DEFAULT_WEBHOOK_PATH;
-  const stateDir = core.state.resolveStateDir(process.env, os.homedir());
+  const stateDir = core.state.resolveStateDir(process.env, os.homedir);
   const replayGuard = createLanxinReplayGuard({
     stateDir,
     onDiskError: (diskErr) => {
@@ -129,13 +155,34 @@ export async function monitorLanxinProvider(opts: MonitorLanxinOpts = {}): Promi
   });
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    const reqPath = (req.url ?? "/").split("?")[0] ?? "/";
+    const reqUrl = new URL(req.url ?? "/", "http://localhost");
+    const reqPath = reqUrl.pathname;
     if (reqPath === "/healthz") {
       writeJson(res, 200, { ok: true });
       return;
     }
     if (req.method !== "POST" || reqPath !== path) {
       writeJson(res, 404, { error: "Not found" });
+      return;
+    }
+    const timestamp = reqUrl.searchParams.get("timestamp")?.trim() ?? "";
+    const nonce = reqUrl.searchParams.get("nonce")?.trim() ?? "";
+    const signature = reqUrl.searchParams.get("signature")?.trim() ?? "";
+    if (!timestamp || !nonce || !signature) {
+      error(
+        `lanxin: webhook signature params missing: timestamp=${Boolean(timestamp)} nonce=${Boolean(nonce)} signature=${Boolean(signature)}`,
+      );
+      writeJson(res, 401, { error: "Missing signature query parameters" });
+      return;
+    }
+    const signatureValidation = validateWebhookSignatureParams({
+      timestamp,
+      nonce,
+      signature,
+    });
+    if (!signatureValidation.ok) {
+      error(`lanxin: webhook signature validation failed: ${signatureValidation.message}`);
+      writeJson(res, 401, { error: signatureValidation.message });
       return;
     }
 
@@ -153,7 +200,7 @@ export async function monitorLanxinProvider(opts: MonitorLanxinOpts = {}): Promi
       }
       const decrypted = decryptLanxinDataEncrypt({
         dataEncrypt,
-        aesKey: account.aesKey,
+        aesKey,
       });
       const events = Array.isArray(decrypted.events) ? decrypted.events : [];
       logLanxinDebug(cfg, "webhook decrypted events", {
