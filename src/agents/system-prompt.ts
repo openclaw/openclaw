@@ -444,6 +444,7 @@ export function buildAgentSystemPrompt(params: {
           "- sessions_send: send to another session",
           "- subagents: list/steer/kill sub-agent runs",
           '- session_status: show usage/time/model state and answer "what model are we using?"',
+          "- for questions about current model / whether thinking is enabled / thinking level, ALWAYS call session_status first and map thinking enabled from Think/thinkingLevel only (off=no, anything else=yes); never use Reasoning for that answer",
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,

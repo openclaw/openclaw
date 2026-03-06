@@ -120,6 +120,9 @@ export async function handleInlineActions(params: {
   resolveDefaultThinkingLevel: Awaited<
     ReturnType<typeof createModelSelectionState>
   >["resolveDefaultThinkingLevel"];
+  resolveDefaultReasoningLevel: Awaited<
+    ReturnType<typeof createModelSelectionState>
+  >["resolveDefaultReasoningLevel"];
   provider: string;
   model: string;
   contextTokens: number;
@@ -159,6 +162,7 @@ export async function handleInlineActions(params: {
     blockReplyChunking,
     resolvedBlockStreamingBreak,
     resolveDefaultThinkingLevel,
+    resolveDefaultReasoningLevel,
     provider,
     model,
     contextTokens,
@@ -332,6 +336,7 @@ export async function handleInlineActions(params: {
       resolvedReasoningLevel,
       resolvedElevatedLevel,
       resolveDefaultThinkingLevel,
+      resolveDefaultReasoningLevel,
       isGroup,
       defaultGroupActivation: defaultActivation,
       mediaDecisions: ctx.MediaUnderstandingDecisions,
@@ -372,6 +377,7 @@ export async function handleInlineActions(params: {
       blockReplyChunking,
       resolvedBlockStreamingBreak,
       resolveDefaultThinkingLevel,
+      resolveDefaultReasoningLevel,
       provider,
       model,
       contextTokens,
