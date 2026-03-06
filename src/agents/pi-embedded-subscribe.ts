@@ -672,10 +672,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getMessagingToolSentMediaUrls: () => messagingToolSentMediaUrls.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
     getSuccessfulCronAdds: () => state.successfulCronAdds,
-    // Returns true if any messaging tool successfully sent a message.
-    // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
-    // which is generated AFTER the tool sends the actual answer.
-    didSendViaMessagingTool: () => messagingToolSentTexts.length > 0,
+    // Returns true if any messaging tool successfully sent user-visible content.
+    // Used to suppress agent confirmations generated AFTER the tool already
+    // delivered the actual reply text or media.
+    didSendViaMessagingTool: () =>
+      messagingToolSentTexts.length > 0 || messagingToolSentMediaUrls.length > 0,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,
     getCompactionCount: () => compactionCount,
