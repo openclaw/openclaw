@@ -24,6 +24,7 @@ import {
 const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi", "exa"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
+const MAX_EXA_SEARCH_COUNT = 100;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
@@ -148,9 +149,12 @@ function createWebSearchSchema(provider: (typeof SEARCH_PROVIDERS)[number]) {
     query: Type.String({ description: "Search query string." }),
     count: Type.Optional(
       Type.Number({
-        description: "Number of results to return (1-10).",
+        description:
+          provider === "exa"
+            ? "Number of results to return (1-100)."
+            : "Number of results to return (1-10).",
         minimum: 1,
-        maximum: MAX_SEARCH_COUNT,
+        maximum: provider === "exa" ? MAX_EXA_SEARCH_COUNT : MAX_SEARCH_COUNT,
       }),
     ),
     country: Type.Optional(
@@ -856,9 +860,9 @@ async function runGeminiSearch(params: {
   );
 }
 
-function resolveSearchCount(value: unknown, fallback: number): number {
+function resolveSearchCount(value: unknown, fallback: number, max = MAX_SEARCH_COUNT): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  const clamped = Math.max(1, Math.min(MAX_SEARCH_COUNT, Math.floor(parsed)));
+  const clamped = Math.max(1, Math.min(max, Math.floor(parsed)));
   return clamped;
 }
 
@@ -1817,7 +1821,11 @@ export function createWebSearchTool(options?: {
 
       const result = await runWebSearch({
         query,
-        count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+        count: resolveSearchCount(
+          count,
+          DEFAULT_SEARCH_COUNT,
+          provider === "exa" ? MAX_EXA_SEARCH_COUNT : MAX_SEARCH_COUNT,
+        ),
         apiKey,
         timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),

@@ -62,6 +62,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     placeholder: "sk-...",
     signupUrl: "https://platform.moonshot.cn/",
   },
+  {
+    value: "exa",
+    label: "Exa (neural search)",
+    hint: "Neural search · content snippets",
+    envKeys: ["EXA_API_KEY"],
+    placeholder: "your-exa-key",
+    signupUrl: "https://exa.ai/",
+  },
 ] as const;
 
 export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
@@ -81,6 +89,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
       return search?.grok?.apiKey;
     case "kimi":
       return search?.kimi?.apiKey;
+    case "exa":
+      return search?.exa?.apiKey;
   }
 }
 
@@ -143,6 +153,9 @@ export function applySearchKey(
       break;
     case "kimi":
       search.kimi = { ...search.kimi, apiKey: key };
+      break;
+    case "exa":
+      search.exa = { ...search.exa, apiKey: key };
       break;
   }
   return {
