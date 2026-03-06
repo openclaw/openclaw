@@ -336,6 +336,12 @@ export type ChannelToolSend = {
 };
 
 export type ChannelMessageActionAdapter = {
+  /**
+   * Advertise agent-discoverable actions for this channel.
+   * Keep this aligned with any gated capability checks. Poll discovery is
+   * not inferred from `outbound.sendPoll`, so channels that want agents to
+   * create polls should include `"poll"` here when enabled.
+   */
   listActions?: (params: { cfg: OpenClawConfig }) => ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   supportsButtons?: (params: { cfg: OpenClawConfig }) => boolean;
