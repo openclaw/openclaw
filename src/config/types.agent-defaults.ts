@@ -281,6 +281,11 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
     announceTimeoutMs?: number;
+    /** Route non-bound sub-agent completions through the parent agent session instead
+     *  of delivering directly to the channel. Enables orchestrator synthesis of every
+     *  sub-agent result. Bound/hook-mode session completions always deliver directly
+     *  regardless of this flag. Default: false (direct delivery when no siblings active). */
+    completionRouteViaParent?: boolean;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
