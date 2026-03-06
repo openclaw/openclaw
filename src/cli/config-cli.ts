@@ -394,8 +394,7 @@ export async function runConfigRestore(opts: {
 
     // Validate backup is parseable before overwriting anything
     try {
-      const backupContent = fs.readFileSync(restorePath, "utf8");
-      JSON5.parse(backupContent);
+      JSON5.parse(fs.readFileSync(restorePath, "utf8"));
     } catch (e) {
       runtime.error(danger(`Backup file is not valid JSON5 and cannot be restored: ${restorePath}`));
       runtime.exit(1);
