@@ -45,6 +45,7 @@ describe("handleControlUiHttpRequest", () => {
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
     basePath?: string;
+    allowHardlinks?: boolean;
   }) {
     const { res, end } = makeMockHttpResponse();
     const handled = handleControlUiHttpRequest(
@@ -52,7 +53,11 @@ describe("handleControlUiHttpRequest", () => {
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
-        root: { kind: "resolved", path: params.rootPath },
+        root: {
+          kind: "resolved",
+          path: params.rootPath,
+          ...(params.allowHardlinks !== undefined ? { allowHardlinks: params.allowHardlinks } : {}),
+        },
       },
     );
     return { res, end, handled };
@@ -146,7 +151,7 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("serves index.html when control-ui files are hardlinked", async () => {
+  it("serves index.html when control-ui files are hardlinked in trusted roots", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const hardlinkSource = path.join(tmp, "index-source.html");
@@ -159,11 +164,33 @@ describe("handleControlUiHttpRequest", () => {
           url: "/",
           method: "GET",
           rootPath: tmp,
+          allowHardlinks: true,
         });
 
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
         expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("<html>pnpm-hardlink</html>\n");
+      },
+    });
+  });
+
+  it("rejects hardlinked control-ui files for custom roots", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const hardlinkSource = path.join(tmp, "index-source.html");
+        const hardlinkTarget = path.join(tmp, "index.html");
+        await fs.writeFile(hardlinkSource, "<html>pnpm-hardlink</html>\n");
+        await fs.rm(hardlinkTarget);
+        await fs.link(hardlinkSource, hardlinkTarget);
+
+        const { res, end, handled } = runControlUiRequest({
+          url: "/",
+          method: "GET",
+          rootPath: tmp,
+          allowHardlinks: false,
+        });
+
+        expectNotFoundResponse({ handled, res, end });
       },
     });
   });
