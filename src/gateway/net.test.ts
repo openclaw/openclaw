@@ -468,9 +468,9 @@ describe("isSecureWebSocketUrl", () => {
     // Hostnames are rejected to avoid accepting arbitrary public hostnames
     // over insecure ws://. This is a security measure - DNS resolution
     // is not available in this synchronous validator, so we fail closed.
+    // Note: localhost is handled separately before allowPrivateWs check.
     const hostnameWsUrls = [
       "ws://gateway.private.example:18789",
-      "ws://localhost:18789", // localhost is handled separately before allowPrivateWs check
       "ws://my-tailscale-host.ts.net:18789",
     ];
 
