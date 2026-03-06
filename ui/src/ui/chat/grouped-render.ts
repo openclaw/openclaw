@@ -37,7 +37,7 @@ function sanitizeMediaType(raw: unknown): string {
 
 function sanitizeDataUrl(raw: string): string | null {
   // Only allow data: URLs with an approved image MIME type prefix.
-  const match = raw.match(/^data:(image\/[a-z][a-z0-9+\-]*);base64,/);
+  const match = raw.match(/^data:(image\/[a-z][a-z0-9+-]*);base64,/);
   if (!match || !ALLOWED_IMAGE_MIME_TYPES.has(match[1])) {
     return null;
   }

@@ -763,51 +763,59 @@ async function injectMediaImagesIntoHistory(messages: unknown[]): Promise<unknow
     const isToolResultMsg =
       msgRole === "toolresult" || msgRole === "tool_result" || msgRole === "tool";
 
-    // Skip collecting new images once the total budget (injected + pending) is exhausted.
-    if (totalInjectedBytes + pendingBytes >= MAX_TOTAL_INJECTED_BYTES) {
+    // When the budget is exhausted, skip collecting NEW images but still allow
+    // injection of already-pending images into assistant messages (otherwise
+    // pending images only flush at the very end of history, possibly attaching
+    // to an unrelated later message).
+    const budgetExhausted = totalInjectedBytes + pendingBytes >= MAX_TOTAL_INJECTED_BYTES;
+    if (budgetExhausted && pendingImages.length === 0) {
       continue;
     }
 
-    for (const block of content) {
-      if (!block || typeof block !== "object") {
-        continue;
-      }
-      const b = block as Record<string, unknown>;
-
-      // Strategy 1a: Collect images from MEDIA: lines in tool_result content blocks.
-      if (pendingImages.length < MAX_PENDING_IMAGES) {
-        const mediaImages = await collectMediaImagesFromBlock(b, seenPaths);
-        for (const img of mediaImages) {
-          if (pendingImages.length >= MAX_PENDING_IMAGES) {
-            break;
-          }
-          pendingImages.push(img);
-          pendingBytes += img.data.length;
+    // Only collect new images when budget allows — but always fall through to
+    // the injection branch below so pending images attach to the right message.
+    if (!budgetExhausted) {
+      for (const block of content) {
+        if (!block || typeof block !== "object") {
+          continue;
         }
-      }
+        const b = block as Record<string, unknown>;
 
-      // Strategy 1b: Collect images from plain text blocks in toolResult messages.
-      // Handles the format: {role:"toolResult", content:[{type:"text", text:"MEDIA:..."}]}
-      if (pendingImages.length < MAX_PENDING_IMAGES && isToolResultMsg) {
-        const textImages = await collectMediaImagesFromTextBlock(b, seenPaths);
-        for (const img of textImages) {
-          if (pendingImages.length >= MAX_PENDING_IMAGES) {
-            break;
+        // Strategy 1a: Collect images from MEDIA: lines in tool_result content blocks.
+        if (pendingImages.length < MAX_PENDING_IMAGES) {
+          const mediaImages = await collectMediaImagesFromBlock(b, seenPaths);
+          for (const img of mediaImages) {
+            if (pendingImages.length >= MAX_PENDING_IMAGES) {
+              break;
+            }
+            pendingImages.push(img);
+            pendingBytes += img.data.length;
           }
-          pendingImages.push(img);
-          pendingBytes += img.data.length;
         }
-      }
 
-      // Strategy 2: Collect images from exec commands with image-viewer patterns.
-      if (pendingImages.length < MAX_PENDING_IMAGES) {
-        const execImages = await collectImagePathsFromToolUse(b, seenPaths);
-        for (const img of execImages) {
-          if (pendingImages.length >= MAX_PENDING_IMAGES) {
-            break;
+        // Strategy 1b: Collect images from plain text blocks in toolResult messages.
+        // Handles the format: {role:"toolResult", content:[{type:"text", text:"MEDIA:..."}]}
+        if (pendingImages.length < MAX_PENDING_IMAGES && isToolResultMsg) {
+          const textImages = await collectMediaImagesFromTextBlock(b, seenPaths);
+          for (const img of textImages) {
+            if (pendingImages.length >= MAX_PENDING_IMAGES) {
+              break;
+            }
+            pendingImages.push(img);
+            pendingBytes += img.data.length;
           }
-          pendingImages.push(img);
-          pendingBytes += img.data.length;
+        }
+
+        // Strategy 2: Collect images from exec commands with image-viewer patterns.
+        if (pendingImages.length < MAX_PENDING_IMAGES) {
+          const execImages = await collectImagePathsFromToolUse(b, seenPaths);
+          for (const img of execImages) {
+            if (pendingImages.length >= MAX_PENDING_IMAGES) {
+              break;
+            }
+            pendingImages.push(img);
+            pendingBytes += img.data.length;
+          }
         }
       }
     }
