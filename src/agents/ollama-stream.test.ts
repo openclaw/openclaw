@@ -417,4 +417,23 @@ describe("createOllamaStreamFn", () => {
       },
     );
   });
+
+  it("falls back to reasoning in a done chunk when content is empty", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"final reasoning"},"done":true,"prompt_eval_count":1,"eval_count":2}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        const doneEvent = events.at(-1);
+        if (!doneEvent || doneEvent.type !== "done") {
+          throw new Error("Expected done event");
+        }
+
+        expect(doneEvent.message.content).toEqual([{ type: "text", text: "final reasoning" }]);
+      },
+    );
+  });
 });

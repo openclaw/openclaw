@@ -323,10 +323,7 @@ export function buildAssistantMessage(
 ): AssistantMessage {
   const content: (TextContent | ToolCall)[] = [];
 
-  // Qwen 3 (and potentially other reasoning models) may return their final
-  // answer in a `reasoning` field with an empty `content`. Fall back to
-  // `reasoning` so the response isn't silently dropped.
-  const text = response.message.content || response.message.reasoning || "";
+  const text = coerceOllamaResponseText(response.message);
   if (text) {
     content.push({ type: "text", text });
   }
@@ -394,6 +391,21 @@ export async function* parseNdjsonStream(
       log.warn(`Skipping malformed trailing data: ${buffer.trim().slice(0, 120)}`);
     }
   }
+}
+
+function coerceOllamaResponseText(
+  message: { content?: string; reasoning?: string } | undefined,
+): string {
+  if (!message) {
+    return "";
+  }
+  if (typeof message.content === "string" && message.content.length > 0) {
+    return message.content;
+  }
+  if (typeof message.reasoning === "string" && message.reasoning.length > 0) {
+    return message.reasoning;
+  }
+  return "";
 }
 
 // ── Main StreamFn factory ───────────────────────────────────────────────────
@@ -472,11 +484,9 @@ export function createOllamaStreamFn(
         let finalResponse: OllamaChatResponse | undefined;
 
         for await (const chunk of parseNdjsonStream(reader)) {
-          if (chunk.message?.content) {
-            accumulatedContent += chunk.message.content;
-          } else if (chunk.message?.reasoning) {
-            // Qwen 3 reasoning mode: content may be empty, output in reasoning
-            accumulatedContent += chunk.message.reasoning;
+          const chunkText = coerceOllamaResponseText(chunk.message);
+          if (chunkText) {
+            accumulatedContent += chunkText;
           }
 
           // Ollama sends tool_calls in intermediate (done:false) chunks,
