@@ -240,4 +240,40 @@ describe("discoverKilocodeModels (fetch path)", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("keeps a later valid duplicate when an earlier entry is malformed", async () => {
+    const origNodeEnv = process.env.NODE_ENV;
+    const origVitest = process.env.VITEST;
+    delete process.env.NODE_ENV;
+    delete process.env.VITEST;
+
+    const malformedAutoModel = makeAutoModel({
+      name: "Broken Kilo Auto",
+      pricing: undefined,
+    });
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          data: [malformedAutoModel, makeAutoModel(), makeGatewayModel()],
+        }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    try {
+      const models = await discoverKilocodeModels();
+      const auto = models.find((m) => m.id === "kilo/auto");
+      expect(auto).toBeDefined();
+      expect(auto?.name).toBe("Kilo: Auto");
+      expect(auto?.cost.input).toBeCloseTo(5.0);
+      expect(models.some((m) => m.id === "anthropic/claude-sonnet-4")).toBe(true);
+    } finally {
+      process.env.NODE_ENV = origNodeEnv;
+      if (origVitest !== undefined) {
+        process.env.VITEST = origVitest;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
 });

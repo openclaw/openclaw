@@ -156,19 +156,19 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
     }
 
     const models: ModelDefinitionConfig[] = [];
-    const seenIds = new Set<string>();
+    const discoveredIds = new Set<string>();
 
     for (const entry of data.data) {
       if (!entry || typeof entry !== "object") {
         continue;
       }
       const id = typeof entry.id === "string" ? entry.id.trim() : "";
-      if (!id || seenIds.has(id)) {
+      if (!id || discoveredIds.has(id)) {
         continue;
       }
-      seenIds.add(id);
       try {
         models.push(toModelDefinition(entry));
+        discoveredIds.add(id);
       } catch (e) {
         log.warn(`Skipping malformed model entry "${id}": ${String(e)}`);
       }
@@ -177,7 +177,7 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
     // Ensure the static fallback models are always present
     const staticModels = buildStaticCatalog();
     for (const staticModel of staticModels) {
-      if (!seenIds.has(staticModel.id)) {
+      if (!discoveredIds.has(staticModel.id)) {
         models.unshift(staticModel);
       }
     }
