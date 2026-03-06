@@ -12,6 +12,7 @@ import {
 } from "../../config/config.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
+import { probeGateway } from "../../gateway/probe.js";
 import { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -449,16 +450,25 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         // ignore diagnostics failures
       }
       await maybeExplainGatewayServiceStop();
-      // If the port is already bound by another gateway instance, exit 0 so
-      // service managers (systemd, launchd) with Restart=on-failure do not
-      // spin in a tight crash-loop.  Any other lock-acquisition failure is
-      // still a real error and warrants a non-zero exit.
+      // Only exit 0 when the port is held by an already-running OpenClaw
+      // gateway instance (confirmed by a live probe).  If an unrelated process
+      // is on the port, startup genuinely failed and we must exit non-zero so
+      // supervisors with Restart=on-failure keep retrying instead of silently
+      // accepting a downed gateway.
       const lockCause = (err as GatewayLockError).cause;
       const isPortConflict =
         lockCause != null &&
         typeof lockCause === "object" &&
         (lockCause as NodeJS.ErrnoException).code === "EADDRINUSE";
-      defaultRuntime.exit(isPortConflict ? 0 : 1);
+      if (isPortConflict) {
+        const probe = await probeGateway({
+          url: `ws://127.0.0.1:${port}`,
+          timeoutMs: 3000,
+        }).catch(() => null);
+        defaultRuntime.exit(probe?.ok ? 0 : 1);
+      } else {
+        defaultRuntime.exit(1);
+      }
       return;
     }
     defaultRuntime.error(`Gateway failed to start: ${String(err)}`);
