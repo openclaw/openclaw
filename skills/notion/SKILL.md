@@ -16,7 +16,7 @@ Use the Notion API to create/read/update pages, data sources (databases), and bl
 ## Setup
 
 1. Create an integration at https://notion.so/my-integrations
-2. Copy the API key (starts with `ntn_` or `secret_`)
+2. Copy the **internal integration token** from the integration `Configuration` tab (often starts with `ntn_` or `secret_`)
 3. Store it:
 
 ```bash
@@ -25,6 +25,13 @@ echo "ntn_your_key_here" > ~/.config/notion/api_key
 ```
 
 4. Share target pages/databases with your integration (click "..." → "Connect to" → your integration name)
+
+### OpenClaw runtime env names
+
+- Primary: `NOTION_API_KEY`
+- Compatibility aliases: `NOTION_KEY`, `NOTION_TOKEN`
+
+In Docker-secrets deployments, store the token in `/home/jpow/.openclaw/secrets/notion_api_key`; OpenClaw loads and exports these env vars at runtime.
 
 ## API Basics
 
