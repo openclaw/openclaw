@@ -121,6 +121,17 @@ export async function resolveGatewayRuntimeConfig(params: {
   const dangerouslyAllowHostHeaderOriginFallback =
     params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
+  const configAuthMode = params.cfg.gateway?.auth?.mode;
+  if (
+    (configAuthMode === "token" || configAuthMode === "password") &&
+    resolvedAuth.mode === "none"
+  ) {
+    throw new Error(
+      `Security: gateway.auth.mode="${configAuthMode}" in config but runtime resolved to auth=none. ` +
+        "Refusing to start — check auth overrides and SecretRef resolution.",
+    );
+  }
+
   assertGatewayAuthConfigured(resolvedAuth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(

@@ -13,6 +13,8 @@ export function logGatewayStartup(params: {
   tlsEnabled?: boolean;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void; warn: (msg: string) => void };
   isNixMode: boolean;
+  authMode?: string;
+  authModeSource?: string;
 }) {
   const { provider: agentProvider, model: agentModel } = resolveConfiguredModelRef({
     cfg: params.cfg,
@@ -23,6 +25,12 @@ export function logGatewayStartup(params: {
   params.log.info(`agent model: ${modelRef}`, {
     consoleMessage: `agent model: ${chalk.whiteBright(modelRef)}`,
   });
+  if (params.authMode) {
+    const sourceLabel = params.authModeSource ? ` (source: ${params.authModeSource})` : "";
+    params.log.info(`gateway auth mode resolved: ${params.authMode}${sourceLabel}`, {
+      consoleMessage: `gateway auth mode: ${chalk.whiteBright(params.authMode)}${sourceLabel}`,
+    });
+  }
   const scheme = params.tlsEnabled ? "wss" : "ws";
   const formatHost = (host: string) => (host.includes(":") ? `[${host}]` : host);
   const hosts =

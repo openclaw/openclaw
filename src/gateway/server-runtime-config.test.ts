@@ -271,4 +271,49 @@ describe("resolveGatewayRuntimeConfig", () => {
       expect(result.strictTransportSecurityHeader).toBeUndefined();
     });
   });
+
+  describe("auth config/runtime mismatch invariant", () => {
+    it("throws when config sets auth.mode=token but runtime resolves to none", async () => {
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: {
+              bind: "loopback",
+              auth: { mode: "token" },
+            },
+          },
+          port: 18789,
+          auth: { mode: "none" },
+        }),
+      ).rejects.toThrow(/Security.*gateway\.auth\.mode="token".*auth=none/);
+    });
+
+    it("throws when config sets auth.mode=password but runtime resolves to none", async () => {
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: {
+              bind: "loopback",
+              auth: { mode: "password" },
+            },
+          },
+          port: 18789,
+          auth: { mode: "none" },
+        }),
+      ).rejects.toThrow(/Security.*gateway\.auth\.mode="password".*auth=none/);
+    });
+
+    it("does not throw when config sets auth.mode=none and runtime resolves to none", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+          },
+        },
+        port: 18789,
+      });
+      expect(result.resolvedAuth.mode).toBe("none");
+    });
+  });
 });

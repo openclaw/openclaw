@@ -867,6 +867,8 @@ export async function startGatewayServer(
     tlsEnabled: gatewayTls.enabled,
     log,
     isNixMode,
+    authMode: resolvedAuth.mode,
+    authModeSource: resolvedAuth.modeSource,
   });
   const stopGatewayUpdateCheck = minimalTestGateway
     ? () => {}
