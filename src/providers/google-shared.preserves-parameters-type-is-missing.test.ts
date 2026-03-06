@@ -9,8 +9,10 @@ import {
   loadGoogleSharedModule,
 } from "./google-shared.test-helpers.js";
 
-let convertMessages: (...args: unknown[]) => unknown;
-let convertTools: (...args: unknown[]) => unknown;
+type ConvertedContent = { role?: string; parts?: unknown[] };
+
+let convertMessages: (model: unknown, context: unknown) => ConvertedContent[];
+let convertTools: (tools: Tool[]) => unknown;
 
 beforeAll(async () => {
   const loaded = await loadGoogleSharedModule();

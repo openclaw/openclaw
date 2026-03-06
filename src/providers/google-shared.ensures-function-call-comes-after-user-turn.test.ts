@@ -10,10 +10,13 @@ import {
   loadGoogleSharedModule,
 } from "./google-shared.test-helpers.js";
 
-let convertMessages: (...args: unknown[]) => unknown;
+type ConvertedContent = { role?: string; parts?: unknown[] };
+
+let convertMessages: (model: unknown, context: unknown) => ConvertedContent[];
 
 beforeAll(async () => {
-  ({ convertMessages } = await loadGoogleSharedModule());
+  const loaded = await loadGoogleSharedModule();
+  convertMessages = loaded.convertMessages as typeof convertMessages;
 });
 
 describe("google-shared convertTools", () => {
