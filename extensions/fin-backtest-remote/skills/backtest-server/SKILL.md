@@ -23,14 +23,14 @@ When the user talks about **running a backtest**, **submitting a strategy**, **c
 
 ## Tools
 
-| Tool | Purpose |
-|------|--------|
+| Tool                       | Purpose                                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------------------------ |
 | `backtest_remote_validate` | Validate strategy package dir (fep v1.1) before zip/submit; use first when dir is not yet zipped |
-| `backtest_remote_submit` | POST strategy ZIP; returns task_id (use after validate + zip) |
-| `backtest_remote_status` | GET task status and result_summary |
-| `backtest_remote_report` | GET full report (only when completed) |
-| `backtest_remote_list` | GET paginated task list |
-| `backtest_remote_cancel` | DELETE a queued task |
+| `backtest_remote_submit`   | POST strategy ZIP; returns task_id (use after validate + zip)                                    |
+| `backtest_remote_status`   | GET task status and result_summary                                                               |
+| `backtest_remote_report`   | GET full report (only when completed)                                                            |
+| `backtest_remote_list`     | GET paginated task list                                                                          |
+| `backtest_remote_cancel`   | DELETE a queued task                                                                             |
 
 ## Distinction from local backtest
 

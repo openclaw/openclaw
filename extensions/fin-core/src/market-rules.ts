@@ -138,7 +138,13 @@ function getLocalDayOfWeek(date: Date, timezone: string): number {
   });
   const dayStr = formatter.format(date);
   const dayMap: Record<string, number> = {
-    Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
   };
   return dayMap[dayStr] ?? 0;
 }

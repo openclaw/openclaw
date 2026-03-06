@@ -33,7 +33,7 @@
     "openfinclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openfinclaw": ">=2026.2.0"
+    "openfinclaw": ">=0.0.1"
   },
   "openclaw": {
     "extensions": [

@@ -8,12 +8,7 @@
   },
   "tools": {
     "profile": "coding",
-    "alsoAllow": [
-      "read",
-      "exec",
-      "write",
-      "edit"
-    ]
+    "alsoAllow": ["read", "exec", "write", "edit"]
   },
   "commands": {
     "native": "auto",
@@ -23,10 +18,7 @@
   },
   "skills": {
     "load": {
-      "extraDirs": [
-        "skills",
-        "commons/skills"
-      ]
+      "extraDirs": ["skills", "commons/skills"]
     }
   },
   "plugins": {

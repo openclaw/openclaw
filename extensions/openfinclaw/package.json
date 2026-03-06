@@ -1,7 +1,7 @@
 {
   "name": "@openfinclaw/openfinclaw",
   "version": "0.0.2",
-  "description": "OpenFinClaw - Complete financial tools suite for OpenClaw (strategy builder, backtest, market data, trading)",
+  "description": "OpenFinClaw - Financial tools for OpenClaw: strategy builder, remote backtest",
   "keywords": [
     "backtest",
     "crypto",
@@ -20,17 +20,18 @@
   },
   "files": [
     "skills",
+    "src",
+    "*.ts",
     "openclaw.plugin.json",
-    "README.md",
-    "index.ts"
+    "README.md"
   ],
   "type": "module",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org"
   },
-  "peerDependencies": {
-    "openfinclaw": ">=2026.2.0"
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.0"
   },
   "openclaw": {
     "extensions": [

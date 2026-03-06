@@ -92,10 +92,10 @@ def compute(data):
 
 ## 相关 Tools
 
-| Tool | 用途 |
-|------|------|
-| `backtest_remote_validate` | 校验策略包目录格式是否符合 fep v1.1，通过后才可打包上传 |
-| `backtest_remote_submit` | 提交已打包的 ZIP 到远程回测服务 |
-| `backtest_remote_status` / `backtest_remote_report` | 查询任务状态与报告 |
+| Tool                                                | 用途                                                    |
+| --------------------------------------------------- | ------------------------------------------------------- |
+| `backtest_remote_validate`                          | 校验策略包目录格式是否符合 fep v1.2，通过后才可打包上传 |
+| `backtest_remote_submit`                            | 提交已打包的 ZIP 到远程回测服务                         |
+| `backtest_remote_status` / `backtest_remote_report` | 查询任务状态与报告                                      |
 
 总结：**先按本 skill 生成/补全策略包 → 用 backtest_remote_validate 校验 → 通过后再打包并 backtest_remote_submit**。

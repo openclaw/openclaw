@@ -100,7 +100,9 @@ export class FutuAdapter implements UnifiedExchangeAdapter {
   }
 
   async fetchOpenOrders(symbol?: string): Promise<OrderResult[]> {
-    const path = symbol ? `/orders?status=open&symbol=${encodeURIComponent(symbol)}` : "/orders?status=open";
+    const path = symbol
+      ? `/orders?status=open&symbol=${encodeURIComponent(symbol)}`
+      : "/orders?status=open";
     const data = await this.request<FutuOrderResponse[]>("GET", path);
 
     return (data ?? []).map((o) => ({

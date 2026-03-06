@@ -141,7 +141,7 @@ export class StrategyRegistry {
   updateDefinition(id: string, definition: StrategyDefinition): void {
     const record = this.records.get(id);
     if (!record) throw new Error(`Strategy ${id} not found`);
-    
+
     const oldDefinition = record.definition;
     if (hasDefinitionChangeded(oldDefinition, definition)) {
       record.definition = definition;

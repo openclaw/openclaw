@@ -93,7 +93,7 @@ This skill needs **read** (read files) and **exec** (run shell commands). Ensure
 └── data/                 # 自定义数据
 ```
 
-**Packaging:** `cd <strategy-dir> && zip -r ../<name>.zip fep.yaml scripts/`
+**Packaging:** `cd <strategy-dir> && zip -r ../<id>-<version>.zip fep.yaml scripts/` (e.g. `fin-dca-basic-test-1.0.0.zip`)
 
 ---
 
@@ -366,7 +366,7 @@ Present the package and next steps:
 - **Local/registration:** Run backtest (fin-backtest), deploy to paper (fin_paper_create), tweak parameters in fep.yaml.
 - **Remote Findoo Backtest (fep v1.2):** If user wants to submit to the remote server:
   1. Ensure directory is validated (`backtest_remote_validate`)
-  2. Zip: `zip -r ../<name>.zip fep.yaml scripts/`
+  2. Zip: `zip -r ../<id>-<version>.zip fep.yaml scripts/` (e.g. `fin-dca-basic-test-1.0.0.zip`)
   3. Submit with `backtest_remote_submit` (filePath, optional symbol, initial_capital, start_date, end_date, engine, budget_cap_usd)
   4. Poll with `backtest_remote_status`, fetch report with `backtest_remote_report` when status is completed
 

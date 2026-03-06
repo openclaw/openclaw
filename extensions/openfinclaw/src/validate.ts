@@ -69,7 +69,7 @@ export async function validateStrategyPackage(dirPath: string): Promise<Validate
   if (!/^\s*identity\s*:/m.test(fepStr)) {
     errors.push("fep.yaml must contain 'identity:' section");
   }
-  const identityBlockMatch = /identity:\s*([\s\S]*?)(?:\n\S|$)/m.exec(fepStr);
+  const identityBlockMatch = /identity:\s*([\s\S]*?)(?=\n\w|\n$|$)/.exec(fepStr);
   const identityBlock = identityBlockMatch ? identityBlockMatch[1] : "";
   if (!/\bid\s*:/m.test(identityBlock)) {
     errors.push("fep.yaml identity must include 'id' (unique strategy id)");
@@ -86,7 +86,7 @@ export async function validateStrategyPackage(dirPath: string): Promise<Validate
   if (!/^\s*technical\s*:/m.test(fepStr)) {
     errors.push("fep.yaml must contain 'technical:' section");
   } else {
-    const technicalBlockMatch = /technical:\s*([\s\S]*?)(?:\n\S|$)/m.exec(fepStr);
+    const technicalBlockMatch = /technical:\s*([\s\S]*?)(?=\n\w|\n$|$)/.exec(fepStr);
     const technicalBlock = technicalBlockMatch ? technicalBlockMatch[1] : "";
     if (!/\blanguage\s*:\s*python\b/m.test(technicalBlock)) {
       errors.push('fep.yaml technical.language must be "python"');
@@ -100,12 +100,12 @@ export async function validateStrategyPackage(dirPath: string): Promise<Validate
       "fep.yaml must contain 'backtest:' section with defaultPeriod, initialCapital, benchmark",
     );
   } else {
-    const backtestBlockMatch = /backtest:\s*([\s\S]*?)(?:\n\S|$)/m.exec(fepStr);
+    const backtestBlockMatch = /backtest:\s*([\s\S]*?)(?=\n\w|\n$|$)/.exec(fepStr);
     const backtestBlock = backtestBlockMatch ? backtestBlockMatch[1] : "";
     if (!/defaultPeriod\s*:/m.test(backtestBlock)) {
       errors.push("fep.yaml backtest.defaultPeriod is required (startDate/endDate)");
     } else {
-      const periodBlockMatch = /defaultPeriod:\s*([\s\S]*?)(?:\n\s*[A-Za-z]|$)/m.exec(
+      const periodBlockMatch = /defaultPeriod:\s*([\s\S]*?)(?=\n\s*[A-Za-z]|\n\w|\n$|$)/.exec(
         backtestBlock,
       );
       const periodBlock = periodBlockMatch ? periodBlockMatch[1] : "";

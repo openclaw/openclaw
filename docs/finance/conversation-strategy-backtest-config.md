@@ -30,10 +30,10 @@ Agent 需要 **read**、**write**、**edit**、**exec** 才能在工作区生成
   1. **用模板当主配置**：启动 Gateway（或 CLI agent）时设置环境变量，例如  
      `OPENCLAW_CONFIG_PATH=D:\code\openFinclaw\commons\templates\finclaw-starter\openclaw.json`  
      并保证进程**当前工作目录为仓库根**（若模板里用了相对路径如 `extraDirs`）。
-  2. **修改默认主配置**：在**实际生效的那份**里写入上述 `tools.profile` 与 `tools.alsoAllow`。  
-     - 若使用**旧路径**：修改 **`~/.openclaw/openclaw.json`**（不存在则新建该文件）。  
+  2. **修改默认主配置**：在**实际生效的那份**里写入上述 `tools.profile` 与 `tools.alsoAllow`。
+     - 若使用**旧路径**：修改 **`~/.openclaw/openclaw.json`**（不存在则新建该文件）。
      - 若使用**新路径**：修改 **`~/.openfinclaw/openfinclaw.json`**。  
-     保存后**重启 Gateway**，再试创建策略。
+       保存后**重启 Gateway**，再试创建策略。
 - 修改任意配置后，**必须重启 Gateway** 才会生效。
 
 ---
@@ -56,7 +56,7 @@ openclaw commons install fin-strategy-builder
 
 若项目使用 `skills.skillsDir: "./skills"` 或默认工作区 `skills/`：
 
-- 将 `fin-strategy-builder` 的 SKILL 放到工作区 `skills/fin-strategy-builder/SKILL.md`，或  
+- 将 `fin-strategy-builder` 的 SKILL 放到工作区 `skills/fin-strategy-builder/SKILL.md`，或
 - 通过 `skills.load.extraDirs` 指向包含 fin-strategy-builder 的目录。
 
 确保运行 Agent 时加载的 skill 列表中包含 **fin-strategy-builder**（可通过 `openclaw skills status` 等命令确认）。
@@ -109,13 +109,13 @@ openclaw config set plugins.entries.fin-backtest-remote.config.apiKey "bt-sk-xxx
 
 ## 4. 配置检查清单
 
-| 项 | 配置 | 说明 |
-|----|------|------|
-| 工具 profile | `tools.profile: "coding"` | 保证 read/write/edit/exec 可用 |
-| 策略构建器 | fin-strategy-builder 已安装并参与加载 | 对话可触发「创建策略」「生成策略包」等 |
-| 远程回测插件 | `plugins.entries.fin-backtest-remote.enabled: true` | 对话可校验、提交、查回测 |
-| 回测服务地址 | `plugins.entries.fin-backtest-remote.config.baseUrl` | 必填（生产/测试环境） |
-| 回测 API Key | `plugins.entries.fin-backtest-remote.config.apiKey` | 按服务要求配置，本地免鉴权可留空 |
+| 项           | 配置                                                 | 说明                                   |
+| ------------ | ---------------------------------------------------- | -------------------------------------- |
+| 工具 profile | `tools.profile: "coding"`                            | 保证 read/write/edit/exec 可用         |
+| 策略构建器   | fin-strategy-builder 已安装并参与加载                | 对话可触发「创建策略」「生成策略包」等 |
+| 远程回测插件 | `plugins.entries.fin-backtest-remote.enabled: true`  | 对话可校验、提交、查回测               |
+| 回测服务地址 | `plugins.entries.fin-backtest-remote.config.baseUrl` | 必填（生产/测试环境）                  |
+| 回测 API Key | `plugins.entries.fin-backtest-remote.config.apiKey`  | 按服务要求配置，本地免鉴权可留空       |
 
 ---
 
@@ -137,6 +137,7 @@ openclaw config set plugins.entries.fin-backtest-remote.config.apiKey "bt-sk-xxx
    `extraDirs` 会按**当前工作目录**解析，因此需在仓库根下执行 Agent/Gateway：
 
    **Windows (PowerShell)：**
+
    ```powershell
    $env:OPENCLAW_CONFIG_PATH = "D:\code\openFinclaw\commons\templates\finclaw-starter\openclaw.json"
    cd D:\code\openFinclaw
@@ -144,6 +145,7 @@ openclaw config set plugins.entries.fin-backtest-remote.config.apiKey "bt-sk-xxx
    ```
 
    **Windows (CMD)：**
+
    ```cmd
    set OPENCLAW_CONFIG_PATH=D:\code\openFinclaw\commons\templates\finclaw-starter\openclaw.json
    cd D:\code\openFinclaw
@@ -151,6 +153,7 @@ openclaw config set plugins.entries.fin-backtest-remote.config.apiKey "bt-sk-xxx
    ```
 
    **Linux / macOS：**
+
    ```bash
    export OPENCLAW_CONFIG_PATH="$PWD/commons/templates/finclaw-starter/openclaw.json"
    cd /path/to/openFinclaw

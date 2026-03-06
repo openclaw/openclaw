@@ -100,6 +100,7 @@ pnpm test
 ### 手动 / 联调
 
 1. **先确认远程服务可用**（不依赖 OpenClaw）：
+
    ```bash
    curl http://<baseUrl>/api/v1/health
    # 预期: {"status":"ok"}

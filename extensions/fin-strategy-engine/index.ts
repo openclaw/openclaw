@@ -1,6 +1,6 @@
-import { Type } from "@sinclair/typebox";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import { BacktestEngine, buildIndicatorLib } from "./src/backtest-engine.js";
 import { createBollingerBands } from "./src/builtin-strategies/bollinger-bands.js";

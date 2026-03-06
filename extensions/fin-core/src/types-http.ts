@@ -92,7 +92,16 @@ export type StrategyRegistryLike = {
       strategyId: string;
     };
   }>;
-  get?: (id: string) => { id: string; name: string; level: string; status?: string; definition?: Record<string, unknown>; symbol?: string } | undefined;
+  get?: (id: string) =>
+    | {
+        id: string;
+        name: string;
+        level: string;
+        status?: string;
+        definition?: Record<string, unknown>;
+        symbol?: string;
+      }
+    | undefined;
   updateLevel?: (id: string, level: string) => void;
   updateStatus?: (id: string, status: string) => void;
   updateBacktest?: (id: string, result: Record<string, unknown>) => void;
@@ -108,7 +117,14 @@ export type FundManagerLike = {
 export type BacktestEngineLike = {
   run: (
     definition: Record<string, unknown>,
-    ohlcv: Array<{ timestamp: number; open: number; high: number; low: number; close: number; volume: number }>,
+    ohlcv: Array<{
+      timestamp: number;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volume: number;
+    }>,
     config?: Record<string, unknown>,
   ) => {
     totalReturn: number;
@@ -129,7 +145,16 @@ export type DataProviderLike = {
     symbol: string,
     timeframe: string,
     limit?: number,
-  ) => Promise<Array<{ timestamp: number; open: number; high: number; low: number; close: number; volume: number }>>;
+  ) => Promise<
+    Array<{
+      timestamp: number;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volume: number;
+    }>
+  >;
 };
 
 export type AlertEngineLike = {

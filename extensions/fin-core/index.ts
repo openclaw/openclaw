@@ -9,16 +9,28 @@ import { RiskController } from "./src/risk-controller.js";
 import { registerHttpRoutes } from "./src/route-handlers.js";
 import { registerSseRoutes } from "./src/sse-handlers.js";
 import { loadDashboardTemplates } from "./src/template-renderer.js";
-import { registerPaperTools, registerStrategyTools, registerTradingTools } from "./src/tools/index.js";
+import {
+  registerPaperTools,
+  registerStrategyTools,
+  registerTradingTools,
+} from "./src/tools/index.js";
 import type { RuntimeServices } from "./src/types-http.js";
 import type { ExchangeConfig, TradingRiskConfig } from "./src/types.js";
 
-export type { AdapterOrderParams, UnifiedExchangeAdapter } from "./src/adapters/adapter-interface.js";
+export type {
+  AdapterOrderParams,
+  UnifiedExchangeAdapter,
+} from "./src/adapters/adapter-interface.js";
 export { AlpacaAdapter } from "./src/adapters/alpaca-adapter.js";
 export { CcxtAdapter } from "./src/adapters/ccxt-adapter.js";
 export { FutuAdapter } from "./src/adapters/futu-adapter.js";
 export { createAdapter } from "./src/adapters/adapter-factory.js";
-export { isMarketOpen, resolveMarket, validateLotSize, getMarketTimezone } from "./src/market-rules.js";
+export {
+  isMarketOpen,
+  resolveMarket,
+  validateLotSize,
+  getMarketTimezone,
+} from "./src/market-rules.js";
 export { AgentEventSqliteStore } from "./src/agent-event-sqlite-store.js";
 export { AgentEventStore } from "./src/agent-event-store.js";
 export { ExchangeHealthStore } from "./src/exchange-health-store.js";
@@ -191,7 +203,10 @@ const finCorePlugin = {
       exchange
         .command("add <name>")
         .description("Add an exchange connection")
-        .option("--exchange <type>", "Exchange type (binance, okx, bybit, hyperliquid, alpaca, futu)")
+        .option(
+          "--exchange <type>",
+          "Exchange type (binance, okx, bybit, hyperliquid, alpaca, futu)",
+        )
         .option("--api-key <key>", "API key")
         .option("--secret <secret>", "API secret")
         .option("--passphrase <pass>", "API passphrase (OKX)")

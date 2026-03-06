@@ -2,22 +2,15 @@
 set -euo pipefail
 
 # OpenFinClaw Plugin Publisher
-# Publishes all @openfinclaw/* packages to npm
+# Publishes @openfinclaw/openfinclaw to npm
 #
 # Usage:
 #   export NPM_TOKEN=npm_xxxxx
 #   pnpm plugins:publish:openfinclaw
 #
-# Required: NPM_TOKEN (Automation token with 2FA bypass enabled)
+# Required: NPM_TOKEN (Granular Access Token with 2FA bypass enabled)
 
-PLUGIN_PACKAGES=(
-  "@openfinclaw/fin-shared-types"
-  "@openfinclaw/fin-core"
-  "@openfinclaw/fin-market-data"
-  "@openfinclaw/fin-strategy-engine"
-  "@openfinclaw/fin-backtest-remote"
-  "@openfinclaw/openfinclaw"
-)
+PLUGIN_NAME="@openfinclaw/openfinclaw"
 
 echo "OpenFinClaw Plugin Publisher"
 echo "============================="
@@ -77,20 +70,18 @@ echo "Installing dependencies..."
 pnpm install
 echo ""
 
-# Publish each package
-for pkg in "${PLUGIN_PACKAGES[@]}"; do
-  echo "Publishing $pkg..."
-  if pnpm --filter "$pkg" publish --access public --no-git-checks; then
-    echo "✓ $pkg published"
-  else
-    echo "⚠ $pkg may have failed or already published"
-  fi
+# Publish
+echo "Publishing ${PLUGIN_NAME}..."
+if pnpm --filter "${PLUGIN_NAME}" publish --access public --no-git-checks; then
   echo ""
-done
+  echo "✓ ${PLUGIN_NAME} published successfully"
+else
+  echo ""
+  echo "⚠ Publishing may have failed or package already published"
+fi
 
+echo ""
 echo "==========================================="
-echo "Verifying published packages..."
-for pkg in "${PLUGIN_PACKAGES[@]}"; do
-  version=$(npm view "$pkg" version 2>/dev/null || echo "NOT FOUND")
-  echo "  $pkg: $version"
-done
+echo "Verifying..."
+version=$(npm view "${PLUGIN_NAME}" version 2>/dev/null || echo "NOT FOUND")
+echo "  ${PLUGIN_NAME}: ${version}"

@@ -30,7 +30,9 @@ export function createAdapter(
 
   if (config.exchange === "alpaca") {
     if (!config.apiKey || !config.secret) {
-      throw new Error(`Alpaca adapter requires apiKey and secret. Configure them in financial.exchanges.${exchangeId}.`);
+      throw new Error(
+        `Alpaca adapter requires apiKey and secret. Configure them in financial.exchanges.${exchangeId}.`,
+      );
     }
     return new AlpacaAdapter(
       exchangeId,
@@ -41,12 +43,7 @@ export function createAdapter(
   }
 
   if (config.exchange === "futu") {
-    return new FutuAdapter(
-      exchangeId,
-      config.testnet ?? false,
-      config.host,
-      config.port,
-    );
+    return new FutuAdapter(exchangeId, config.testnet ?? false, config.host, config.port);
   }
 
   throw new Error(

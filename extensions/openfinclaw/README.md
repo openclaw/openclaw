@@ -1,6 +1,6 @@
 # @openfinclaw/openfinclaw
 
-Complete financial tools suite for OpenClaw.
+Financial tools for OpenClaw: strategy builder, publishing, and backtest.
 
 ## Installation
 
@@ -16,10 +16,16 @@ openclaw plugins install @openfinclaw/openfinclaw
 
 ## Features
 
+- **skill-publish** - Publish strategies to server with automatic backtest
 - **fin-strategy-builder** - Turn natural language trading ideas into FEP v1.2 strategy packages
-- **fin-backtest-remote** - Submit and manage backtests on remote server
-- **fin-market-data** - Market data tools (prices, orderbooks, tickers)
-- **fin-strategy-engine** - Strategy lifecycle management
+
+### Available Tools
+
+| Tool                   | Description                                              |
+| ---------------------- | -------------------------------------------------------- |
+| `skill_publish`        | Publish a strategy ZIP to server (auto-trigger backtest) |
+| `skill_publish_verify` | Query publish status and get backtest report             |
+| `skill_validate`       | Validate strategy package directory locally              |
 
 ## Configuration
 
@@ -27,11 +33,42 @@ After installation, configure your API key:
 
 ```bash
 # Get your API key at https://hub.openfinclaw.ai
-openclaw config set plugins.entries.openfinclaw.config.backtestApiKey YOUR_API_KEY
-openclaw config set plugins.entries.openfinclaw.config.backtestApiUrl https://backtest.openfinclaw.ai
+openclaw config set plugins.entries.openfinclaw.config.skillApiKey YOUR_API_KEY
+
+# Optional: modify server URL (default: http://192.168.31.202:3000)
+openclaw config set plugins.entries.openfinclaw.config.skillApiUrl http://192.168.31.202:3000
 ```
 
+Or use environment variables:
+
+```bash
+export SKILL_API_KEY=YOUR_API_KEY
+export SKILL_API_URL=http://192.168.31.202:3000
+```
+
+### Configuration Options
+
+| Config Key         | Environment Variable       | Description                      | Default                      |
+| ------------------ | -------------------------- | -------------------------------- | ---------------------------- |
+| `skillApiKey`      | `SKILL_API_KEY`            | API key (fch\_ prefix, 68 chars) | Required                     |
+| `skillApiUrl`      | `SKILL_API_URL`            | Skill server URL                 | `http://192.168.31.202:3000` |
+| `requestTimeoutMs` | `SKILL_REQUEST_TIMEOUT_MS` | Request timeout in milliseconds  | `60000`                      |
+
 ## Skills
+
+### skill-publish
+
+Publish strategies and get backtest results:
+
+```
+User: "发布我的策略到服务器"
+Agent:
+1. skill_validate(dirPath) → validate locally
+2. [zip the directory]
+3. skill_publish(filePath) → get submissionId, backtestTaskId
+4. skill_publish_verify(submissionId) → poll until completed
+5. Return backtest report
+```
 
 ### fin-strategy-builder
 

@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { NewsStore } from "./news-store.js";
 import type { KolNewsItem } from "./grok-client.js";
+import { NewsStore } from "./news-store.js";
 
 function makeItem(overrides: Partial<KolNewsItem> = {}): KolNewsItem {
   return {

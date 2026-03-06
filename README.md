@@ -92,8 +92,10 @@ OpenFinClaw is different:
 ## Features
 
 # Talk to the assistant (optionally deliver back to any connected channel: WhatsApp/Telegram/Slack/Discord/Google Chat/Signal/iMessage/BlueBubbles/IRC/Microsoft Teams/Matrix/Feishu/LINE/Mattermost/Nextcloud Talk/Nostr/Synology Chat/Tlon/Twitch/Zalo/Zalo Personal/WebChat)
+
 openclaw agent --message "Ship checklist" --thinking high
-```
+
+````
 
 | Dimension               | What you contribute                                      | Format                | Example                                                        |
 | ----------------------- | -------------------------------------------------------- | --------------------- | -------------------------------------------------------------- |
@@ -115,7 +117,7 @@ finclaw commons publish --type skill --path ./skills/tax-loss-harvest/
 
 # Example: publish a workspace template
 finclaw commons publish --type workspace --path ./workspaces/crypto-trader/
-```
+````
 
 **Discovering** — Users browse, search, and install from the commons:
 

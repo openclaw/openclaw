@@ -1,77 +1,101 @@
 ---
-title: "OpenFinClaw 插件安装与发布指南"
-summary: "如何安装和发布 @openfinclaw/* 金融工具插件"
+title: "OpenFinClaw 插件安装与配置指南"
+summary: "如何安装和配置 @openfinclaw/openfinclaw 金融工具插件"
 ---
 
-# OpenFinClaw 插件安装与发布指南
+# OpenFinClaw 插件安装与配置指南
 
-## 用户安装
+## 安装
 
-### 交互式安装（推荐）
+### 方式一：一键安装（推荐）
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cryptoSUN2049/openFinclaw/main/scripts/install-finclaw.sh | bash
 ```
 
-安装时会显示插件选择菜单：
-
-```
-🦞 OpenFinClaw Installer
-
-Select plugins to install:
-  [x] Shared Types    - Shared types and interfaces (required)
-  [x] Fin Core        - Core infrastructure, exchange registry (required)
-  [x] Market Data     - Prices, orderbooks, tickers
-  [x] Strategy Engine - Indicators, backtest, evolution
-  [x] Backtest Remote - Submit backtests to remote server
-  [x] OpenFinClaw     - Skills: fin-strategy-builder
-```
-
-### 非交互式安装
+### 方式二：手动安装
 
 ```bash
-# 安装全部插件
-OPENFINCLAW_PLUGINS=all curl -fsSL https://raw.githubusercontent.com/cryptoSUN2049/openFinclaw/main/scripts/install-finclaw.sh | bash
-
-# 安装指定插件
-OPENFINCLAW_PLUGINS=fin-core,fin-market-data,openfinclaw curl -fsSL https://raw.githubusercontent.com/cryptoSUN2049/openFinclaw/main/scripts/install-finclaw.sh | bash
-```
-
-### 手动安装
-
-```bash
-# 安装单个插件
-openclaw plugins install @openfinclaw/fin-core
-
-# 安装全部
-openclaw plugins install @openfinclaw/fin-shared-types
-openclaw plugins install @openfinclaw/fin-core
-openclaw plugins install @openfinclaw/fin-market-data
-openclaw plugins install @openfinclaw/fin-strategy-engine
-openclaw plugins install @openfinclaw/fin-backtest-remote
 openclaw plugins install @openfinclaw/openfinclaw
-```
-
-### 配置 API Key
-
-```bash
-# 获取 API Key: https://hub.openfinclaw.ai
-openclaw config set plugins.entries.openfinclaw.config.backtestApiKey YOUR_API_KEY
-openclaw config set plugins.entries.openfinclaw.config.backtestApiUrl https://backtest.openfinclaw.ai
 ```
 
 ---
 
-## 可用插件
+## 配置 API Key
 
-| 插件            | 包名                               | 说明                         |
-| --------------- | ---------------------------------- | ---------------------------- |
-| Shared Types    | `@openfinclaw/fin-shared-types`    | 共享类型定义 (必需)          |
-| Fin Core        | `@openfinclaw/fin-core`            | 核心基础设施 (必需)          |
-| Market Data     | `@openfinclaw/fin-market-data`     | 市场数据工具                 |
-| Strategy Engine | `@openfinclaw/fin-strategy-engine` | 策略引擎                     |
-| Backtest Remote | `@openfinclaw/fin-backtest-remote` | 远程回测                     |
-| OpenFinClaw     | `@openfinclaw/openfinclaw`         | Skills: fin-strategy-builder |
+安装后需要配置 Skill API Key 才能使用策略发布和回测功能。
+
+### 方式一：CLI 命令（推荐）
+
+```bash
+# 获取 API Key: https://hub.openfinclaw.ai
+openclaw config set plugins.entries.openfinclaw.config.skillApiKey YOUR_API_KEY
+
+# 可选：修改服务器地址
+openclaw config set plugins.entries.openfinclaw.config.skillApiUrl http://192.168.31.202:3000
+```
+
+### 方式二：环境变量
+
+```bash
+export SKILL_API_KEY=YOUR_API_KEY
+export SKILL_API_URL=http://192.168.31.202:3000
+```
+
+### 方式三：直接编辑配置文件
+
+编辑 `~/.openclaw/openclaw.json`：
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "openfinclaw": {
+        "enabled": true,
+        "config": {
+          "skillApiUrl": "http://192.168.31.202:3000",
+          "skillApiKey": "fch_xxxxxxxx"
+        }
+      }
+    }
+  }
+}
+```
+
+### 配置项说明
+
+| 配置项             | 说明                               | 默认值                       |
+| ------------------ | ---------------------------------- | ---------------------------- |
+| `skillApiKey`      | API Key（以 `fch_` 开头，68 字符） | 无（必需）                   |
+| `skillApiUrl`      | Skill Server 地址                  | `http://192.168.31.202:3000` |
+| `requestTimeoutMs` | 请求超时（毫秒）                   | `60000`                      |
+
+### 环境变量
+
+| 环境变量                   | 对应配置项         |
+| -------------------------- | ------------------ |
+| `SKILL_API_KEY`            | `skillApiKey`      |
+| `SKILL_API_URL`            | `skillApiUrl`      |
+| `SKILL_REQUEST_TIMEOUT_MS` | `requestTimeoutMs` |
+
+---
+
+## 功能
+
+### 可用工具
+
+| 工具                   | 说明                                |
+| ---------------------- | ----------------------------------- |
+| `skill_publish`        | 发布策略 ZIP 到服务器，自动触发回测 |
+| `skill_publish_verify` | 查询发布状态和回测结果              |
+| `skill_validate`       | 本地校验策略包目录（发布前必做）    |
+
+### 可用 Skills
+
+| Skill                  | 说明                                        |
+| ---------------------- | ------------------------------------------- |
+| `skill-publish`        | 策略发布流程：校验 → 打包 → 发布 → 轮询结果 |
+| `fin-strategy-builder` | 自然语言构建交易策略                        |
 
 ---
 
@@ -108,13 +132,11 @@ npm view @openfinclaw/openfinclaw version
 
 ## 版本管理
 
-所有 `@openfinclaw/*` 包使用统一版本号。
-
 ```bash
 # 当前版本
 grep '"version"' extensions/openfinclaw/package.json
 
-# 更新版本（所有包同步更新）
+# 更新版本
 pnpm plugins:sync
 ```
 
@@ -150,3 +172,7 @@ openclaw gateway restart
 # 检查配置
 openclaw config get plugins.entries.openfinclaw
 ```
+
+### API Key 无效
+
+确保 API Key 以 `fch_` 开头，长度为 68 字符。如需获取新 Key，访问 https://hub.openfinclaw.ai 。

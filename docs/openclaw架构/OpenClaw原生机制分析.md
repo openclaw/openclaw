@@ -116,13 +116,13 @@ register(api: OpenClawPluginApi) {
 
 ### 3.4 关键认知：Tools ≠ Skills
 
-| | Tools | Skills |
-|---|---|---|
-| **本质** | 可执行函数 | Markdown 文档 |
-| **注册方式** | `api.registerTool()` | 清单 `skills` 字段 → SKILL.md |
-| **谁用** | Agent 调用（tool_use） | 注入 System Prompt，LLM 阅读 |
-| **作用** | 执行动作（查数据、下单） | 告诉 LLM 什么场景用什么工具 |
-| **加载** | Plugin 系统 | Agent Skill 系统 |
+|              | Tools                    | Skills                        |
+| ------------ | ------------------------ | ----------------------------- |
+| **本质**     | 可执行函数               | Markdown 文档                 |
+| **注册方式** | `api.registerTool()`     | 清单 `skills` 字段 → SKILL.md |
+| **谁用**     | Agent 调用（tool_use）   | 注入 System Prompt，LLM 阅读  |
+| **作用**     | 执行动作（查数据、下单） | 告诉 LLM 什么场景用什么工具   |
+| **加载**     | Plugin 系统              | Agent Skill 系统              |
 
 **这是 OpenClaw 最精妙的设计**：Skill.md 是给 LLM 的"说明书"，告诉它"什么时候用什么工具、怎么用"。LLM 自己决定调不调。
 
@@ -203,23 +203,23 @@ System Prompt = 基础指令
 
 ### 5.1 钩子分类
 
-| 类别 | 钩子名 | 作用 |
-|------|--------|------|
-| **Agent** | `before_model_resolve` | 覆盖模型/提供商选择 |
-| | `before_prompt_build` | 修改系统提示 |
-| | `before_agent_start` | 复合钩子（模型+提示） |
-| | `llm_input` / `llm_output` | 记录 LLM 输入输出 |
-| | `agent_end` | 会话结束分析 |
-| **Tool** | `before_tool_call` | **拦截/修改**工具调用（可 block） |
-| | `after_tool_call` | 工具执行后处理 |
-| | `tool_result_persist` | 修改工具结果持久化 |
-| **Message** | `message_received` | 收到消息处理 |
-| | `message_sending` | 发送前（可取消） |
-| | `message_sent` | 发送后通知 |
-| **Session** | `session_start/end` | 会话生命周期 |
-| | `before_compaction` | 上下文压缩前 |
-| | `before_reset` | /new 或 /reset 前 |
-| **Subagent** | `subagent_spawning/spawned/ended` | 子代理生命周期 |
+| 类别         | 钩子名                            | 作用                              |
+| ------------ | --------------------------------- | --------------------------------- |
+| **Agent**    | `before_model_resolve`            | 覆盖模型/提供商选择               |
+|              | `before_prompt_build`             | 修改系统提示                      |
+|              | `before_agent_start`              | 复合钩子（模型+提示）             |
+|              | `llm_input` / `llm_output`        | 记录 LLM 输入输出                 |
+|              | `agent_end`                       | 会话结束分析                      |
+| **Tool**     | `before_tool_call`                | **拦截/修改**工具调用（可 block） |
+|              | `after_tool_call`                 | 工具执行后处理                    |
+|              | `tool_result_persist`             | 修改工具结果持久化                |
+| **Message**  | `message_received`                | 收到消息处理                      |
+|              | `message_sending`                 | 发送前（可取消）                  |
+|              | `message_sent`                    | 发送后通知                        |
+| **Session**  | `session_start/end`               | 会话生命周期                      |
+|              | `before_compaction`               | 上下文压缩前                      |
+|              | `before_reset`                    | /new 或 /reset 前                 |
+| **Subagent** | `subagent_spawning/spawned/ended` | 子代理生命周期                    |
 
 ### 5.2 风控钩子示例
 
@@ -337,18 +337,18 @@ rc.instance.evaluate(tradeParams);
 
 提供 10 个 AI 工具 + 6 个 Skill 文档：
 
-| 工具 | 作用 |
-|------|------|
-| `fin_stock` | A/HK/US 股票数据 |
-| `fin_index` | 指数/ETF 数据 |
-| `fin_macro` | 宏观经济数据 |
-| `fin_derivatives` | 期货/期权数据 |
-| `fin_crypto` | 加密/DeFi 数据 |
-| `fin_market` | 龙虎榜/涨停/北向资金 |
-| `fin_query` | 通用 172 端点查询 |
-| `fin_data_ohlcv` | K 线数据 |
-| `fin_data_regime` | 市场状态识别 |
-| `fin_data_markets` | 市场总览 |
+| 工具               | 作用                 |
+| ------------------ | -------------------- |
+| `fin_stock`        | A/HK/US 股票数据     |
+| `fin_index`        | 指数/ETF 数据        |
+| `fin_macro`        | 宏观经济数据         |
+| `fin_derivatives`  | 期货/期权数据        |
+| `fin_crypto`       | 加密/DeFi 数据       |
+| `fin_market`       | 龙虎榜/涨停/北向资金 |
+| `fin_query`        | 通用 172 端点查询    |
+| `fin_data_ohlcv`   | K 线数据             |
+| `fin_data_regime`  | 市场状态识别         |
+| `fin_data_markets` | 市场总览             |
 
 每个工具对应一个 Skill.md，告诉 LLM 什么场景用什么工具。
 
@@ -365,9 +365,7 @@ rc.instance.evaluate(tradeParams);
       "model": { "primary": "anthropic/claude-sonnet" },
       "tools": { "exec": { "security": "ask" } }
     },
-    "list": [
-      { "id": "agent-1", "skills": ["skill-1"], "workspace": "~/ws" }
-    ]
+    "list": [{ "id": "agent-1", "skills": ["skill-1"], "workspace": "~/ws" }]
   },
   "models": {
     "providers": {
@@ -450,12 +448,12 @@ bundled + 不在默认列表   →  禁用
 
 ## 十、关键设计模式总结
 
-| 模式 | OpenClaw 做法 | 意义 |
-|------|--------------|------|
-| **LLM 自主性** | Skill 注入提示 + Tool 可调用 → LLM 自己决策 | 不是硬编码 if-else 路由 |
-| **Plugin 注册制** | registerTool / registerService / registerHook | 松耦合、可扩展 |
-| **Service 通信** | 插件间通过 Service 消费，不直接 import | 解耦依赖 |
-| **Skill ≠ Tool** | Skill 是文档（给 LLM 读），Tool 是函数（给 LLM 调） | 分离"知识"和"能力" |
-| **多层风控** | Hook before_tool_call + 工具策略 + 沙箱 | 纵深防御 |
-| **故障转移** | 多 API Key 轮转 + 自动降级 + 压缩 | 高可用 |
-| **Commons 分发** | 注册表 + install + bundled | 生态系统 |
+| 模式              | OpenClaw 做法                                       | 意义                    |
+| ----------------- | --------------------------------------------------- | ----------------------- |
+| **LLM 自主性**    | Skill 注入提示 + Tool 可调用 → LLM 自己决策         | 不是硬编码 if-else 路由 |
+| **Plugin 注册制** | registerTool / registerService / registerHook       | 松耦合、可扩展          |
+| **Service 通信**  | 插件间通过 Service 消费，不直接 import              | 解耦依赖                |
+| **Skill ≠ Tool**  | Skill 是文档（给 LLM 读），Tool 是函数（给 LLM 调） | 分离"知识"和"能力"      |
+| **多层风控**      | Hook before_tool_call + 工具策略 + 沙箱             | 纵深防御                |
+| **故障转移**      | 多 API Key 轮转 + 自动降级 + 压缩                   | 高可用                  |
+| **Commons 分发**  | 注册表 + install + bundled                          | 生态系统                |

@@ -41,8 +41,7 @@ function resolveConfig(api: OpenClawPluginApi): BacktestRemoteConfig {
     readEnv(["BACKTEST_API_BASE_URL", "BACKTEST_BASE_URL"]) ??
     "http://150.109.16.195:8000";
   const apiKey =
-    (typeof raw?.apiKey === "string" ? raw.apiKey : undefined) ??
-    readEnv(["BACKTEST_API_KEY"]);
+    (typeof raw?.apiKey === "string" ? raw.apiKey : undefined) ?? readEnv(["BACKTEST_API_KEY"]);
   const timeoutRaw = raw?.requestTimeoutMs ?? readEnv(["BACKTEST_REQUEST_TIMEOUT_MS"]);
   const requestTimeoutMs =
     Number(timeoutRaw) >= 5000 && Number(timeoutRaw) <= 300_000
@@ -131,15 +130,9 @@ const finBacktestRemotePlugin = {
           symbol: Type.Optional(
             Type.String({ description: "Trading symbol override, e.g. BTC-USD, ETH-USD" }),
           ),
-          initial_capital: Type.Optional(
-            Type.Number({ description: "Initial capital override" }),
-          ),
-          start_date: Type.Optional(
-            Type.String({ description: "Start date YYYY-MM-DD" }),
-          ),
-          end_date: Type.Optional(
-            Type.String({ description: "End date YYYY-MM-DD" }),
-          ),
+          initial_capital: Type.Optional(Type.Number({ description: "Initial capital override" })),
+          start_date: Type.Optional(Type.String({ description: "Start date YYYY-MM-DD" })),
+          end_date: Type.Optional(Type.String({ description: "End date YYYY-MM-DD" })),
           engine: Type.Optional(
             Type.Unsafe<"script" | "agent">({
               type: "string",
@@ -147,9 +140,7 @@ const finBacktestRemotePlugin = {
               description: "script (L1) or agent (L2)",
             }),
           ),
-          budget_cap_usd: Type.Optional(
-            Type.Number({ description: "L2 Agent budget cap in USD" }),
-          ),
+          budget_cap_usd: Type.Optional(Type.Number({ description: "L2 Agent budget cap in USD" })),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
@@ -173,10 +164,7 @@ const finBacktestRemotePlugin = {
             if (typeof params.end_date === "string" && params.end_date.trim()) {
               form.append("end_date", params.end_date.trim());
             }
-            if (
-              params.engine === "script" ||
-              params.engine === "agent"
-            ) {
+            if (params.engine === "script" || params.engine === "agent") {
               form.append("engine", params.engine);
             }
             if (typeof params.budget_cap_usd === "number") {
@@ -192,10 +180,16 @@ const finBacktestRemotePlugin = {
             return json({
               success: false,
               status,
-              error: (data as { message?: string; detail?: string })?.message ?? (data as { detail?: string })?.detail ?? data,
+              error:
+                (data as { message?: string; detail?: string })?.message ??
+                (data as { detail?: string })?.detail ??
+                data,
             });
           } catch (err) {
-            return json({ success: false, error: err instanceof Error ? err.message : String(err) });
+            return json({
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
           }
         },
       },
@@ -220,17 +214,27 @@ const finBacktestRemotePlugin = {
             if (!taskId) {
               return json({ success: false, error: "task_id is required" });
             }
-            const { status, data } = await backtestRequest(config, "GET", `/backtests/${encodeURIComponent(taskId)}`);
+            const { status, data } = await backtestRequest(
+              config,
+              "GET",
+              `/backtests/${encodeURIComponent(taskId)}`,
+            );
             if (status >= 200 && status < 300) {
               return json({ success: true, ...(data as object) });
             }
             return json({
               success: false,
               status,
-              error: (data as { message?: string; detail?: string })?.message ?? (data as { detail?: string })?.detail ?? data,
+              error:
+                (data as { message?: string; detail?: string })?.message ??
+                (data as { detail?: string })?.detail ??
+                data,
             });
           } catch (err) {
-            return json({ success: false, error: err instanceof Error ? err.message : String(err) });
+            return json({
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
           }
         },
       },
@@ -255,7 +259,11 @@ const finBacktestRemotePlugin = {
             if (!taskId) {
               return json({ success: false, error: "task_id is required" });
             }
-            const { status, data } = await backtestRequest(config, "GET", `/backtests/${encodeURIComponent(taskId)}/report`);
+            const { status, data } = await backtestRequest(
+              config,
+              "GET",
+              `/backtests/${encodeURIComponent(taskId)}/report`,
+            );
             if (status >= 200 && status < 300) {
               const report = data as {
                 metadata?: {
@@ -360,10 +368,16 @@ const finBacktestRemotePlugin = {
             return json({
               success: false,
               status,
-              error: (data as { message?: string; detail?: string })?.message ?? (data as { detail?: string })?.detail ?? data,
+              error:
+                (data as { message?: string; detail?: string })?.message ??
+                (data as { detail?: string })?.detail ??
+                data,
             });
           } catch (err) {
-            return json({ success: false, error: err instanceof Error ? err.message : String(err) });
+            return json({
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
           }
         },
       },
@@ -377,12 +391,8 @@ const finBacktestRemotePlugin = {
         label: "List remote backtest tasks",
         description: "List backtest tasks with optional limit and offset.",
         parameters: Type.Object({
-          limit: Type.Optional(
-            Type.Number({ description: "Max items per page (default 20)" }),
-          ),
-          offset: Type.Optional(
-            Type.Number({ description: "Offset for pagination (default 0)" }),
-          ),
+          limit: Type.Optional(Type.Number({ description: "Max items per page (default 20)" })),
+          offset: Type.Optional(Type.Number({ description: "Offset for pagination (default 0)" })),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
@@ -402,10 +412,16 @@ const finBacktestRemotePlugin = {
             return json({
               success: false,
               status,
-              error: (data as { message?: string; detail?: string })?.message ?? (data as { detail?: string })?.detail ?? data,
+              error:
+                (data as { message?: string; detail?: string })?.message ??
+                (data as { detail?: string })?.detail ??
+                data,
             });
           } catch (err) {
-            return json({ success: false, error: err instanceof Error ? err.message : String(err) });
+            return json({
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
           }
         },
       },
@@ -429,17 +445,27 @@ const finBacktestRemotePlugin = {
             if (!taskId) {
               return json({ success: false, error: "task_id is required" });
             }
-            const { status, data } = await backtestRequest(config, "DELETE", `/backtests/${encodeURIComponent(taskId)}`);
+            const { status, data } = await backtestRequest(
+              config,
+              "DELETE",
+              `/backtests/${encodeURIComponent(taskId)}`,
+            );
             if (status >= 200 && status < 300) {
               return json({ success: true, ...(data as object) });
             }
             return json({
               success: false,
               status,
-              error: (data as { message?: string; detail?: string })?.message ?? (data as { detail?: string })?.detail ?? data,
+              error:
+                (data as { message?: string; detail?: string })?.message ??
+                (data as { detail?: string })?.detail ??
+                data,
             });
           } catch (err) {
-            return json({ success: false, error: err instanceof Error ? err.message : String(err) });
+            return json({
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
           }
         },
       },
@@ -455,7 +481,8 @@ const finBacktestRemotePlugin = {
           "Validate a strategy package directory (fep v1.1) before zipping and submitting. Checks: fep.yaml with identity/technical/backtest, scripts/strategy.py with compute(data), and no forbidden imports (os, subprocess, eval, exec, open, requests, urllib). Only upload after validation passes.",
         parameters: Type.Object({
           dirPath: Type.String({
-            description: "Path to strategy package directory (must contain fep.yaml and scripts/strategy.py)",
+            description:
+              "Path to strategy package directory (must contain fep.yaml and scripts/strategy.py)",
           }),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
