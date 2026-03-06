@@ -132,6 +132,15 @@ describe("commands registry", () => {
     expect(native.find((spec) => spec.name === "agentstatus")).toBeFalsy();
   });
 
+  it("normalizes mixed-case nativePrefix for slack command specs", () => {
+    const native = listNativeCommandSpecsForConfig(
+      { commands: { native: true } },
+      { provider: "slack", nativePrefix: "AcCt1" },
+    );
+    expect(native.find((spec) => spec.name === "acct1-help")).toBeTruthy();
+    expect(native.find((spec) => spec.name === "acct1-agentstatus")).toBeTruthy();
+  });
+
   it("finds slack commands by prefixed native names", () => {
     expect(
       findCommandByNativeName("acct1-agentstatus", "slack", { nativePrefix: "acct1" })?.key,
@@ -140,6 +149,19 @@ describe("commands registry", () => {
     expect(findCommandByNativeName("agentstatus", "slack", { nativePrefix: "acct1" })?.key).toBe(
       "status",
     );
+  });
+
+  it("ignores invalid hyphenated nativePrefix values", () => {
+    const native = listNativeCommandSpecsForConfig(
+      { commands: { native: true } },
+      { provider: "slack", nativePrefix: "acct-1" },
+    );
+    expect(native.find((spec) => spec.name === "help")).toBeTruthy();
+    expect(native.find((spec) => spec.name === "agentstatus")).toBeTruthy();
+    expect(native.find((spec) => spec.name === "acct-1-help")).toBeFalsy();
+    expect(
+      findCommandByNativeName("acct-1-agentstatus", "slack", { nativePrefix: "acct-1" }),
+    ).toBeUndefined();
   });
 
   it("keeps discord native command specs within slash-command limits", () => {

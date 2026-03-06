@@ -148,7 +148,13 @@ function normalizeNativePrefix(nativePrefix?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  return trimmed.replace(/^-+|-+$/g, "");
+  const normalized = trimmed.toLowerCase();
+  // Native slash command prefix is a single segment prepended as "<prefix>-<command>".
+  // Restrict to lowercase alphanumeric to avoid ambiguous multi-segment matching.
+  if (!/^[a-z0-9]+$/.test(normalized)) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function withNativePrefix(name: string, nativePrefix?: string): string {
