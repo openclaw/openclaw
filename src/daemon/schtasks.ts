@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { VERSION } from "../version.js";
+import { VERSION, resolveUsableRuntimeVersion } from "../version.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
@@ -317,6 +317,10 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
  * reports the correct version after an npm global update.
  */
 async function patchTaskScriptVersion(env: GatewayServiceEnv): Promise<void> {
+  const usableVersion = resolveUsableRuntimeVersion(VERSION);
+  if (!usableVersion) {
+    return;
+  }
   const scriptPath = resolveTaskScriptPath(env);
   let content: string;
   try {
@@ -326,7 +330,7 @@ async function patchTaskScriptVersion(env: GatewayServiceEnv): Promise<void> {
   }
   const updated = content.replace(
     /^set "OPENCLAW_SERVICE_VERSION=[^\r\n"]*"$/im,
-    `set "OPENCLAW_SERVICE_VERSION=${VERSION}"`,
+    `set "OPENCLAW_SERVICE_VERSION=${usableVersion}"`,
   );
   if (updated !== content) {
     await fs.writeFile(scriptPath, updated, "utf8");
