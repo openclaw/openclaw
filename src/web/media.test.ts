@@ -473,4 +473,22 @@ describe("local media root guard", () => {
       }),
     );
   });
+
+  it("resolves relative paths against allowed roots instead of CWD (#37111)", async () => {
+    // tinyPngFile lives under fixtureRoot; a relative basename should resolve there.
+    const fileName = path.basename(tinyPngFile);
+    const result = await loadWebMedia(`./${fileName}`, 1024 * 1024, {
+      localRoots: [fixtureRoot],
+    });
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("rejects relative paths when file is not under any allowed root", async () => {
+    await expect(
+      loadWebMedia("./nonexistent-file.png", 1024 * 1024, {
+        localRoots: ["/nonexistent-root"],
+      }),
+    ).rejects.toMatchObject({ code: "path-not-allowed" });
+  });
 });

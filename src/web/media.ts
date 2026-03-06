@@ -137,6 +137,33 @@ async function assertLocalMediaAllowed(
   );
 }
 
+/**
+ * Resolve a relative media path against allowed local roots.
+ * Returns the first existing candidate under an allowed root, or falls
+ * back to `path.resolve(mediaPath)` (CWD-based) when no root matches.
+ */
+async function resolveRelativeMediaPath(
+  mediaPath: string,
+  localRoots: readonly string[] | "any" | undefined,
+): Promise<string> {
+  if (localRoots === "any") {
+    return path.resolve(mediaPath);
+  }
+  const roots = localRoots ?? getDefaultLocalRoots();
+  for (const root of roots) {
+    const candidate = path.resolve(root, mediaPath);
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // File doesn't exist under this root, try next.
+    }
+  }
+  // No match found; fall back to CWD resolution so the downstream
+  // assertLocalMediaAllowed produces its normal error.
+  return path.resolve(mediaPath);
+}
+
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
 const MB = 1024 * 1024;
@@ -347,6 +374,11 @@ async function loadWebMediaInternal(
       "unsafe-bypass",
       "Refusing localRoots bypass without readFile override. Use sandboxValidated with readFile, or pass explicit localRoots.",
     );
+  }
+
+  // Resolve relative paths against allowed roots instead of CWD (#37111).
+  if (!path.isAbsolute(mediaUrl) && !(sandboxValidated || localRoots === "any")) {
+    mediaUrl = await resolveRelativeMediaPath(mediaUrl, localRoots);
   }
 
   // Guard local reads against allowed directory roots to prevent file exfiltration.
