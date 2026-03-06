@@ -595,6 +595,7 @@ export async function runCronIsolatedAgentTurn(params: {
         ].join(" ");
         await runPrompt(continuationPrompt);
       }
+    }
   } catch (err) {
     return withRunSession({ status: "error", error: String(err) });
   }
