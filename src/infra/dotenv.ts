@@ -44,21 +44,31 @@ function expandEnvReferences(
   return resolved;
 }
 
-function loadEnvFile(filePath: string, opts?: { override?: boolean }) {
+function loadEnvFile(filePath: string, opts?: { override?: boolean; quiet?: boolean }) {
   if (!fs.existsSync(filePath)) {
     return;
   }
-  const parsed = dotenv.parse(fs.readFileSync(filePath, "utf8"));
+  const result = dotenv.configDotenv({
+    path: filePath,
+    processEnv: {},
+    quiet: opts?.quiet ?? true,
+  });
+  if (result.error || !result.parsed) {
+    return;
+  }
+  const parsed = result.parsed;
   const expanded = expandEnvReferences(parsed, process.env);
   dotenv.populate(process.env, expanded, { override: opts?.override ?? false });
 }
 
-export function loadDotEnv(_opts?: { quiet?: boolean }) {
+export function loadDotEnv(opts?: { quiet?: boolean }) {
+  const quiet = opts?.quiet ?? true;
+
   // Load from process CWD first so fallback expansion can reference it.
-  loadEnvFile(path.join(process.cwd(), ".env"));
+  loadEnvFile(path.join(process.cwd(), ".env"), { quiet });
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.
   const globalEnvPath = path.join(resolveConfigDir(process.env), ".env");
-  loadEnvFile(globalEnvPath, { override: false });
+  loadEnvFile(globalEnvPath, { override: false, quiet });
 }

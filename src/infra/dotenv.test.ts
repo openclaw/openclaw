@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import dotenv from "dotenv";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadDotEnv } from "./dotenv.js";
 
 async function writeEnvFile(filePath: string, contents: string) {
@@ -48,6 +49,10 @@ async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>)
 }
 
 describe("loadDotEnv", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("loads ~/.openclaw/.env as fallback without overriding CWD .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
@@ -134,6 +139,28 @@ describe("loadDotEnv", () => {
 
         expect(process.env.BASE).toBe("from-global");
         expect(process.env.COMBINED).toBe("from-global-suffix");
+      });
+    });
+  });
+
+  it("keeps loading fallback env files when a prior env file fails to parse", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(path.join(cwdDir, ".env"), "BROKEN=1\n");
+        await writeEnvFile(path.join(stateDir, ".env"), "FALLBACK_OK=from-global\n");
+        process.chdir(cwdDir);
+        delete process.env.FALLBACK_OK;
+
+        const configSpy = vi.spyOn(dotenv, "configDotenv");
+        configSpy.mockImplementation((options) => {
+          if (typeof options?.path === "string" && options.path === path.join(cwdDir, ".env")) {
+            return { parsed: {}, error: new Error("boom") };
+          }
+          return { parsed: { FALLBACK_OK: "from-global" } };
+        });
+
+        expect(() => loadDotEnv({ quiet: true })).not.toThrow();
+        expect(process.env.FALLBACK_OK).toBe("from-global");
       });
     });
   });
