@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -6,11 +7,11 @@ vi.mock("node:child_process", () => ({
   execFile: execFileMock,
 }));
 
-import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isSystemdUserServiceAvailable,
   parseSystemdShow,
+  readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
   stopSystemdService,
@@ -200,40 +201,6 @@ describe("resolveSystemdUserUnitPath", () => {
   });
 });
 
-describe("splitArgsPreservingQuotes", () => {
-  it("splits on whitespace outside quotes", () => {
-    expect(splitArgsPreservingQuotes('/usr/bin/openclaw gateway start --name "My Bot"')).toEqual([
-      "/usr/bin/openclaw",
-      "gateway",
-      "start",
-      "--name",
-      "My Bot",
-    ]);
-  });
-
-  it("supports systemd-style backslash escaping", () => {
-    expect(
-      splitArgsPreservingQuotes('openclaw --name "My \\"Bot\\"" --foo bar', {
-        escapeMode: "backslash",
-      }),
-    ).toEqual(["openclaw", "--name", 'My "Bot"', "--foo", "bar"]);
-  });
-
-  it("supports schtasks-style escaped quotes while preserving other backslashes", () => {
-    expect(
-      splitArgsPreservingQuotes('openclaw --path "C:\\\\Program Files\\\\OpenClaw"', {
-        escapeMode: "backslash-quote-only",
-      }),
-    ).toEqual(["openclaw", "--path", "C:\\\\Program Files\\\\OpenClaw"]);
-
-    expect(
-      splitArgsPreservingQuotes('openclaw --label "My \\"Quoted\\" Name"', {
-        escapeMode: "backslash-quote-only",
-      }),
-    ).toEqual(["openclaw", "--label", 'My "Quoted" Name']);
-  });
-});
-
 describe("parseSystemdExecStart", () => {
   it("preserves quoted arguments", () => {
     const execStart = '/usr/bin/openclaw gateway start --name "My Bot"';
@@ -244,6 +211,35 @@ describe("parseSystemdExecStart", () => {
       "--name",
       "My Bot",
     ]);
+  });
+});
+
+describe("readSystemdServiceExecStart", () => {
+  it("parses multiline spaced ExecStart assignments", async () => {
+    const readFileSpy = vi
+      .spyOn(fs, "readFile")
+      .mockResolvedValue(
+        [
+          "[Service]",
+          "ExecStart = /usr/bin/env OPENCLAW_MODE=prod \\",
+          "  /usr/bin/openclaw gateway run",
+          "WorkingDirectory=/home/test/work",
+        ].join("\n"),
+      );
+
+    try {
+      const result = await readSystemdServiceExecStart({ HOME: "/home/test" });
+      expect(result?.programArguments).toEqual([
+        "/usr/bin/env",
+        "OPENCLAW_MODE=prod",
+        "/usr/bin/openclaw",
+        "gateway",
+        "run",
+      ]);
+      expect(result?.workingDirectory).toBe("/home/test/work");
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 });
 

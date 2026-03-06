@@ -8,6 +8,7 @@ import {
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { collectSystemdExecStartValues, resolveExecStartCommand } from "./systemd-unit.js";
 
 export type ExtraGatewayService = {
   platform: "darwin" | "linux" | "win32";
@@ -104,6 +105,49 @@ function isOpenClawGatewaySystemdService(name: string, contents: string): boolea
     return false;
   }
   return contents.toLowerCase().includes("gateway");
+}
+
+function isBrowserExecutableToken(token: string): boolean {
+  if (!token) {
+    return false;
+  }
+  const lower = token.toLowerCase();
+  const base = lower.split("/").pop() ?? lower;
+  return (
+    base === "chromium" ||
+    base === "chromium-browser" ||
+    base === "google-chrome" ||
+    base === "chrome"
+  );
+}
+
+function isRemoteDebuggingPortToken(token: string): boolean {
+  return token === "--remote-debugging-port" || token.startsWith("--remote-debugging-port=");
+}
+
+/**
+ * Returns true when a systemd unit is a browser/CDP service (e.g. a snap-installed
+ * Chromium running headless with --remote-debugging-port as a persistent workaround
+ * for on-demand launch failures).  Such services must NOT be treated as rogue
+ * "gateway-like" processes even when their ExecStart path happens to contain the
+ * word "openclaw" (e.g. a --user-data-dir under ~/snap/chromium/common/openclaw/).
+ *
+ * Detection heuristics (any one is sufficient):
+ *   1. ExecStart contains --remote-debugging-port  (CDP flag)
+ *   2. ExecStart references a chromium or chrome binary
+ */
+function isBrowserCdpService(contents: string): boolean {
+  const execStartValues = collectSystemdExecStartValues(contents);
+  for (const value of execStartValues) {
+    const { command, args } = resolveExecStartCommand(value);
+    if (command && isBrowserExecutableToken(command)) {
+      return true;
+    }
+    if (args.some(isRemoteDebuggingPortToken)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isOpenClawGatewayTaskName(name: string): boolean {
@@ -249,6 +293,13 @@ async function scanSystemdDir(params: {
       continue;
     }
     if (marker === "openclaw" && isOpenClawGatewaySystemdService(name, contents)) {
+      continue;
+    }
+    // Exclude browser/CDP services (e.g. snap Chromium running headless with
+    // --remote-debugging-port).  They are not gateway processes even when their
+    // ExecStart path incidentally contains the word "openclaw".
+    // See: https://github.com/openclaw/openclaw/issues/24644
+    if (isBrowserCdpService(contents)) {
       continue;
     }
     results.push({
