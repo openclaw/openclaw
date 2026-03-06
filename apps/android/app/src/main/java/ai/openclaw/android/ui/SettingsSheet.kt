@@ -200,9 +200,12 @@ fun SettingsSheet(viewModel: MainViewModel) {
       mutableStateOf(isNotificationListenerEnabled(context))
     }
 
-  var notificationPackagesDraft by
-    remember(notificationForwardingPackages) {
-      mutableStateOf(notificationForwardingPackages.toList().sorted().joinToString(","))
+  var notificationPickerExpanded by remember { mutableStateOf(false) }
+  var notificationAppSearch by remember { mutableStateOf("") }
+  var notificationShowSystemApps by remember { mutableStateOf(false) }
+  var installedNotificationApps by
+    remember(context) {
+      mutableStateOf(queryInstalledApps(context))
     }
   var notificationQuietStartDraft by
     remember(notificationForwardingQuietStart) {
@@ -305,6 +308,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
               PackageManager.PERMISSION_GRANTED
           notificationsPermissionGranted = hasNotificationsPermission(context)
           notificationListenerEnabled = isNotificationListenerEnabled(context)
+          installedNotificationApps = queryInstalledApps(context)
           photosPermissionGranted =
             ContextCompat.checkSelfPermission(context, photosPermission) ==
               PackageManager.PERMISSION_GRANTED
@@ -388,6 +392,20 @@ fun SettingsSheet(viewModel: MainViewModel) {
       locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
     }
   }
+
+  val normalizedAppSearch = notificationAppSearch.trim().lowercase()
+  val filteredNotificationApps =
+    remember(installedNotificationApps, normalizedAppSearch, notificationShowSystemApps) {
+      installedNotificationApps
+        .asSequence()
+        .filter { app -> notificationShowSystemApps || !app.isSystemApp }
+        .filter { app ->
+          normalizedAppSearch.isEmpty() ||
+            app.label.lowercase().contains(normalizedAppSearch) ||
+            app.packageName.lowercase().contains(normalizedAppSearch)
+        }
+        .toList()
+    }
 
   Box(
     modifier =
@@ -707,28 +725,80 @@ fun SettingsSheet(viewModel: MainViewModel) {
         }
       }
       item {
-        OutlinedTextField(
-          value = notificationPackagesDraft,
-          onValueChange = { notificationPackagesDraft = it },
-          label = {
-            Text("Package IDs (comma-separated)", style = mobileCaption1, color = mobileTextSecondary)
-          },
-          modifier = Modifier.fillMaxWidth(),
-          textStyle = mobileBody.copy(color = mobileText),
-          colors = settingsTextFieldColors(),
-          enabled = notificationForwardingEnabled,
-        )
-      }
-      item {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
           Button(
-            onClick = { viewModel.setNotificationForwardingPackagesCsv(notificationPackagesDraft) },
+            onClick = { notificationPickerExpanded = !notificationPickerExpanded },
             enabled = notificationForwardingEnabled,
             colors = settingsPrimaryButtonColors(),
             shape = RoundedCornerShape(14.dp),
           ) {
-            Text("Save Packages", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
+            Text(
+              if (notificationPickerExpanded) "Close App Picker" else "Open App Picker",
+              style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+            )
           }
+        }
+      }
+      item {
+        Text(
+          "Selected: ${notificationForwardingPackages.size} package(s)",
+          style = mobileCallout,
+          color = mobileTextSecondary,
+        )
+      }
+      if (notificationPickerExpanded) {
+        item {
+          OutlinedTextField(
+            value = notificationAppSearch,
+            onValueChange = { notificationAppSearch = it },
+            label = {
+              Text("Search apps", style = mobileCaption1, color = mobileTextSecondary)
+            },
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = mobileBody.copy(color = mobileText),
+            colors = settingsTextFieldColors(),
+            enabled = notificationForwardingEnabled,
+          )
+        }
+        item {
+          ListItem(
+            modifier = Modifier.settingsRowModifier().alpha(if (notificationForwardingEnabled) 1f else 0.6f),
+            colors = listItemColors,
+            headlineContent = { Text("Show System Apps", style = mobileHeadline) },
+            supportingContent = {
+              Text("Include Android/system packages in results.", style = mobileCallout)
+            },
+            trailingContent = {
+              Switch(
+                checked = notificationShowSystemApps,
+                onCheckedChange = { notificationShowSystemApps = it },
+                enabled = notificationForwardingEnabled,
+              )
+            },
+          )
+        }
+        items(filteredNotificationApps, key = { it.packageName }) { app ->
+          ListItem(
+            modifier = Modifier.settingsRowModifier().alpha(if (notificationForwardingEnabled) 1f else 0.6f),
+            colors = listItemColors,
+            headlineContent = { Text(app.label, style = mobileHeadline) },
+            supportingContent = { Text(app.packageName, style = mobileCallout) },
+            trailingContent = {
+              Switch(
+                checked = notificationForwardingPackages.contains(app.packageName),
+                onCheckedChange = { checked ->
+                  val next = notificationForwardingPackages.toMutableSet()
+                  if (checked) {
+                    next.add(app.packageName)
+                  } else {
+                    next.remove(app.packageName)
+                  }
+                  viewModel.setNotificationForwardingPackagesCsv(next.sorted().joinToString(","))
+                },
+                enabled = notificationForwardingEnabled,
+              )
+            },
+          )
         }
       }
       item {
@@ -824,7 +894,16 @@ fun SettingsSheet(viewModel: MainViewModel) {
         OutlinedTextField(
           value = notificationSessionKeyDraft,
           onValueChange = { notificationSessionKeyDraft = it },
-          label = { Text("Route Session Key (optional)", style = mobileCaption1, color = mobileTextSecondary) },
+          label = {
+            Text(
+              "Route Session Key (optional, blank = default route)",
+              style = mobileCaption1,
+              color = mobileTextSecondary,
+            )
+          },
+          placeholder = {
+            Text("Leave empty for default node route", style = mobileCaption1, color = mobileTextSecondary)
+          },
           modifier = Modifier.fillMaxWidth(),
           textStyle = mobileBody.copy(color = mobileText),
           colors = settingsTextFieldColors(),
@@ -1146,6 +1225,52 @@ fun SettingsSheet(viewModel: MainViewModel) {
       item { Spacer(modifier = Modifier.height(24.dp)) }
     }
   }
+}
+
+private data class InstalledApp(
+  val label: String,
+  val packageName: String,
+  val isSystemApp: Boolean,
+)
+
+private fun queryInstalledApps(context: Context): List<InstalledApp> {
+  val packageManager = context.packageManager
+  val launcherIntent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
+
+  val launcherPackages =
+    packageManager
+      .queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)
+      .asSequence()
+      .mapNotNull { it.activityInfo?.packageName?.trim()?.takeIf(String::isNotEmpty) }
+      .toMutableSet()
+
+  val recentNotificationPackages =
+    DeviceNotificationListenerService
+      .snapshot(context)
+      .notifications
+      .asSequence()
+      .map { it.packageName.trim() }
+      .filter { it.isNotEmpty() }
+      .toSet()
+
+  val candidatePackages = (launcherPackages + recentNotificationPackages)
+    .filter { it != context.packageName }
+
+  return candidatePackages
+    .asSequence()
+    .mapNotNull { packageName ->
+      runCatching {
+        val appInfo = packageManager.getApplicationInfo(packageName, 0)
+        val label = packageManager.getApplicationLabel(appInfo)?.toString()?.trim().orEmpty()
+        InstalledApp(
+          label = if (label.isEmpty()) packageName else label,
+          packageName = packageName,
+          isSystemApp = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0,
+        )
+      }.getOrNull()
+    }
+    .sortedWith(compareBy<InstalledApp> { it.label.lowercase() }.thenBy { it.packageName })
+    .toList()
 }
 
 @Composable
