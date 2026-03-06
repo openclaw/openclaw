@@ -394,10 +394,20 @@ export function buildGatewayCronService(params: {
 
         if (webhookTarget && evt.summary) {
           void (async () => {
+            // Enrich the event with job-level metadata so receivers can correlate
+            // the webhook back to the originating job and caller session without
+            // an extra API round-trip.
+            const enrichedPayload: Record<string, unknown> = { ...evt };
+            if (job?.name) {
+              enrichedPayload.jobName = job.name;
+            }
+            if (job?.sessionKey) {
+              enrichedPayload.callerSessionKey = job.sessionKey;
+            }
             await postCronWebhook({
               webhookUrl: webhookTarget.url,
               webhookToken,
-              payload: evt,
+              payload: enrichedPayload,
               logContext: { jobId: evt.jobId },
               blockedLog: "cron: webhook delivery blocked by SSRF guard",
               failedLog: "cron: webhook delivery failed",
