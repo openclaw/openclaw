@@ -107,16 +107,11 @@ export function resolveRuntimeServiceVersion(
   fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
 ): string {
   const runtimeVersion = resolveUsableRuntimeVersion(VERSION);
+  const processVersion = resolveUsableRuntimeVersion(env["OPENCLAW_VERSION"]);
+  const packageVersion = resolveUsableRuntimeVersion(env["npm_package_version"]);
   const serviceVersion = resolveUsableRuntimeVersion(env["OPENCLAW_SERVICE_VERSION"]);
 
-  return (
-    firstNonEmpty(
-      serviceVersion,
-      runtimeVersion,
-      env["OPENCLAW_VERSION"],
-      env["npm_package_version"],
-    ) ?? fallback
-  );
+  return firstNonEmpty(runtimeVersion, processVersion, packageVersion, serviceVersion) ?? fallback;
 }
 
 // Single source of truth for the current OpenClaw version.
