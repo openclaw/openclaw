@@ -38,7 +38,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text"],
     contextWindow: 131072,
-    maxTokens: 8192,
+    maxTokens: 4096,
     privacy: "private",
   },
   {
@@ -313,6 +313,7 @@ interface VeniceModelSpec {
   name: string;
   privacy: "private" | "anonymized";
   availableContextTokens: number;
+  maxCompletionTokens?: number;
   capabilities: {
     supportsReasoning: boolean;
     supportsVision: boolean;
@@ -327,6 +328,29 @@ interface VeniceModel {
 
 interface VeniceModelsResponse {
   data: VeniceModel[];
+}
+
+function coercePositiveNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  if (value <= 0) {
+    return null;
+  }
+  return Math.floor(value);
+}
+
+function resolveVeniceMaxTokens(params: {
+  maxCompletionTokens: unknown;
+  contextWindow: unknown;
+  fallbackMaxTokens: number;
+}): number {
+  const completionLimit = coercePositiveNumber(params.maxCompletionTokens);
+  const contextWindow = coercePositiveNumber(params.contextWindow);
+  const fallback = coercePositiveNumber(params.fallbackMaxTokens) ?? 8192;
+
+  const raw = completionLimit ?? fallback;
+  return contextWindow ? Math.min(raw, contextWindow) : raw;
 }
 
 /**
@@ -366,8 +390,20 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
     for (const apiModel of data.data) {
       const catalogEntry = catalogById.get(apiModel.id);
       if (catalogEntry) {
-        // Use catalog metadata for known models
-        models.push(buildVeniceModelDefinition(catalogEntry));
+        // Use catalog metadata for known models, but prefer API token limits.
+        const contextWindow =
+          coercePositiveNumber(apiModel.model_spec.availableContextTokens) ??
+          catalogEntry.contextWindow;
+        const maxTokens = resolveVeniceMaxTokens({
+          maxCompletionTokens: apiModel.model_spec.maxCompletionTokens,
+          contextWindow,
+          fallbackMaxTokens: catalogEntry.maxTokens,
+        });
+        models.push({
+          ...buildVeniceModelDefinition(catalogEntry),
+          contextWindow,
+          maxTokens,
+        });
       } else {
         // Create definition for newly discovered models not in catalog
         const isReasoning =
@@ -384,8 +420,12 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
           reasoning: isReasoning,
           input: hasVision ? ["text", "image"] : ["text"],
           cost: VENICE_DEFAULT_COST,
-          contextWindow: apiModel.model_spec.availableContextTokens || 128000,
-          maxTokens: 8192,
+          contextWindow: coercePositiveNumber(apiModel.model_spec.availableContextTokens) ?? 128000,
+          maxTokens: resolveVeniceMaxTokens({
+            maxCompletionTokens: apiModel.model_spec.maxCompletionTokens,
+            contextWindow: apiModel.model_spec.availableContextTokens,
+            fallbackMaxTokens: 8192,
+          }),
           // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
           compat: {
             supportsUsageInStreaming: false,
