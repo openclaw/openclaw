@@ -242,7 +242,14 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
           images: {
             allowUrl: true,
             urlAllowlist: ["images.example.com"],
-            allowedMimes: ["image/jpeg", "image/png", "image/gif", "image/webp"],
+            allowedMimes: [
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+            ],
             maxBytes: 10485760,
             maxRedirects: 3,
             timeoutMs: 10000,
@@ -268,6 +275,7 @@ Defaults when omitted:
 - `images.maxBytes`: 10MB
 - `images.maxRedirects`: 3
 - `images.timeoutMs`: 10s
+- HEIC/HEIF `input_image` sources are accepted and normalized to JPEG before provider delivery.
 
 Security note:
 
