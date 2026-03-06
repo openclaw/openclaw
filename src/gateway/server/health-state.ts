@@ -5,6 +5,7 @@ import { resolveMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { VERSION, readVersionFromPackageJsonForModuleUrl } from "../../version.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { Snapshot } from "../protocol/index.js";
 
@@ -24,6 +25,21 @@ export function buildGatewaySnapshot(): Snapshot {
   const uptimeMs = Math.round(process.uptime() * 1000);
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
   const updateAvailable = getUpdateAvailable() ?? undefined;
+  // Detect version mismatch: compare the compiled-in VERSION against the
+  // package.json version currently on disk. If they differ, the package was
+  // updated after the gateway started and a restart is needed to pick up the
+  // new version.
+  let versionMismatch: { runningVersion: string; installedVersion: string } | undefined;
+  const installedVersion = readVersionFromPackageJsonForModuleUrl(import.meta.url);
+  if (
+    installedVersion &&
+    installedVersion !== "0.0.0" &&
+    VERSION &&
+    VERSION !== "0.0.0" &&
+    installedVersion !== VERSION
+  ) {
+    versionMismatch = { runningVersion: VERSION, installedVersion };
+  }
   // Health is async; caller should await getHealthSnapshot and replace later if needed.
   const emptyHealth: unknown = {};
   return {
@@ -42,6 +58,7 @@ export function buildGatewaySnapshot(): Snapshot {
     },
     authMode: auth.mode,
     updateAvailable,
+    versionMismatch,
   };
 }
 

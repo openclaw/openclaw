@@ -67,6 +67,12 @@ export const SnapshotSchema = Type.Object(
         channel: NonEmptyString,
       }),
     ),
+    versionMismatch: Type.Optional(
+      Type.Object({
+        runningVersion: NonEmptyString,
+        installedVersion: NonEmptyString,
+      }),
+    ),
   },
   { additionalProperties: false },
 );
