@@ -245,10 +245,14 @@ export function resolveEffectiveEnableState(params: {
   rootConfig?: OpenClawConfig;
 }): { enabled: boolean; reason?: string } {
   const base = resolveEnableState(params.id, params.origin, params.config);
+  const bundledChannelEnabled = isBundledChannelEnabledByChannelConfig(
+    params.rootConfig,
+    params.id,
+  );
   if (
     !base.enabled &&
-    base.reason === "bundled (disabled by default)" &&
-    isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
+    bundledChannelEnabled &&
+    (base.reason === "bundled (disabled by default)" || base.reason === "not in allowlist")
   ) {
     return { enabled: true };
   }
