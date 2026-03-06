@@ -19,6 +19,7 @@ const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 500 * 1024 * 1024; // 500 MB
+const DEFAULT_MAX_BACKUPS = 5;
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
@@ -26,6 +27,7 @@ export type LoggerSettings = {
   level?: LogLevel;
   file?: string;
   maxFileBytes?: number;
+  maxBackups?: number;
   consoleLevel?: LogLevel;
   consoleStyle?: ConsoleStyle;
 };
@@ -36,6 +38,7 @@ type ResolvedSettings = {
   level: LogLevel;
   file: string;
   maxFileBytes: number;
+  maxBackups: number;
 };
 export type LoggerResolvedSettings = ResolvedSettings;
 export type LogTransportRecord = Record<string, unknown>;
@@ -79,6 +82,7 @@ function resolveSettings(): ResolvedSettings {
       level: "silent",
       file: defaultRollingPathForToday(),
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
+      maxBackups: DEFAULT_MAX_BACKUPS,
     };
   }
 
@@ -102,14 +106,20 @@ function resolveSettings(): ResolvedSettings {
   const level = envLevel ?? fromConfig;
   const file = cfg?.file ?? defaultRollingPathForToday();
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
-  return { level, file, maxFileBytes };
+  const maxBackups = resolveMaxBackups(cfg?.maxBackups);
+  return { level, file, maxFileBytes, maxBackups };
 }
 
 function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
   if (!a) {
     return true;
   }
-  return a.level !== b.level || a.file !== b.file || a.maxFileBytes !== b.maxFileBytes;
+  return (
+    a.level !== b.level ||
+    a.file !== b.file ||
+    a.maxFileBytes !== b.maxFileBytes ||
+    a.maxBackups !== b.maxBackups
+  );
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
@@ -154,20 +164,37 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const nextBytes = currentFileBytes + payloadBytes;
       if (nextBytes > settings.maxFileBytes) {
-        if (!warnedAboutSizeCap) {
-          warnedAboutSizeCap = true;
-          const warningLine = JSON.stringify({
+        if (settings.maxBackups > 0) {
+          // Rotate: shift existing backups up, rename current log to .1
+          rotateLogFile(settings.file, settings.maxBackups);
+          currentFileBytes = 0;
+          // Emit a rotation notice to the new log file
+          const noticePayload = `${JSON.stringify({
             time: formatLocalIsoWithOffset(new Date()),
-            level: "warn",
+            level: "info",
             subsystem: "logging",
-            message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
-          });
-          appendLogLine(settings.file, `${warningLine}\n`);
-          process.stderr.write(
-            `[openclaw] log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}\n`,
-          );
+            message: `log rotated; previous log archived file=${settings.file} maxFileBytes=${settings.maxFileBytes} maxBackups=${settings.maxBackups}`,
+          })}\n`;
+          if (appendLogLine(settings.file, noticePayload)) {
+            currentFileBytes += Buffer.byteLength(noticePayload, "utf8");
+          }
+        } else {
+          // Rotation disabled (maxBackups=0): suppress writes and warn once
+          if (!warnedAboutSizeCap) {
+            warnedAboutSizeCap = true;
+            const warningLine = JSON.stringify({
+              time: formatLocalIsoWithOffset(new Date()),
+              level: "warn",
+              subsystem: "logging",
+              message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
+            });
+            appendLogLine(settings.file, `${warningLine}\n`);
+            process.stderr.write(
+              `[openclaw] log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}\n`,
+            );
+          }
+          return;
         }
-        return;
       }
       if (appendLogLine(settings.file, payload)) {
         currentFileBytes = nextBytes;
@@ -188,6 +215,47 @@ function resolveMaxLogFileBytes(raw: unknown): number {
     return Math.floor(raw);
   }
   return DEFAULT_MAX_LOG_FILE_BYTES;
+}
+
+function resolveMaxBackups(raw: unknown): number {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_MAX_BACKUPS;
+}
+
+/**
+ * Rotate log files: shift existing backups up by one, capping at maxBackups.
+ * e.g. file.4 → deleted, file.3 → file.4, ..., file.1 → file.2, file → file.1
+ */
+function rotateLogFile(file: string, maxBackups: number): void {
+  try {
+    // Remove the oldest backup if it exists
+    const oldest = `${file}.${maxBackups}`;
+    try {
+      fs.rmSync(oldest, { force: true });
+    } catch {
+      // ignore
+    }
+    // Shift backups: file.N-1 → file.N (from highest to lowest)
+    for (let i = maxBackups - 1; i >= 1; i--) {
+      const src = `${file}.${i}`;
+      const dst = `${file}.${i + 1}`;
+      try {
+        fs.renameSync(src, dst);
+      } catch {
+        // src may not exist — ignore
+      }
+    }
+    // Rename current log to .1
+    try {
+      fs.renameSync(file, `${file}.1`);
+    } catch {
+      // if rename fails (e.g. file doesn't exist), ignore
+    }
+  } catch {
+    // never block on rotation failures
+  }
 }
 
 function getCurrentLogFileBytes(file: string): number {

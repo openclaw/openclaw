@@ -244,6 +244,7 @@ export const OpenClawSchema = z
         level: LoggingLevelSchema.optional(),
         file: z.string().optional(),
         maxFileBytes: z.number().int().positive().optional(),
+        maxBackups: z.number().int().min(0).optional(),
         consoleLevel: LoggingLevelSchema.optional(),
         consoleStyle: z
           .union([z.literal("pretty"), z.literal("compact"), z.literal("json")])
