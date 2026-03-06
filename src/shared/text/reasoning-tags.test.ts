@@ -188,12 +188,19 @@ describe("stripReasoningTagsFromText", () => {
     it("applies strict and preserve modes to unclosed tags", () => {
       const input = "Before <think>unclosed content after";
       const cases = [
-        { mode: "strict" as const, expected: "Before" },
+        { mode: "strict" as const, expected: "Before unclosed content after" },
         { mode: "preserve" as const, expected: "Before unclosed content after" },
       ];
       for (const { mode, expected } of cases) {
         expect(stripReasoningTagsFromText(input, { mode })).toBe(expected);
       }
+    });
+
+    it("keeps visible tail text when a malformed thinking block never closes", () => {
+      const input = "<think>drafting... Final answer goes here";
+      expect(stripReasoningTagsFromText(input, { mode: "strict" })).toBe(
+        "drafting... Final answer goes here",
+      );
     });
   });
 

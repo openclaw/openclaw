@@ -30,7 +30,6 @@ export function stripReasoningTagsFromText(
     return text;
   }
 
-  const mode = options?.mode ?? "strict";
   const trimMode = options?.trim ?? "both";
 
   let cleaned = text;
@@ -84,9 +83,9 @@ export function stripReasoningTagsFromText(
     lastIndex = idx + match[0].length;
   }
 
-  if (!inThinking || mode === "preserve") {
-    result += cleaned.slice(lastIndex);
-  }
+  // Preserve trailing text after malformed/unclosed tags so shared delivery
+  // paths do not silently drop otherwise visible assistant output.
+  result += cleaned.slice(lastIndex);
 
   return applyTrim(result, trimMode);
 }
