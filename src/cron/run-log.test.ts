@@ -66,6 +66,25 @@ describe("cron run log", () => {
     );
   });
 
+  it("creates run log file with 0o600 permissions", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withRunLogDir("openclaw-cron-log-perms-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-perms.jsonl");
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-perms",
+        action: "finished",
+        status: "ok",
+      });
+      const fileStat = await fs.stat(logPath);
+      expect(fileStat.mode & 0o777).toBe(0o600);
+      const dirStat = await fs.stat(path.dirname(logPath));
+      expect(dirStat.mode & 0o777).toBe(0o700);
+    });
+  });
+
   it("appends JSONL and prunes by line count", async () => {
     await withRunLogDir("openclaw-cron-log-", async (dir) => {
       const logPath = path.join(dir, "runs", "job-1.jsonl");

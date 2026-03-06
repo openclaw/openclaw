@@ -122,6 +122,26 @@ describe("saveCronStore", () => {
     }
   });
 
+  it("creates store file with 0o600 permissions", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { storePath } = await makeStorePath();
+    await saveCronStore(storePath, dummyStore);
+    const stat = await fs.stat(storePath);
+    expect(stat.mode & 0o777).toBe(0o600);
+  });
+
+  it("creates cron directory with 0o700 permissions", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { storePath } = await makeStorePath();
+    await saveCronStore(storePath, dummyStore);
+    const stat = await fs.stat(path.dirname(storePath));
+    expect(stat.mode & 0o777).toBe(0o700);
+  });
+
   it("falls back to copyFile on EPERM (Windows)", async () => {
     const { storePath } = await makeStorePath();
 
