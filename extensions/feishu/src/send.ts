@@ -313,7 +313,13 @@ export async function sendMessageFeishu(
       if (!isWithdrawnReplyError(err)) {
         throw err;
       }
-      return sendFallbackDirect(client, directParams, "Feishu send failed");
+      const result = await sendFallbackDirect(client, directParams, "Feishu send failed");
+      recordChannelActivity({
+        channel: "feishu",
+        accountId: resolvedAccountId,
+        direction: "outbound",
+      });
+      return result;
     }
     if (shouldFallbackFromReplyTarget(response)) {
       const result = await sendFallbackDirect(client, directParams, "Feishu send failed");
@@ -372,7 +378,13 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
       if (!isWithdrawnReplyError(err)) {
         throw err;
       }
-      return sendFallbackDirect(client, directParams, "Feishu card send failed");
+      const result = await sendFallbackDirect(client, directParams, "Feishu card send failed");
+      recordChannelActivity({
+        channel: "feishu",
+        accountId: resolvedAccountId,
+        direction: "outbound",
+      });
+      return result;
     }
     if (shouldFallbackFromReplyTarget(response)) {
       const result = await sendFallbackDirect(client, directParams, "Feishu card send failed");
