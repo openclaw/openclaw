@@ -868,7 +868,12 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "overloaded";
   }
   if (isTransientHttpError(raw)) {
-    // Treat transient 5xx provider failures as retryable transport issues.
+    // 529 is always overloaded, even without explicit overload keywords in the body.
+    const status = extractLeadingHttpStatus(raw.trim());
+    if (status?.code === 529) {
+      return "overloaded";
+    }
+    // Treat remaining transient 5xx provider failures as retryable transport issues.
     return "timeout";
   }
   if (isJsonApiInternalServerError(raw)) {

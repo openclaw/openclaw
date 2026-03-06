@@ -125,6 +125,8 @@ describe("markAuthProfileFailure", () => {
 
       const stats = store.usageStats?.["anthropic:default"];
       expect(typeof stats?.cooldownUntil).toBe("number");
+      expect(stats?.disabledUntil).toBeUndefined();
+      expect(stats?.disabledReason).toBeUndefined();
       expect(stats?.failureCounts?.overloaded).toBe(1);
     });
   });
