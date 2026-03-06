@@ -354,4 +354,48 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       tokenCount: 0,
     });
   });
+
+  it("treats no-op compact results as not compacted", async () => {
+    const piAgent = await import("@mariozechner/pi-coding-agent");
+    const createAgentSession = vi.mocked(piAgent.createAgentSession);
+    createAgentSession.mockImplementationOnce(async () => {
+      const session = {
+        sessionId: "session-1",
+        messages: [
+          { role: "user", content: "hello", timestamp: 1 },
+          { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+        ],
+        agent: {
+          replaceMessages: vi.fn((messages: unknown[]) => {
+            session.messages = [...(messages as typeof session.messages)];
+          }),
+          streamFn: vi.fn(),
+        },
+        compact: vi.fn(async () => ({
+          summary: "summary",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 120,
+          details: { ok: true },
+        })),
+        dispose: vi.fn(),
+      };
+      return { session };
+    });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: false,
+      reason: "nothing to compact",
+    });
+    expect(sessionHook("compact:after")).toBeUndefined();
+    expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+  });
 });

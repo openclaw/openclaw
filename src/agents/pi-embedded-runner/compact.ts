@@ -743,6 +743,17 @@ export async function compactEmbeddedPiSessionDirect(
         }
         const messageCountAfter = session.messages.length;
         const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
+        if (compactedCount === 0) {
+          log.info(
+            `[compaction] skipping — compaction returned no message reduction ` +
+              `(sessionKey=${params.sessionKey ?? params.sessionId})`,
+          );
+          return {
+            ok: true,
+            compacted: false,
+            reason: "nothing to compact",
+          };
+        }
         const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
         if (diagEnabled && preMetrics && postMetrics) {
           log.debug(
