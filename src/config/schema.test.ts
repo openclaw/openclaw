@@ -271,6 +271,31 @@ describe("config schema", () => {
     expect(lookupConfigSchema(baseSchema, "__proto__.polluted")).toBeNull();
   });
 
+  it("rejects overly deep lookup paths", () => {
+    const buildNestedObjectSchema = (segments: string[]) => {
+      const [head, ...rest] = segments;
+      if (!head) {
+        return { type: "string" };
+      }
+      return {
+        type: "object",
+        properties: {
+          [head]: buildNestedObjectSchema(rest),
+        },
+      };
+    };
+
+    const deepPathSegments = Array.from({ length: 33 }, (_, index) => `a${index}`);
+    const deepSchema = {
+      schema: buildNestedObjectSchema(deepPathSegments),
+      uiHints: {},
+      version: "test",
+      generatedAt: "test",
+    } as unknown as Parameters<typeof lookupConfigSchema>[0];
+
+    expect(lookupConfigSchema(deepSchema, deepPathSegments.join("."))).toBeNull();
+  });
+
   it("returns null for missing config schema paths", () => {
     expect(lookupConfigSchema(baseSchema, "gateway.notReal.path")).toBeNull();
   });

@@ -51,6 +51,7 @@ const LOOKUP_SCHEMA_BOOLEAN_KEYS = new Set([
   "readOnly",
   "writeOnly",
 ]);
+const MAX_LOOKUP_PATH_SEGMENTS = 32;
 
 function cloneSchema<T>(value: T): T {
   if (typeof structuredClone === "function") {
@@ -682,12 +683,16 @@ export function lookupConfigSchema(
   if (!normalizedPath) {
     return null;
   }
+  const parts = splitLookupPath(normalizedPath);
+  if (parts.length === 0 || parts.length > MAX_LOOKUP_PATH_SEGMENTS) {
+    return null;
+  }
 
   let current = asSchemaObject(response.schema);
   if (!current) {
     return null;
   }
-  for (const segment of splitLookupPath(normalizedPath)) {
+  for (const segment of parts) {
     const next = resolveLookupChildSchema(current, segment);
     if (!next) {
       return null;

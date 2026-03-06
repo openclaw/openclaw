@@ -87,6 +87,24 @@ describe("gateway config methods", () => {
     expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
   });
 
+  it("rejects config.schema.lookup when the path exceeds the protocol limit", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+      path: `gateway.${"a".repeat(1020)}`,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
+  });
+
+  it("rejects config.schema.lookup when the path contains invalid characters", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+      path: "gateway.auth\nspoof",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
+  });
+
   it("rejects prototype-chain config.schema.lookup paths without reflecting them", async () => {
     const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
       path: "constructor",
