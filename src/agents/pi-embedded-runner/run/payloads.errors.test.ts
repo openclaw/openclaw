@@ -282,6 +282,27 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(0);
   });
 
+  it("does not add the generic exec fallback when assistant output already exists", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Recovered and finished the task."],
+      lastAssistant: makeStoppedAssistant(),
+      lastToolError: { toolName: "exec", error: "command not found" },
+      verboseLevel: "off",
+    });
+
+    expectSinglePayloadText(payloads, "Recovered and finished the task.");
+  });
+
+  it("does not add the generic exec fallback when a messaging tool already replied", () => {
+    const payloads = buildPayloads({
+      didSendViaMessagingTool: true,
+      lastToolError: { toolName: "exec", error: "command not found" },
+      verboseLevel: "off",
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
   it.each([
     {
       name: "still shows mutating tool errors when messages.suppressToolErrors is enabled",

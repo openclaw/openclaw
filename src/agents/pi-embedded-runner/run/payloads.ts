@@ -52,6 +52,27 @@ function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "on" || level === "full";
 }
 
+function isSilentExecFailureFallbackEligible(params: {
+  payloadCount: number;
+  lastToolError?: LastToolError;
+  suppressToolErrorWarnings?: boolean;
+  verboseLevel?: VerboseLevel;
+  didSendViaMessagingTool?: boolean;
+}): boolean {
+  if (
+    params.payloadCount > 0 ||
+    params.suppressToolErrorWarnings ||
+    params.didSendViaMessagingTool
+  ) {
+    return false;
+  }
+  const normalizedToolName = params.lastToolError?.toolName.trim().toLowerCase();
+  if (normalizedToolName !== "exec" && normalizedToolName !== "bash") {
+    return false;
+  }
+  return !isVerboseToolDetailEnabled(params.verboseLevel);
+}
+
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: LastToolError;
   hasUserFacingReply: boolean;
@@ -317,7 +338,7 @@ export function buildEmbeddedRunPayloads(params: {
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
-  return replyItems
+  const payloads = replyItems
     .map((item) => ({
       text: item.text?.trim() ? item.text.trim() : undefined,
       mediaUrls: item.media?.length ? item.media : undefined,
@@ -337,4 +358,23 @@ export function buildEmbeddedRunPayloads(params: {
       }
       return true;
     });
+  if (
+    isSilentExecFailureFallbackEligible({
+      payloadCount: payloads.length,
+      lastToolError: params.lastToolError,
+      suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+      verboseLevel: params.verboseLevel,
+      didSendViaMessagingTool: params.didSendViaMessagingTool,
+    })
+  ) {
+    return [
+      {
+        text:
+          "⚠️ I couldn't complete a command before the reply finished. " +
+          "Please try again, or turn /verbose on for more detail.",
+        isError: true,
+      },
+    ];
+  }
+  return payloads;
 }
