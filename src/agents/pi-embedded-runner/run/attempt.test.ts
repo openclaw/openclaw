@@ -7,6 +7,7 @@ import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import {
   buildAfterTurnRuntimeContext,
   applyPromptBuildHookResult,
+  buildEmbeddedHookContext,
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
@@ -185,6 +186,46 @@ describe("composeSystemPromptWithHookContext", () => {
         appendSystemContext: "  append only  ",
       }),
     ).toBe("append only");
+  });
+});
+
+describe("buildEmbeddedHookContext", () => {
+  it("preserves trigger and resolves channelId from messageChannel", () => {
+    expect(
+      buildEmbeddedHookContext({
+        agentId: "agent-1",
+        sessionKey: "session-1",
+        sessionId: "session-id-1",
+        workspaceDir: "/tmp/workspace",
+        messageProvider: "slack-provider",
+        messageChannel: "slack",
+        trigger: "cron",
+      }),
+    ).toEqual({
+      agentId: "agent-1",
+      sessionKey: "session-1",
+      sessionId: "session-id-1",
+      workspaceDir: "/tmp/workspace",
+      messageProvider: "slack-provider",
+      trigger: "cron",
+      channelId: "slack",
+    });
+  });
+
+  it("falls back channelId to messageProvider when messageChannel is absent", () => {
+    expect(
+      buildEmbeddedHookContext({
+        messageProvider: "telegram",
+      }),
+    ).toEqual({
+      agentId: undefined,
+      sessionKey: undefined,
+      sessionId: undefined,
+      workspaceDir: undefined,
+      messageProvider: "telegram",
+      trigger: undefined,
+      channelId: "telegram",
+    });
   });
 });
 
