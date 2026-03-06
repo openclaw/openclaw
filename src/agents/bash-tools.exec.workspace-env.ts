@@ -34,10 +34,17 @@ export async function loadWorkspaceDotEnvForExec(params: {
 
   const parsed = dotenv.parse(envRaw);
   const baseEnv = params.baseEnv ?? {};
+  const isWindows = process.platform === "win32";
+  const baseEnvKeysLower = isWindows
+    ? new Set(Object.keys(baseEnv).map((key) => key.toLowerCase()))
+    : undefined;
   const injected: Record<string, string> = {};
   for (const [key, value] of Object.entries(parsed)) {
     // Match dotenv semantics used at startup: never override already-defined vars.
-    if (typeof baseEnv[key] === "string") {
+    const alreadyDefined =
+      typeof baseEnv[key] === "string" ||
+      (isWindows && baseEnvKeysLower?.has(key.toLowerCase()) === true);
+    if (alreadyDefined) {
       continue;
     }
     injected[key] = value;
