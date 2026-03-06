@@ -462,17 +462,12 @@ function checkBotMentioned(
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
     return mentions.some((m) => {
-      // In group chats, bot display names can vary (alias/localized name/card name),
-      // so mention-name equality is not reliable.
-      // open_id is the stable identifier and should be the source of truth.
+      // open_id is the stable identifier and should be source of truth.
       if (m.id.open_id === botOpenId) return true;
-
-      // Backward-compatible fallback: only use name match when mention payload has no IDs at all.
-      // If user_id/union_id exists, it's likely a real user mention and should not be misclassified.
+      // Fallback by name only when Feishu provided no immutable ids at all.
       if (!m.id.open_id && !m.id.user_id && !m.id.union_id && botName && m.name === botName) {
         return true;
       }
-
       return false;
     });
   }
@@ -508,6 +503,17 @@ function normalizeMentions(
   }
 
   return result;
+}
+
+function normalizeFeishuCommandProbeBody(text: string): string {
+  if (!text) {
+    return "";
+  }
+  return text
+    .replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ")
+    .replace(/(^|\s)@[^/\s]+(?=\s|$|\/)/gu, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -780,14 +786,12 @@ export function parseFeishuMessageEvent(
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
   const mentionedBot = checkBotMentioned(event, botOpenId, botName);
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
-  // In p2p, the bot mention is a pure addressing prefix with no semantic value;
-  // strip it so slash commands like @Bot /help still have a leading /.
+  // Strip the bot's own mention so slash commands like @Bot /help retain
+  // the leading /. This applies in both p2p *and* group contexts — the
+  // mentionedBot flag already captures whether the bot was addressed, so
+  // keeping the mention tag in content only breaks command detection (#35994).
   // Non-bot mentions (e.g. mention-forward targets) are still normalized to <at> tags.
-  const content = normalizeMentions(
-    rawContent,
-    event.message.mentions,
-    event.message.chat_type === "p2p" ? botOpenId : undefined,
-  );
+  const content = normalizeMentions(rawContent, event.message.mentions, botOpenId);
   const senderOpenId = event.sender.sender_id.open_id?.trim();
   const senderUserId = event.sender.sender_id.user_id?.trim();
   const senderFallbackId = senderOpenId || senderUserId || "";
@@ -1087,8 +1091,9 @@ export async function handleFeishuMessage(params: {
       channel: "feishu",
       accountId: account.accountId,
     });
+    const commandProbeBody = isGroup ? normalizeFeishuCommandProbeBody(ctx.content) : ctx.content;
     const shouldComputeCommandAuthorized = core.channel.commands.shouldComputeCommandAuthorized(
-      ctx.content,
+      commandProbeBody,
       cfg,
     );
     const storeAllowFrom =

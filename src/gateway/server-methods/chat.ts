@@ -935,6 +935,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         Surface: INTERNAL_MESSAGE_CHANNEL,
         OriginatingChannel: originatingChannel,
         OriginatingTo: originatingTo,
+        ExplicitDeliverRoute: hasDeliverableRoute,
         AccountId: accountId,
         MessageThreadId: messageThreadId,
         ChatType: "direct",
