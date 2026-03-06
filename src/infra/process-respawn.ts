@@ -39,7 +39,7 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
         return {
-          mode: "failed",
+          mode: "supervised",
           detail: restart.detail ?? "launchctl kickstart failed",
         };
       }

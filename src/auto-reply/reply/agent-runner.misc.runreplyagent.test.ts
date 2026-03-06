@@ -15,6 +15,8 @@ const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const addInflightAgentRunMock = vi.fn();
+const removeInflightAgentRunMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -58,6 +60,11 @@ vi.mock("../../runtime.js", async () => {
   };
 });
 
+vi.mock("../../gateway/inflight-agent-runs.js", () => ({
+  addInflightAgentRun: (params: unknown) => addInflightAgentRunMock(params),
+  removeInflightAgentRun: (runId: string) => removeInflightAgentRunMock(runId),
+}));
+
 vi.mock("./queue.js", async () => {
   const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
@@ -89,9 +96,13 @@ beforeEach(() => {
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  addInflightAgentRunMock.mockClear();
+  removeInflightAgentRunMock.mockClear();
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
+  addInflightAgentRunMock.mockResolvedValue(undefined);
+  removeInflightAgentRunMock.mockResolvedValue(undefined);
   resetSystemEventsForTest();
 
   // Default: no provider switch; execute the chosen provider+model.
@@ -116,7 +127,9 @@ describe("runReplyAgent onAgentRunStart", () => {
     opts?: {
       runId?: string;
       onAgentRunStart?: (runId: string) => void;
+      isHeartbeat?: boolean;
     };
+    config?: Record<string, unknown>;
   }) {
     const provider = params?.provider ?? "anthropic";
     const model = params?.model ?? "claude";
@@ -133,12 +146,13 @@ describe("runReplyAgent onAgentRunStart", () => {
       summaryLine: "hello",
       enqueuedAt: Date.now(),
       run: {
+        agentId: "main",
         sessionId: "session",
         sessionKey: "main",
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: params?.config ?? {},
         skillsSnapshot: {},
         provider,
         model,
@@ -214,6 +228,63 @@ describe("runReplyAgent onAgentRunStart", () => {
     expect(onAgentRunStart).toHaveBeenCalledTimes(1);
     expect(onAgentRunStart).toHaveBeenCalledWith("run-started");
     expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("persists and clears inflight run for embedded auto-reply when restart recovery is enabled", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const result = await createRun({
+      opts: { runId: "run-inflight-recovery" },
+      config: {
+        gateway: {
+          restartRecovery: {
+            resumeInflightAgentRuns: true,
+          },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ text: "ok" });
+    expect(addInflightAgentRunMock).toHaveBeenCalledTimes(1);
+    expect(addInflightAgentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-inflight-recovery",
+        acceptedAt: expect.any(Number),
+        opts: expect.objectContaining({
+          runId: "run-inflight-recovery",
+          message: "hello",
+          agentId: "main",
+          sessionId: "session",
+        }),
+      }),
+    );
+    expect(removeInflightAgentRunMock).toHaveBeenCalledTimes(1);
+    expect(removeInflightAgentRunMock).toHaveBeenCalledWith("run-inflight-recovery");
+  });
+
+  it("does not persist inflight run for heartbeat turns", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const result = await createRun({
+      opts: { runId: "run-heartbeat", isHeartbeat: true },
+      config: {
+        gateway: {
+          restartRecovery: {
+            resumeInflightAgentRuns: true,
+          },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ text: "ok" });
+    expect(addInflightAgentRunMock).not.toHaveBeenCalled();
+    expect(removeInflightAgentRunMock).not.toHaveBeenCalled();
   });
 });
 

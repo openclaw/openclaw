@@ -3,6 +3,7 @@ import type { AgentCommandIngressOpts } from "../commands/agent/types.js";
 import { resolveStateDir } from "../config/paths.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "../infra/json-files.js";
+import { shouldPreserveInflightAgentRunsForPendingRestart } from "../infra/restart.js";
 
 type InflightAgentRunRecord = {
   runId: string;
@@ -142,6 +143,9 @@ export async function removeInflightAgentRun(
   if (!cleaned) {
     return;
   }
+  if (shouldPreserveInflightAgentRunsForPendingRestart()) {
+    return;
+  }
   clearPendingErrorTimer(cleaned);
   const storePath = resolveStorePath(env);
   registerStorePath(storePath);
@@ -215,10 +219,16 @@ export function ensureInflightAgentRunLifecycleCleanerStarted(
       return;
     }
     if (phase === "end") {
+      if (shouldPreserveInflightAgentRunsForPendingRestart()) {
+        return;
+      }
       void removeInflightAgentRunFromAllKnownStores(evt.runId);
       return;
     }
     if (phase === "error") {
+      if (shouldPreserveInflightAgentRunsForPendingRestart()) {
+        return;
+      }
       scheduleErrorCleanup(evt.runId);
     }
   });

@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentCommandIngressOpts } from "../commands/agent/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  __testing as restartTesting,
+  scheduleGatewaySigusr1Restart,
+  setPreRestartDeferralCheck,
+} from "../infra/restart.js";
 import {
   __test,
   addInflightAgentRun,
@@ -22,6 +27,8 @@ async function makeTempStateDir(prefix: string) {
 
 afterEach(async () => {
   __test.reset();
+  restartTesting.resetSigusr1State();
+  vi.useRealTimers();
   process.env = { ...savedEnv };
 });
 
@@ -74,5 +81,53 @@ describe("inflight agent runs persistence", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
     const storePath = __test.resolveStorePath(env);
     expect(storePath).toBe(path.join(dir, "inflight-agent-runs.json"));
+  });
+
+  it("preserves records while a restart is deferred", async () => {
+    vi.useFakeTimers();
+    const dir = await makeTempStateDir("openclaw-inflight-agent-deferred-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const runId = "run-deferred-1";
+    const opts: AgentCommandIngressOpts = {
+      message: "do work",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      deliver: false,
+      senderIsOwner: true,
+      runId,
+    };
+
+    await addInflightAgentRun({ runId, acceptedAt: Date.now(), opts }, env);
+    setPreRestartDeferralCheck(() => 1);
+    scheduleGatewaySigusr1Restart({ delayMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    await removeInflightAgentRun(runId, env);
+    expect((await listInflightAgentRuns(env)).map((r) => r.runId)).toEqual([runId]);
+  });
+
+  it("does not clean up on lifecycle end while a restart is deferred", async () => {
+    vi.useFakeTimers();
+    const dir = await makeTempStateDir("openclaw-inflight-agent-end-deferred-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    ensureInflightAgentRunLifecycleCleanerStarted(env);
+    const runId = "run-end-deferred-1";
+    const opts: AgentCommandIngressOpts = {
+      message: "do work",
+      sessionId: "sess-1",
+      deliver: false,
+      senderIsOwner: true,
+      runId,
+    };
+
+    await addInflightAgentRun({ runId, acceptedAt: Date.now(), opts }, env);
+    setPreRestartDeferralCheck(() => 1);
+    scheduleGatewaySigusr1Restart({ delayMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+    await Promise.resolve();
+
+    expect((await listInflightAgentRuns(env)).map((r) => r.runId)).toEqual([runId]);
   });
 });
