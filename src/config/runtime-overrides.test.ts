@@ -111,6 +111,30 @@ describe("runtime overrides", () => {
     expect(Object.keys(getConfigOverrides()).length).toBe(0);
   });
 
+  it("does not retarget later array overrides when unsetting an earlier index", () => {
+    const cfg = {
+      agents: {
+        list: [
+          { id: "main", name: "Main" },
+          { id: "helper", name: "Helper" },
+        ],
+      },
+    } as OpenClawConfig;
+
+    setConfigOverride("agents.list[0].id", "patched-main");
+    setConfigOverride("agents.list[1].id", "patched-helper");
+
+    const removed = unsetConfigOverride("agents.list[0].id");
+    expect(removed.ok).toBe(true);
+    expect(removed.removed).toBe(true);
+
+    const next = applyConfigOverrides(cfg);
+    expect(next.agents?.list).toEqual([
+      { id: "main", name: "Main" },
+      { id: "patched-helper", name: "Helper" },
+    ]);
+  });
+
   it("rejects prototype pollution paths", () => {
     const attempts = ["__proto__.polluted", "constructor.polluted", "prototype.polluted"];
     for (const path of attempts) {

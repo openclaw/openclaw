@@ -34,7 +34,9 @@ function hasAt(container: PathContainer, key: PathSegment): boolean {
 
 function deleteAt(container: PathContainer, key: PathSegment): void {
   if (Array.isArray(container) && typeof key === "number") {
-    container.splice(key, 1);
+    // Runtime overrides use arrays as sparse index-addressed patch maps, so
+    // deleting an entry must not retarget later indexes.
+    container[key] = undefined;
     return;
   }
   delete (container as PathNode)[String(key)];
@@ -45,7 +47,7 @@ function isEmptyContainer(value: unknown): boolean {
     return Object.keys(value).length === 0;
   }
   if (Array.isArray(value)) {
-    return value.length === 0;
+    return value.every((entry) => entry === undefined);
   }
   return false;
 }
