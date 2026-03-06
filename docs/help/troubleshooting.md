@@ -34,6 +34,14 @@ Good output in one line:
 - `openclaw channels status --probe` → channels report `connected` or `ready`.
 - `openclaw logs --follow` → steady activity, no repeating fatal errors.
 
+## docs.openclaw.ai shows an SSL error Comcast/Xfinity
+
+If you see SSL/connection errors when accessing `docs.openclaw.ai` from a Comcast/Xfinity connection:
+
+1. **Disable Xfinity Advanced Security** or allowlist `docs.openclaw.ai`
+2. **Report the false positive** at [https://spa.xfinity.com/check_url_status](https://spa.xfinity.com/check_url_status)
+3. **Use the GitHub mirror** if the site remains blocked: [https://github.com/openclaw/openclaw/tree/main/docs](https://github.com/openclaw/openclaw/tree/main/docs)
+
 ## Anthropic long context 429
 
 If you see:
