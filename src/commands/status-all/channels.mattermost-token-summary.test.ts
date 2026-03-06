@@ -50,11 +50,207 @@ function makeSlackPlugin(params?: { botToken?: string; appToken?: string }): Cha
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
+      inspectAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        botToken: params?.botToken ?? "bot-token",
+        appToken: params?.appToken ?? "app-token",
+      }),
       resolveAccount: () => ({
         name: "Primary",
         enabled: true,
         botToken: params?.botToken ?? "bot-token",
         appToken: params?.appToken ?? "app-token",
+      }),
+      isConfigured: () => true,
+      isEnabled: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
+function makeUnavailableSlackPlugin(): ChannelPlugin {
+  return {
+    id: "slack",
+    meta: {
+      id: "slack",
+      label: "Slack",
+      selectionLabel: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["primary"],
+      defaultAccountId: () => "primary",
+      inspectAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        configured: true,
+        botToken: "",
+        appToken: "",
+        botTokenSource: "config",
+        appTokenSource: "config",
+        botTokenStatus: "configured_unavailable",
+        appTokenStatus: "configured_unavailable",
+      }),
+      resolveAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        configured: true,
+        botToken: "",
+        appToken: "",
+        botTokenSource: "config",
+        appTokenSource: "config",
+        botTokenStatus: "configured_unavailable",
+        appTokenStatus: "configured_unavailable",
+      }),
+      isConfigured: () => true,
+      isEnabled: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
+function makeSourceAwareUnavailablePlugin(): ChannelPlugin {
+  return {
+    id: "slack",
+    meta: {
+      id: "slack",
+      label: "Slack",
+      selectionLabel: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["primary"],
+      defaultAccountId: () => "primary",
+      inspectAccount: (cfg) =>
+        (cfg as { marker?: string }).marker === "source"
+          ? {
+              name: "Primary",
+              enabled: true,
+              configured: true,
+              botToken: "",
+              appToken: "",
+              botTokenSource: "config",
+              appTokenSource: "config",
+              botTokenStatus: "configured_unavailable",
+              appTokenStatus: "configured_unavailable",
+            }
+          : {
+              name: "Primary",
+              enabled: true,
+              configured: false,
+              botToken: "",
+              appToken: "",
+              botTokenSource: "none",
+              appTokenSource: "none",
+            },
+      resolveAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        botToken: "",
+        appToken: "",
+      }),
+      isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      isEnabled: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
+function makeSourceUnavailableResolvedAvailablePlugin(): ChannelPlugin {
+  return {
+    id: "discord",
+    meta: {
+      id: "discord",
+      label: "Discord",
+      selectionLabel: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["primary"],
+      defaultAccountId: () => "primary",
+      inspectAccount: (cfg) =>
+        (cfg as { marker?: string }).marker === "source"
+          ? {
+              name: "Primary",
+              enabled: true,
+              configured: true,
+              tokenSource: "config",
+              tokenStatus: "configured_unavailable",
+            }
+          : {
+              name: "Primary",
+              enabled: true,
+              configured: true,
+              tokenSource: "config",
+              tokenStatus: "available",
+            },
+      resolveAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        configured: true,
+        tokenSource: "config",
+        tokenStatus: "available",
+      }),
+      isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      isEnabled: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
+function makeHttpSlackUnavailablePlugin(): ChannelPlugin {
+  return {
+    id: "slack",
+    meta: {
+      id: "slack",
+      label: "Slack",
+      selectionLabel: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["primary"],
+      defaultAccountId: () => "primary",
+      inspectAccount: () => ({
+        accountId: "primary",
+        name: "Primary",
+        enabled: true,
+        configured: true,
+        mode: "http",
+        botToken: "xoxb-http",
+        signingSecret: "",
+        botTokenSource: "config",
+        signingSecretSource: "config",
+        botTokenStatus: "available",
+        signingSecretStatus: "configured_unavailable",
+      }),
+      resolveAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        configured: true,
+        mode: "http",
+        botToken: "xoxb-http",
+        signingSecret: "",
+        botTokenSource: "config",
+        signingSecretSource: "config",
+        botTokenStatus: "available",
+        signingSecretStatus: "configured_unavailable",
       }),
       isConfigured: () => true,
       isEnabled: () => true,
@@ -120,6 +316,90 @@ describe("buildChannelsTable - mattermost token summary", () => {
     expect(slackRow).toBeDefined();
     expect(slackRow?.state).toBe("warn");
     expect(slackRow?.detail).toContain("need bot+app");
+  });
+
+  it("reports configured-but-unavailable Slack credentials as warn", async () => {
+    vi.mocked(listChannelPlugins).mockReturnValue([makeUnavailableSlackPlugin()]);
+
+    const table = await buildChannelsTable({ channels: {} } as never, {
+      showSecrets: false,
+    });
+
+    const slackRow = table.rows.find((row) => row.id === "slack");
+    expect(slackRow).toBeDefined();
+    expect(slackRow?.state).toBe("warn");
+    expect(slackRow?.detail).toContain("unavailable in this command path");
+  });
+
+  it("preserves unavailable credential state from the source config snapshot", async () => {
+    vi.mocked(listChannelPlugins).mockReturnValue([makeSourceAwareUnavailablePlugin()]);
+
+    const table = await buildChannelsTable({ marker: "resolved", channels: {} } as never, {
+      showSecrets: false,
+      sourceConfig: { marker: "source", channels: {} } as never,
+    });
+
+    const slackRow = table.rows.find((row) => row.id === "slack");
+    expect(slackRow).toBeDefined();
+    expect(slackRow?.state).toBe("warn");
+    expect(slackRow?.detail).toContain("unavailable in this command path");
+
+    const slackDetails = table.details.find((detail) => detail.title === "Slack accounts");
+    expect(slackDetails).toBeDefined();
+    expect(slackDetails?.rows).toEqual([
+      {
+        Account: "primary (Primary)",
+        Notes: "bot:config · app:config · secret unavailable in this command path",
+        Status: "WARN",
+      },
+    ]);
+  });
+
+  it("treats status-only available credentials as resolved", async () => {
+    vi.mocked(listChannelPlugins).mockReturnValue([makeSourceUnavailableResolvedAvailablePlugin()]);
+
+    const table = await buildChannelsTable({ marker: "resolved", channels: {} } as never, {
+      showSecrets: false,
+      sourceConfig: { marker: "source", channels: {} } as never,
+    });
+
+    const discordRow = table.rows.find((row) => row.id === "discord");
+    expect(discordRow).toBeDefined();
+    expect(discordRow?.state).toBe("ok");
+    expect(discordRow?.detail).toBe("configured");
+
+    const discordDetails = table.details.find((detail) => detail.title === "Discord accounts");
+    expect(discordDetails).toBeDefined();
+    expect(discordDetails?.rows).toEqual([
+      {
+        Account: "primary (Primary)",
+        Notes: "token:config",
+        Status: "OK",
+      },
+    ]);
+  });
+
+  it("treats Slack HTTP signing-secret availability as required config", async () => {
+    vi.mocked(listChannelPlugins).mockReturnValue([makeHttpSlackUnavailablePlugin()]);
+
+    const table = await buildChannelsTable({ channels: {} } as never, {
+      showSecrets: false,
+    });
+
+    const slackRow = table.rows.find((row) => row.id === "slack");
+    expect(slackRow).toBeDefined();
+    expect(slackRow?.state).toBe("warn");
+    expect(slackRow?.detail).toContain("configured http credentials unavailable");
+
+    const slackDetails = table.details.find((detail) => detail.title === "Slack accounts");
+    expect(slackDetails).toBeDefined();
+    expect(slackDetails?.rows).toEqual([
+      {
+        Account: "primary (Primary)",
+        Notes: "bot:config · signing:config · secret unavailable in this command path",
+        Status: "WARN",
+      },
+    ]);
   });
 
   it("still reports single-token channels as ok", async () => {

@@ -14,6 +14,26 @@ export type NpmSpecResolution = {
   resolvedAt?: string;
 };
 
+export type NpmResolutionFields = {
+  resolvedName?: string;
+  resolvedVersion?: string;
+  resolvedSpec?: string;
+  integrity?: string;
+  shasum?: string;
+  resolvedAt?: string;
+};
+
+export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmResolutionFields {
+  return {
+    resolvedName: resolution?.name,
+    resolvedVersion: resolution?.version,
+    resolvedSpec: resolution?.resolvedSpec,
+    integrity: resolution?.integrity,
+    shasum: resolution?.shasum,
+    resolvedAt: resolution?.resolvedAt,
+  };
+}
+
 export type NpmIntegrityDrift = {
   expectedIntegrity: string;
   actualIntegrity: string;

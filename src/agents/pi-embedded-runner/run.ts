@@ -66,6 +66,17 @@ import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
+type CopilotTokenState = {
+  githubToken: string;
+  expiresAt: number;
+  refreshTimer?: ReturnType<typeof setTimeout>;
+  refreshInFlight?: Promise<void>;
+};
+
+const COPILOT_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+const COPILOT_REFRESH_RETRY_MS = 60 * 1000;
+const COPILOT_REFRESH_MIN_DELAY_MS = 5 * 1000;
+
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
@@ -189,6 +200,43 @@ function resolveActiveErrorContext(params: {
   };
 }
 
+/**
+ * Build agentMeta for error return paths, preserving accumulated usage so that
+ * session totalTokens reflects the actual context size rather than going stale.
+ * Without this, error returns omit usage and the session keeps whatever
+ * totalTokens was set by the previous successful run.
+ */
+function buildErrorAgentMeta(params: {
+  sessionId: string;
+  provider: string;
+  model: string;
+  usageAccumulator: UsageAccumulator;
+  lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
+  lastAssistant?: { usage?: unknown } | null;
+  /** API-reported total from the most recent call, mirroring the success path correction. */
+  lastTurnTotal?: number;
+}): EmbeddedPiAgentMeta {
+  const usage = toNormalizedUsage(params.usageAccumulator);
+  // Apply the same lastTurnTotal correction the success path uses so
+  // usage.total reflects the API-reported context size, not accumulated totals.
+  if (usage && params.lastTurnTotal && params.lastTurnTotal > 0) {
+    usage.total = params.lastTurnTotal;
+  }
+  const lastCallUsage = params.lastAssistant
+    ? normalizeUsage(params.lastAssistant.usage as UsageLike)
+    : undefined;
+  const promptTokens = derivePromptTokens(params.lastRunPromptUsage);
+  return {
+    sessionId: params.sessionId,
+    provider: params.provider,
+    model: params.model,
+    // Only include usage fields when we have actual data from prior API calls.
+    ...(usage ? { usage } : {}),
+    ...(lastCallUsage ? { lastCallUsage } : {}),
+    ...(promptTokens ? { promptTokens } : {}),
+  };
+}
+
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
@@ -252,6 +300,8 @@ export async function runEmbeddedPiAgent(
         sessionId: params.sessionId,
         workspaceDir: resolvedWorkspace,
         messageProvider: params.messageProvider ?? undefined,
+        trigger: params.trigger,
+        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
       };
       if (hookRunner?.hasHooks("before_model_resolve")) {
         try {
@@ -365,6 +415,105 @@ export async function runEmbeddedPiAgent(
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;
       let lastProfileId: string | undefined;
+      const copilotTokenState: CopilotTokenState | null =
+        model.provider === "github-copilot" ? { githubToken: "", expiresAt: 0 } : null;
+      let copilotRefreshCancelled = false;
+      const hasCopilotGithubToken = () => Boolean(copilotTokenState?.githubToken.trim());
+
+      const clearCopilotRefreshTimer = () => {
+        if (!copilotTokenState?.refreshTimer) {
+          return;
+        }
+        clearTimeout(copilotTokenState.refreshTimer);
+        copilotTokenState.refreshTimer = undefined;
+      };
+
+      const stopCopilotRefreshTimer = () => {
+        if (!copilotTokenState) {
+          return;
+        }
+        copilotRefreshCancelled = true;
+        clearCopilotRefreshTimer();
+      };
+
+      const refreshCopilotToken = async (reason: string): Promise<void> => {
+        if (!copilotTokenState) {
+          return;
+        }
+        if (copilotTokenState.refreshInFlight) {
+          await copilotTokenState.refreshInFlight;
+          return;
+        }
+        const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
+        copilotTokenState.refreshInFlight = (async () => {
+          const githubToken = copilotTokenState.githubToken.trim();
+          if (!githubToken) {
+            throw new Error("Copilot refresh requires a GitHub token.");
+          }
+          log.debug(`Refreshing GitHub Copilot token (${reason})...`);
+          const copilotToken = await resolveCopilotApiToken({
+            githubToken,
+          });
+          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+          copilotTokenState.expiresAt = copilotToken.expiresAt;
+          const remaining = copilotToken.expiresAt - Date.now();
+          log.debug(
+            `Copilot token refreshed; expires in ${Math.max(0, Math.floor(remaining / 1000))}s.`,
+          );
+        })()
+          .catch((err) => {
+            log.warn(`Copilot token refresh failed: ${describeUnknownError(err)}`);
+            throw err;
+          })
+          .finally(() => {
+            copilotTokenState.refreshInFlight = undefined;
+          });
+        await copilotTokenState.refreshInFlight;
+      };
+
+      const scheduleCopilotRefresh = (): void => {
+        if (!copilotTokenState || copilotRefreshCancelled) {
+          return;
+        }
+        if (!hasCopilotGithubToken()) {
+          log.warn("Skipping Copilot refresh scheduling; GitHub token missing.");
+          return;
+        }
+        clearCopilotRefreshTimer();
+        const now = Date.now();
+        const refreshAt = copilotTokenState.expiresAt - COPILOT_REFRESH_MARGIN_MS;
+        const delayMs = Math.max(COPILOT_REFRESH_MIN_DELAY_MS, refreshAt - now);
+        const timer = setTimeout(() => {
+          if (copilotRefreshCancelled) {
+            return;
+          }
+          refreshCopilotToken("scheduled")
+            .then(() => scheduleCopilotRefresh())
+            .catch(() => {
+              if (copilotRefreshCancelled) {
+                return;
+              }
+              const retryTimer = setTimeout(() => {
+                if (copilotRefreshCancelled) {
+                  return;
+                }
+                refreshCopilotToken("scheduled-retry")
+                  .then(() => scheduleCopilotRefresh())
+                  .catch(() => undefined);
+              }, COPILOT_REFRESH_RETRY_MS);
+              copilotTokenState.refreshTimer = retryTimer;
+              if (copilotRefreshCancelled) {
+                clearTimeout(retryTimer);
+                copilotTokenState.refreshTimer = undefined;
+              }
+            });
+        }, delayMs);
+        copilotTokenState.refreshTimer = timer;
+        if (copilotRefreshCancelled) {
+          clearTimeout(timer);
+          copilotTokenState.refreshTimer = undefined;
+        }
+      };
 
       const resolveAuthProfileFailoverReason = (params: {
         allInCooldown: boolean;
@@ -445,6 +594,11 @@ export async function runEmbeddedPiAgent(
             githubToken: apiKeyInfo.apiKey,
           });
           authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+          if (copilotTokenState) {
+            copilotTokenState.githubToken = apiKeyInfo.apiKey;
+            copilotTokenState.expiresAt = copilotToken.expiresAt;
+            scheduleCopilotRefresh();
+          }
         } else {
           authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
         }
@@ -479,15 +633,39 @@ export async function runEmbeddedPiAgent(
       };
 
       try {
+        const autoProfileCandidates = profileCandidates.filter(
+          (candidate): candidate is string =>
+            typeof candidate === "string" && candidate.length > 0 && candidate !== lockedProfileId,
+        );
+        const allAutoProfilesInCooldown =
+          autoProfileCandidates.length > 0 &&
+          autoProfileCandidates.every((candidate) => isProfileInCooldown(authStore, candidate));
+        const unavailableReason = allAutoProfilesInCooldown
+          ? (resolveProfilesUnavailableReason({
+              store: authStore,
+              profileIds: autoProfileCandidates,
+            }) ?? "rate_limit")
+          : null;
+        const allowRateLimitCooldownProbe =
+          params.allowRateLimitCooldownProbe === true &&
+          allAutoProfilesInCooldown &&
+          unavailableReason === "rate_limit";
+        let didRateLimitCooldownProbe = false;
+
         while (profileIndex < profileCandidates.length) {
           const candidate = profileCandidates[profileIndex];
-          if (
-            candidate &&
-            candidate !== lockedProfileId &&
-            isProfileInCooldown(authStore, candidate)
-          ) {
-            profileIndex += 1;
-            continue;
+          const inCooldown =
+            candidate && candidate !== lockedProfileId && isProfileInCooldown(authStore, candidate);
+          if (inCooldown) {
+            if (allowRateLimitCooldownProbe && !didRateLimitCooldownProbe) {
+              didRateLimitCooldownProbe = true;
+              log.warn(
+                `probing cooldowned auth profile for ${provider}/${modelId} due to rate_limit unavailability`,
+              );
+            } else {
+              profileIndex += 1;
+              continue;
+            }
           }
           await applyApiKeyInfo(profileCandidates[profileIndex]);
           break;
@@ -508,10 +686,35 @@ export async function runEmbeddedPiAgent(
         }
       }
 
+      const maybeRefreshCopilotForAuthError = async (
+        errorText: string,
+        retried: boolean,
+      ): Promise<boolean> => {
+        if (!copilotTokenState || retried) {
+          return false;
+        }
+        if (!isFailoverErrorMessage(errorText)) {
+          return false;
+        }
+        if (classifyFailoverReason(errorText) !== "auth") {
+          return false;
+        }
+        try {
+          await refreshCopilotToken("auth-error");
+          scheduleCopilotRefresh();
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
+      let bootstrapPromptWarningSignaturesSeen =
+        params.bootstrapPromptWarningSignaturesSeen ??
+        (params.bootstrapPromptWarningSignature ? [params.bootstrapPromptWarningSignature] : []);
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
@@ -535,6 +738,9 @@ export async function runEmbeddedPiAgent(
         });
       };
       try {
+        let authRetryPending = false;
+        // Hoisted so the retry-limit error path can use the most recent API total.
+        let lastTurnTotal: number | undefined;
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
             const message =
@@ -556,16 +762,21 @@ export async function runEmbeddedPiAgent(
               ],
               meta: {
                 durationMs: Date.now() - started,
-                agentMeta: {
+                agentMeta: buildErrorAgentMeta({
                   sessionId: params.sessionId,
                   provider,
                   model: model.id,
-                },
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastTurnTotal,
+                }),
                 error: { kind: "retry_limit", message },
               },
             };
           }
           runLoopIterations += 1;
+          const copilotAuthRetry = authRetryPending;
+          authRetryPending = false;
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
@@ -575,6 +786,7 @@ export async function runEmbeddedPiAgent(
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
+            trigger: params.trigger,
             messageChannel: params.messageChannel,
             messageProvider: params.messageProvider,
             agentAccountId: params.agentAccountId,
@@ -631,6 +843,9 @@ export async function runEmbeddedPiAgent(
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
+            bootstrapPromptWarningSignaturesSeen,
+            bootstrapPromptWarningSignature:
+              bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
           });
 
           const {
@@ -641,13 +856,23 @@ export async function runEmbeddedPiAgent(
             sessionIdUsed,
             lastAssistant,
           } = attempt;
+          bootstrapPromptWarningSignaturesSeen =
+            attempt.bootstrapPromptWarningSignaturesSeen ??
+            (attempt.bootstrapPromptWarningSignature
+              ? Array.from(
+                  new Set([
+                    ...bootstrapPromptWarningSignaturesSeen,
+                    attempt.bootstrapPromptWarningSignature,
+                  ]),
+                )
+              : bootstrapPromptWarningSignaturesSeen);
           const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
-          const lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
+          lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
           const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
           autoCompactionCount += attemptCompactionCount;
           const activeErrorContext = resolveActiveErrorContext({
@@ -839,11 +1064,15 @@ export async function runEmbeddedPiAgent(
               ],
               meta: {
                 durationMs: Date.now() - started,
-                agentMeta: {
+                agentMeta: buildErrorAgentMeta({
                   sessionId: sessionIdUsed,
                   provider,
                   model: model.id,
-                },
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastAssistant,
+                  lastTurnTotal,
+                }),
                 systemPromptReport: attempt.systemPromptReport,
                 error: { kind, message: errorText },
               },
@@ -852,6 +1081,10 @@ export async function runEmbeddedPiAgent(
 
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
+            if (await maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
+              authRetryPending = true;
+              continue;
+            }
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
               return {
@@ -865,11 +1098,15 @@ export async function runEmbeddedPiAgent(
                 ],
                 meta: {
                   durationMs: Date.now() - started,
-                  agentMeta: {
+                  agentMeta: buildErrorAgentMeta({
                     sessionId: sessionIdUsed,
                     provider,
                     model: model.id,
-                  },
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastAssistant,
+                    lastTurnTotal,
+                  }),
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "role_ordering", message: errorText },
                 },
@@ -893,11 +1130,15 @@ export async function runEmbeddedPiAgent(
                 ],
                 meta: {
                   durationMs: Date.now() - started,
-                  agentMeta: {
+                  agentMeta: buildErrorAgentMeta({
                     sessionId: sessionIdUsed,
                     provider,
                     model: model.id,
-                  },
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastAssistant,
+                    lastTurnTotal,
+                  }),
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "image_size", message: errorText },
                 },
@@ -960,6 +1201,16 @@ export async function runEmbeddedPiAgent(
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
 
+          if (
+            authFailure &&
+            (await maybeRefreshCopilotForAuthError(
+              lastAssistant?.errorMessage ?? "",
+              copilotAuthRetry,
+            ))
+          ) {
+            authRetryPending = true;
+            continue;
+          }
           if (imageDimensionError && lastProfileId) {
             const details = [
               imageDimensionError.messageIndex !== undefined
@@ -1138,7 +1389,11 @@ export async function runEmbeddedPiAgent(
               aborted,
               systemPromptReport: attempt.systemPromptReport,
               // Handle client tool calls (OpenResponses hosted tools)
-              stopReason: attempt.clientToolCall ? "tool_calls" : undefined,
+              // Propagate the LLM stop reason so callers (lifecycle events,
+              // ACP bridge) can distinguish end_turn from max_tokens.
+              stopReason: attempt.clientToolCall
+                ? "tool_calls"
+                : (lastAssistant?.stopReason as string | undefined),
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {
@@ -1157,6 +1412,7 @@ export async function runEmbeddedPiAgent(
           };
         }
       } finally {
+        stopCopilotRefreshTimer();
         process.chdir(prevCwd);
       }
     }),

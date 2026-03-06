@@ -1,5 +1,6 @@
-import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk";
+import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/bluebubbles";
 import { z } from "zod";
+import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
 const allowFromEntry = z.union([z.string(), z.number()]);
 
@@ -30,7 +31,7 @@ const bluebubblesAccountSchema = z
     enabled: z.boolean().optional(),
     markdown: MarkdownConfigSchema,
     serverUrl: z.string().optional(),
-    password: z.string().optional(),
+    password: buildSecretInputSchema().optional(),
     webhookPath: z.string().optional(),
     dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
     allowFrom: z.array(allowFromEntry).optional(),
@@ -49,8 +50,8 @@ const bluebubblesAccountSchema = z
   })
   .superRefine((value, ctx) => {
     const serverUrl = value.serverUrl?.trim() ?? "";
-    const password = value.password?.trim() ?? "";
-    if (serverUrl && !password) {
+    const passwordConfigured = hasConfiguredSecretInput(value.password);
+    if (serverUrl && !passwordConfigured) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["password"],
@@ -61,5 +62,6 @@ const bluebubblesAccountSchema = z
 
 export const BlueBubblesConfigSchema = bluebubblesAccountSchema.extend({
   accounts: z.object({}).catchall(bluebubblesAccountSchema).optional(),
+  defaultAccount: z.string().optional(),
   actions: bluebubblesActionSchema,
 });

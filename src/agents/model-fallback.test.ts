@@ -173,8 +173,23 @@ async function expectSkippedUnavailableProvider(params: {
   expect(result.attempts[0]?.reason).toBe(params.expectedReason);
 }
 
+// OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
+const OPENAI_RATE_LIMIT_MESSAGE =
+  "Rate limit reached for gpt-4.1-mini in organization org_test on requests per min. Limit: 3.000000 / min. Current: 3.000000 / min.";
+// Anthropic overloaded_error example shape: https://docs.anthropic.com/en/api/errors
+const ANTHROPIC_OVERLOADED_PAYLOAD =
+  '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_test"}';
+// Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
+// https://github.com/openclaw/openclaw/issues/23440
+const INSUFFICIENT_QUOTA_PAYLOAD =
+  '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
+// Internal OpenClaw compatibility marker, not a provider API contract.
+const MODEL_COOLDOWN_MESSAGE = "model_cooldown: All credentials for model gpt-5 are cooling down";
+// SDK/transport compatibility marker, not a provider API contract.
+const CONNECTION_ERROR_MESSAGE = "Connection error.";
+
 describe("runWithModelFallback", () => {
-  it("normalizes openai gpt-5.3 codex to openai-codex before running", async () => {
+  it("keeps openai gpt-5.3 codex on the openai provider before running", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockResolvedValueOnce("ok");
 
@@ -187,7 +202,7 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai-codex", "gpt-5.3-codex");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-5.3-codex");
   });
 
   it("falls back on unrecognized errors when candidates remain", async () => {
@@ -386,6 +401,25 @@ describe("runWithModelFallback", () => {
         "LLM request rejected: Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
       ),
     });
+  });
+
+  it("records 400 insufficient_quota payloads as billing during fallback", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error(INSUFFICIENT_QUOTA_PAYLOAD), { status: 400 }))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]?.reason).toBe("billing");
   });
 
   it("falls back to configured primary for override credential validation errors", async () => {
@@ -712,6 +746,38 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back on documented OpenAI 429 rate limit responses", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error(OPENAI_RATE_LIMIT_MESSAGE), { status: 429 }),
+    });
+  });
+
+  it("falls back on documented overloaded_error payloads", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: new Error(ANTHROPIC_OVERLOADED_PAYLOAD),
+    });
+  });
+
+  it("falls back on internal model cooldown markers", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: new Error(MODEL_COOLDOWN_MESSAGE),
+    });
+  });
+
+  it("falls back on compatibility connection error messages", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: new Error(CONNECTION_ERROR_MESSAGE),
+    });
+  });
+
   it("falls back on timeout abort errors", async () => {
     const timeoutCause = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
     await expectFallsBackToHaiku({
@@ -743,11 +809,74 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back on unhandled stop reason error responses", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: new Error("Unhandled stop reason: error"),
+    });
+  });
+
+  it("falls back on abort errors with reason: error", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("aborted"), {
+        name: "AbortError",
+        reason: "reason: error",
+      }),
+    });
+  });
+
   it("falls back when message says aborted but error is a timeout", async () => {
     await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
       firstError: Object.assign(new Error("request aborted"), { code: "ETIMEDOUT" }),
+    });
+  });
+
+  it("falls back on ECONNREFUSED (local server down or remote unreachable)", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:11434"), {
+        code: "ECONNREFUSED",
+      }),
+    });
+  });
+
+  it("falls back on ENETUNREACH (network disconnected)", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("connect ENETUNREACH"), { code: "ENETUNREACH" }),
+    });
+  });
+
+  it("falls back on EHOSTUNREACH (host unreachable)", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("connect EHOSTUNREACH"), { code: "EHOSTUNREACH" }),
+    });
+  });
+
+  it("falls back on EAI_AGAIN (DNS resolution failure)", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("getaddrinfo EAI_AGAIN api.openai.com"), {
+        code: "EAI_AGAIN",
+      }),
+    });
+  });
+
+  it("falls back on ENETRESET (connection reset by network)", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("connect ENETRESET"), { code: "ENETRESET" }),
     });
   });
 
@@ -987,7 +1116,9 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("sonnet success");
       expect(run).toHaveBeenCalledTimes(1); // Primary skipped, fallback attempted
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5");
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
+        allowRateLimitCooldownProbe: true,
+      });
     });
 
     it("skips same-provider models on auth cooldown but still tries no-profile fallback providers", async () => {
@@ -1092,7 +1223,9 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("groq success");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5"); // Rate limit allows attempt
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
+        allowRateLimitCooldownProbe: true,
+      }); // Rate limit allows attempt
       expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile"); // Cross-provider works
     });
   });
