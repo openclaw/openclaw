@@ -162,10 +162,16 @@ function resolveContactInfo(
   const phoneDigits = rawPhone.replace(/\D/g, "");
   const phone = phoneDigits ? normalizeBrazilianMobile(phoneDigits) : rawPhone;
 
-  // 1. Try senderName from metadata first (WhatsApp display name)
-  const senderName = metadata?.senderName as string | undefined;
-  if (senderName) {
-    return { name: senderName, phone };
+  // 1. Try contacts-map.json / contacts-briefing.json first (controlled by us)
+  //    This is the canonical source of truth — never changes based on what
+  //    the sender set as their WhatsApp display name.
+  if (cfg) {
+    const contactsMap = getContactsMap(cfg);
+    const digits = normalizeBrazilianMobile(phone.replace(/\D/g, ""));
+    const mapName = contactsMap.get(digits);
+    if (mapName) {
+      return { name: mapName, phone };
+    }
   }
 
   // 2. Try contact manager (CONTATOS.md)
@@ -178,17 +184,9 @@ function resolveContactInfo(
     // Contact manager may not be initialized
   }
 
-  // 3. Try contacts-map.json (cached, reloaded every 5 min)
-  if (cfg) {
-    const contactsMap = getContactsMap(cfg);
-    const digits = normalizeBrazilianMobile(phone.replace(/\D/g, ""));
-    const mapName = contactsMap.get(digits);
-    if (mapName) {
-      return { name: mapName, phone };
-    }
-  }
-
-  // 4. Fallback: sanitized phone
+  // 3. Fallback: E.164 phone number (never use senderName from WhatsApp
+  //    metadata for folder names — it's user-controlled and causes
+  //    duplicate/fragmented folders when people change their profile name)
   return { name: phone, phone };
 }
 
