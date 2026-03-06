@@ -100,7 +100,7 @@ RUN for dir in /app/extensions /app/.agent /app/.agents; do \
       fi; \
     done
 # Install extension dependencies after copying extensions directory
-RUN pnpm install --no-frozen-lockfile
+RUN NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
 RUN pnpm build
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
