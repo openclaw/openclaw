@@ -1116,7 +1116,9 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("sonnet success");
       expect(run).toHaveBeenCalledTimes(1); // Primary skipped, fallback attempted
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5");
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
+        allowRateLimitCooldownProbe: true,
+      });
     });
 
     it("skips same-provider models on auth cooldown but still tries no-profile fallback providers", async () => {
@@ -1221,7 +1223,9 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("groq success");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5"); // Rate limit allows attempt
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
+        allowRateLimitCooldownProbe: true,
+      }); // Rate limit allows attempt
       expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile"); // Cross-provider works
     });
   });

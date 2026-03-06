@@ -52,7 +52,9 @@ function expectPrimaryProbeSuccess(
 ) {
   expect(result.result).toBe(expectedResult);
   expect(run).toHaveBeenCalledTimes(1);
-  expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+  expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+    allowRateLimitCooldownProbe: true,
+  });
 }
 
 describe("runWithModelFallback – probe logic", () => {
@@ -197,8 +199,12 @@ describe("runWithModelFallback – probe logic", () => {
 
     expect(result.result).toBe("fallback-ok");
     expect(run).toHaveBeenCalledTimes(2);
-    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini");
-    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
+    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
+      allowRateLimitCooldownProbe: true,
+    });
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
+      allowRateLimitCooldownProbe: true,
+    });
   });
 
   it("throttles probe when called within 30s interval", async () => {
@@ -319,7 +325,11 @@ describe("runWithModelFallback – probe logic", () => {
       run,
     });
 
-    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini");
-    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
+      allowRateLimitCooldownProbe: true,
+    });
+    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-4.1-mini", {
+      allowRateLimitCooldownProbe: true,
+    });
   });
 });

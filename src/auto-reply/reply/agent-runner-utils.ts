@@ -166,6 +166,7 @@ export function buildEmbeddedRunBaseParams(params: {
   model: string;
   runId: string;
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
+  allowRateLimitCooldownProbe?: boolean;
 }) {
   return {
     sessionFile: params.run.sessionFile,
@@ -186,6 +187,7 @@ export function buildEmbeddedRunBaseParams(params: {
     bashElevated: params.run.bashElevated,
     timeoutMs: params.run.timeoutMs,
     runId: params.runId,
+    allowRateLimitCooldownProbe: params.allowRateLimitCooldownProbe,
   };
 }
 
