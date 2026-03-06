@@ -733,6 +733,240 @@ describe("BlueBubbles webhook monitor", () => {
 
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
     });
+
+    it("drops direct payload with ambiguous legacy group hint and no chat context", async () => {
+      const account = createMockAccount({
+        dmPolicy: "open",
+        groupPolicy: "open",
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "aiden",
+          handle: { address: "+15551234567" },
+          isFromMe: false,
+          guid: "msg-ambiguous-group-hint",
+          date: Date.now(),
+          conversationLabel: "Group id:Unknown",
+          isGroupChat: "unknown",
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
+    it("drops direct payload with legacy group=true metadata and no chat context", async () => {
+      const account = createMockAccount({
+        dmPolicy: "open",
+        groupPolicy: "open",
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "aiden",
+          handle: { address: "+15551234567" },
+          isFromMe: false,
+          guid: "msg-legacy-group-true",
+          date: Date.now(),
+          conversationLabel: "Group id:Unknown",
+          group: true,
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
+    it("drops direct payload with nested chat group metadata and no chat context", async () => {
+      const account = createMockAccount({
+        dmPolicy: "open",
+        groupPolicy: "open",
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "aiden",
+          handle: { address: "+15551234567" },
+          isFromMe: false,
+          guid: "msg-nested-group-true",
+          date: Date.now(),
+          conversationLabel: "Group id:Unknown",
+          chat: { isGroupChat: true },
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
+    it("keeps direct payload with legacy group=false metadata and no chat context", async () => {
+      const account = createMockAccount({
+        dmPolicy: "open",
+        groupPolicy: "open",
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "direct ping",
+          handle: { address: "+15551234567" },
+          isFromMe: false,
+          guid: "msg-legacy-group-false",
+          date: Date.now(),
+          conversationLabel: "Group id:Unknown",
+          isGroup: false,
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps direct payload with nested legacy group=false metadata and no chat context", async () => {
+      const account = createMockAccount({
+        dmPolicy: "open",
+        groupPolicy: "open",
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "direct ping",
+          handle: { address: "+15551234567" },
+          isFromMe: false,
+          guid: "msg-nested-group-false",
+          date: Date.now(),
+          conversationLabel: "Group id:Unknown",
+          chat: { group: false },
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops mention-only direct payloads with unresolved conversation labels", async () => {
+      const account = createMockAccount({
+        dmPolicy: "open",
+        groupPolicy: "open",
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "aiden",
+          handle: { address: "+15551234567" },
+          isFromMe: false,
+          guid: "msg-mention-only-unknown-label",
+          date: Date.now(),
+          conversationLabel: "Group id:Unknown",
+          was_mentioned: true,
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
   });
 
   describe("mention gating (group messages)", () => {

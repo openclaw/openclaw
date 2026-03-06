@@ -1,5 +1,6 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { shouldSuppressMessagingToolReplies } from "../auto-reply/reply/reply-payloads.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
@@ -385,7 +386,24 @@ export function handleMessageEnd(
     } else if (text !== ctx.state.lastBlockReplyText) {
       // Check for duplicates before emitting (same logic as emitBlockChunk).
       const normalizedText = normalizeTextForComparison(text);
+      const hasRoutingScope =
+        typeof ctx.params.messageProvider === "string" &&
+        ctx.params.messageProvider.trim().length > 0 &&
+        typeof ctx.params.originatingTo === "string" &&
+        ctx.params.originatingTo.trim().length > 0;
+      const suppressByRoute = hasRoutingScope
+        ? shouldSuppressMessagingToolReplies({
+            messageProvider: ctx.params.messageProvider,
+            messagingToolSentTargets: ctx.state.messagingToolSentTargets,
+            originatingTo: ctx.params.originatingTo,
+            accountId: ctx.params.accountId,
+          })
+        : true;
+      const shouldSuppressBlockReply = hasRoutingScope
+        ? suppressByRoute || ctx.state.hasUnknownMessagingToolTarget
+        : suppressByRoute;
       if (
+        shouldSuppressBlockReply &&
         isMessagingToolDuplicateNormalized(
           normalizedText,
           ctx.state.messagingToolSentTextsNormalized,

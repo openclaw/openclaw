@@ -10,6 +10,12 @@ export type ToolResultFormat = "markdown" | "plain";
 export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;
   runId: string;
+  /** Originating message channel/provider (e.g. telegram, bluebubbles). */
+  messageProvider?: string;
+  /** Originating delivery target for the current run (chat/user/thread key). */
+  originatingTo?: string;
+  /** Originating account id for provider-scoped sends (optional). */
+  accountId?: string;
   hookRunner?: HookRunner;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;

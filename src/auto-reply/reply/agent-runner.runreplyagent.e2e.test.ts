@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessions from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
@@ -93,7 +94,10 @@ beforeAll(async () => {
 beforeEach(() => {
   state.runEmbeddedPiAgentMock.mockClear();
   state.runCliAgentMock.mockClear();
+  vi.mocked(queueEmbeddedPiMessage).mockClear();
+  vi.mocked(queueEmbeddedPiMessage).mockReturnValue(false);
   vi.mocked(enqueueFollowupRun).mockClear();
+  vi.mocked(enqueueFollowupRun).mockReturnValue(true);
   vi.mocked(scheduleFollowupDrain).mockClear();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
@@ -109,6 +113,8 @@ function createMinimalRun(params?: {
   blockStreamingEnabled?: boolean;
   isActive?: boolean;
   shouldFollowup?: boolean;
+  shouldSteer?: boolean;
+  isStreaming?: boolean;
   resolvedQueueMode?: string;
   runOverrides?: Partial<FollowupRun["run"]>;
 }) {
@@ -160,10 +166,10 @@ function createMinimalRun(params?: {
         followupRun,
         queueKey: "main",
         resolvedQueue,
-        shouldSteer: false,
+        shouldSteer: params?.shouldSteer ?? false,
         shouldFollowup: params?.shouldFollowup ?? false,
         isActive: params?.isActive ?? false,
-        isStreaming: false,
+        isStreaming: params?.isStreaming ?? false,
         opts,
         typing,
         sessionEntry: params?.sessionEntry,
@@ -305,7 +311,92 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
-  it("still enqueues non-heartbeat runs when another run is active", async () => {
+  it("still enqueues non-heartbeat runs when another run is active and emits busy notice", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+    });
+
+    const result = await run();
+
+    expect(result).toMatchObject({
+      text: expect.stringContaining("Still working on your previous request"),
+    });
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("does not emit busy notice when no stable session state is available", async () => {
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("does not emit busy notice when followup enqueue is skipped", async () => {
+    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("does not emit queued busy notice when message is steered into active stream", async () => {
+    vi.mocked(queueEmbeddedPiMessage).mockReturnValueOnce(true);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      shouldFollowup: false,
+      resolvedQueueMode: "collect",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(queueEmbeddedPiMessage)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("enqueues non-heartbeat runs without emitting busy notice when session state is unavailable", async () => {
     const { run } = createMinimalRun({
       opts: { isHeartbeat: false },
       isActive: true,

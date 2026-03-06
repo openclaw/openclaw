@@ -7,6 +7,25 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+type ParsedBoolean = {
+  value: boolean;
+  source: "boolean" | "number" | "string";
+};
+
+function hasDefinedProperty(record: Record<string, unknown> | null, key: string): boolean {
+  if (!record || !Object.prototype.hasOwnProperty.call(record, key)) {
+    return false;
+  }
+  const value = record[key];
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  return true;
+}
+
 function readString(record: Record<string, unknown> | null, key: string): string | undefined {
   if (!record) {
     return undefined;
@@ -23,12 +42,52 @@ function readNumber(record: Record<string, unknown> | null, key: string): number
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function readBoolean(record: Record<string, unknown> | null, key: string): boolean | undefined {
+function readBooleanWithSource(
+  record: Record<string, unknown> | null,
+  key: string,
+): ParsedBoolean | undefined {
   if (!record) {
     return undefined;
   }
   const value = record[key];
-  return typeof value === "boolean" ? value : undefined;
+  if (typeof value === "boolean") {
+    return { value, source: "boolean" };
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value === 1) {
+      return { value: true, source: "number" };
+    }
+    if (value === 0) {
+      return { value: false, source: "number" };
+    }
+    return undefined;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "y"].includes(normalized)) {
+      return { value: true, source: "string" };
+    }
+    if (["0", "false", "no", "n"].includes(normalized)) {
+      return { value: false, source: "string" };
+    }
+  }
+  return undefined;
+}
+
+function readBoolean(record: Record<string, unknown> | null, key: string): boolean | undefined {
+  return readBooleanWithSource(record, key)?.value;
+}
+
+function readFirstBooleanWithSource(
+  candidates: Array<{ record: Record<string, unknown> | null; key: string }>,
+): ParsedBoolean | undefined {
+  for (const candidate of candidates) {
+    const parsed = readBooleanWithSource(candidate.record, candidate.key);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return undefined;
 }
 
 function readNumberLike(record: Record<string, unknown> | null, key: string): number | undefined {
@@ -154,15 +213,22 @@ function extractReplyMetadata(message: Record<string, unknown>): {
 
   const directReplyId =
     readString(message, "replyToMessageGuid") ??
+    readString(message, "reply_to_message_guid") ??
     readString(message, "replyToGuid") ??
+    readString(message, "reply_to_guid") ??
     readString(message, "replyGuid") ??
     readString(message, "selectedMessageGuid") ??
+    readString(message, "selected_message_guid") ??
     readString(message, "selectedMessageId") ??
+    readString(message, "selected_message_id") ??
     readString(message, "replyToMessageId") ??
+    readString(message, "reply_to_message_id") ??
     readString(message, "replyId") ??
+    readString(message, "reply_id") ??
     readString(replyRecord, "guid") ??
     readString(replyRecord, "id") ??
-    readString(replyRecord, "messageId");
+    readString(replyRecord, "messageId") ??
+    readString(replyRecord, "message_id");
 
   const associatedType =
     readNumberLike(message, "associatedMessageType") ??
@@ -170,13 +236,18 @@ function extractReplyMetadata(message: Record<string, unknown>): {
   const associatedGuid =
     readString(message, "associatedMessageGuid") ??
     readString(message, "associated_message_guid") ??
-    readString(message, "associatedMessageId");
+    readString(message, "associatedMessageId") ??
+    readString(message, "associated_message_id");
   const isReactionAssociation =
     typeof associatedType === "number" && REACTION_TYPE_MAP.has(associatedType);
 
   const replyToId = directReplyId ?? (!isReactionAssociation ? associatedGuid : undefined);
-  const threadOriginatorGuid = readString(message, "threadOriginatorGuid");
-  const messageGuid = readString(message, "guid");
+  const threadOriginatorGuid =
+    readString(message, "threadOriginatorGuid") ?? readString(message, "thread_originator_guid");
+  const messageGuid =
+    readString(message, "guid") ??
+    readString(message, "messageGuid") ??
+    readString(message, "message_guid");
   const fallbackReplyId =
     !replyToId && threadOriginatorGuid && threadOriginatorGuid !== messageGuid
       ? threadOriginatorGuid
@@ -228,10 +299,14 @@ function extractChatContext(message: Record<string, unknown>): {
   chatId?: number;
   chatName?: string;
   isGroup: boolean;
+  explicitIsGroupHint?: boolean;
+  explicitGroupChatHint?: boolean;
   participants: unknown[];
 } {
   const chat = asRecord(message.chat) ?? asRecord(message.conversation) ?? null;
   const chatFromList = readFirstChatRecord(message);
+  const conversationLabel = extractConversationLabel(message);
+  const chatGuidFromConversationLabel = extractChatGuidFromConversationLabel(conversationLabel);
   const chatGuid =
     readString(message, "chatGuid") ??
     readString(message, "chat_guid") ??
@@ -240,7 +315,8 @@ function extractChatContext(message: Record<string, unknown>): {
     readString(chat, "guid") ??
     readString(chatFromList, "chatGuid") ??
     readString(chatFromList, "chat_guid") ??
-    readString(chatFromList, "guid");
+    readString(chatFromList, "guid") ??
+    chatGuidFromConversationLabel;
   const chatIdentifier =
     readString(message, "chatIdentifier") ??
     readString(message, "chat_identifier") ??
@@ -280,11 +356,38 @@ function extractChatContext(message: Record<string, unknown>): {
         : [];
   const participantsCount = participants.length;
   const groupFromChatGuid = resolveGroupFlagFromChatGuid(chatGuid);
+  const hasConcreteChatIdentity =
+    Boolean(chatGuid?.trim()) ||
+    Boolean(chatIdentifier?.trim()) ||
+    (typeof chatId === "number" && Number.isFinite(chatId));
+  const explicitGroupChatHint = readFirstBooleanWithSource([
+    { record: message, key: "isGroupChat" },
+    { record: message, key: "is_group_chat" },
+    { record: message, key: "group" },
+    { record: chat, key: "isGroupChat" },
+    { record: chat, key: "is_group_chat" },
+    { record: chat, key: "group" },
+    { record: chatFromList, key: "isGroupChat" },
+    { record: chatFromList, key: "is_group_chat" },
+    { record: chatFromList, key: "group" },
+  ]);
+  const explicitIsGroupCandidate =
+    explicitGroupChatHint ??
+    readFirstBooleanWithSource([
+      { record: message, key: "isGroup" },
+      { record: message, key: "is_group" },
+      { record: chat, key: "isGroup" },
+      { record: chat, key: "is_group" },
+      { record: chatFromList, key: "isGroup" },
+      { record: chatFromList, key: "is_group" },
+      { record: message, key: "group" },
+      { record: chat, key: "group" },
+      { record: chatFromList, key: "group" },
+    ]);
   const explicitIsGroup =
-    readBoolean(message, "isGroup") ??
-    readBoolean(message, "is_group") ??
-    readBoolean(chat, "isGroup") ??
-    readBoolean(message, "group");
+    !hasConcreteChatIdentity && explicitIsGroupCandidate?.value !== false
+      ? undefined
+      : explicitIsGroupCandidate?.value;
   const isGroup =
     typeof groupFromChatGuid === "boolean"
       ? groupFromChatGuid
@@ -296,6 +399,8 @@ function extractChatContext(message: Record<string, unknown>): {
     chatId,
     chatName,
     isGroup,
+    explicitIsGroupHint: explicitIsGroup,
+    explicitGroupChatHint: explicitGroupChatHint?.value,
     participants,
   };
 }
@@ -422,6 +527,26 @@ function extractChatIdentifierFromChatGuid(chatGuid?: string | null): string | u
   return identifier || undefined;
 }
 
+function extractConversationLabel(message: Record<string, unknown>): string | undefined {
+  return readString(message, "conversationLabel") ?? readString(message, "conversation_label");
+}
+
+function extractChatGuidFromConversationLabel(conversationLabel?: string): string | undefined {
+  const label = conversationLabel?.trim();
+  if (!label) {
+    return undefined;
+  }
+  const markerIndex = label.toLowerCase().lastIndexOf("id:");
+  if (markerIndex < 0) {
+    return undefined;
+  }
+  const chatGuid = label.slice(markerIndex + 3).trim();
+  if (!chatGuid) {
+    return undefined;
+  }
+  return resolveGroupFlagFromChatGuid(chatGuid) === true ? chatGuid : undefined;
+}
+
 export function formatGroupAllowlistEntry(params: {
   chatGuid?: string;
   chatId?: number;
@@ -469,6 +594,14 @@ export type NormalizedWebhookMessage = {
   replyToId?: string;
   replyToBody?: string;
   replyToSender?: string;
+  itemType?: number;
+  dateEdited?: number;
+  explicitIsGroupHint?: boolean;
+  explicitGroupChatHint?: boolean;
+  explicitWasMentioned?: boolean;
+  hasConversationLabel?: boolean;
+  hasExplicitGroupChatFlag?: boolean;
+  hasMessageIdFull?: boolean;
 };
 
 export type NormalizedWebhookReaction = {
@@ -682,8 +815,16 @@ export function normalizeWebhookMessage(
     "";
 
   const { senderId, senderName } = extractSenderInfo(message);
-  const { chatGuid, chatIdentifier, chatId, chatName, isGroup, participants } =
-    extractChatContext(message);
+  const {
+    chatGuid,
+    chatIdentifier,
+    chatId,
+    chatName,
+    isGroup,
+    explicitIsGroupHint,
+    explicitGroupChatHint,
+    participants,
+  } = extractChatContext(message);
   const normalizedParticipants = normalizeParticipantList(participants);
 
   const fromMe = readBoolean(message, "isFromMe") ?? readBoolean(message, "is_from_me");
@@ -717,6 +858,35 @@ export function normalizeWebhookMessage(
     readNumber(message, "date") ??
     readNumber(message, "dateCreated") ??
     readNumber(message, "timestamp");
+  const itemType =
+    readNumberLike(message, "itemType") ?? readNumberLike(message, "item_type") ?? undefined;
+  const dateEdited =
+    readNumberLike(message, "dateEdited") ?? readNumberLike(message, "date_edited") ?? undefined;
+  const explicitWasMentioned =
+    readBoolean(message, "wasMentioned") ?? readBoolean(message, "was_mentioned");
+  const chatRecord = asRecord(message.chat) ?? asRecord(message.conversation) ?? null;
+  const chatRecordFromList = readFirstChatRecord(message);
+  const hasConversationLabel =
+    hasDefinedProperty(message, "conversationLabel") ||
+    hasDefinedProperty(message, "conversation_label");
+  const hasExplicitGroupChatFlag =
+    hasDefinedProperty(message, "isGroupChat") ||
+    hasDefinedProperty(message, "is_group_chat") ||
+    hasDefinedProperty(message, "isGroup") ||
+    hasDefinedProperty(message, "is_group") ||
+    hasDefinedProperty(message, "group") ||
+    hasDefinedProperty(chatRecord, "isGroupChat") ||
+    hasDefinedProperty(chatRecord, "is_group_chat") ||
+    hasDefinedProperty(chatRecord, "isGroup") ||
+    hasDefinedProperty(chatRecord, "is_group") ||
+    hasDefinedProperty(chatRecord, "group") ||
+    hasDefinedProperty(chatRecordFromList, "isGroupChat") ||
+    hasDefinedProperty(chatRecordFromList, "is_group_chat") ||
+    hasDefinedProperty(chatRecordFromList, "isGroup") ||
+    hasDefinedProperty(chatRecordFromList, "is_group") ||
+    hasDefinedProperty(chatRecordFromList, "group");
+  const hasMessageIdFull =
+    hasDefinedProperty(message, "messageIdFull") || hasDefinedProperty(message, "message_id_full");
   const timestamp =
     typeof timestampRaw === "number"
       ? timestampRaw > 1_000_000_000_000
@@ -755,6 +925,14 @@ export function normalizeWebhookMessage(
     replyToId: replyMetadata.replyToId,
     replyToBody: replyMetadata.replyToBody,
     replyToSender: replyMetadata.replyToSender,
+    itemType,
+    dateEdited,
+    explicitIsGroupHint,
+    explicitGroupChatHint,
+    explicitWasMentioned,
+    hasConversationLabel,
+    hasExplicitGroupChatFlag,
+    hasMessageIdFull,
   };
 }
 
@@ -769,7 +947,8 @@ export function normalizeWebhookReaction(
   const associatedGuid =
     readString(message, "associatedMessageGuid") ??
     readString(message, "associated_message_guid") ??
-    readString(message, "associatedMessageId");
+    readString(message, "associatedMessageId") ??
+    readString(message, "associated_message_id");
   const associatedType =
     readNumberLike(message, "associatedMessageType") ??
     readNumberLike(message, "associated_message_type");

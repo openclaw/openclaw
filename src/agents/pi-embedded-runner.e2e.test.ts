@@ -143,17 +143,40 @@ const nextRunId = (prefix = "run-embedded-test") => `${prefix}-${++runCounter}`;
 const nextSessionKey = () => `agent:test:embedded:${nextRunId("session-key")}`;
 const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
 
-const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string) => {
+const runWithOrphanedUserMessages = async (texts: string[], sessionKey: string) => {
   const sessionFile = nextSessionFile();
   const sessionManager = SessionManager.open(sessionFile);
   sessionManager.appendMessage({
     role: "user",
-    content: [{ type: "text", text }],
+    content: [{ type: "text", text: "seed user" }],
     timestamp: Date.now(),
   });
+  sessionManager.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "seed assistant" }],
+    stopReason: "stop",
+    api: "openai-responses",
+    provider: "openai",
+    model: "mock-1",
+    usage: createMockUsage(1, 1),
+    timestamp: Date.now(),
+  });
+  sessionManager.appendCustomEntry("model-snapshot", {
+    timestamp: Date.now(),
+    provider: "openai",
+    modelApi: "openai-responses",
+    modelId: "mock-1",
+  });
+  for (const text of texts) {
+    sessionManager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+  }
 
   const cfg = makeOpenAiConfig(["mock-1"]);
-  return await runEmbeddedPiAgent({
+  const result = await runEmbeddedPiAgent({
     sessionId: "session:test",
     sessionKey,
     sessionFile,
@@ -167,14 +190,24 @@ const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string
     runId: nextRunId("orphaned-user"),
     enqueue: immediateEnqueue,
   });
+  return { result, sessionFile };
 };
 
 const textFromContent = (content: unknown) => {
   if (typeof content === "string") {
     return content;
   }
-  if (Array.isArray(content) && content[0]?.type === "text") {
-    return (content[0] as { text?: string }).text;
+  if (Array.isArray(content)) {
+    const textBlocks = content
+      .filter(
+        (block): block is { type?: string; text?: string } =>
+          Boolean(block) && typeof block === "object",
+      )
+      .map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
+      .filter(Boolean);
+    if (textBlocks.length > 0) {
+      return textBlocks.join("\n");
+    }
   }
   return undefined;
 };
@@ -283,7 +316,7 @@ describe("runEmbeddedPiAgent", () => {
   );
 
   it("repairs orphaned user messages and continues", async () => {
-    const result = await runWithOrphanedSingleUserMessage("orphaned user", nextSessionKey());
+    const { result } = await runWithOrphanedUserMessages(["orphaned user"], nextSessionKey());
 
     expect(result.meta.error).toBeUndefined();
     expect(result.payloads?.length ?? 0).toBeGreaterThan(0);

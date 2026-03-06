@@ -58,6 +58,9 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+const BUSY_QUEUE_NOTICE_TEXT =
+  "Still working on your previous request. I queued this message and will follow up next.";
+const BUSY_QUEUE_NOTICE_COOLDOWN_MS = 30_000;
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -188,6 +191,44 @@ export async function runReplyAgent(params: {
     }
   };
 
+  const maybeBuildBusyQueueNotice = async (): Promise<ReplyPayload | undefined> => {
+    if (isHeartbeat) {
+      return undefined;
+    }
+    const now = Date.now();
+    const stateEntry =
+      activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
+    // No stable session state means we cannot track cooldown safely; skip notice
+    // instead of risking repeated busy-message spam.
+    if (!stateEntry) {
+      return undefined;
+    }
+    const lastNoticeAt =
+      typeof stateEntry.lastBusyQueueNoticeAt === "number"
+        ? stateEntry.lastBusyQueueNoticeAt
+        : undefined;
+    if (typeof lastNoticeAt === "number" && now - lastNoticeAt < BUSY_QUEUE_NOTICE_COOLDOWN_MS) {
+      return undefined;
+    }
+    stateEntry.lastBusyQueueNoticeAt = now;
+    stateEntry.updatedAt = now;
+    activeSessionEntry = stateEntry;
+    if (sessionKey && activeSessionStore) {
+      activeSessionStore[sessionKey] = stateEntry;
+    }
+    if (sessionKey && storePath) {
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async () => ({
+          lastBusyQueueNoticeAt: now,
+          updatedAt: now,
+        }),
+      });
+    }
+    return { text: BUSY_QUEUE_NOTICE_TEXT };
+  };
+
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
@@ -210,10 +251,15 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
+    const didEnqueue = enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
+    if (!didEnqueue) {
+      typing.cleanup();
+      return undefined;
+    }
     await touchActiveSessionEntry();
+    const busyNotice = await maybeBuildBusyQueueNotice();
     typing.cleanup();
-    return undefined;
+    return busyNotice;
   }
 
   await typingSignals.signalRunStart();
