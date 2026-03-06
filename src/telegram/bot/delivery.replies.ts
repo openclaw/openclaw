@@ -103,6 +103,21 @@ function isEmptyTextChunk(chunk: { html?: string; text?: string } | undefined): 
   return !html && !text;
 }
 
+function shouldSkipEmptyTextChunk(params: {
+  chunk: { html?: string; text?: string } | undefined;
+  context: "reply" | "follow-up" | "voice fallback";
+  index: number;
+  total: number;
+}): boolean {
+  if (!isEmptyTextChunk(params.chunk)) {
+    return false;
+  }
+  logVerbose(
+    `telegram ${params.context} chunk ${params.index + 1}/${params.total} rendered empty; skipping`,
+  );
+  return true;
+}
+
 async function deliverTextReply(params: {
   bot: Bot;
   chatId: string;
@@ -119,12 +134,20 @@ async function deliverTextReply(params: {
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = params.chunkText(params.replyText);
+  let buttonsAttached = false;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
-    if (isEmptyTextChunk(chunk)) {
+    if (
+      shouldSkipEmptyTextChunk({
+        chunk,
+        context: "reply",
+        index: i,
+        total: chunks.length,
+      })
+    ) {
       continue;
     }
-    const shouldAttachButtons = i === 0 && params.replyMarkup;
+    const shouldAttachButtons = !buttonsAttached && params.replyMarkup;
     const replyToForChunk = resolveReplyToForSend({
       replyToId: params.replyToId,
       replyToMode: params.replyToMode,
@@ -145,6 +168,9 @@ async function deliverTextReply(params: {
         replyMarkup: shouldAttachButtons ? params.replyMarkup : undefined,
       },
     );
+    if (shouldAttachButtons) {
+      buttonsAttached = true;
+    }
     if (firstDeliveredMessageId == null) {
       firstDeliveredMessageId = messageId;
     }
@@ -168,9 +194,17 @@ async function sendPendingFollowUpText(params: {
   progress: DeliveryProgress;
 }): Promise<void> {
   const chunks = params.chunkText(params.text);
+  let buttonsAttached = false;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
-    if (isEmptyTextChunk(chunk)) {
+    if (
+      shouldSkipEmptyTextChunk({
+        chunk,
+        context: "follow-up",
+        index: i,
+        total: chunks.length,
+      })
+    ) {
       continue;
     }
     const replyToForFollowUp = resolveReplyToForSend({
@@ -184,8 +218,11 @@ async function sendPendingFollowUpText(params: {
       textMode: "html",
       plainText: chunk.text,
       linkPreview: params.linkPreview,
-      replyMarkup: i === 0 ? params.replyMarkup : undefined,
+      replyMarkup: !buttonsAttached ? params.replyMarkup : undefined,
     });
+    if (!buttonsAttached && params.replyMarkup) {
+      buttonsAttached = true;
+    }
     markReplyApplied(params.progress, replyToForFollowUp);
     markDelivered(params.progress);
   }
@@ -222,7 +259,14 @@ async function sendTelegramVoiceFallbackText(opts: {
   let appliedReplyTo = false;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
-    if (isEmptyTextChunk(chunk)) {
+    if (
+      shouldSkipEmptyTextChunk({
+        chunk,
+        context: "voice fallback",
+        index: i,
+        total: chunks.length,
+      })
+    ) {
       continue;
     }
     // Only apply reply reference, quote text, and buttons to the first chunk.

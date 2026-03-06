@@ -56,7 +56,7 @@ function createBot(api: Record<string, unknown> = {}): Bot {
 }
 
 async function deliverWith(params: DeliverWithParams) {
-  await deliverReplies({
+  return await deliverReplies({
     ...baseDeliveryParams,
     ...params,
   });
@@ -479,17 +479,58 @@ describe("deliverReplies", () => {
     const sendMessage = vi.fn();
     const bot = { api: { sendMessage } } as unknown as Bot;
 
-    await deliverReplies({
-      replies: [{ text: "   " }],
+    await expect(
+      deliverReplies({
+        replies: [{ text: "   " }],
+        chatId: "123",
+        token: "tok",
+        runtime,
+        bot,
+        replyToMode: "off",
+        textLimit: 4000,
+      }),
+    ).resolves.toEqual({ delivered: false });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps inline buttons on the first non-empty text chunk after skipped whitespace", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 11,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    const result = await deliverReplies({
+      replies: [
+        {
+          text: "   hello",
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Ack", callback_data: "ack" }]],
+            },
+          },
+        },
+      ],
       chatId: "123",
       token: "tok",
       runtime,
       bot,
       replyToMode: "off",
-      textLimit: 4000,
+      textLimit: 3,
     });
 
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(result).toEqual({ delivered: true });
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        reply_markup: {
+          inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
+        },
+      }),
+    );
+    expect(sendMessage.mock.calls[1]?.[2]).not.toHaveProperty("reply_markup");
   });
 
   it("uses reply_to_message_id when quote text is provided", async () => {
