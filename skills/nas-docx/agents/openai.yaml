@@ -1,0 +1,8 @@
+interface:
+  display_name: "NAS DOCX"
+  short_description: "Extract and summarize NAS Word files."
+  brand_color: "#1F6FEB"
+  default_prompt: "Use $nas-docx to extract the real text from a NAS .docx with bundled docx_text.py and summarize it without guessing from the filename."
+
+policy:
+  allow_implicit_invocation: true

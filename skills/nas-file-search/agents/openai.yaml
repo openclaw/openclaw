@@ -1,0 +1,8 @@
+interface:
+  display_name: "NAS File Search"
+  short_description: "Find NAS files by filename with nas_search."
+  brand_color: "#0E7490"
+  default_prompt: "Use $nas-file-search to locate a NAS file by filename with nas_search, then pass the resolved path to the next skill."
+
+policy:
+  allow_implicit_invocation: true

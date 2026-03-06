@@ -54,7 +54,21 @@ function normalizeRelPath(rawPath: unknown): string {
   if (!trimmed || trimmed === "/") {
     return ".";
   }
+  if (trimmed === DEFAULT_ROOT) {
+    return ".";
+  }
+  if (trimmed.startsWith(DEFAULT_ROOT + "/")) {
+    return trimmed.slice(DEFAULT_ROOT.length + 1);
+  }
   return trimmed.replace(/^\/+/, "");
+}
+
+function looksLikeFilenameQuery(rawQuery: string): boolean {
+  const q = rawQuery.trim();
+  if (!q) {
+    return false;
+  }
+  return /[\\/]/.test(q) || /\.[A-Za-z0-9]{2,8}$/.test(q) || /[_-]/.test(q);
 }
 
 function resolveInsideRoot(root: string, relPath: string): string {
@@ -177,6 +191,73 @@ async function runSearch(params: {
     count: matches.length,
     truncated: lines.length > max,
     matches,
+  };
+}
+
+async function runFilenameSearch(params: {
+  root: string;
+  relPath: string;
+  query: string;
+  maxResults: number;
+}): Promise<{
+  root: string;
+  path: string;
+  query: string;
+  count: number;
+  truncated: boolean;
+  matches: Array<{ file: string }>;
+}> {
+  const absPath = resolveInsideRoot(params.root, params.relPath);
+  await assertExists(absPath);
+  const max = Math.max(1, Math.min(500, params.maxResults));
+  const needle = params.query.trim().toLocaleLowerCase();
+  if (!needle) {
+    return {
+      root: path.resolve(params.root),
+      path: toRelPath(params.root, absPath),
+      query: params.query,
+      count: 0,
+      truncated: false,
+      matches: [],
+    };
+  }
+
+  let stdout = "";
+  try {
+    const res = await execFileAsync("rg", ["--files", "--hidden", absPath], {
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    stdout = res.stdout ?? "";
+  } catch (error) {
+    const err = error as { stdout?: string; code?: number | string };
+    if (err.code === 1) {
+      stdout = err.stdout ?? "";
+    } else {
+      throw new Error("ripgrep (rg) is required for nas_search");
+    }
+  }
+
+  const files = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((absFile) => {
+      const relFile = toRelPath(params.root, absFile);
+      const baseName = path.basename(relFile);
+      return (
+        relFile.toLocaleLowerCase().includes(needle) || baseName.toLocaleLowerCase().includes(needle)
+      );
+    });
+
+  return {
+    root: path.resolve(params.root),
+    path: toRelPath(params.root, absPath),
+    query: params.query,
+    count: Math.min(files.length, max),
+    truncated: files.length > max,
+    matches: files.slice(0, max).map((absFile) => ({
+      file: toRelPath(params.root, absFile),
+    })),
   };
 }
 
@@ -361,22 +442,14 @@ export function createNasTools(api: OpenClawPluginApi): AnyAgentTool[] {
             : cfg.maxSearchResults;
         const maxResults = Math.max(1, Math.min(500, requestedMax));
 
-        if (params.mode === "filename") {
-          const listing = await runSearch({
+        if (params.mode === "filename" || (params.mode == null && looksLikeFilenameQuery(query))) {
+          const listing = await runFilenameSearch({
             root: cfg.root,
             relPath,
             query,
             maxResults,
           });
-          const files = Array.from(new Set(listing.matches.map((m) => m.file)));
-          return jsonResult({
-            root: listing.root,
-            path: listing.path,
-            query,
-            count: files.length,
-            truncated: files.length > maxResults,
-            matches: files.slice(0, maxResults).map((file) => ({ file })),
-          });
+          return jsonResult(listing);
         }
 
         const result = await runSearch({

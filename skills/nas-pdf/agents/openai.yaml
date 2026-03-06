@@ -1,0 +1,8 @@
+interface:
+  display_name: "NAS PDF"
+  short_description: "Extract and summarize NAS PDF files."
+  brand_color: "#B45309"
+  default_prompt: "Use $nas-pdf to extract the real text from a NAS PDF with the bundled helper and summarize it without guessing from the filename."
+
+policy:
+  allow_implicit_invocation: true
