@@ -119,7 +119,7 @@ const TRUNCATION_MARKER = "\n[…truncated by openclaw]";
  * Clamp a string to `MAX_HOOK_CONTEXT_LENGTH` (inclusive of the
  * truncation marker), so the returned value never exceeds the limit.
  */
-function clampHookString(
+export function clampHookString(
   value: string | undefined,
   label: string,
   warn: ((msg: string) => void) | undefined,

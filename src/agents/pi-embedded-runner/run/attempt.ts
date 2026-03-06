@@ -9,6 +9,7 @@ import { resolveChannelCapabilities } from "../../../config/channel-capabilities
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { clampHookString } from "../../../plugins/hooks.js";
 import {
   isCronSessionKey,
   isSubagentSessionKey,
@@ -905,9 +906,15 @@ export async function runEmbeddedAttempt(
           : undefined;
         const hookResult = {
           systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
-          prependContext: [promptBuildResult?.prependContext, legacyResult?.prependContext]
-            .filter((value): value is string => Boolean(value))
-            .join("\n\n"),
+          // Clamp combined context: each hook is individually clamped, but
+          // legacy + phase hooks can concatenate to exceed the limit.
+          prependContext: clampHookString(
+            [promptBuildResult?.prependContext, legacyResult?.prependContext]
+              .filter((value): value is string => Boolean(value))
+              .join("\n\n") || undefined,
+            "combined prependContext",
+            log.warn.bind(log),
+          ),
         };
         {
           if (hookResult?.prependContext) {
