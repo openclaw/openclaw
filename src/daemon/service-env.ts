@@ -84,6 +84,7 @@ function addCommonUserBinDirs(dirs: string[], home: string): void {
   dirs.push(`${home}/.volta/bin`);
   dirs.push(`${home}/.asdf/shims`);
   dirs.push(`${home}/.bun/bin`);
+  dirs.push(`${home}/.n/bin`);
 }
 
 function addCommonEnvConfiguredBinDirs(
@@ -95,6 +96,7 @@ function addCommonEnvConfiguredBinDirs(
   addNonEmptyDir(dirs, appendSubdir(env?.BUN_INSTALL, "bin"));
   addNonEmptyDir(dirs, appendSubdir(env?.VOLTA_HOME, "bin"));
   addNonEmptyDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"));
+  addNonEmptyDir(dirs, appendSubdir(env?.N_PREFIX, "bin"));
 }
 
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
@@ -128,6 +130,7 @@ export function resolveDarwinUserBinDirs(
   // Env-configured bin roots (override defaults when present).
   // Note: FNM_DIR on macOS defaults to ~/Library/Application Support/fnm
   // Note: PNPM_HOME on macOS defaults to ~/Library/pnpm
+  // Note: n uses N_PREFIX/bin when configured
   addCommonEnvConfiguredBinDirs(dirs, env);
   // nvm: no stable default path, relies on env or user's shell config
   // User must set NVM_DIR and source nvm.sh for it to work
