@@ -177,6 +177,24 @@ describe("resolveProfilesUnavailableReason", () => {
     ).toBe("auth");
   });
 
+  it("returns overloaded for active overloaded cooldown windows", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+        failureCounts: { overloaded: 2, rate_limit: 1 },
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default"],
+        now,
+      }),
+    ).toBe("overloaded");
+  });
+
   it("falls back to rate_limit when active cooldown has no reason history", () => {
     const now = Date.now();
     const store = makeStore({

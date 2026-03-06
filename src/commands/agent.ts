@@ -174,7 +174,7 @@ function runAgentAttempt(params: {
   primaryProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
-  allowRateLimitCooldownProbe?: boolean;
+  allowTransientCooldownProbe?: boolean;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
@@ -325,7 +325,7 @@ function runAgentAttempt(params: {
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
-    allowRateLimitCooldownProbe: params.allowRateLimitCooldownProbe,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
@@ -868,7 +868,7 @@ async function agentCommandInternal(
             primaryProvider: provider,
             sessionStore,
             storePath,
-            allowRateLimitCooldownProbe: runOptions?.allowRateLimitCooldownProbe,
+            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (

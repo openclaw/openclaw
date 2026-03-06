@@ -50,6 +50,26 @@ describe("discord auto presence", () => {
     expect(decision?.presence.activities[0]?.state).toBe("token exhausted");
   });
 
+  it("treats overloaded cooldown as exhausted", () => {
+    const now = Date.now();
+    const decision = resolveDiscordAutoPresenceDecision({
+      discordConfig: {
+        autoPresence: {
+          enabled: true,
+          exhaustedText: "token exhausted",
+        },
+      },
+      authStore: createStore({ cooldownUntil: now + 60_000, failureCounts: { overloaded: 2 } }),
+      gatewayConnected: true,
+      now,
+    });
+
+    expect(decision).toBeTruthy();
+    expect(decision?.state).toBe("exhausted");
+    expect(decision?.presence.status).toBe("dnd");
+    expect(decision?.presence.activities[0]?.state).toBe("token exhausted");
+  });
+
   it("recovers from exhausted to online once a profile becomes usable", () => {
     let now = Date.now();
     let store = createStore({ cooldownUntil: now + 60_000, failureCounts: { rate_limit: 1 } });

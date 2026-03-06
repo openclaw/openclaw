@@ -208,7 +208,7 @@ export function createFollowupRunner(params: {
               bashElevated: queued.run.bashElevated,
               timeoutMs: queued.run.timeoutMs,
               runId,
-              allowRateLimitCooldownProbe: runOptions?.allowRateLimitCooldownProbe,
+              allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               blockReplyBreak: queued.run.blockReplyBreak,
               bootstrapPromptWarningSignaturesSeen,
               bootstrapPromptWarningSignature:

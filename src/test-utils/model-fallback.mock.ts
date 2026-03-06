@@ -4,7 +4,7 @@ export async function runWithModelFallback(params: {
   run: (
     provider: string,
     model: string,
-    options?: { allowRateLimitCooldownProbe?: boolean },
+    options?: { allowTransientCooldownProbe?: boolean },
   ) => Promise<unknown>;
 }) {
   return {

@@ -311,7 +311,7 @@ export async function runAgentTurnWithFallback(params: {
             model,
             runId,
             authProfile,
-            allowRateLimitCooldownProbe: runOptions?.allowRateLimitCooldownProbe,
+            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           });
           return (async () => {
             const result = await runEmbeddedPiAgent({
