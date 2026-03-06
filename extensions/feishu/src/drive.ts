@@ -23,8 +23,8 @@ async function getRootFolderToken(client: Lark.Client): Promise<string> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing internal SDK property
   const res = (await (client as any).httpInstance.get(
     `${domain}/open-apis/drive/explorer/v2/root_folder/meta`,
-  )) as { code: number; msg?: string; data?: { token?: string } };
-  if (res.code !== 0) {
+  )) as { code?: number; msg?: string; data?: { token?: string } };
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg ?? "Failed to get root folder");
   }
   const token = res.data?.token;
@@ -40,7 +40,7 @@ async function listFolder(client: Lark.Client, folderToken?: string) {
   const res = await client.drive.file.list({
     params: validFolderToken ? { folder_token: validFolderToken } : {},
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -64,7 +64,7 @@ async function getFileInfo(client: Lark.Client, fileToken: string, folderToken?:
   const res = await client.drive.file.list({
     params: folderToken ? { folder_token: folderToken } : {},
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -103,7 +103,7 @@ async function createFolder(client: Lark.Client, name: string, folderToken?: str
       folder_token: effectiveToken,
     },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -129,7 +129,7 @@ async function moveFile(client: Lark.Client, fileToken: string, type: string, fo
       folder_token: folderToken,
     },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -155,7 +155,7 @@ async function deleteFile(client: Lark.Client, fileToken: string, type: string) 
         | "shortcut",
     },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
