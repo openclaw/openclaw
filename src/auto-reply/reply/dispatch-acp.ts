@@ -140,6 +140,7 @@ function hasBoundConversationForSession(params: {
 
 export type AcpDispatchAttemptResult = {
   queuedFinal: boolean;
+  attemptedFinal?: number;
   counts: Record<ReplyDispatchKind, number>;
 };
 
@@ -175,6 +176,7 @@ export async function tryDispatchAcpReply(params: {
   }
 
   let queuedFinal = false;
+  let attemptedFinal = 0;
   const delivery = createAcpDispatchDeliveryCoordinator({
     cfg: params.cfg,
     ctx: params.ctx,
@@ -194,7 +196,7 @@ export async function tryDispatchAcpReply(params: {
     delivery.applyRoutedCounts(counts);
     params.recordProcessed("completed", { reason: "acp_empty_prompt" });
     params.markIdle("message_completed");
-    return { queuedFinal: false, counts };
+    return { queuedFinal: false, attemptedFinal: 0, counts };
   }
 
   const identityPendingBeforeTurn = isSessionIdentityPending(
@@ -311,7 +313,7 @@ export async function tryDispatchAcpReply(params: {
     );
     params.recordProcessed("completed", { reason: "acp_dispatch" });
     params.markIdle("message_completed");
-    return { queuedFinal, counts };
+    return { queuedFinal, attemptedFinal, counts };
   } catch (err) {
     await projector.flush(true);
     const acpError = toAcpRuntimeError({
@@ -334,6 +336,6 @@ export async function tryDispatchAcpReply(params: {
       reason: `acp_error:${acpError.code.toLowerCase()}`,
     });
     params.markIdle("message_completed");
-    return { queuedFinal, counts };
+    return { queuedFinal, attemptedFinal, counts };
   }
 }

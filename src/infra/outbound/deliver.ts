@@ -36,7 +36,12 @@ import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
-import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
+import {
+  ackDelivery,
+  enqueueDelivery,
+  failDelivery,
+  markAttemptStarted,
+} from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
@@ -248,6 +253,10 @@ type DeliverOutboundPayloadsCoreParams = {
     groupId?: string;
   };
   silent?: boolean;
+  /** Links outbox queue rows to a durable message turn. */
+  turnId?: string;
+  /** Dispatch kind for outbox tracking and recovery filtering. */
+  dispatchKind?: "tool" | "block" | "final";
 };
 
 type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
@@ -480,22 +489,32 @@ export async function deliverOutboundPayloads(
         gifPlayback: params.gifPlayback,
         silent: params.silent,
         mirror: params.mirror,
+        turnId: params.turnId,
+        dispatchKind: params.dispatchKind,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
   // Wrap onError to detect partial failures under bestEffort mode.
   // When bestEffort is true, per-payload errors are caught and passed to onError
   // without throwing — so the outer try/catch never fires. We track whether any
   // payload failed so we can call failDelivery instead of ackDelivery.
+  // When bestEffort is true but onError is absent, we still wrap so hadPartialFailure is set.
   let hadPartialFailure = false;
-  const wrappedParams = params.onError
-    ? {
-        ...params,
-        onError: (err: unknown, payload: NormalizedOutboundPayload) => {
-          hadPartialFailure = true;
-          params.onError!(err, payload);
-        },
-      }
-    : params;
+  const wrappedParams =
+    params.bestEffort || params.onError
+      ? {
+          ...params,
+          onError: (err: unknown, payload: NormalizedOutboundPayload) => {
+            hadPartialFailure = true;
+            params.onError?.(err, payload);
+          },
+        }
+      : params;
+
+  // Mark attempt started before sending so the row passes startup-cutoff
+  // filtering even if the subsequent ack/fail write is swallowed.
+  if (queueId) {
+    await markAttemptStarted(queueId).catch(() => {});
+  }
 
   try {
     const results = await deliverOutboundPayloadsCore(wrappedParams);

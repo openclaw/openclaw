@@ -3,12 +3,17 @@ import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { logVerbose } from "../../globals.js";
+import {
+  getLifecycleDb,
+  isLifecycleDbInMemory,
+  runLifecycleTransaction,
+} from "../message-lifecycle/db.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { OutboundChannel } from "./targets.js";
 
-const QUEUE_DIRNAME = "delivery-queue";
-const FAILED_DIRNAME = "failed";
 const MAX_RETRIES = 5;
+export { MAX_RETRIES };
 
 /** Backoff delays in milliseconds indexed by retry count (1-based). */
 const BACKOFF_MS: readonly number[] = [
@@ -17,6 +22,11 @@ const BACKOFF_MS: readonly number[] = [
   120_000, // retry 3: 2m
   600_000, // retry 4: 10m
 ];
+
+/** Default expiry for stale queued messages. */
+const DEFAULT_OUTBOX_MAX_AGE_MS = 30 * 60_000;
+/** Terminal outbox rows older than this are pruned. */
+export const OUTBOX_PRUNE_AGE_MS = 48 * 60 * 60_000;
 
 type DeliveryMirrorPayload = {
   sessionKey: string;
@@ -29,11 +39,6 @@ type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
-  /**
-   * Original payloads before plugin hooks. On recovery, hooks re-run on these
-   * payloads — this is intentional since hooks are stateless transforms and
-   * should produce the same result on replay.
-   */
   payloads: ReplyPayload[];
   threadId?: string | number | null;
   replyToId?: string | null;
@@ -41,6 +46,12 @@ type QueuedDeliveryPayload = {
   gifPlayback?: boolean;
   silent?: boolean;
   mirror?: DeliveryMirrorPayload;
+  /** Dispatch kind (tool/block/final). Non-final entries are skipped during recovery. */
+  dispatchKind?: "tool" | "block" | "final";
+};
+
+type QueuedDeliveryParams = QueuedDeliveryPayload & {
+  turnId?: string;
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
@@ -49,6 +60,8 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
+  turnId?: string;
+  dispatchKind?: "tool" | "block" | "final";
 }
 
 export type RecoverySummary = {
@@ -56,206 +69,9 @@ export type RecoverySummary = {
   failed: number;
   skippedMaxRetries: number;
   deferredBackoff: number;
+  /** Entries skipped because they were enqueued after gateway startup (live delivery in progress). */
+  skippedStartupCutoff: number;
 };
-
-function resolveQueueDir(stateDir?: string): string {
-  const base = stateDir ?? resolveStateDir();
-  return path.join(base, QUEUE_DIRNAME);
-}
-
-function resolveFailedDir(stateDir?: string): string {
-  return path.join(resolveQueueDir(stateDir), FAILED_DIRNAME);
-}
-
-/** Ensure the queue directory (and failed/ subdirectory) exist. */
-export async function ensureQueueDir(stateDir?: string): Promise<string> {
-  const queueDir = resolveQueueDir(stateDir);
-  await fs.promises.mkdir(queueDir, { recursive: true, mode: 0o700 });
-  await fs.promises.mkdir(resolveFailedDir(stateDir), { recursive: true, mode: 0o700 });
-  return queueDir;
-}
-
-/** Persist a delivery entry to disk before attempting send. Returns the entry ID. */
-type QueuedDeliveryParams = QueuedDeliveryPayload;
-
-export async function enqueueDelivery(
-  params: QueuedDeliveryParams,
-  stateDir?: string,
-): Promise<string> {
-  const queueDir = await ensureQueueDir(stateDir);
-  const id = generateSecureUuid();
-  const entry: QueuedDelivery = {
-    id,
-    enqueuedAt: Date.now(),
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId,
-    payloads: params.payloads,
-    threadId: params.threadId,
-    replyToId: params.replyToId,
-    bestEffort: params.bestEffort,
-    gifPlayback: params.gifPlayback,
-    silent: params.silent,
-    mirror: params.mirror,
-    retryCount: 0,
-  };
-  const filePath = path.join(queueDir, `${id}.json`);
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  const json = JSON.stringify(entry, null, 2);
-  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
-  await fs.promises.rename(tmp, filePath);
-  return id;
-}
-
-/** Remove a successfully delivered entry from the queue. */
-export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
-  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
-  try {
-    await fs.promises.unlink(filePath);
-  } catch (err) {
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? String((err as { code?: unknown }).code)
-        : null;
-    if (code !== "ENOENT") {
-      throw err;
-    }
-    // Already removed — no-op.
-  }
-}
-
-/** Update a queue entry after a failed delivery attempt. */
-export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
-  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
-  const raw = await fs.promises.readFile(filePath, "utf-8");
-  const entry: QueuedDelivery = JSON.parse(raw);
-  entry.retryCount += 1;
-  entry.lastAttemptAt = Date.now();
-  entry.lastError = error;
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
-  await fs.promises.rename(tmp, filePath);
-}
-
-/** Load all pending delivery entries from the queue directory. */
-export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
-  const queueDir = resolveQueueDir(stateDir);
-  let files: string[];
-  try {
-    files = await fs.promises.readdir(queueDir);
-  } catch (err) {
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? String((err as { code?: unknown }).code)
-        : null;
-    if (code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
-  const entries: QueuedDelivery[] = [];
-  for (const file of files) {
-    if (!file.endsWith(".json")) {
-      continue;
-    }
-    const filePath = path.join(queueDir, file);
-    try {
-      const stat = await fs.promises.stat(filePath);
-      if (!stat.isFile()) {
-        continue;
-      }
-      const raw = await fs.promises.readFile(filePath, "utf-8");
-      const parsed = JSON.parse(raw) as QueuedDelivery;
-      const { entry, migrated } = normalizeLegacyQueuedDeliveryEntry(parsed);
-      if (migrated) {
-        const tmp = `${filePath}.${process.pid}.tmp`;
-        await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
-          encoding: "utf-8",
-          mode: 0o600,
-        });
-        await fs.promises.rename(tmp, filePath);
-      }
-      entries.push(entry);
-    } catch {
-      // Skip malformed or inaccessible entries.
-    }
-  }
-  return entries;
-}
-
-/** Move a queue entry to the failed/ subdirectory. */
-export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
-  const queueDir = resolveQueueDir(stateDir);
-  const failedDir = resolveFailedDir(stateDir);
-  await fs.promises.mkdir(failedDir, { recursive: true, mode: 0o700 });
-  const src = path.join(queueDir, `${id}.json`);
-  const dest = path.join(failedDir, `${id}.json`);
-  await fs.promises.rename(src, dest);
-}
-
-/** Compute the backoff delay in ms for a given retry count. */
-export function computeBackoffMs(retryCount: number): number {
-  if (retryCount <= 0) {
-    return 0;
-  }
-  return BACKOFF_MS[Math.min(retryCount - 1, BACKOFF_MS.length - 1)] ?? BACKOFF_MS.at(-1) ?? 0;
-}
-
-export function isEntryEligibleForRecoveryRetry(
-  entry: QueuedDelivery,
-  now: number,
-): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
-  const backoff = computeBackoffMs(entry.retryCount + 1);
-  if (backoff <= 0) {
-    return { eligible: true };
-  }
-  const firstReplayAfterCrash = entry.retryCount === 0 && entry.lastAttemptAt === undefined;
-  if (firstReplayAfterCrash) {
-    return { eligible: true };
-  }
-  const hasAttemptTimestamp =
-    typeof entry.lastAttemptAt === "number" &&
-    Number.isFinite(entry.lastAttemptAt) &&
-    entry.lastAttemptAt > 0;
-  const baseAttemptAt = hasAttemptTimestamp
-    ? (entry.lastAttemptAt ?? entry.enqueuedAt)
-    : entry.enqueuedAt;
-  const nextEligibleAt = baseAttemptAt + backoff;
-  if (now >= nextEligibleAt) {
-    return { eligible: true };
-  }
-  return { eligible: false, remainingBackoffMs: nextEligibleAt - now };
-}
-
-function normalizeLegacyQueuedDeliveryEntry(entry: QueuedDelivery): {
-  entry: QueuedDelivery;
-  migrated: boolean;
-} {
-  const hasAttemptTimestamp =
-    typeof entry.lastAttemptAt === "number" &&
-    Number.isFinite(entry.lastAttemptAt) &&
-    entry.lastAttemptAt > 0;
-  if (hasAttemptTimestamp || entry.retryCount <= 0) {
-    return { entry, migrated: false };
-  }
-  const hasEnqueuedTimestamp =
-    typeof entry.enqueuedAt === "number" &&
-    Number.isFinite(entry.enqueuedAt) &&
-    entry.enqueuedAt > 0;
-  if (!hasEnqueuedTimestamp) {
-    return { entry, migrated: false };
-  }
-  return {
-    entry: {
-      ...entry,
-      lastAttemptAt: entry.enqueuedAt,
-    },
-    migrated: true,
-  };
-}
 
 export type DeliverFn = (
   params: {
@@ -271,30 +87,499 @@ export interface RecoveryLogger {
   error(msg: string): void;
 }
 
+function resolveQueueDir(stateDir?: string): string {
+  const base = stateDir ?? resolveStateDir();
+  return path.join(base, "delivery-queue");
+}
+
+function resolveDeliveryMaxAgeMs(cfg: OpenClawConfig): number {
+  const configured = cfg.messages?.delivery?.maxAgeMs;
+  if (typeof configured !== "number" || !Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_OUTBOX_MAX_AGE_MS;
+  }
+  return Math.floor(configured);
+}
+
+function resolveExpireAction(cfg: OpenClawConfig): "fail" | "deliver" {
+  const action = cfg.messages?.delivery?.expireAction;
+  // Default to "deliver" so that a long gateway restart doesn't permanently
+  // drop queued messages. Operators can opt into "fail" explicitly.
+  return action === "fail" ? "fail" : "deliver";
+}
+
+export async function ensureQueueDir(stateDir?: string): Promise<string> {
+  // Kept for backward compatibility with callers/tests that expect this helper.
+  // SQLite-backed queue does not require directory structure, but we retain the
+  // legacy queue path for one-time import support.
+  const queueDir = resolveQueueDir(stateDir);
+  await fs.promises.mkdir(queueDir, { recursive: true, mode: 0o700 });
+  await fs.promises.mkdir(path.join(queueDir, "failed"), { recursive: true, mode: 0o700 });
+  return queueDir;
+}
+
+/** Persist a delivery entry before attempting send. Returns the entry ID. */
+export async function enqueueDelivery(
+  params: QueuedDeliveryParams,
+  stateDir?: string,
+): Promise<string> {
+  const db = getLifecycleDb(stateDir);
+  const id = generateSecureUuid();
+  const now = Date.now();
+  const payload = JSON.stringify({
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId,
+    payloads: params.payloads,
+    threadId: params.threadId,
+    replyToId: params.replyToId,
+    bestEffort: params.bestEffort,
+    gifPlayback: params.gifPlayback,
+    silent: params.silent,
+    mirror: params.mirror,
+    dispatchKind: params.dispatchKind,
+  });
+  db.prepare(
+    `INSERT INTO message_outbox
+       (id, turn_id, channel, account_id, target, dispatch_kind, payload, queued_at, status, attempt_count, next_attempt_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?)`,
+  ).run(
+    id,
+    params.turnId ?? null,
+    params.channel,
+    params.accountId ?? "",
+    params.to,
+    params.dispatchKind ?? null,
+    payload,
+    now,
+    now,
+  );
+  return id;
+}
+
 /**
- * On gateway startup, scan the delivery queue and retry any pending entries.
- * Uses exponential backoff and moves entries that exceed MAX_RETRIES to failed/.
+ * Mark a delivery as "attempt started" before the actual send.
+ * This ensures the row passes startup-cutoff filtering even if the
+ * subsequent ack/fail bookkeeping write is swallowed.
+ *
+ * Also pushes next_attempt_at forward by the second-retry backoff (25s)
+ * to prevent the recovery worker from picking up the row while the direct
+ * send is still in progress. We use the second tier rather than the first
+ * (5s) because some channels have longer timeouts (e.g. Signal 10s RPC).
+ * If the direct send completes normally, ackDelivery or failDelivery
+ * finalizes the row before recovery touches it.
+ */
+export async function markAttemptStarted(id: string, stateDir?: string): Promise<void> {
+  const db = getLifecycleDb(stateDir);
+  try {
+    const now = Date.now();
+    db.prepare(
+      `UPDATE message_outbox
+         SET last_attempt_at = ?, next_attempt_at = ?
+       WHERE id = ? AND last_attempt_at IS NULL`,
+    ).run(now, now + computeBackoffMs(2), id);
+  } catch (err) {
+    logVerbose(`delivery-queue: markAttemptStarted failed: ${String(err)}`);
+  }
+}
+
+// ackDelivery is best-effort bookkeeping after a successful send.
+// If the UPDATE fails, the entry stays queued and the recovery worker
+// will re-send it. This is safe because channel sends are idempotent
+// (via idempotency keys where supported, or harmless duplicate delivery).
+/** Mark a delivery as successful. */
+export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
+  const db = getLifecycleDb(stateDir);
+  try {
+    db.prepare(
+      `UPDATE message_outbox
+         SET status='delivered', delivered_at=?, completed_at=?
+       WHERE id=?`,
+    ).run(Date.now(), Date.now(), id);
+  } catch (err) {
+    logVerbose(`delivery-queue: ackDelivery failed: ${String(err)}`);
+  }
+}
+
+// failDelivery write errors are self-correcting: the entry remains in
+// 'queued' status and will be retried up to MAX_RETRIES times.
+// After MAX_RETRIES, moveToFailed marks it terminal.
+/** Record a failed delivery attempt. */
+export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
+  const db = getLifecycleDb(stateDir);
+  try {
+    // Only act on non-terminal rows — if the live path already acked/failed
+    // this entry, the recovery worker should not resurrect it.
+    const row = db
+      .prepare(
+        `SELECT attempt_count, dispatch_kind FROM message_outbox WHERE id=? AND status IN ('queued','failed_retryable')`,
+      )
+      .get(id) as { attempt_count: number; dispatch_kind: string | null } | undefined;
+    if (!row) {
+      return;
+    }
+    const now = Date.now();
+    if (isPermanentDeliveryError(error)) {
+      db.prepare(
+        `UPDATE message_outbox
+           SET status='failed_terminal',
+               error_class='permanent',
+               attempt_count=?,
+               last_error=?,
+               last_attempt_at=?,
+               completed_at=?,
+               terminal_reason=?
+         WHERE id=?`,
+      ).run(row.attempt_count + 1, error, now, now, error, id);
+      return;
+    }
+    // Non-final rows (tool/block dispatches) have no recovery path — recovery
+    // skips them by dispatch_kind filter. Mark terminal immediately rather than
+    // leaving them in failed_retryable where they'd accumulate.
+    if (row.dispatch_kind && row.dispatch_kind !== "final") {
+      db.prepare(
+        `UPDATE message_outbox
+           SET status='failed_terminal',
+               error_class='terminal',
+               attempt_count=?,
+               last_error=?,
+               last_attempt_at=?,
+               completed_at=?,
+               terminal_reason=?
+         WHERE id=?`,
+      ).run(row.attempt_count + 1, error, now, now, "non-final dispatch; no recovery path", id);
+      return;
+    }
+    const nextCount = row.attempt_count + 1;
+    if (nextCount >= MAX_RETRIES) {
+      db.prepare(
+        `UPDATE message_outbox
+           SET status='failed_terminal',
+               error_class='terminal',
+               attempt_count=?,
+               last_error=?,
+               last_attempt_at=?,
+               completed_at=?,
+               terminal_reason=?
+         WHERE id=?`,
+      ).run(nextCount, error, now, now, error, id);
+      return;
+    }
+    db.prepare(
+      `UPDATE message_outbox
+         SET status='failed_retryable',
+             attempt_count=?,
+             last_error=?,
+             last_attempt_at=?,
+             next_attempt_at=?
+       WHERE id=?`,
+    ).run(nextCount, error, now, now + computeBackoffMs(nextCount), id);
+  } catch (err) {
+    logVerbose(`delivery-queue: failDelivery failed: ${String(err)}`);
+  }
+}
+
+/** Load pending queue entries eligible for retry now. */
+export async function loadPendingDeliveries(
+  stateDir?: string,
+  startupCutoff?: number,
+): Promise<QueuedDelivery[]> {
+  const db = getLifecycleDb(stateDir);
+  try {
+    // When a startupCutoff is supplied (gateway startup timestamp), exclude entries that were
+    // enqueued during this instance's lifetime and have never been attempted. Those entries are
+    // actively being delivered on the direct path; picking them up would cause duplicate sends.
+    // Entries enqueued before startup (crash survivors) or entries that have already had at least
+    // one attempt (transient failures) are always included.
+    const now = Date.now();
+    const rows = (
+      startupCutoff !== undefined
+        ? db
+            .prepare(
+              `SELECT id, payload, queued_at, attempt_count, last_attempt_at, last_error, turn_id
+                 FROM message_outbox
+                WHERE status IN ('queued', 'failed_retryable')
+                  AND (dispatch_kind IS NULL OR dispatch_kind = 'final')
+                  AND next_attempt_at <= ?
+                  AND (queued_at < ? OR last_attempt_at IS NOT NULL OR attempt_count > 0)
+                ORDER BY queued_at ASC`,
+            )
+            .all(now, startupCutoff)
+        : db
+            .prepare(
+              `SELECT id, payload, queued_at, attempt_count, last_attempt_at, last_error, turn_id
+                 FROM message_outbox
+                WHERE status IN ('queued', 'failed_retryable')
+                  AND (dispatch_kind IS NULL OR dispatch_kind = 'final')
+                  AND next_attempt_at <= ?
+                ORDER BY queued_at ASC`,
+            )
+            .all(now)
+    ) as Array<{
+      id: string;
+      payload: string;
+      queued_at: number;
+      attempt_count: number;
+      last_attempt_at: number | null;
+      last_error: string | null;
+      turn_id: string | null;
+    }>;
+
+    const entries: QueuedDelivery[] = [];
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.payload) as QueuedDeliveryPayload;
+        entries.push({
+          ...parsed,
+          id: row.id,
+          enqueuedAt: row.queued_at,
+          retryCount: row.attempt_count,
+          ...(row.last_attempt_at != null ? { lastAttemptAt: row.last_attempt_at } : {}),
+          ...(row.last_error ? { lastError: row.last_error } : {}),
+          ...(row.turn_id ? { turnId: row.turn_id } : {}),
+        });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        db.prepare(
+          `UPDATE message_outbox
+             SET status='failed_terminal',
+                 error_class='terminal',
+                 last_error=?,
+                 terminal_reason=?,
+                 completed_at=?
+           WHERE id=?`,
+        ).run(`invalid payload: ${errMsg}`, `invalid payload: ${errMsg}`, Date.now(), row.id);
+      }
+    }
+    return entries;
+  } catch (err) {
+    logVerbose(`delivery-queue: loadPendingDeliveries failed: ${String(err)}`);
+    return [];
+  }
+}
+
+/** Mark an entry as terminal failed.
+ * Only acts on non-terminal rows so we never overwrite an already-acked or
+ * already-failed entry (mirrors the guard in failDelivery). */
+export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
+  const db = getLifecycleDb(stateDir);
+  try {
+    db.prepare(
+      `UPDATE message_outbox
+         SET status='failed_terminal',
+             error_class='terminal',
+             terminal_reason=COALESCE(terminal_reason,'moved to failed'),
+             completed_at=?
+       WHERE id=? AND status IN ('queued','failed_retryable')`,
+    ).run(Date.now(), id);
+  } catch (err) {
+    logVerbose(`delivery-queue: moveToFailed failed: ${String(err)}`);
+  }
+}
+
+/** Compute retry backoff in milliseconds. */
+export function computeBackoffMs(retryCount: number): number {
+  if (retryCount <= 0) {
+    return 0;
+  }
+  return BACKOFF_MS[Math.min(retryCount - 1, BACKOFF_MS.length - 1)] ?? BACKOFF_MS.at(-1) ?? 0;
+}
+
+export function isEntryEligibleForRecoveryRetry(
+  entry: QueuedDelivery,
+  now: number,
+): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
+  // Use the same backoff level that failDelivery used when writing next_attempt_at.
+  // failDelivery increments attempt_count to nextCount and writes
+  // next_attempt_at = now + computeBackoffMs(nextCount), so entry.retryCount
+  // already reflects the incremented value.
+  const backoff = computeBackoffMs(entry.retryCount);
+  if (backoff <= 0) {
+    return { eligible: true };
+  }
+  const firstReplayAfterCrash = entry.retryCount === 0 && entry.lastAttemptAt === undefined;
+  if (firstReplayAfterCrash) {
+    return { eligible: true };
+  }
+  const hasAttemptTimestamp =
+    typeof entry.lastAttemptAt === "number" &&
+    Number.isFinite(entry.lastAttemptAt) &&
+    entry.lastAttemptAt > 0;
+  const baseAttemptAt = hasAttemptTimestamp ? entry.lastAttemptAt! : entry.enqueuedAt;
+  const nextEligibleAt = baseAttemptAt + backoff;
+  if (now >= nextEligibleAt) {
+    return { eligible: true };
+  }
+  return { eligible: false, remainingBackoffMs: nextEligibleAt - now };
+}
+
+/**
+ * Import legacy file queue entries into SQLite outbox.
+ * This is deterministic and idempotent for existing IDs.
+ */
+export async function importLegacyFileQueue(stateDir?: string): Promise<void> {
+  const queueDir = resolveQueueDir(stateDir);
+  const db = getLifecycleDb(stateDir);
+  // Don't delete legacy files when the DB is in-memory; they'd be lost on restart.
+  const inMemory = isLifecycleDbInMemory(stateDir);
+  let files: string[];
+  try {
+    files = fs.readdirSync(queueDir);
+  } catch {
+    return;
+  }
+  for (const file of files) {
+    if (!file.endsWith(".json")) {
+      continue;
+    }
+    const filePath = path.join(queueDir, file);
+    try {
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile()) {
+        continue;
+      }
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const entry = JSON.parse(raw) as QueuedDelivery;
+      if (!entry.id || !entry.channel || !entry.to) {
+        continue;
+      }
+      const payload = JSON.stringify({
+        channel: entry.channel,
+        to: entry.to,
+        accountId: entry.accountId,
+        payloads: entry.payloads,
+        threadId: entry.threadId,
+        replyToId: entry.replyToId,
+        bestEffort: entry.bestEffort,
+        gifPlayback: entry.gifPlayback,
+        silent: entry.silent,
+        mirror: entry.mirror,
+      });
+      runLifecycleTransaction(db, () => {
+        db.prepare(
+          `INSERT OR IGNORE INTO message_outbox
+             (id, turn_id, channel, account_id, target, payload, queued_at, status,
+              attempt_count, next_attempt_at, last_error, last_attempt_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          entry.id,
+          entry.turnId ?? null,
+          entry.channel,
+          entry.accountId ?? "",
+          entry.to,
+          payload,
+          entry.enqueuedAt ?? Date.now(),
+          "queued",
+          entry.retryCount ?? 0,
+          // Respect backoff for imported entries: base from last attempt (or enqueue time)
+          // plus computed backoff for the current retry count.
+          (entry.lastAttemptAt ?? entry.enqueuedAt ?? Date.now()) +
+            computeBackoffMs(entry.retryCount ?? 0),
+          entry.lastError ?? null,
+          entry.lastAttemptAt ?? null,
+        );
+      });
+      if (!inMemory) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (err) {
+      logVerbose(`delivery-queue: failed to import ${filePath}: ${String(err)}`);
+    }
+  }
+}
+
+/**
+ * Retry pending queue entries.
  */
 export async function recoverPendingDeliveries(opts: {
   deliver: DeliverFn;
   log: RecoveryLogger;
   cfg: OpenClawConfig;
   stateDir?: string;
-  /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next restart. Default: 60 000. */
   maxRecoveryMs?: number;
+  /** Timestamp of this gateway instance's startup. Entries enqueued after this time with no
+   *  prior attempt are skipped — they are actively being delivered on the direct path. */
+  startupCutoff?: number;
 }): Promise<RecoverySummary> {
-  const pending = await loadPendingDeliveries(opts.stateDir);
-  if (pending.length === 0) {
-    return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
+  if (resolveExpireAction(opts.cfg) === "fail") {
+    const db = getLifecycleDb(opts.stateDir);
+    const staleCutoff = Date.now() - resolveDeliveryMaxAgeMs(opts.cfg);
+    try {
+      db.prepare(
+        `UPDATE message_outbox
+           SET status='expired',
+               error_class='terminal',
+               last_error='expired: queued_at too old',
+               terminal_reason='expired',
+               completed_at=?
+         WHERE status IN ('queued','failed_retryable')
+           AND queued_at < ?`,
+      ).run(Date.now(), staleCutoff);
+    } catch (err) {
+      logVerbose(`delivery-queue: expiry update failed: ${String(err)}`);
+    }
   }
 
-  // Process oldest first.
-  pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
+  // Non-final outbox rows (tool/block dispatches) are never recovered — the parent turn
+  // will be replayed from scratch. Mark orphaned non-final rows as terminal so they
+  // don't accumulate unboundedly. Two cases:
+  //   1. Pre-startup rows (crash survivors): queued_at < startupCutoff
+  //   2. Post-startup rows where the direct send already started (markAttemptStarted ran)
+  //      but ack/fail didn't complete: last_attempt_at IS NOT NULL
+  if (opts.startupCutoff !== undefined) {
+    const db = getLifecycleDb(opts.stateDir);
+    try {
+      db.prepare(
+        `UPDATE message_outbox
+           SET status='failed_terminal',
+               error_class='terminal',
+               terminal_reason='non-final dispatch pruned on recovery',
+               completed_at=?
+         WHERE status IN ('queued','failed_retryable')
+           AND dispatch_kind IS NOT NULL
+           AND dispatch_kind != 'final'
+           AND (queued_at < ? OR last_attempt_at IS NOT NULL)`,
+      ).run(Date.now(), opts.startupCutoff);
+    } catch (err) {
+      logVerbose(`delivery-queue: non-final terminalization failed: ${String(err)}`);
+    }
+  }
 
+  const pending = await loadPendingDeliveries(opts.stateDir, opts.startupCutoff);
+
+  // Count entries excluded by the startup cutoff so the log reflects full activity.
+  let skippedStartupCutoff = 0;
+  if (opts.startupCutoff !== undefined) {
+    const db = getLifecycleDb(opts.stateDir);
+    try {
+      const row = db
+        .prepare(
+          `SELECT COUNT(*) AS cnt FROM message_outbox
+            WHERE status IN ('queued','failed_retryable')
+              AND (dispatch_kind IS NULL OR dispatch_kind = 'final')
+              AND next_attempt_at <= ?
+              AND queued_at >= ?
+              AND last_attempt_at IS NULL
+              AND attempt_count = 0`,
+        )
+        .get(Date.now(), opts.startupCutoff) as { cnt: number } | undefined;
+      skippedStartupCutoff = row?.cnt ?? 0;
+    } catch {
+      // non-fatal
+    }
+  }
+
+  if (pending.length === 0) {
+    return {
+      recovered: 0,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+      skippedStartupCutoff,
+    };
+  }
   opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
 
   const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
-
   let recovered = 0;
   let failed = 0;
   let skippedMaxRetries = 0;
@@ -304,31 +589,21 @@ export async function recoverPendingDeliveries(opts: {
     const now = Date.now();
     if (now >= deadline) {
       const deferred = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
-      opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
+      opts.log.warn(
+        `Recovery time budget exceeded — ${deferred} entries deferred to next recovery pass`,
+      );
       break;
     }
     if (entry.retryCount >= MAX_RETRIES) {
-      opts.log.warn(
-        `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
-      );
-      try {
-        await moveToFailed(entry.id, opts.stateDir);
-      } catch (err) {
-        opts.log.error(`Failed to move entry ${entry.id} to failed/: ${String(err)}`);
-      }
+      await moveToFailed(entry.id, opts.stateDir);
       skippedMaxRetries += 1;
       continue;
     }
-
-    const retryEligibility = isEntryEligibleForRecoveryRetry(entry, now);
-    if (!retryEligibility.eligible) {
+    const eligibility = isEntryEligibleForRecoveryRetry(entry, now);
+    if (!eligibility.eligible) {
       deferredBackoff += 1;
-      opts.log.info(
-        `Delivery ${entry.id} not ready for retry yet — backoff ${retryEligibility.remainingBackoffMs}ms remaining`,
-      );
       continue;
     }
-
     try {
       await opts.deliver({
         cfg: opts.cfg,
@@ -342,40 +617,24 @@ export async function recoverPendingDeliveries(opts: {
         gifPlayback: entry.gifPlayback,
         silent: entry.silent,
         mirror: entry.mirror,
-        skipQueue: true, // Prevent re-enqueueing during recovery
+        turnId: entry.turnId,
+        skipQueue: true,
       });
       await ackDelivery(entry.id, opts.stateDir);
       recovered += 1;
-      opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (isPermanentDeliveryError(errMsg)) {
-        opts.log.warn(`Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`);
-        try {
-          await moveToFailed(entry.id, opts.stateDir);
-        } catch (moveErr) {
-          opts.log.error(`Failed to move entry ${entry.id} to failed/: ${String(moveErr)}`);
-        }
-        failed += 1;
-        continue;
-      }
-      try {
-        await failDelivery(entry.id, errMsg, opts.stateDir);
-      } catch {
-        // Best-effort update.
+      const message = err instanceof Error ? err.message : String(err);
+      if (isPermanentDeliveryError(message)) {
+        await moveToFailed(entry.id, opts.stateDir);
+      } else {
+        await failDelivery(entry.id, message, opts.stateDir);
       }
       failed += 1;
-      opts.log.warn(`Retry failed for delivery ${entry.id}: ${errMsg}`);
     }
   }
 
-  opts.log.info(
-    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skippedMaxRetries} skipped (max retries), ${deferredBackoff} deferred (backoff)`,
-  );
-  return { recovered, failed, skippedMaxRetries, deferredBackoff };
+  return { recovered, failed, skippedMaxRetries, deferredBackoff, skippedStartupCutoff };
 }
-
-export { MAX_RETRIES };
 
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /no conversation reference found/i,
@@ -391,4 +650,22 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
+}
+
+export function pruneOutbox(ageMs: number, stateDir?: string): void {
+  if (!Number.isFinite(ageMs) || ageMs <= 0) {
+    logVerbose(`delivery-queue: pruneOutbox skipped — invalid ageMs: ${ageMs}`);
+    return;
+  }
+  const db = getLifecycleDb(stateDir);
+  const cutoff = Date.now() - ageMs;
+  try {
+    db.prepare(
+      `DELETE FROM message_outbox
+        WHERE status IN ('delivered','failed_terminal','expired')
+          AND COALESCE(completed_at, delivered_at, queued_at) < ?`,
+    ).run(cutoff);
+  } catch (err) {
+    logVerbose(`delivery-queue: pruneOutbox failed: ${String(err)}`);
+  }
 }
