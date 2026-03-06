@@ -41,6 +41,10 @@ const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
 const BRAVE_SEARCH_LANG_CODE = /^[a-z]{2}$/i;
+
+// Brave Search API language codes include some hyphenated values.
+// Examples from Brave's validation errors: zh-hans, zh-hant, en-gb, pt-br, pt-pt.
+const BRAVE_SEARCH_LANG_CODES_EXTRA = new Set(["zh-hans", "zh-hant", "en-gb", "pt-br", "pt-pt"]);
 const BRAVE_UI_LANG_LOCALE = /^([a-z]{2})-([a-z]{2})$/i;
 const PERPLEXITY_RECENCY_VALUES = new Set(["day", "week", "month", "year"]);
 
@@ -127,7 +131,7 @@ function createWebSearchSchema(provider: (typeof SEARCH_PROVIDERS)[number]) {
       search_lang: Type.Optional(
         Type.String({
           description:
-            "Short ISO language code for search results (e.g., 'de', 'en', 'fr', 'tr'). Must be a 2-letter code, NOT a locale.",
+            "Language code for search results (e.g., 'de', 'en', 'fr', 'tr', 'zh-hans', 'zh-hant'). Not a locale (use ui_lang for 'en-US').",
         }),
       ),
       ui_lang: Type.Optional(
@@ -731,10 +735,22 @@ function normalizeBraveSearchLang(value: string | undefined): string | undefined
     return undefined;
   }
   const trimmed = value.trim();
-  if (!trimmed || !BRAVE_SEARCH_LANG_CODE.test(trimmed)) {
+  if (!trimmed) {
     return undefined;
   }
-  return trimmed.toLowerCase();
+
+  // Brave accepts many ISO-like tags, including some hyphenated values.
+  // We still reject true locales (e.g. en-US) which should go in ui_lang.
+  if (BRAVE_SEARCH_LANG_CODE.test(trimmed)) {
+    return trimmed.toLowerCase();
+  }
+
+  const lower = trimmed.toLowerCase();
+  if (BRAVE_SEARCH_LANG_CODES_EXTRA.has(lower)) {
+    return lower;
+  }
+
+  return undefined;
 }
 
 function normalizeBraveUiLang(value: string | undefined): string | undefined {
@@ -1473,7 +1489,7 @@ export function createWebSearchTool(options?: {
         return jsonResult({
           error: "invalid_search_lang",
           message:
-            "search_lang must be a 2-letter ISO language code like 'en' (not a locale like 'en-US').",
+            "search_lang must be a Brave-supported language code like 'en', 'de', 'fr', 'zh-hans', or 'zh-hant' (not a locale like 'en-US').",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }

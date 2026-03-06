@@ -37,6 +37,17 @@ describe("web_search brave language param normalization", () => {
       invalidField: "ui_lang",
     });
   });
+
+  it("accepts Brave hyphenated language codes (e.g. Chinese script variants)", () => {
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-hans" })).toEqual({
+      search_lang: "zh-hans",
+      ui_lang: undefined,
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-hant" })).toEqual({
+      search_lang: "zh-hant",
+      ui_lang: undefined,
+    });
+  });
 });
 
 describe("web_search freshness normalization", () => {
