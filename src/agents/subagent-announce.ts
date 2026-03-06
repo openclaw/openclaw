@@ -21,6 +21,7 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
+import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { isDeliverableMessageChannel, isInternalMessageChannel } from "../utils/message-channel.js";
 import {
   buildAnnounceIdFromChildRun,
@@ -82,7 +83,10 @@ function buildCompletionDeliveryMessage(params: {
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
 }): string {
-  const findingsText = params.findings.trim();
+  const findingsText = parseInlineDirectives(params.findings, {
+    stripAudioTag: false,
+    stripReplyTags: true,
+  }).text;
   if (isAnnounceSkip(findingsText)) {
     return "";
   }
@@ -736,6 +740,7 @@ async function sendSubagentAnnounceDirectly(params: {
   bestEffortDeliver?: boolean;
   completionRouteMode?: "bound" | "fallback" | "hook";
   spawnMode?: SpawnSubagentMode;
+  announceType?: SubagentAnnounceType;
   directIdempotencyKey: string;
   currentRunId?: string;
   completionDirectOrigin?: DeliveryContext;
@@ -778,8 +783,9 @@ async function sendSubagentAnnounceDirectly(params: {
       const forceBoundSessionDirectDelivery =
         params.spawnMode === "session" &&
         (params.completionRouteMode === "bound" || params.completionRouteMode === "hook");
+      const forceCronDirectDelivery = params.announceType === "cron job";
       let shouldSendCompletionDirectly = true;
-      if (!forceBoundSessionDirectDelivery) {
+      if (!forceBoundSessionDirectDelivery && !forceCronDirectDelivery) {
         let pendingDescendantRuns = 0;
         try {
           const { countPendingDescendantRuns, countPendingDescendantRunsExcludingRun } =
@@ -919,6 +925,7 @@ async function deliverSubagentAnnouncement(params: {
   bestEffortDeliver?: boolean;
   completionRouteMode?: "bound" | "fallback" | "hook";
   spawnMode?: SpawnSubagentMode;
+  announceType?: SubagentAnnounceType;
   directIdempotencyKey: string;
   currentRunId?: string;
   signal?: AbortSignal;
@@ -948,6 +955,7 @@ async function deliverSubagentAnnouncement(params: {
         completionDirectOrigin: params.completionDirectOrigin,
         completionRouteMode: params.completionRouteMode,
         spawnMode: params.spawnMode,
+        announceType: params.announceType,
         directOrigin: params.directOrigin,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
@@ -1233,7 +1241,8 @@ export async function runSubagentAnnounceFlow(params: {
     } catch {
       // Best-effort only; fall back to direct announce behavior when unavailable.
     }
-    if (pendingChildDescendantRuns > 0) {
+    const isCronAnnounce = params.announceType === "cron job";
+    if (pendingChildDescendantRuns > 0 && !isCronAnnounce) {
       // The finished run still has pending descendant subagents (either active,
       // or ended but still finishing their own announce and cleanup flow). Defer
       // announcing this run until descendants fully settle.
@@ -1406,6 +1415,7 @@ export async function runSubagentAnnounceFlow(params: {
       bestEffortDeliver: params.bestEffortDeliver,
       completionRouteMode: completionResolution.routeMode,
       spawnMode: params.spawnMode,
+      announceType,
       directIdempotencyKey,
       currentRunId: params.childRunId,
       signal: params.signal,

@@ -132,6 +132,10 @@ type CompactionMessageMetrics = {
   contributors: Array<{ role: string; chars: number; tool?: string }>;
 };
 
+function hasRealConversationContent(msg: AgentMessage): boolean {
+  return msg.role === "user" || msg.role === "assistant" || msg.role === "toolResult";
+}
+
 function createCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
@@ -661,6 +665,17 @@ export async function compactEmbeddedPiSessionDirect(
           log.debug(
             `[compaction-diag] contributors diagId=${diagId} top=${JSON.stringify(preMetrics.contributors)}`,
           );
+        }
+
+        if (!session.messages.some(hasRealConversationContent)) {
+          log.info(
+            `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
+          );
+          return {
+            ok: true,
+            compacted: false,
+            reason: "no real conversation messages",
+          };
         }
 
         const compactStartedAt = Date.now();

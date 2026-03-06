@@ -47,6 +47,32 @@ describe("normalizePluginsConfig", () => {
     });
     expect(result.slots.memory).toBe("memory-core");
   });
+
+  it("normalizes plugin hook policy flags", () => {
+    const result = normalizePluginsConfig({
+      entries: {
+        "voice-call": {
+          hooks: {
+            allowPromptInjection: false,
+          },
+        },
+      },
+    });
+    expect(result.entries["voice-call"]?.hooks?.allowPromptInjection).toBe(false);
+  });
+
+  it("drops invalid plugin hook policy values", () => {
+    const result = normalizePluginsConfig({
+      entries: {
+        "voice-call": {
+          hooks: {
+            allowPromptInjection: "nope",
+          } as unknown as { allowPromptInjection: boolean },
+        },
+      },
+    });
+    expect(result.entries["voice-call"]?.hooks).toBeUndefined();
+  });
 });
 
 describe("resolveEffectiveEnableState", () => {

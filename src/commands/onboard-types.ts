@@ -144,6 +144,7 @@ export type OnboardOptions = {
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;
   gatewayToken?: string;
+  gatewayTokenRefEnv?: string;
   gatewayPassword?: string;
   tailscale?: TailscaleMode;
   tailscaleResetOnExit?: boolean;

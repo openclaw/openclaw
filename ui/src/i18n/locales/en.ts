@@ -122,6 +122,7 @@ export const en: TranslationMap = {
     zhTW: "繁體中文 (Traditional Chinese)",
     ptBR: "Português (Brazilian Portuguese)",
     de: "Deutsch (German)",
+    es: "Español (Spanish)",
   },
   cron: {
     summary: {

@@ -70,7 +70,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     case "focus":
       return await handleSubagentsFocusAction(ctx);
     case "unfocus":
-      return handleSubagentsUnfocusAction(ctx);
+      return await handleSubagentsUnfocusAction(ctx);
     case "list":
       return handleSubagentsListAction(ctx);
     case "kill":

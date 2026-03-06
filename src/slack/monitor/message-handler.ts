@@ -15,6 +15,8 @@ export type SlackMessageHandler = (
   opts: { source: "message" | "app_mention"; wasMentioned?: boolean },
 ) => Promise<void>;
 
+const APP_MENTION_RETRY_TTL_MS = 60_000;
+
 function resolveSlackSenderId(message: SlackMessageEvent): string | null {
   return message.user ?? message.bot_id ?? null;
 }
@@ -49,6 +51,13 @@ function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonito
     cfg,
     hasMedia: Boolean(message.files && message.files.length > 0),
   });
+}
+
+function buildSeenMessageKey(channelId: string | undefined, ts: string | undefined): string | null {
+  if (!channelId || !ts) {
+    return null;
+  }
+  return `${channelId}:${ts}`;
 }
 
 /**
@@ -133,8 +142,17 @@ export function createSlackMessageHandler(params: {
           wasMentioned: combinedMentioned || last.opts.wasMentioned,
         },
       });
+      const seenMessageKey = buildSeenMessageKey(last.message.channel, last.message.ts);
       if (!prepared) {
+        const hasMessageSource = entries.some((entry) => entry.opts.source === "message");
+        const hasAppMentionSource = entries.some((entry) => entry.opts.source === "app_mention");
+        if (seenMessageKey && hasMessageSource && !hasAppMentionSource) {
+          rememberAppMentionRetryKey(seenMessageKey);
+        }
         return;
+      }
+      if (seenMessageKey) {
+        appMentionRetryKeys.delete(seenMessageKey);
       }
       if (entries.length > 1) {
         const ids = entries.map((entry) => entry.message.ts).filter(Boolean) as string[];
@@ -152,6 +170,31 @@ export function createSlackMessageHandler(params: {
   });
   const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
   const pendingTopLevelDebounceKeys = new Map<string, Set<string>>();
+  const appMentionRetryKeys = new Map<string, number>();
+
+  const pruneAppMentionRetryKeys = (now: number) => {
+    for (const [key, expiresAt] of appMentionRetryKeys) {
+      if (expiresAt <= now) {
+        appMentionRetryKeys.delete(key);
+      }
+    }
+  };
+
+  const rememberAppMentionRetryKey = (key: string) => {
+    const now = Date.now();
+    pruneAppMentionRetryKeys(now);
+    appMentionRetryKeys.set(key, now + APP_MENTION_RETRY_TTL_MS);
+  };
+
+  const consumeAppMentionRetryKey = (key: string) => {
+    const now = Date.now();
+    pruneAppMentionRetryKeys(now);
+    if (!appMentionRetryKeys.has(key)) {
+      return false;
+    }
+    appMentionRetryKeys.delete(key);
+    return true;
+  };
 
   return async (message, opts) => {
     if (opts.source === "message" && message.type !== "message") {
@@ -165,8 +208,13 @@ export function createSlackMessageHandler(params: {
     ) {
       return;
     }
-    if (ctx.markMessageSeen(message.channel, message.ts)) {
-      return;
+    const seenMessageKey = buildSeenMessageKey(message.channel, message.ts);
+    if (seenMessageKey && ctx.markMessageSeen(message.channel, message.ts)) {
+      // Allow exactly one app_mention retry if the same ts was previously dropped
+      // from the message stream before it reached dispatch.
+      if (opts.source !== "app_mention" || !consumeAppMentionRetryKey(seenMessageKey)) {
+        return;
+      }
     }
     trackEvent?.();
     const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });
