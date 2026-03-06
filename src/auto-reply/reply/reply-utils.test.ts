@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import { parseAudioTag } from "./audio-tags.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import { parseAudioTag } from "./audio-tags.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -887,6 +887,7 @@ describe("sanitizeOutboundText", () => {
     expect(sanitizeOutboundText("Reasoning:  \n")).toBeNull();
     expect(sanitizeOutboundText("Reasoning")).toBe("Reasoning");
     expect(sanitizeOutboundText("reasoning:")).toBe("reasoning:");
+    expect(sanitizeOutboundText("REASONING:")).toBe("REASONING:");
     expect(sanitizeOutboundText("Reasoning: Here is my analysis...")).toBe(
       "Reasoning: Here is my analysis...",
     );
@@ -954,6 +955,7 @@ describe("buildReplyPayloads outbound sanitizer", () => {
   it("does not suppress non-documented Reasoning variants", () => {
     expect(build([{ text: "Reasoning" }])).toMatchObject([{ text: "Reasoning" }]);
     expect(build([{ text: "reasoning:" }])).toMatchObject([{ text: "reasoning:" }]);
+    expect(build([{ text: "REASONING:" }])).toMatchObject([{ text: "REASONING:" }]);
   });
 
   it("keeps reply threading and inline directives intact for normal text", () => {
