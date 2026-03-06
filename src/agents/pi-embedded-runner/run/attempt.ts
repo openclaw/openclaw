@@ -10,6 +10,7 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { ModelProviderConfig } from "../../../config/types.models.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
@@ -200,6 +201,38 @@ export function resolveOllamaCompatNumCtxEnabled(params: {
   return true;
 }
 
+function resolveProviderConfigById(params: {
+  config?: OpenClawConfig;
+  providerId?: string;
+}): ModelProviderConfig | undefined {
+  const providerId = params.providerId?.trim();
+  if (!providerId) {
+    return undefined;
+  }
+  const providers = params.config?.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const direct = providers[providerId];
+  if (direct) {
+    return direct;
+  }
+  const normalized = normalizeProviderId(providerId);
+  for (const [candidateId, candidate] of Object.entries(providers)) {
+    if (normalizeProviderId(candidateId) === normalized) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+export function resolveProviderAuthHeaderEnabled(params: {
+  config?: OpenClawConfig;
+  providerId?: string;
+}): boolean {
+  return Boolean(resolveProviderConfigById(params)?.authHeader);
+}
+
 export function shouldInjectOllamaCompatNumCtx(params: {
   model: { api?: string; provider?: string; baseUrl?: string };
   config?: OpenClawConfig;
@@ -236,6 +269,29 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
         options?.onPayload?.(payload);
       },
     });
+}
+
+export function wrapStreamFnAuthorizationHeader(baseFn: StreamFn | undefined): StreamFn {
+  const streamFn = baseFn ?? streamSimple;
+  return (model, context, options) => {
+    const apiKey = typeof options?.apiKey === "string" ? options.apiKey.trim() : "";
+    if (!apiKey) {
+      return streamFn(model, context, options);
+    }
+    const headers = { ...options?.headers };
+    const existingAuthKey = Object.keys(headers).find(
+      (key) => key.toLowerCase() === "authorization",
+    );
+    const existingAuthValue = existingAuthKey ? headers[existingAuthKey] : undefined;
+    if (typeof existingAuthValue === "string" && existingAuthValue.trim()) {
+      return streamFn(model, context, options);
+    }
+    headers[existingAuthKey ?? "Authorization"] = `Bearer ${apiKey}`;
+    return streamFn(model, context, {
+      ...options,
+      headers,
+    });
+  };
 }
 
 function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {
@@ -1201,6 +1257,21 @@ export async function runEmbeddedAttempt(
         params.thinkLevel,
         sessionAgentId,
       );
+
+      const providerIdForAuthHeader =
+        typeof params.model.provider === "string" && params.model.provider.trim().length > 0
+          ? params.model.provider
+          : params.provider;
+      if (
+        resolveProviderAuthHeaderEnabled({
+          config: params.config,
+          providerId: providerIdForAuthHeader,
+        })
+      ) {
+        activeSession.agent.streamFn = wrapStreamFnAuthorizationHeader(
+          activeSession.agent.streamFn,
+        );
+      }
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
