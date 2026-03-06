@@ -7,6 +7,8 @@ describe("buildBareSessionResetPrompt", () => {
     const prompt = buildBareSessionResetPrompt();
     expect(prompt).toContain("Execute your Session Startup sequence now");
     expect(prompt).toContain("read the required files before responding to the user");
+    expect(prompt).toContain("Never invent file names or paths");
+    expect(prompt).toContain("never claim to have read a file you did not read");
   });
 
   it("appends current time line so agents know the date", () => {
