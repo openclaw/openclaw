@@ -1,6 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { convertMessages } from "../../node_modules/@mariozechner/pi-ai/dist/providers/google-shared.js";
-import type { Context } from "../../node_modules/@mariozechner/pi-ai/dist/types.js";
+import type { Context } from "@mariozechner/pi-ai";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   asRecord,
   expectConvertedRoles,
@@ -8,7 +7,14 @@ import {
   makeGeminiCliModel,
   makeGoogleAssistantMessage,
   makeModel,
+  loadGoogleSharedModule,
 } from "./google-shared.test-helpers.js";
+
+let convertMessages: (...args: unknown[]) => unknown;
+
+beforeAll(async () => {
+  ({ convertMessages } = await loadGoogleSharedModule());
+});
 
 describe("google-shared convertTools", () => {
   it("ensures function call comes after user turn, not after model turn", () => {
@@ -34,7 +40,7 @@ describe("google-shared convertTools", () => {
     const contents = convertMessages(model, context);
     expectConvertedRoles(contents, ["user", "model", "model"]);
     const toolCallPart = contents[2].parts?.find(
-      (part) => typeof part === "object" && part !== null && "functionCall" in part,
+      (part: unknown) => typeof part === "object" && part !== null && "functionCall" in part,
     );
     const toolCall = asRecord(toolCallPart);
     expect(toolCall.functionCall).toBeTruthy();
@@ -69,12 +75,12 @@ describe("google-shared convertTools", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    const parts = contents.flatMap((content) => content.parts ?? []);
+    const parts = contents.flatMap((content: { parts?: unknown[] }) => content.parts ?? []);
     const toolCallPart = parts.find(
-      (part) => typeof part === "object" && part !== null && "functionCall" in part,
+      (part: unknown) => typeof part === "object" && part !== null && "functionCall" in part,
     );
     const toolResponsePart = parts.find(
-      (part) => typeof part === "object" && part !== null && "functionResponse" in part,
+      (part: unknown) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
 
     const toolCall = asRecord(toolCallPart);
