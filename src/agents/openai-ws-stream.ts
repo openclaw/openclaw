@@ -525,25 +525,40 @@ export function createOpenAIWebSocketStreamFn(
 
       // ── 3. Compute incremental vs full input ─────────────────────────────
       const prevResponseId = session.manager.previousResponseId;
+      let requestPreviousResponseId: string | undefined = prevResponseId ?? undefined;
       let inputItems: InputItem[];
 
       if (prevResponseId && session.lastContextLength > 0) {
-        // Subsequent turn: only send new messages (tool results) since last call
-        const newMessages = context.messages.slice(session.lastContextLength);
-        // Filter to only tool results — the assistant message is already in server context
-        const toolResults = newMessages.filter((m) => (m as AnyMessage).role === "toolResult");
-        if (toolResults.length === 0) {
-          // Shouldn't happen in a well-formed turn, but fall back to full context
-          log.debug(
-            `[ws-stream] session=${sessionId}: no new tool results found; sending full context`,
-          );
+        // Subsequent turn: only send new messages (tool results) since last call.
+        // If message history was rewound (for example, orphaned user repair), incremental
+        // state is stale; fall back to a full request without previous_response_id.
+        if (context.messages.length < session.lastContextLength) {
+          requestPreviousResponseId = undefined;
+          session.lastContextLength = 0;
           inputItems = buildFullInput(context);
+          log.debug(
+            `[ws-stream] session=${sessionId}: context rewound; resetting incremental state and sending full context`,
+          );
         } else {
-          inputItems = convertMessagesToInputItems(toolResults);
+          const newMessages = context.messages.slice(session.lastContextLength);
+          // Filter to only tool results — the assistant message is already in server context
+          const toolResults = newMessages.filter((m) => (m as AnyMessage).role === "toolResult");
+          if (toolResults.length === 0) {
+            // Stale incremental state: replay full context and let this response
+            // establish a fresh previous_response_id.
+            requestPreviousResponseId = undefined;
+            session.lastContextLength = 0;
+            log.debug(
+              `[ws-stream] session=${sessionId}: no new tool results found; resetting incremental state and sending full context`,
+            );
+            inputItems = buildFullInput(context);
+          } else {
+            inputItems = convertMessagesToInputItems(toolResults);
+            log.debug(
+              `[ws-stream] session=${sessionId}: incremental send (${inputItems.length} tool results) previous_response_id=${prevResponseId}`,
+            );
+          }
         }
-        log.debug(
-          `[ws-stream] session=${sessionId}: incremental send (${inputItems.length} tool results) previous_response_id=${prevResponseId}`,
-        );
       } else {
         // First turn: send full context
         inputItems = buildFullInput(context);
@@ -596,7 +611,7 @@ export function createOpenAIWebSocketStreamFn(
         input: inputItems,
         instructions: context.systemPrompt ?? undefined,
         tools: tools.length > 0 ? tools : undefined,
-        ...(prevResponseId ? { previous_response_id: prevResponseId } : {}),
+        ...(requestPreviousResponseId ? { previous_response_id: requestPreviousResponseId } : {}),
         ...extraParams,
       };
       options?.onPayload?.(payload);
