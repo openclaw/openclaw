@@ -736,7 +736,7 @@ async function getVosk() {
     // @ts-ignore
     console.log(t("chat.stt.loading"));
     const { createModel } = await import("vosk-browser");
-    // 使用本地英文模型
+    // Use local English model
     const model = (await createModel(
       "/models/vosk-model-small-en-us-0.15.zip",
     )) as unknown as VoskModel;
@@ -753,11 +753,11 @@ async function getVosk() {
 
 async function startStt(props: ChatProps) {
   try {
-    // 先请求麦克风权限，这样用户能立刻看到反馈
+    // Request microphone permission first so user sees immediate feedback
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     globalStream = stream;
 
-    // 然后再加载模型（如果还没加载的话）
+    // Then load model (if not already loaded)
     const { model } = await getVosk();
 
     audioContext = new AudioContext({ sampleRate: 16000 });
@@ -786,8 +786,8 @@ async function startStt(props: ChatProps) {
 
     processor.onaudioprocess = (e) => {
       if (voskRecognizer) {
-        // vosk-browser 的 acceptWaveform 在 0.0.8 版本中
-        // 可能期望直接接收 AudioBuffer 或特定的 Float32Array
+        // vosk-browser's acceptWaveform in version 0.0.8
+        // might expect AudioBuffer or specific Float32Array directly
         voskRecognizer.acceptWaveform(e.inputBuffer);
       }
     };
@@ -820,7 +820,7 @@ function stopStt() {
     globalStream.getTracks().forEach((track) => track.stop());
     globalStream = null;
   }
-  // 我们保留模型以供下次使用，但可以销毁识别器
+  // Keep model for next use, but destroy recognizer
   if (voskRecognizer) {
     voskRecognizer.remove();
     voskRecognizer = null;
