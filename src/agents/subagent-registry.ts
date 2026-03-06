@@ -1169,6 +1169,8 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
   try {
     const startedAt = Date.now();
     const hardTimeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
+    // Very large timeout values represent "effectively no hard deadline" (e.g., runTimeoutSeconds=0
+    // mapped through timer-safe max values). Keep polling in that mode instead of forcing timeout.
     const hasHardTimeout = hardTimeoutMs < 2_147_000_000;
     const deadlineAt = hasHardTimeout ? startedAt + hardTimeoutMs : Number.POSITIVE_INFINITY;
     const pollTimeoutMs = 60_000;

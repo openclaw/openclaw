@@ -36,6 +36,17 @@ type ReplyBurstState = {
   recentShortMessageAt: number[];
 };
 
+function sweepExpiredReplyBurstState(params: {
+  now: number;
+  burstState: Map<string, ReplyBurstState>;
+}) {
+  for (const [key, state] of params.burstState) {
+    if (params.now - state.lastInboundAt > TELEGRAM_REPLY_BURST_VERY_DENSE_WINDOW_MS) {
+      params.burstState.delete(key);
+    }
+  }
+}
+
 function buildReplyBurstKey(ctx: TelegramContext): string {
   const msg = ctx.message;
   const chatId = String(msg.chat.id);
@@ -87,6 +98,7 @@ function resolveAdaptiveReplyToMode(params: {
   const withinBurst = previous != null && now - previous.lastInboundAt <= burstWindowMs;
   const streak = withinBurst ? previous.streak + 1 : 1;
   params.burstState.set(key, { lastInboundAt: now, streak, recentShortMessageAt });
+  sweepExpiredReplyBurstState({ now, burstState: params.burstState });
   return streak >= 2 ? params.configuredMode : "off";
 }
 
