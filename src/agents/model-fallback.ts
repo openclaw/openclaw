@@ -33,6 +33,16 @@ type ModelCandidate = {
   model: string;
 };
 
+export type ModelFallbackRunOptions = {
+  allowRateLimitCooldownProbe?: boolean;
+};
+
+type ModelFallbackRunFn<T> = (
+  provider: string,
+  model: string,
+  options?: ModelFallbackRunOptions,
+) => Promise<T>;
+
 type FallbackAttempt = {
   provider: string;
   model: string;
@@ -124,14 +134,18 @@ function buildFallbackSuccess<T>(params: {
 }
 
 async function runFallbackCandidate<T>(params: {
-  run: (provider: string, model: string) => Promise<T>;
+  run: ModelFallbackRunFn<T>;
   provider: string;
   model: string;
+  options?: ModelFallbackRunOptions;
 }): Promise<{ ok: true; result: T } | { ok: false; error: unknown }> {
   try {
+    const result = params.options
+      ? await params.run(params.provider, params.model, params.options)
+      : await params.run(params.provider, params.model);
     return {
       ok: true,
-      result: await params.run(params.provider, params.model),
+      result,
     };
   } catch (err) {
     if (shouldRethrowAbort(err)) {
@@ -142,15 +156,17 @@ async function runFallbackCandidate<T>(params: {
 }
 
 async function runFallbackAttempt<T>(params: {
-  run: (provider: string, model: string) => Promise<T>;
+  run: ModelFallbackRunFn<T>;
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  options?: ModelFallbackRunOptions;
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
     provider: params.provider,
     model: params.model,
+    options: params.options,
   });
   if (runResult.ok) {
     return {
@@ -439,7 +455,7 @@ export async function runWithModelFallback<T>(params: {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
-  run: (provider: string, model: string) => Promise<T>;
+  run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
@@ -458,6 +474,7 @@ export async function runWithModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    let runOptions: ModelFallbackRunOptions | undefined;
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -497,10 +514,18 @@ export async function runWithModelFallback<T>(params: {
         if (decision.markProbe) {
           lastProbeAttempt.set(probeThrottleKey, now);
         }
+        if (decision.reason === "rate_limit") {
+          runOptions = { allowRateLimitCooldownProbe: true };
+        }
       }
     }
 
-    const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
+    const attemptRun = await runFallbackAttempt({
+      run: params.run,
+      ...candidate,
+      attempts,
+      options: runOptions,
+    });
     if ("success" in attemptRun) {
       return attemptRun.success;
     }
