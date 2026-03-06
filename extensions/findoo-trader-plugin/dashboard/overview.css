@@ -397,50 +397,118 @@
 }
 
 /* ════════════════════════════════════════════════════════════════
-   Capital Allocation — Horizontal Bar Chart
+   Capital Allocation — Horizontal Bar Chart (Agent-Era style)
    ════════════════════════════════════════════════════════════════ */
 
 .alloc-bars {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   padding: 4px 0;
 }
 .alloc-bar-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 .alloc-bar-row__name {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-dim);
-  min-width: 80px;
+  min-width: 95px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .alloc-bar-row__pct {
-  font-size: 10px;
-  color: var(--text);
-  min-width: 28px;
-  text-align: right;
+  display: none; /* percentage now shown inside bar */
 }
 .alloc-bar-row__track {
   flex: 1;
-  height: 14px;
+  height: 16px;
   background: var(--bg);
   border-radius: 3px;
   overflow: hidden;
+  position: relative;
 }
 .alloc-bar-row__fill {
   height: 100%;
   border-radius: 3px;
-  transition: width 0.8s ease;
+  transition: width 1s cubic-bezier(0.22, 1, 0.36, 1);
   min-width: 2px;
+  position: relative;
+}
+.alloc-bar-row__fill .bar-label {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
 }
 .alloc-bar-row__val {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 40px;
+  text-align: right;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Chart Stats — colored semantic values
+   ════════════════════════════════════════════════════════════════ */
+
+.chart-stats {
+  display: flex;
+  gap: 16px;
+  margin-top: 10px;
+}
+.chart-stat {
   font-size: 10px;
   color: var(--text-dim);
-  min-width: 36px;
-  text-align: right;
+}
+.chart-stat .num {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Agent Feed — enhanced filter chips
+   ════════════════════════════════════════════════════════════════ */
+
+.feed-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.feed-chips .fchip {
+  padding: 3px 9px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-dim);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+  font-family: var(--mono);
+  letter-spacing: 0.3px;
+}
+.feed-chips .fchip:hover {
+  color: var(--text);
+}
+.feed-chips .fchip.active {
+  color: var(--text-hi);
+  border-color: var(--border);
+  background: var(--bg-card);
+}
+
+/* Feed category count badges */
+.fchip__count {
+  font-size: 8px;
+  font-weight: 700;
+  margin-left: 3px;
+  opacity: 0.6;
 }

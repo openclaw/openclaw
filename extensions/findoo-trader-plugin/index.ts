@@ -605,7 +605,7 @@ const findooTraderPlugin = {
     ideationScheduler.start();
     ideationRef.scheduler = ideationScheduler;
 
-    // ── Cold-Start Seeder (seeds 5 classic strategies on first launch) ──
+    // ── Cold-Start Seeder (seeds 10 strategies on first launch) ──
     // Creates seed strategies at L0 and promotes to L1. The LLM agent handles
     // all further lifecycle decisions (backtests, promotions, demotions) via
     // HEARTBEAT.md checklist + fin_* AI tools.

@@ -1094,7 +1094,7 @@
             if (secret) body.secret = secret;
             if (passphrase) body.passphrase = passphrase;
 
-            putApi("/api/v1/finance/exchanges/" + encodeURIComponent(id), body)
+            postApi("/api/v1/finance/exchanges/update", body)
               .then(function () {
                 SE.closeEditExchange();
                 toast("Exchange updated: " + id, "success");

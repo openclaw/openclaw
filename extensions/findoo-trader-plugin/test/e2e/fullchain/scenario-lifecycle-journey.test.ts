@@ -3,7 +3,7 @@
  *
  * Tests real user flows that a beginner or cold-start user would experience:
  *   J1. Empty state — fresh Flow page with no data
- *   J2. Cold start — ColdStartSeeder populates 5 strategies + 5 manual seeds (10 total)
+ *   J2. Cold start — ColdStartSeeder populates 10 strategies + 5 manual seeds (15 total)
  *   J3. Full lifecycle — single strategy walks L0→L1→L2→L3 with Flow API reflection
  *   J4. Browser cold-start — Playwright verifies seeded Flow page renders correctly
  *
@@ -64,7 +64,7 @@ const PASSING_WALKFORWARD = {
   threshold: 0.6,
 };
 
-// ── 5 additional manual seed strategies (supplement ColdStartSeeder's 5 → 10 total) ──
+// ── 5 additional manual seed strategies (supplement ColdStartSeeder's 10 → 15 total) ──
 const MANUAL_SEEDS = [
   { name: "Breakout Range", symbol: "BNB/USDT", timeframe: "4h" },
   { name: "Volume Profile", symbol: "SOL/USDT", timeframe: "1h" },
@@ -178,7 +178,7 @@ describe("J2 — Cold Start: 10 Seed Strategies", () => {
 
   afterAll(() => ctx?.cleanup());
 
-  it("ColdStartSeeder creates 5 strategies at L1 when registry is empty", async () => {
+  it("ColdStartSeeder creates 10 strategies at L1 when registry is empty", async () => {
     // Verify empty
     expect(ctx.services.strategyRegistry.list().length).toBe(0);
 
@@ -191,12 +191,12 @@ describe("J2 — Cold Start: 10 Seed Strategies", () => {
     });
 
     const result = await seeder.maybeSeed();
-    expect(result.seeded).toBe(5);
+    expect(result.seeded).toBe(10);
     expect(result.skipped).toBe(false);
 
-    // All 5 should be at L1_BACKTEST
+    // All 10 should be at L1_BACKTEST
     const strategies = ctx.services.strategyRegistry.list();
-    expect(strategies.length).toBe(5);
+    expect(strategies.length).toBe(10);
     for (const s of strategies) {
       expect(s.level).toBe("L1_BACKTEST");
     }
@@ -219,11 +219,11 @@ describe("J2 — Cold Start: 10 Seed Strategies", () => {
     expect(result.seeded).toBe(0);
     expect(result.skipped).toBe(true);
 
-    // Still 5 strategies
-    expect(ctx.services.strategyRegistry.list().length).toBe(5);
+    // Still 10 strategies
+    expect(ctx.services.strategyRegistry.list().length).toBe(10);
   });
 
-  it("manual seeds bring total to 10 strategies across multiple levels", async () => {
+  it("manual seeds bring total to 15 strategies across multiple levels", async () => {
     // Add 5 more manual seeds via API (simulating a user who also creates their own)
     for (const seed of MANUAL_SEEDS) {
       const res = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/create`, {
@@ -241,24 +241,24 @@ describe("J2 — Cold Start: 10 Seed Strategies", () => {
       expect(res.status).toBe(201);
     }
 
-    // Now 10 total: 5 seeder (L1) + 5 manual (L0)
+    // Now 15 total: 10 seeder (L1) + 5 manual (L0)
     const all = ctx.services.strategyRegistry.list();
-    expect(all.length).toBe(10);
+    expect(all.length).toBe(15);
 
     const l0 = all.filter((s) => s.level === "L0_INCUBATE");
     const l1 = all.filter((s) => s.level === "L1_BACKTEST");
     expect(l0.length).toBe(5);
-    expect(l1.length).toBe(5);
+    expect(l1.length).toBe(10);
   });
 
-  it("Flow JSON reflects all 10 strategies in correct pipeline columns", async () => {
+  it("Flow JSON reflects all 15 strategies in correct pipeline columns", async () => {
     const { status, body } = await fetchJson(`${ctx.baseUrl}/api/v1/finance/dashboard/flow`);
     expect(status).toBe(200);
 
     const data = body as {
       strategies: Array<{ id: string; name: string; level: string }>;
     };
-    expect(data.strategies.length).toBe(10);
+    expect(data.strategies.length).toBe(15);
 
     // Verify distribution
     const levels = data.strategies.reduce(
@@ -269,7 +269,7 @@ describe("J2 — Cold Start: 10 Seed Strategies", () => {
       {} as Record<string, number>,
     );
     expect(levels.L0_INCUBATE).toBe(5);
-    expect(levels.L1_BACKTEST).toBe(5);
+    expect(levels.L1_BACKTEST).toBe(10);
   });
 
   it("runCycle auto-promotes L0→L1 and eligible L1→L2 from seed pool", async () => {
@@ -421,7 +421,7 @@ bd("J4 — Browser Cold Start with Seeds", () => {
   beforeAll(async () => {
     ctx = await createFullChainServer();
 
-    // Run ColdStartSeeder to populate 5 strategies at L1
+    // Run ColdStartSeeder to populate 10 strategies at L1
     const seeder = new ColdStartSeeder({
       strategyRegistry: ctx.services.strategyRegistry,
       backtestEngine: ctx.services.backtestEngine,
@@ -434,7 +434,7 @@ bd("J4 — Browser Cold Start with Seeds", () => {
     ctx.services.activityLog.append({
       category: "seed",
       action: "cold_start_seeded",
-      detail: "Cold start: 5 classic strategies seeded to L1",
+      detail: "Cold start: 10 strategies seeded to L1",
     });
     ctx.services.activityLog.append({
       category: "heartbeat",
@@ -456,15 +456,15 @@ bd("J4 — Browser Cold Start with Seeds", () => {
     await page.waitForLoadState("domcontentloaded");
     await page.waitForTimeout(500);
 
-    // L1 column should have 5 strategy cards
+    // L1 column should have 10 strategy cards
     const l1Cards = page.locator('[data-level="L1_BACKTEST"] .pipeline-col__cards');
     const l1Text = await l1Cards.textContent();
     expect(l1Text).toContain("SMA Crossover");
     expect(l1Text).toContain("RSI Mean Reversion");
 
-    // L1 count should show 5
+    // L1 count should show 10
     const countText = await page.locator("#countL1").textContent();
-    expect(countText?.trim()).toBe("5");
+    expect(countText?.trim()).toBe("10");
 
     // L0 column should show "No strategies" (empty)
     const l0Text = await page
@@ -488,7 +488,7 @@ bd("J4 — Browser Cold Start with Seeds", () => {
 
     // Verify content includes our seed entry
     const timelineText = await page.locator("#timelineEntries").textContent();
-    expect(timelineText).toContain("5 classic strategies seeded");
+    expect(timelineText).toContain("10 strategies seeded");
 
     await page.close();
   });

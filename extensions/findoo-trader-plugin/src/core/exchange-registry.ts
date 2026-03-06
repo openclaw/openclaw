@@ -14,6 +14,10 @@ export class ExchangeRegistry {
     this.instances.delete(id);
   }
 
+  getConfig(id: string): ExchangeConfig | undefined {
+    return this.configs.get(id);
+  }
+
   removeExchange(id: string): boolean {
     this.instances.delete(id);
     return this.configs.delete(id);
@@ -46,11 +50,13 @@ export class ExchangeRegistry {
       throw new Error(`Unsupported exchange: ${config.exchange}`);
     }
 
+    const proxyUrl = config.httpProxy || process.env.HTTPS_PROXY || process.env.https_proxy;
     const instance = new (ExchangeClass as new (opts: Record<string, unknown>) => unknown)({
       apiKey: config.apiKey,
       secret: config.secret,
       password: config.passphrase,
       enableRateLimit: true,
+      ...(proxyUrl ? { httpProxy: proxyUrl } : {}),
       options: {
         defaultType: config.defaultType ?? "spot",
         ...(config.subaccount ? { subaccount: config.subaccount } : {}),

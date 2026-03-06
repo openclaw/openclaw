@@ -226,19 +226,16 @@ describe("DataHubClient construction", () => {
 
 const DATAHUB_URL = process.env.DATAHUB_API_URL ?? "http://43.134.61.136:8088";
 const DATAHUB_USERNAME = process.env.DATAHUB_USERNAME ?? "admin";
-const DATAHUB_PASSWORD =
-  process.env.DATAHUB_PASSWORD ??
-  process.env.DATAHUB_API_KEY ??
-  "98ffa5c5-1ec6-4735-8e0c-715a5eca1a8d";
-// Live tests run by default (public DataHub has baked-in credentials)
-// Set DATAHUB_SKIP_LIVE=1 to skip
+const DEV_KEY = "98ffa5c5-1ec6-4735-8e0c-715a5eca1a8d";
+const DATAHUB_API_KEY = process.env.DATAHUB_PASSWORD ?? process.env.DATAHUB_API_KEY ?? DEV_KEY;
+// Live tests use built-in dev key by default. Set DATAHUB_SKIP_LIVE=1 to skip.
 const SKIP_LIVE = process.env.DATAHUB_SKIP_LIVE === "1";
 
 describe.skipIf(SKIP_LIVE)("Live DataHub E2E", () => {
   let client: DataHubClient;
 
   beforeAll(() => {
-    client = new DataHubClient(DATAHUB_URL, DATAHUB_USERNAME, DATAHUB_PASSWORD, 30_000);
+    client = new DataHubClient(DATAHUB_URL, DATAHUB_USERNAME, DATAHUB_API_KEY, 30_000);
   });
 
   // --- Coverage / Meta ---

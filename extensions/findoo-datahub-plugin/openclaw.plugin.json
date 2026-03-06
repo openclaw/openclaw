@@ -18,9 +18,9 @@
         "default": "admin",
         "description": "DataHub HTTP Basic Auth username"
       },
-      "datahubPassword": {
+      "datahubApiKey": {
         "type": "string",
-        "description": "DataHub HTTP Basic Auth password",
+        "description": "DataHub API key (required). Set via config or DATAHUB_API_KEY env var.",
         "sensitive": true
       },
       "requestTimeoutMs": {

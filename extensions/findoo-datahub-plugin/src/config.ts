@@ -3,7 +3,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 export type PluginConfig = {
   datahubApiUrl: string;
   datahubUsername: string;
-  datahubPassword: string;
+  datahubApiKey: string | undefined;
   requestTimeoutMs: number;
 };
 
@@ -15,10 +15,9 @@ function readEnv(keys: string[]): string | undefined {
   return undefined;
 }
 
-// Public DataHub defaults — works out of the box
+// Built-in DataHub URL — API key must be configured by the user
 const DEFAULT_DATAHUB_URL = "http://43.134.61.136:8088";
 const DEFAULT_DATAHUB_USERNAME = "admin";
-const DEFAULT_DATAHUB_PASSWORD = "98ffa5c5-1ec6-4735-8e0c-715a5eca1a8d";
 
 export function resolveConfig(api: OpenClawPluginApi): PluginConfig {
   const raw = api.pluginConfig as Record<string, unknown> | undefined;
@@ -37,7 +36,7 @@ export function resolveConfig(api: OpenClawPluginApi): PluginConfig {
     (typeof raw?.datahubPassword === "string" ? raw.datahubPassword : undefined) ??
     (typeof raw?.datahubApiKey === "string" ? raw.datahubApiKey : undefined) ??
     readEnv(["DATAHUB_PASSWORD", "OPENFINCLAW_DATAHUB_PASSWORD", "DATAHUB_API_KEY"]) ??
-    DEFAULT_DATAHUB_PASSWORD;
+    undefined;
 
   const timeoutRaw = raw?.requestTimeoutMs ?? readEnv(["OPENFINCLAW_DATAHUB_TIMEOUT_MS"]);
   const timeout = Number(timeoutRaw);
@@ -45,7 +44,7 @@ export function resolveConfig(api: OpenClawPluginApi): PluginConfig {
   return {
     datahubApiUrl: datahubApiUrl.replace(/\/+$/, ""),
     datahubUsername,
-    datahubPassword,
+    datahubApiKey: datahubPassword,
     requestTimeoutMs: Number.isFinite(timeout) && timeout >= 1000 ? Math.floor(timeout) : 30_000,
   };
 }

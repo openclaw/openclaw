@@ -37,14 +37,21 @@ const findooDatahubPlugin = {
     "172 endpoints covering equity (A/HK/US), crypto, macro, derivatives, index, ETF.",
   kind: "financial" as const,
 
-  async register(api: OpenClawPluginApi) {
+  register(api: OpenClawPluginApi) {
     const config = resolveConfig(api);
 
     // --- DataHub client ---
+    if (!config.datahubApiKey) {
+      api.log?.(
+        "warn",
+        "findoo-datahub-plugin: no API key configured. Set DATAHUB_API_KEY env var or plugins.findoo-datahub-plugin.datahubApiKey in config. Using built-in dev key.",
+      );
+    }
+
     const client = new DataHubClient(
       config.datahubApiUrl,
       config.datahubUsername,
-      config.datahubPassword,
+      config.datahubApiKey ?? "98ffa5c5-1ec6-4735-8e0c-715a5eca1a8d",
       config.requestTimeoutMs,
     );
 

@@ -446,9 +446,11 @@
       <aside class="col-r">
         <div class="col-r__head">
           <div class="col-r__title">Agent Activity</div>
-          <div class="filter-chips" id="feedFilters">
+          <div class="feed-chips" id="feedFilters">
             <button class="fchip active" data-f="all">All</button>
+            <button class="fchip" data-f="decisions">Decisions</button>
             <button class="fchip" data-f="trades">Trades</button>
+            <button class="fchip" data-f="evolution">Evolution</button>
             <button class="fchip" data-f="alerts">Alerts</button>
           </div>
         </div>
@@ -873,14 +875,14 @@
             var val = a.value || a.amount || "";
             var valStr = val ? "$" + fmt(val, 0) : pct.toFixed(1) + "%";
             var bg = allocBarColors[i % allocBarColors.length];
-            // Last item with "cash" in name uses muted color
             if (/cash|reserve/i.test(name)) bg = allocBarColors[allocBarColors.length - 1];
+            // Show percentage label inside the bar fill when wide enough
+            var barLabel = pct >= 8 ? '<span class="bar-label">' + pct.toFixed(0) + '%</span>' : '';
             html +=
               '<div class="alloc-bar-row">' +
               '<span class="alloc-bar-row__name">' + esc(name) + '</span>' +
-              '<span class="alloc-bar-row__pct num">' + pct.toFixed(0) + '%</span>' +
               '<div class="alloc-bar-row__track">' +
-              '<div class="alloc-bar-row__fill" style="width:' + Math.min(pct, 100) + '%;background:' + bg + '"></div>' +
+              '<div class="alloc-bar-row__fill" style="width:' + Math.min(pct, 100) + '%;background:' + bg + '">' + barLabel + '</div>' +
               '</div>' +
               '<span class="alloc-bar-row__val num">' + valStr + '</span>' +
               '</div>';
@@ -1019,7 +1021,7 @@
             pluginEl.textContent = config.plugins.enabled + "/" + config.plugins.total + " active";
         }
 
-        // ── Render: Chart stats ──
+        // ── Render: Chart stats (colored semantic values) ──
         function renderChartStats(trading) {
           var strategies = trading.strategies || [];
           var snapshots = trading.snapshots || [];
@@ -1043,24 +1045,29 @@
             var maxDD = strategies.reduce(function (b, s) {
               return Math.min(b, s.maxDrawdown || 0);
             }, 0);
-            $("csSharpe").textContent = maxSharpe.toFixed(2);
+            var sharpeEl = $("csSharpe");
+            sharpeEl.textContent = maxSharpe.toFixed(2);
+            sharpeEl.className = "num " + (maxSharpe >= 1.0 ? "gain" : maxSharpe >= 0.5 ? "" : "loss");
             var ddEl = $("csDd");
             ddEl.textContent = fmtPct(maxDD);
-            ddEl.className = "num loss";
+            ddEl.className = "num " + (maxDD > -0.1 ? "gain" : "loss");
           }
         }
 
         // ── Render: Pipeline ──
         function renderPipeline(strategies) {
-          var counts = { 0: 0, 1: 0, 2: 0, 3: 0 };
+          var l0 = 0, l1 = 0, l2 = 0, l3 = 0;
           (strategies || []).forEach(function (s) {
-            var lvl = s.level != null ? s.level : 0;
-            if (counts[lvl] != null) counts[lvl]++;
+            var lvl = s.level || "";
+            if (lvl === "L0_INCUBATE" || lvl === 0) l0++;
+            else if (lvl === "L1_BACKTEST" || lvl === 1) l1++;
+            else if (lvl === "L2_PAPER" || lvl === 2) l2++;
+            else if (lvl === "L3_LIVE" || lvl === 3) l3++;
           });
-          $("pipeL0").textContent = counts[0];
-          $("pipeL1").textContent = counts[1];
-          $("pipeL2").textContent = counts[2];
-          $("pipeL3").textContent = counts[3];
+          $("pipeL0").textContent = l0;
+          $("pipeL1").textContent = l1;
+          $("pipeL2").textContent = l2;
+          $("pipeL3").textContent = l3;
         }
 
         // ── Render: Top Strategies ──
@@ -1128,23 +1135,30 @@
           el.innerHTML = html;
         }
 
-        // ── Render: Agent Activity Feed ──
+        // ── Render: Agent Activity Feed (Agent-Era categorized feed) ──
         function eventCategory(e) {
           var t = (e.type || e.category || "").toLowerCase();
-          if (/approv|decision|promot/i.test(t)) return "decisions";
-          if (/trade|order|execut|close/i.test(t)) return "trades";
-          if (/evol|mutat|gene/i.test(t)) return "evolution";
-          if (/alert|warn/i.test(t)) return "alerts";
+          if (/approv|decision|promot|gate/i.test(t)) return "decisions";
+          if (/trade|order|execut|close|fill/i.test(t)) return "trades";
+          if (/evol|mutat|gene|cross|decay|extinct/i.test(t)) return "evolution";
+          if (/alert|warn|risk|breach/i.test(t)) return "alerts";
+          if (/heartbeat|system|brief|discovery/i.test(t)) return "system";
           return "trades";
         }
         function eventTypeLabel(e) {
           var t = (e.type || "").toLowerCase();
           if (/approv/i.test(t)) return { label: "APPROVAL", cls: "approval" };
-          if (/execut|auto/i.test(t)) return { label: "EXECUTED", cls: "executed" };
+          if (/promot/i.test(t)) return { label: "PROMOTION", cls: "promotion" };
+          if (/execut|auto/i.test(t)) return { label: "AUTO-EXEC", cls: "executed" };
           if (/evol|mutat/i.test(t)) return { label: "EVOLUTION", cls: "evolution" };
+          if (/cross/i.test(t)) return { label: "CROSSOVER", cls: "crossover" };
+          if (/decay/i.test(t)) return { label: "DECAY", cls: "decay" };
+          if (/extinct/i.test(t)) return { label: "EXTINCTION", cls: "extinction" };
           if (/alert/i.test(t)) return { label: "ALERT", cls: "alert" };
           if (/close/i.test(t)) return { label: "CLOSED", cls: "trade" };
           if (/trade|order/i.test(t)) return { label: "TRADE", cls: "trade" };
+          if (/heartbeat/i.test(t)) return { label: "HEARTBEAT", cls: "system" };
+          if (/system|brief/i.test(t)) return { label: "SYSTEM", cls: "system" };
           return { label: t.toUpperCase() || "EVENT", cls: "trade" };
         }
 
@@ -1152,7 +1166,9 @@
           var el = $("feedList");
           if (!events || !events.length) {
             el.innerHTML =
-              '<div style="text-align:center;color:var(--text-dim);padding:20px;font-size:10px">No agent activity yet</div>';
+              '<div style="text-align:center;color:var(--text-dim);padding:20px;font-size:10px">' +
+              '<div style="font-size:16px;margin-bottom:6px;opacity:.4">&#x1F916;</div>' +
+              'No agent activity yet</div>';
             return;
           }
           var html = "";
@@ -1166,37 +1182,37 @@
             var pending = e.status === "pending" || e.needsApproval;
 
             html +=
-              '<div class="fcard fcard--' +
+              '<div class="event-card event-card--' +
               tl.cls +
               '" data-cat="' +
               cat +
               '" data-id="' +
               esc(e.id || "") +
               '">' +
-              '<div class="fcard__top">' +
-              '<span class="fcard__type fcard__type--' +
+              '<div class="event-card__top">' +
+              '<span class="event-card__type event-card__type--' +
               tl.cls +
               '">' +
               tl.label +
               "</span>" +
-              '<span class="fcard__time num">' +
+              '<span class="event-card__time">' +
               timeAgo(e.timestamp || e.createdAt) +
               "</span>" +
               "</div>" +
-              '<div class="fcard__title">' +
+              '<div class="event-card__title">' +
               esc(e.title || e.summary || e.message || "") +
               "</div>";
 
             if (e.description || e.detail) {
-              html += '<div class="fcard__desc">' + esc(e.description || e.detail) + "</div>";
+              html += '<div class="event-card__desc">' + esc(e.description || e.detail) + "</div>";
             }
             if (pending) {
               html +=
-                '<div class="fcard__actions">' +
-                '<button class="fcard__btn fcard__btn--approve" data-event-id="' +
+                '<div class="event-card__actions">' +
+                '<button class="event-card__btn event-card__btn--approve" data-event-id="' +
                 esc(e.id) +
                 '" data-event-approve="true">Approve &#9656;</button>' +
-                '<button class="fcard__btn fcard__btn--reject" data-event-id="' +
+                '<button class="event-card__btn event-card__btn--reject" data-event-id="' +
                 esc(e.id) +
                 '" data-event-approve="false">Reject</button>' +
                 "</div>";
@@ -1508,7 +1524,7 @@
           approveEvent: function (id, approved) {
             postApi("/api/v1/finance/events/approve", { eventId: id, approved: approved })
               .then(function () {
-                var card = document.querySelector('.fcard[data-id="' + id + '"]');
+                var card = document.querySelector('.event-card[data-id="' + id + '"]');
                 if (card) card.style.display = "none";
                 $("botMsg").innerHTML =
                   "<em>Event " + (approved ? "approved" : "rejected") + "</em>";
@@ -1578,9 +1594,9 @@
         }
 
         // ── Filter chips (feed) ──
-        document.querySelectorAll(".fchip").forEach(function (c) {
+        document.querySelectorAll("#feedFilters .fchip").forEach(function (c) {
           c.addEventListener("click", function () {
-            document.querySelectorAll(".fchip").forEach(function (x) {
+            document.querySelectorAll("#feedFilters .fchip").forEach(function (x) {
               x.classList.remove("active");
             });
             c.classList.add("active");

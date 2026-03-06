@@ -283,12 +283,13 @@
       <!-- RIGHT COLUMN -->
       <aside class="col-r">
         <div class="col-r__head">
-          <div class="col-r__title">Evolution Feed</div>
+          <div class="col-r__title">Strategy Events</div>
           <div class="filter-chips" id="feedFilters">
             <button class="fchip active" data-f="all">All</button>
-            <button class="fchip" data-f="mutation">Mutation</button>
-            <button class="fchip" data-f="promote">Promote</button>
-            <button class="fchip" data-f="kill">Kill</button>
+            <button class="fchip" data-f="promotion">Promotions</button>
+            <button class="fchip" data-f="evolution">Evolution</button>
+            <button class="fchip" data-f="backtest">Backtest</button>
+            <button class="fchip" data-f="decay">Decay</button>
           </div>
         </div>
         <div class="col-r__feed" id="feedList"></div>
@@ -1052,50 +1053,54 @@
           el.innerHTML = html;
         }
 
-        // ── Render: Evolution Feed ──
+        // ── Render: Strategy Events Feed ──
         function eventCategory(e) {
-          var t = (e.type || e.action || "").toLowerCase();
-          if (/mutat|crossover|gene/i.test(t)) return "mutation";
-          if (/promot/i.test(t)) return "promote";
-          if (/kill|extinct|cull/i.test(t)) return "kill";
-          return "mutation";
+          var t = ((e.type || e.action || "") + " " + (e.title || "")).toLowerCase();
+          if (/promot/i.test(t)) return "promotion";
+          if (/evolut|mutat|crossover|gene|v\d.*v\d/i.test(t)) return "evolution";
+          if (/backtest|completed.*trades/i.test(t)) return "backtest";
+          if (/decay|degrad|sharpe.*decay/i.test(t)) return "decay";
+          if (/discover|pattern|hub/i.test(t)) return "discovery";
+          if (/kill|extinct|cull/i.test(t)) return "decay";
+          return "evolution"; // default bucket
         }
         function eventTypeLabel(e) {
-          var t = (e.type || e.action || "").toLowerCase();
-          if (/mutat/i.test(t)) return { label: "MUTATION", cls: "mutation" };
-          if (/crossover/i.test(t)) return { label: "CROSSOVER", cls: "crossover" };
-          if (/promot/i.test(t)) return { label: "PROMOTED", cls: "promotion" };
+          var t = ((e.type || e.action || "") + " " + (e.title || "")).toLowerCase();
+          if (/promot/i.test(t)) return { label: "PROMOTION", cls: "promotion" };
+          if (/evolut|mutat|crossover|gene/i.test(t)) return { label: "EVOLUTION", cls: "evolution" };
+          if (/backtest/i.test(t)) return { label: "BACKTEST", cls: "backtest" };
+          if (/decay|degrad/i.test(t)) return { label: "DECAY", cls: "decay" };
+          if (/discover/i.test(t)) return { label: "DISCOVERY", cls: "discovery" };
           if (/kill|extinct/i.test(t)) return { label: "KILLED", cls: "extinction" };
-          if (/approv/i.test(t)) return { label: "APPROVAL", cls: "approval" };
-          return { label: t.toUpperCase() || "EVENT", cls: "mutation" };
+          if (/system|cold.start|seed/i.test(t)) return { label: "SYSTEM", cls: "system" };
+          return { label: (e.type || "EVENT").toUpperCase(), cls: "system" };
         }
 
         function renderFeed(events, filter) {
           var el = $("feedList");
           if (!events || !events.length) {
-            el.innerHTML =
-              '<div style="text-align:center;color:var(--text-dim);padding:20px;font-size:10px">No evolution events yet</div>';
+            el.innerHTML = '<div style="text-align:center;color:var(--text-dim);padding:20px;font-size:10px">No strategy events yet</div>';
             return;
           }
           var html = "";
           var count = 0;
-          events.forEach(function (e) {
+          events.forEach(function (e, idx) {
             var cat = eventCategory(e);
             if (filter !== "all" && cat !== filter) return;
             if (count >= 50) return;
             count++;
             var tl = eventTypeLabel(e);
             html +=
-              '<div class="fcard fcard--' + tl.cls + '">' +
-              '<div class="fcard__top">' +
-              '<span class="fcard__type fcard__type--' + tl.cls + '">' + tl.label + "</span>" +
-              '<span class="fcard__time num">' + timeAgo(e.timestamp || e.createdAt) + "</span>" +
-              "</div>" +
-              '<div class="fcard__title">' + esc(e.title || e.summary || e.message || "") + "</div>" +
+              '<div class="event-card event-card--' + tl.cls + '" style="animation-delay:' + (idx * 0.03) + 's">' +
+              '<div class="event-card__top">' +
+              '<span class="event-card__type">' + tl.label + '</span>' +
+              '<span class="event-card__time num">' + timeAgo(e.timestamp || e.createdAt) + '</span>' +
+              '</div>' +
+              '<div class="event-card__title">' + esc(e.title || e.summary || e.message || "") + '</div>' +
               (e.description || e.detail
-                ? '<div class="fcard__desc">' + esc(e.description || e.detail) + "</div>"
-                : "") +
-              "</div>";
+                ? '<div class="event-card__desc">' + esc(e.description || e.detail) + '</div>'
+                : '') +
+              '</div>';
           });
           el.innerHTML = html;
         }
@@ -1335,7 +1340,7 @@
           },
         };
 
-        // ── Filter chips: Evolution Feed ──
+        // ── Filter chips: Strategy Events ──
         document.querySelectorAll(".fchip").forEach(function (c) {
           c.addEventListener("click", function () {
             document.querySelectorAll(".fchip").forEach(function (x) {

@@ -19,6 +19,8 @@ export type ExchangeConfig = {
   subaccount?: string;
   /** Default market type. Defaults to "spot". */
   defaultType?: "spot" | "swap" | "future";
+  /** HTTP proxy URL (e.g. "http://127.0.0.1:7890"). Also falls back to HTTPS_PROXY env. */
+  httpProxy?: string;
 };
 
 /** Risk limits for automated trading. */

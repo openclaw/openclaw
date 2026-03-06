@@ -162,6 +162,55 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
     },
   });
 
+  // ── POST /api/v1/finance/exchanges/update — Update exchange credentials ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/exchanges/update",
+    handler: async (req: HttpReq, res: HttpRes) => {
+      try {
+        const body = await parseJsonBody(req);
+        const { id, apiKey, secret, passphrase, testnet, label } = body as {
+          id?: string;
+          apiKey?: string;
+          secret?: string;
+          passphrase?: string;
+          testnet?: boolean;
+          label?: string;
+        };
+
+        if (!id) {
+          errorResponse(res, 400, "Missing required field: id");
+          return;
+        }
+
+        const existing = registry.getConfig(id);
+        if (!existing) {
+          errorResponse(res, 404, `Exchange "${id}" not found`);
+          return;
+        }
+
+        // Merge: only overwrite fields that were provided (non-empty)
+        registry.addExchange(id, {
+          ...existing,
+          ...(apiKey ? { apiKey } : {}),
+          ...(secret ? { secret } : {}),
+          ...(passphrase !== undefined ? { passphrase } : {}),
+          ...(testnet !== undefined ? { testnet } : {}),
+        });
+
+        eventStore.addEvent({
+          type: "system",
+          title: `Exchange updated: ${id}`,
+          detail: `${existing.exchange}${testnet ? " (testnet)" : ""} credentials updated`,
+          status: "completed",
+        });
+
+        jsonResponse(res, 200, { id, status: "updated" });
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
   // ── DELETE /api/v1/finance/exchanges/:id — Remove exchange ──
   // (Using POST with body since some routers don't support DELETE well)
   api.registerHttpRoute({

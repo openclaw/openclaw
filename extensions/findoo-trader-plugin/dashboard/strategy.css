@@ -171,19 +171,20 @@
   border-color: var(--loss);
 }
 
-/* Feed card type badges for strategy-specific events */
-.fcard__type--mutation {
-  color: var(--accent);
+/* ── Strategy Feed: enhanced filter chips ── */
+.col-r .filter-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
 }
-.fcard__type--crossover {
-  color: var(--purple);
+.col-r .fchip {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.3px;
 }
-.fcard__type--promotion {
-  color: var(--gain);
-}
-.fcard__type--extinction {
-  color: var(--loss);
-}
-.fcard__type--approval {
-  color: var(--warn);
-}
+
+/* Feed card type colors — strategy-specific */
+.fcard__type--backtest { color: var(--info); }
+.fcard__type--decay { color: var(--warn); }
+.fcard__type--discovery { color: var(--purple); }
+.fcard__type--system { color: var(--text-dim); }
