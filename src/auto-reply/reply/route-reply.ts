@@ -117,16 +117,17 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   if (channel === INTERNAL_MESSAGE_CHANNEL) {
     return {
       ok: false,
+      sent: false,
       error: "Webchat routing not supported for queued replies",
     };
   }
 
   const channelId = normalizeChannelId(channel) ?? null;
   if (!channelId) {
-    return { ok: false, error: `Unknown channel: ${String(channel)}` };
+    return { ok: false, sent: false, error: `Unknown channel: ${String(channel)}` };
   }
   if (abortSignal?.aborted) {
-    return { ok: false, error: "Reply routing aborted" };
+    return { ok: false, sent: false, error: "Reply routing aborted" };
   }
 
   const resolvedReplyToId =
