@@ -1,4 +1,9 @@
 import crypto from "node:crypto";
+import {
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  stripSilentToken,
+} from "../../auto-reply/tokens.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -7,6 +12,7 @@ import { AGENT_LANE_NESTED } from "../lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
+  type AnnounceTarget,
   buildAgentToAgentAnnounceContext,
   buildAgentToAgentReplyContext,
   isAnnounceSkip,
@@ -25,6 +31,7 @@ export async function runSessionsSendA2AFlow(params: {
   requesterChannel?: GatewayMessageChannel;
   roundOneReply?: string;
   waitRunId?: string;
+  announceTargetResolution?: { kind: "resolved"; target: AnnounceTarget | null };
 }) {
   const runContextId = params.waitRunId ?? "unknown";
   try {
@@ -51,10 +58,13 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
-    const announceTarget = await resolveAnnounceTarget({
-      sessionKey: params.targetSessionKey,
-      displayKey: params.displayKey,
-    });
+    const announceTarget =
+      params.announceTargetResolution?.kind === "resolved"
+        ? params.announceTargetResolution.target
+        : await resolveAnnounceTarget({
+            sessionKey: params.targetSessionKey,
+            displayKey: params.displayKey,
+          });
     const targetChannel = announceTarget?.channel ?? "unknown";
 
     if (
@@ -118,13 +128,22 @@ export async function runSessionsSendA2AFlow(params: {
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
+    const normalizedAnnounceReply =
+      typeof announceReply === "string"
+        ? stripSilentToken(announceReply, SILENT_REPLY_TOKEN).trim()
+        : "";
+    if (
+      announceTarget &&
+      normalizedAnnounceReply &&
+      !isSilentReplyText(normalizedAnnounceReply, SILENT_REPLY_TOKEN) &&
+      !isAnnounceSkip(normalizedAnnounceReply)
+    ) {
       try {
         await callGateway({
           method: "send",
           params: {
             to: announceTarget.to,
-            message: announceReply.trim(),
+            message: normalizedAnnounceReply,
             channel: announceTarget.channel,
             accountId: announceTarget.accountId,
             idempotencyKey: crypto.randomUUID(),

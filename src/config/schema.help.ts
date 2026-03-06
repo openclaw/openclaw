@@ -1110,6 +1110,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target agents during agent-to-agent exchanges (0-5). Use lower values to hard-limit chatter loops and preserve predictable run completion.",
+  "session.agentToAgent.allowChannelBoundAnnounce":
+    "When true, allows sessions_send announce flow to post to channel-bound target sessions. Keep false to avoid cross-agent announce leakage into bound user channels.",
   "session.threadBindings":
     "Shared defaults for thread-bound session routing behavior across providers that support thread focus workflows. Configure global defaults here and override per channel only when behavior differs.",
   "session.threadBindings.enabled":

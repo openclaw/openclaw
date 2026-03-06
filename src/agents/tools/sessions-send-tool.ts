@@ -11,6 +11,7 @@ import {
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
+import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -235,8 +236,26 @@ export function createSessionsSendTool(opts?: {
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
-      const delivery = { status: "pending", mode: "announce" as const };
+      const allowChannelBoundAnnounce =
+        cfg?.session?.agentToAgent?.allowChannelBoundAnnounce === true;
+      const announceTarget = allowChannelBoundAnnounce
+        ? null
+        : await resolveAnnounceTarget({
+            sessionKey: resolvedKey,
+            displayKey,
+          });
+      const runA2AAnnounceFlow = allowChannelBoundAnnounce || announceTarget === null;
+      const announceTargetResolution = allowChannelBoundAnnounce
+        ? undefined
+        : ({ kind: "resolved", target: announceTarget } as const);
+      const delivery = {
+        status: runA2AAnnounceFlow ? ("pending" as const) : ("skipped" as const),
+        mode: runA2AAnnounceFlow ? ("announce" as const) : ("none" as const),
+      };
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
+        if (!runA2AAnnounceFlow) {
+          return;
+        }
         void runSessionsSendA2AFlow({
           targetSessionKey: resolvedKey,
           displayKey,
@@ -247,6 +266,7 @@ export function createSessionsSendTool(opts?: {
           requesterChannel,
           roundOneReply,
           waitRunId,
+          announceTargetResolution,
         });
       };
 

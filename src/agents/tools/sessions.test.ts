@@ -244,6 +244,21 @@ describe("resolveAnnounceTarget", () => {
     expect(first).toBeDefined();
     expect(first?.method).toBe("sessions.list");
   });
+
+  it("does not infer announce target from display-only key shape", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "main",
+      displayKey: "discord:group:dev",
+    });
+    expect(target).toBeNull();
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
+    expect(first?.method).toBe("sessions.list");
+  });
 });
 
 describe("sessions_list gating", () => {

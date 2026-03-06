@@ -532,6 +532,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.sendPolicy.rules[].match.rawKeyPrefix": "Session Send Rule Raw Key Prefix",
   "session.agentToAgent": "Session Agent-to-Agent",
   "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
+  "session.agentToAgent.allowChannelBoundAnnounce": "Allow Channel-bound Agent Announce",
   "session.threadBindings": "Session Thread Bindings",
   "session.threadBindings.enabled": "Thread Binding Enabled",
   "session.threadBindings.idleHours": "Thread Binding Idle Timeout (hours)",

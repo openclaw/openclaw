@@ -128,6 +128,11 @@ export type SessionConfig = {
   agentToAgent?: {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
+    /**
+     * Allow sessions_send announce flow for channel-bound target sessions.
+     * Default: false (channel-bound sessions skip announce flow).
+     */
+    allowChannelBoundAnnounce?: boolean;
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;

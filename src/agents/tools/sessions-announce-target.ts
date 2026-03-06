@@ -9,8 +9,7 @@ export async function resolveAnnounceTarget(params: {
   displayKey: string;
 }): Promise<AnnounceTarget | null> {
   const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
-  const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
-  const fallback = parsed ?? parsedDisplay ?? null;
+  const fallback = parsed ?? null;
 
   if (fallback) {
     const normalized = normalizeChannelId(fallback.channel);

@@ -726,10 +726,15 @@ async function maybeQueueSubagentAnnounce(params: {
 async function sendSubagentAnnounceDirectly(params: {
   targetRequesterSessionKey: string;
   triggerMessage: string;
+  completionMessage?: string;
   internalEvents?: AgentInternalEvent[];
   expectsCompletionMessage: boolean;
   bestEffortDeliver?: boolean;
+  completionRouteMode?: "bound" | "fallback" | "hook";
+  spawnMode?: SpawnSubagentMode;
+  announceType?: SubagentAnnounceType;
   directIdempotencyKey: string;
+  currentRunId?: string;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   sourceSessionKey?: string;
@@ -752,6 +757,97 @@ async function sendSubagentAnnounceDirectly(params: {
   );
   try {
     const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
+    const completionChannelRaw =
+      typeof completionDirectOrigin?.channel === "string"
+        ? completionDirectOrigin.channel.trim()
+        : "";
+    const completionChannel =
+      completionChannelRaw && isDeliverableMessageChannel(completionChannelRaw)
+        ? completionChannelRaw
+        : "";
+    const completionTo =
+      typeof completionDirectOrigin?.to === "string" ? completionDirectOrigin.to.trim() : "";
+    const hasCompletionDirectTarget =
+      !params.requesterIsSubagent && Boolean(completionChannel) && Boolean(completionTo);
+    let suppressExternalTriggerDelivery = false;
+
+    if (
+      params.expectsCompletionMessage &&
+      hasCompletionDirectTarget &&
+      params.completionMessage?.trim()
+    ) {
+      const forceBoundSessionDirectDelivery =
+        params.spawnMode === "session" &&
+        (params.completionRouteMode === "bound" || params.completionRouteMode === "hook");
+      const forceCronDirectDelivery = params.announceType === "cron job";
+      let shouldSendCompletionDirectly = true;
+      if (!forceBoundSessionDirectDelivery && !forceCronDirectDelivery) {
+        let pendingDescendantRuns = 0;
+        try {
+          const { countPendingDescendantRuns, countPendingDescendantRunsExcludingRun } =
+            await loadSubagentRegistryRuntime();
+          if (params.currentRunId) {
+            pendingDescendantRuns = Math.max(
+              0,
+              countPendingDescendantRunsExcludingRun(
+                canonicalRequesterSessionKey,
+                params.currentRunId,
+              ),
+            );
+          } else {
+            pendingDescendantRuns = Math.max(
+              0,
+              countPendingDescendantRuns(canonicalRequesterSessionKey),
+            );
+          }
+        } catch {
+          // Best-effort only; when unavailable keep historical direct-send behavior.
+        }
+        // Keep non-bound completion announcements coordinated via requester
+        // session routing while sibling or descendant runs are still pending.
+        if (pendingDescendantRuns > 0) {
+          shouldSendCompletionDirectly = false;
+          suppressExternalTriggerDelivery = true;
+        }
+      }
+
+      if (shouldSendCompletionDirectly) {
+        const completionThreadId =
+          completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
+            ? String(completionDirectOrigin.threadId)
+            : undefined;
+        if (params.signal?.aborted) {
+          return {
+            delivered: false,
+            path: "none",
+          };
+        }
+        await runAnnounceDeliveryWithRetry({
+          operation: "completion direct send",
+          signal: params.signal,
+          run: async () =>
+            await callGateway({
+              method: "send",
+              params: {
+                channel: completionChannel,
+                to: completionTo,
+                accountId: completionDirectOrigin?.accountId,
+                threadId: completionThreadId,
+                sessionKey: canonicalRequesterSessionKey,
+                message: params.completionMessage,
+                idempotencyKey: params.directIdempotencyKey,
+              },
+              timeoutMs: announceTimeoutMs,
+            }),
+        });
+
+        return {
+          delivered: true,
+          path: "direct",
+        };
+      }
+    }
+
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
     const effectiveDirectOrigin =
       params.expectsCompletionMessage && completionDirectOrigin
@@ -769,8 +865,8 @@ async function sendSubagentAnnounceDirectly(params: {
       !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
     const shouldDeliverExternally =
       !params.requesterIsSubagent &&
-      (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
-
+      (!params.expectsCompletionMessage || hasDeliverableDirectTarget) &&
+      !suppressExternalTriggerDelivery;
     const threadId =
       effectiveDirectOrigin?.threadId != null && effectiveDirectOrigin.threadId !== ""
         ? String(effectiveDirectOrigin.threadId)

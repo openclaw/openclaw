@@ -151,6 +151,7 @@ const TARGET_KEYS = [
   "session.sendPolicy.rules[].match.rawKeyPrefix",
   "session.agentToAgent",
   "session.agentToAgent.maxPingPongTurns",
+  "session.agentToAgent.allowChannelBoundAnnounce",
   "session.threadBindings",
   "session.threadBindings.enabled",
   "session.threadBindings.idleHours",

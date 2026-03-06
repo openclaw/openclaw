@@ -147,6 +147,14 @@ jobs:
             const trustedThreshold = 4;
             const experiencedThreshold = 10;
 
+            function isSearchRateLimit(error) {
+              const message = error?.response?.data?.message ?? error?.message ?? "";
+              return error?.status === 403 && (
+                error?.response?.headers?.["x-ratelimit-resource"] === "search"
+                || message.includes("API rate limit exceeded")
+              );
+            }
+
             let isMaintainer = false;
             try {
               const membership = await github.rest.teams.getMembershipForUserInOrg({
@@ -179,10 +187,10 @@ jobs:
               });
               mergedCount = merged?.data?.total_count ?? 0;
             } catch (error) {
-              if (error?.status !== 422) {
+              if (error?.status !== 422 && !isSearchRateLimit(error)) {
                 throw error;
               }
-              core.warning(`Skipping merged search for ${login}; treating as 0.`);
+              core.warning(`Skipping merged search for ${login}; treating as 0 due to ${isSearchRateLimit(error) ? "search rate limit" : `status ${error?.status ?? "unknown"}`}.`);
             }
 
             if (mergedCount >= experiencedThreshold) {
@@ -248,6 +256,14 @@ jobs:
 
             const contributorCache = new Map();
 
+            function isSearchRateLimit(error) {
+              const message = error?.response?.data?.message ?? error?.message ?? "";
+              return error?.status === 403 && (
+                error?.response?.headers?.["x-ratelimit-resource"] === "search"
+                || message.includes("API rate limit exceeded")
+              );
+            }
+
             async function ensureSizeLabels() {
               for (const label of sizeLabels) {
                 try {
@@ -303,10 +319,10 @@ jobs:
                 });
                 mergedCount = merged?.data?.total_count ?? 0;
               } catch (error) {
-                if (error?.status !== 422) {
+                if (error?.status !== 422 && !isSearchRateLimit(error)) {
                   throw error;
                 }
-                core.warning(`Skipping merged search for ${login}; treating as 0.`);
+                core.warning(`Skipping merged search for ${login}; treating as 0 due to ${isSearchRateLimit(error) ? "search rate limit" : `status ${error?.status ?? "unknown"}`}.`);
               }
 
               let label = null;
@@ -484,6 +500,14 @@ jobs:
             const trustedThreshold = 4;
             const experiencedThreshold = 10;
 
+            function isSearchRateLimit(error) {
+              const message = error?.response?.data?.message ?? error?.message ?? "";
+              return error?.status === 403 && (
+                error?.response?.headers?.["x-ratelimit-resource"] === "search"
+                || message.includes("API rate limit exceeded")
+              );
+            }
+
             let isMaintainer = false;
             try {
               const membership = await github.rest.teams.getMembershipForUserInOrg({
@@ -516,10 +540,10 @@ jobs:
               });
               mergedCount = merged?.data?.total_count ?? 0;
             } catch (error) {
-              if (error?.status !== 422) {
+              if (error?.status !== 422 && !isSearchRateLimit(error)) {
                 throw error;
               }
-              core.warning(`Skipping merged search for ${login}; treating as 0.`);
+              core.warning(`Skipping merged search for ${login}; treating as 0 due to ${isSearchRateLimit(error) ? "search rate limit" : `status ${error?.status ?? "unknown"}`}.`);
             }
 
             if (mergedCount >= experiencedThreshold) {
