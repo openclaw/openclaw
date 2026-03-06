@@ -136,8 +136,8 @@ export type GatewayTrustedProxyConfig = {
 export type GatewayAuthConfig = {
   /** Authentication mode for Gateway connections. Defaults to token when unset. */
   mode?: GatewayAuthMode;
-  /** Shared token for token mode (stored locally for CLI auth). */
-  token?: string;
+  /** Shared token for token mode (plaintext or SecretRef). */
+  token?: SecretInput;
   /** Shared password for password mode (consider env instead). */
   password?: SecretInput;
   /** Allow Tailscale identity headers when serve mode is enabled. */
@@ -203,6 +203,41 @@ export type GatewayHttpChatCompletionsConfig = {
    * Default: false when absent.
    */
   enabled?: boolean;
+  /**
+   * Max request body size in bytes for `/v1/chat/completions`.
+   * Default: 20MB.
+   */
+  maxBodyBytes?: number;
+  /**
+   * Max number of `image_url` parts processed from the latest user message.
+   * Default: 8.
+   */
+  maxImageParts?: number;
+  /**
+   * Max cumulative decoded image bytes for all `image_url` parts in one request.
+   * Default: 20MB.
+   */
+  maxTotalImageBytes?: number;
+  /** Image input controls for `image_url` parts. */
+  images?: GatewayHttpChatCompletionsImagesConfig;
+};
+
+export type GatewayHttpChatCompletionsImagesConfig = {
+  /** Allow URL fetches for `image_url` parts. Default: false. */
+  allowUrl?: boolean;
+  /**
+   * Optional hostname allowlist for URL fetches.
+   * Supports exact hosts and `*.example.com` wildcards.
+   */
+  urlAllowlist?: string[];
+  /** Allowed MIME types (case-insensitive). */
+  allowedMimes?: string[];
+  /** Max bytes per image. Default: 10MB. */
+  maxBytes?: number;
+  /** Max redirects when fetching a URL. Default: 3. */
+  maxRedirects?: number;
+  /** Fetch timeout in ms. Default: 10s. */
+  timeoutMs?: number;
 };
 
 export type GatewayHttpResponsesConfig = {
