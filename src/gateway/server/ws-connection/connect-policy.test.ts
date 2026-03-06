@@ -238,4 +238,59 @@ describe("ws connect policy", () => {
       ).toBe(tc.expected);
     }
   });
+
+  test("dangerouslyDisableDeviceAuth allows control-ui without device identity or shared auth (issue #35944)", () => {
+    const bypassPolicy = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
+      deviceRaw: null,
+    });
+    expect(bypassPolicy.allowBypass).toBe(true);
+    expect(bypassPolicy.device).toBeNull();
+
+    // Control UI with bypass enabled and NO device identity, NO shared auth → must be allowed.
+    // Bug: without the allowBypass early-allow guard, this falls through to reject-device-required.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: bypassPolicy,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: false,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+
+    // Control UI with bypass enabled and a device payload present in raw but null in policy.
+    const bypassPolicyWithRawDevice = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
+      deviceRaw: {
+        id: "dev-bypass",
+        publicKey: "bad-key",
+        signature: "bad-sig",
+        signedAt: Date.now(),
+        nonce: "nonce-x",
+      },
+    });
+    // Policy must null-out the device so device-id-mismatch validation is skipped.
+    expect(bypassPolicyWithRawDevice.device).toBeNull();
+    // And missing-device path must still allow (no device identity because policy suppressed it).
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: bypassPolicyWithRawDevice,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: false,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+  });
 });
