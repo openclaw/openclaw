@@ -322,6 +322,18 @@ function createTelegramTopicParams(commandBody: string, cfg: OpenClawConfig = ba
   return params;
 }
 
+function createTelegramDmParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "telegram",
+    Surface: "telegram",
+    OriginatingChannel: "telegram",
+    OriginatingTo: "telegram:123456789",
+    AccountId: "default",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
 async function runDiscordAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   return handleAcpCommand(createDiscordParams(commandBody, cfg), true);
 }
@@ -332,6 +344,10 @@ async function runThreadAcpCommand(commandBody: string, cfg: OpenClawConfig = ba
 
 async function runTelegramAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   return handleAcpCommand(createTelegramTopicParams(commandBody, cfg), true);
+}
+
+async function runTelegramDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(createTelegramDmParams(commandBody, cfg), true);
 }
 
 describe("/acp command", () => {
@@ -505,7 +521,7 @@ describe("/acp command", () => {
     const result = await runTelegramAcpCommand("/acp spawn codex --thread here");
 
     expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
-    expect(result?.reply?.text).toContain("Bound this thread to");
+    expect(result?.reply?.text).toContain("Bound this conversation to");
     expect(result?.reply?.channelData).toEqual({ telegram: { pin: true } });
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -514,6 +530,24 @@ describe("/acp command", () => {
           channel: "telegram",
           accountId: "default",
           conversationId: "-1003841603622:topic:498",
+        }),
+      }),
+    );
+  });
+
+  it("binds Telegram DM ACP spawns to the DM conversation id", async () => {
+    const result = await runTelegramDmAcpCommand("/acp spawn codex --thread here");
+
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(result?.reply?.channelData).toBeUndefined();
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "123456789",
         }),
       }),
     );
