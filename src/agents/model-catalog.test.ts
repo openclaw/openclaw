@@ -163,6 +163,7 @@ describe("loadModelCatalog", () => {
         provider: "openai-codex",
         id: "gpt-5.4",
         name: "gpt-5.4",
+        contextWindow: 1_050_000,
       }),
     );
   });

@@ -15,7 +15,7 @@ title: "Thinking Levels"
   - low → “think hard”
   - medium → “think harder”
   - high → “ultrathink” (max budget)
-  - xhigh → “ultrathink+” (GPT-5.2 + Codex models only)
+  - xhigh → “ultrathink+” (available on supported OpenAI/Codex GPT-5.x models, including `openai/gpt-5.4`, `openai/gpt-5.4-pro`, and `openai-codex/gpt-5.4`)
   - adaptive → provider-managed adaptive reasoning budget (supported for Anthropic Claude 4.6 model family)
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
   - `highest`, `max` map to `high`.
