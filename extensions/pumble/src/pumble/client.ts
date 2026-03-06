@@ -31,6 +31,8 @@ export type PumbleChannel = {
   type?: string;
   /** Pumble API returns `channelType` (e.g. "PUBLIC_CHANNEL", "DIRECT_MESSAGE"). */
   channelType?: string;
+  /** Number of members in this channel (populated by fetchPumbleChannel). */
+  memberCount?: number;
 };
 
 export type PumbleMessage = {
@@ -124,11 +126,15 @@ export async function fetchPumbleChannel(
 ): Promise<PumbleChannel> {
   // Pumble GET /v1/channels/{id} wraps the channel inside
   // { channel: PumbleChannel, pinnedMessages, users }.
-  const res = await client.request<{ channel: PumbleChannel } | PumbleChannel>(
+  const res = await client.request<{ channel: PumbleChannel; users?: unknown[] } | PumbleChannel>(
     `/v1/channels/${channelId}`,
   );
   if ("channel" in res && res.channel) {
-    return res.channel;
+    const channel = res.channel;
+    if (Array.isArray(res.users)) {
+      channel.memberCount = res.users.length;
+    }
+    return channel;
   }
   return res as PumbleChannel;
 }

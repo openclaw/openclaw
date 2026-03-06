@@ -201,35 +201,40 @@ export async function monitorPumbleProvider(opts: MonitorPumbleOpts = {}): Promi
     return undefined;
   };
 
-  // Channel type cache with TTL (5 minutes).
-  const channelTypeCache = new Map<string, { value: string; expiresAt: number }>();
+  // Channel info cache with TTL (5 minutes).
+  type ChannelInfo = { channelType?: string; memberCount?: number };
+  const channelInfoCache = new Map<string, { value: ChannelInfo; expiresAt: number }>();
 
-  const resolveChannelType = async (channelId: string): Promise<string | undefined> => {
+  const resolveChannelInfo = async (channelId: string): Promise<ChannelInfo> => {
     const now = Date.now();
-    const cached = channelTypeCache.get(channelId);
+    const cached = channelInfoCache.get(channelId);
     if (cached && cached.expiresAt > now) {
       logVerboseMessage(
-        `pumble: channelType cache HIT for ${channelId} (type=${cached.value}, ttl=${Math.round((cached.expiresAt - now) / 1000)}s remaining)`,
+        `pumble: channelInfo cache HIT for ${channelId} (type=${cached.value.channelType}, members=${cached.value.memberCount}, ttl=${Math.round((cached.expiresAt - now) / 1000)}s remaining)`,
       );
       return cached.value;
     }
     try {
-      logVerboseMessage(`pumble: channelType cache MISS for ${channelId} — fetching from API`);
+      logVerboseMessage(`pumble: channelInfo cache MISS for ${channelId} — fetching from API`);
       const ch = await fetchPumbleChannel(sharedClient, channelId);
       // Pumble API returns `channelType` in v1 responses; `type` is a legacy
       // field observed in some older SDK versions. Kept as fallback.
-      const chType = ch.channelType ?? ch.type;
-      if (chType) {
-        channelTypeCache.set(channelId, {
-          value: chType,
-          expiresAt: now + CHANNEL_CACHE_TTL_MS,
-        });
-        return chType;
-      }
+      const info: ChannelInfo = {
+        channelType: ch.channelType ?? ch.type,
+        memberCount: ch.memberCount,
+      };
+      logVerboseMessage(
+        `pumble: channelInfo fetched for ${channelId}: type=${info.channelType}, members=${info.memberCount}`,
+      );
+      channelInfoCache.set(channelId, {
+        value: info,
+        expiresAt: now + CHANNEL_CACHE_TTL_MS,
+      });
+      return info;
     } catch {
-      // Non-fatal — channelKind() defaults to "channel" when type is undefined.
+      // Non-fatal — channelKind() defaults to "channel" when type/members are undefined.
     }
-    return undefined;
+    return {};
   };
 
   const resolveSenderName = async (senderId: string): Promise<string | undefined> => {
@@ -280,8 +285,8 @@ export async function monitorPumbleProvider(opts: MonitorPumbleOpts = {}): Promi
     if (botId && params.senderId === botId) {
       return null;
     }
-    const channelType = await resolveChannelType(params.channelId);
-    const kind = channelKind(channelType);
+    const chInfo = await resolveChannelInfo(params.channelId);
+    const kind = channelKind(chInfo.channelType, chInfo.memberCount);
     const senderName = (await resolveSenderName(params.senderId)) ?? params.senderId;
     const accessDecision = await resolvePumbleAccessDecision({
       accountConfig: account.config,
@@ -383,13 +388,14 @@ export async function monitorPumbleProvider(opts: MonitorPumbleOpts = {}): Promi
           return;
         }
 
-        const channelType = await resolveChannelType(body.cId);
+        const chInfo = await resolveChannelInfo(body.cId);
         const senderName = await resolveSenderName(body.aId);
 
         await handlePumbleMessage({
           messageId: body.mId,
           channelId: body.cId,
-          channelType,
+          channelType: chInfo.channelType,
+          memberCount: chInfo.memberCount,
           senderId: body.aId,
           senderName,
           text: body.tx,

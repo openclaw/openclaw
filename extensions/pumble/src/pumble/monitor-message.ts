@@ -101,6 +101,7 @@ export function createHandlePumbleMessage(deps: HandlePumbleMessageDeps) {
     messageId: string;
     channelId: string;
     channelType?: string;
+    memberCount?: number;
     senderId: string;
     senderName?: string;
     text: string;
@@ -130,7 +131,7 @@ export function createHandlePumbleMessage(deps: HandlePumbleMessageDeps) {
       return;
     }
 
-    const kind = channelKind(evt.channelType);
+    const kind = channelKind(evt.channelType, evt.memberCount);
     const chatType = channelChatType(kind);
     const senderId = evt.senderId;
     const senderName = evt.senderName || senderId;

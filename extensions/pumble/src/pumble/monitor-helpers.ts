@@ -31,9 +31,17 @@ export function resolveRuntime(opts: { runtime?: RuntimeEnv }): RuntimeEnv {
 /**
  * Maps Pumble SDK `channelType` values to OpenClaw chat types.
  * Pumble SDK enum: 'SELF' | 'DIRECT' | 'PUBLIC' | 'PRIVATE'
+ *
+ * Pumble creates bot DM channels with non-DIRECT types (e.g. "GROUP",
+ * "PRIVATE"). When memberCount is available and equals 2, the channel
+ * is treated as a direct message regardless of the type string.
  */
-export function channelKind(channelType?: string | null): ChatType {
+export function channelKind(channelType?: string | null, memberCount?: number | null): ChatType {
   if (!channelType) {
+    // No type info — fall back to member count if available.
+    if (memberCount === 2) {
+      return "direct";
+    }
     return "channel";
   }
   switch (channelType) {
@@ -41,10 +49,19 @@ export function channelKind(channelType?: string | null): ChatType {
     case "DIRECT_MESSAGE":
     case "SELF":
       return "direct";
-    case "GROUP":
-      return "group";
+    case "PUBLIC":
+    case "PUBLIC_CHANNEL":
+      return "channel";
     default:
-      // PUBLIC, PRIVATE, PUBLIC_CHANNEL, PRIVATE_CHANNEL → "channel"
+      // GROUP, PRIVATE, PRIVATE_CHANNEL, or unknown types:
+      // Pumble creates bot DM channels as GROUP/PRIVATE with exactly
+      // 2 members (bot + user). Treat those as direct messages.
+      if (memberCount === 2) {
+        return "direct";
+      }
+      if (channelType === "GROUP") {
+        return "group";
+      }
       return "channel";
   }
 }
