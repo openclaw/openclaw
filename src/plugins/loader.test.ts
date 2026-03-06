@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
+import { createHookRunner } from "./hooks.js";
 import { __testing, loadOpenClawPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
@@ -187,6 +188,15 @@ function createWarningLogger(warnings: string[]) {
     info: () => {},
     warn: (msg: string) => warnings.push(msg),
     error: () => {},
+  };
+}
+
+function createErrorLogger(errors: string[]) {
+  return {
+    info: () => {},
+    warn: () => {},
+    error: (msg: string) => errors.push(msg),
+    debug: () => {},
   };
 }
 
@@ -573,6 +583,65 @@ describe("loadOpenClawPlugins", () => {
     expect(httpPlugin?.httpRoutes).toBe(1);
   });
 
+  it("rewrites removed registerHttpHandler failures into migration diagnostics", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "http-handler-legacy",
+      filename: "http-handler-legacy.cjs",
+      body: `module.exports = { id: "http-handler-legacy", register(api) {
+  api.registerHttpHandler({ path: "/legacy", handler: async () => true });
+} };`,
+    });
+
+    const errors: string[] = [];
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["http-handler-legacy"],
+      },
+      options: {
+        logger: createErrorLogger(errors),
+      },
+    });
+
+    const loaded = registry.plugins.find((entry) => entry.id === "http-handler-legacy");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toContain("api.registerHttpHandler(...) was removed");
+    expect(loaded?.error).toContain("api.registerHttpRoute(...)");
+    expect(loaded?.error).toContain("registerPluginHttpRoute(...)");
+    expect(
+      registry.diagnostics.some((diag) =>
+        String(diag.message).includes("api.registerHttpHandler(...) was removed"),
+      ),
+    ).toBe(true);
+    expect(errors.some((entry) => entry.includes("api.registerHttpHandler(...) was removed"))).toBe(
+      true,
+    );
+  });
+
+  it("does not rewrite unrelated registerHttpHandler helper failures", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "http-handler-local-helper",
+      filename: "http-handler-local-helper.cjs",
+      body: `module.exports = { id: "http-handler-local-helper", register() {
+  const registerHttpHandler = undefined;
+  registerHttpHandler();
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["http-handler-local-helper"],
+      },
+    });
+
+    const loaded = registry.plugins.find((entry) => entry.id === "http-handler-local-helper");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).not.toContain("api.registerHttpHandler(...) was removed");
+  });
+
   it("rejects plugin http routes missing explicit auth", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -683,6 +752,122 @@ describe("loadOpenClawPlugins", () => {
 
     const disabled = registry.plugins.find((entry) => entry.id === "config-disable");
     expect(disabled?.status).toBe("disabled");
+  });
+
+  it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-policy",
+      filename: "hook-policy.cjs",
+      body: `module.exports = { id: "hook-policy", register(api) {
+  api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
+  api.on("before_agent_start", () => ({
+    prependContext: "legacy",
+    modelOverride: "gpt-4o",
+    providerOverride: "anthropic",
+  }));
+  api.on("before_model_resolve", () => ({ providerOverride: "openai" }));
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-policy"],
+        entries: {
+          "hook-policy": {
+            hooks: {
+              allowPromptInjection: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "hook-policy")?.status).toBe("loaded");
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
+      "before_agent_start",
+      "before_model_resolve",
+    ]);
+    const runner = createHookRunner(registry);
+    const legacyResult = await runner.runBeforeAgentStart({ prompt: "hello", messages: [] }, {});
+    expect(legacyResult).toEqual({
+      modelOverride: "gpt-4o",
+      providerOverride: "anthropic",
+    });
+    const blockedDiagnostics = registry.diagnostics.filter((diag) =>
+      String(diag.message).includes(
+        "blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
+      ),
+    );
+    expect(blockedDiagnostics).toHaveLength(1);
+    const constrainedDiagnostics = registry.diagnostics.filter((diag) =>
+      String(diag.message).includes(
+        "prompt fields constrained by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
+      ),
+    );
+    expect(constrainedDiagnostics).toHaveLength(1);
+  });
+
+  it("keeps prompt-injection typed hooks enabled by default", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-policy-default",
+      filename: "hook-policy-default.cjs",
+      body: `module.exports = { id: "hook-policy-default", register(api) {
+  api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
+  api.on("before_agent_start", () => ({ prependContext: "legacy" }));
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-policy-default"],
+      },
+    });
+
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
+      "before_prompt_build",
+      "before_agent_start",
+    ]);
+  });
+
+  it("ignores unknown typed hooks from plugins and keeps loading", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-unknown",
+      filename: "hook-unknown.cjs",
+      body: `module.exports = { id: "hook-unknown", register(api) {
+  api.on("totally_unknown_hook_name", () => ({ foo: "bar" }));
+  api.on(123, () => ({ foo: "baz" }));
+  api.on("before_model_resolve", () => ({ providerOverride: "openai" }));
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-unknown"],
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "hook-unknown")?.status).toBe("loaded");
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["before_model_resolve"]);
+    const unknownHookDiagnostics = registry.diagnostics.filter((diag) =>
+      String(diag.message).includes('unknown typed hook "'),
+    );
+    expect(unknownHookDiagnostics).toHaveLength(2);
+    expect(
+      unknownHookDiagnostics.some((diag) =>
+        String(diag.message).includes('unknown typed hook "totally_unknown_hook_name" ignored'),
+      ),
+    ).toBe(true);
+    expect(
+      unknownHookDiagnostics.some((diag) =>
+        String(diag.message).includes('unknown typed hook "123" ignored'),
+      ),
+    ).toBe(true);
   });
 
   it("enforces memory slot selection", () => {
