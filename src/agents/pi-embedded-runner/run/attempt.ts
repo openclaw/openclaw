@@ -128,6 +128,34 @@ import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
+/**
+ * Install a one-shot guard on `sessionManager.appendMessage` that replaces
+ * the content of the first user-role message with `originalPrompt`.
+ *
+ * This prevents plugin-injected context (e.g. prependContext from memory
+ * plugins) from leaking into the persisted session transcript / UI while
+ * still sending the full modified prompt to the LLM.
+ *
+ * Returns a teardown function that restores the original appendMessage.
+ */
+export function installTranscriptPromptGuard(
+  sessionManager: { appendMessage: (...args: never[]) => unknown },
+  originalPrompt: string,
+): () => void {
+  const origAppend = sessionManager.appendMessage.bind(sessionManager);
+  let intercepted = false;
+  sessionManager.appendMessage = ((msg: Record<string, unknown>) => {
+    if (!intercepted && msg.role === "user") {
+      intercepted = true;
+      return (origAppend as (m: unknown) => unknown)({ ...msg, content: originalPrompt });
+    }
+    return (origAppend as (m: unknown) => unknown)(msg);
+  }) as typeof sessionManager.appendMessage;
+  return () => {
+    sessionManager.appendMessage = origAppend;
+  };
+}
+
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
   runBeforePromptBuild: (
@@ -1664,12 +1692,27 @@ export async function runEmbeddedAttempt(
               });
           }
 
-          // Only pass images option if there are actually images to pass
-          // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
-          } else {
-            await abortable(activeSession.prompt(effectivePrompt));
+          // When hooks modified the prompt (e.g. prependContext from memory plugins),
+          // persist only the original user prompt to the session transcript so that
+          // raw plugin context doesn't leak into the UI. The LLM still receives the
+          // full effectivePrompt with the prepended context.
+          const removeTranscriptGuard =
+            effectivePrompt !== params.prompt && sessionManager
+              ? installTranscriptPromptGuard(sessionManager, params.prompt)
+              : undefined;
+
+          try {
+            // Only pass images option if there are actually images to pass
+            // This avoids potential issues with models that don't expect the images parameter
+            if (imageResult.images.length > 0) {
+              await abortable(
+                activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+              );
+            } else {
+              await abortable(activeSession.prompt(effectivePrompt));
+            }
+          } finally {
+            removeTranscriptGuard?.();
           }
         } catch (err) {
           promptError = err;
