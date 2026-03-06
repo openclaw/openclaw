@@ -282,6 +282,57 @@ Optional per-id errors:
 }
 ```
 
+### Bitwarden / Vaultwarden CLI
+
+Single secret (password field):
+
+```json5
+{
+  secrets: {
+    providers: {
+      bw_anthropic: {
+        source: "exec",
+        command: "/opt/homebrew/bin/bw",
+        allowSymlinkCommand: true,
+        trustedDirs: ["/opt/homebrew"],
+        args: ["get", "password", "anthropic-key"],
+        passEnv: ["BW_SESSION", "PATH", "HOME"],
+        jsonOnly: false,
+      },
+    },
+  },
+  models: {
+    providers: {
+      anthropic: {
+        apiKey: { source: "exec", provider: "bw_anthropic", id: "value" },
+      },
+    },
+  },
+}
+```
+
+For custom fields, use `bw get item <name>` with `jsonOnly: false` and extract the field you need via a wrapper script, or use separate providers per secret.
+
+Self-hosted Vaultwarden: add `BW_URL` to `passEnv` and set `BW_URL` in your environment to point at your Vaultwarden instance.
+
+CI/automation: use `BW_CLIENTID` and `BW_CLIENTSECRET` instead of `BW_SESSION` for API key auth:
+
+```json5
+{
+  secrets: {
+    providers: {
+      bw_ci: {
+        source: "exec",
+        command: "/usr/local/bin/bw",
+        args: ["get", "password", "deploy-api-key"],
+        passEnv: ["BW_CLIENTID", "BW_CLIENTSECRET", "BW_PASSWORD", "PATH", "HOME"],
+        jsonOnly: false,
+      },
+    },
+  },
+}
+```
+
 ## Supported credential surface
 
 Canonical supported and unsupported credentials are listed in:
