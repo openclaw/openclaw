@@ -48,10 +48,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -71,6 +73,9 @@ import ai.openclaw.android.LocationMode
 import ai.openclaw.android.MainViewModel
 import ai.openclaw.android.NotificationPackageFilterMode
 import ai.openclaw.android.node.DeviceNotificationListenerService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun SettingsSheet(viewModel: MainViewModel) {
@@ -204,8 +209,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
   var notificationAppSearch by remember { mutableStateOf("") }
   var notificationShowSystemApps by remember { mutableStateOf(false) }
   var installedNotificationApps by
-    remember(context) {
-      mutableStateOf(queryInstalledApps(context))
+    remember {
+      mutableStateOf<List<InstalledApp>>(emptyList())
     }
   var notificationQuietStartDraft by
     remember(notificationForwardingQuietStart) {
@@ -299,6 +304,22 @@ fun SettingsSheet(viewModel: MainViewModel) {
       viewModel.refreshGatewayConnection()
     }
 
+  val settingsScope = rememberCoroutineScope()
+
+  fun refreshInstalledNotificationApps() {
+    settingsScope.launch {
+      val discoveredApps =
+        withContext(Dispatchers.IO) {
+          queryInstalledApps(context)
+        }
+      installedNotificationApps = discoveredApps
+    }
+  }
+
+  LaunchedEffect(context) {
+    refreshInstalledNotificationApps()
+  }
+
   DisposableEffect(lifecycleOwner, context) {
     val observer =
       LifecycleEventObserver { _, event ->
@@ -308,7 +329,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
               PackageManager.PERMISSION_GRANTED
           notificationsPermissionGranted = hasNotificationsPermission(context)
           notificationListenerEnabled = isNotificationListenerEnabled(context)
-          installedNotificationApps = queryInstalledApps(context)
+          refreshInstalledNotificationApps()
           photosPermissionGranted =
             ContextCompat.checkSelfPermission(context, photosPermission) ==
               PackageManager.PERMISSION_GRANTED
@@ -406,6 +427,10 @@ fun SettingsSheet(viewModel: MainViewModel) {
         }
         .toList()
     }
+
+  val quietHoursInputValid =
+    isValidHourMinute(notificationQuietStartDraft) &&
+      isValidHourMinute(notificationQuietEndDraft)
 
   Box(
     modifier =
@@ -777,6 +802,15 @@ fun SettingsSheet(viewModel: MainViewModel) {
             },
           )
         }
+        if (filteredNotificationApps.isEmpty()) {
+          item {
+            Text(
+              "No apps match your current filter yet.",
+              style = mobileCallout,
+              color = mobileTextSecondary,
+            )
+          }
+        }
         items(filteredNotificationApps, key = { it.packageName }) { app ->
           ListItem(
             modifier = Modifier.settingsRowModifier().alpha(if (notificationForwardingEnabled) 1f else 0.6f),
@@ -846,6 +880,15 @@ fun SettingsSheet(viewModel: MainViewModel) {
           enabled = notificationForwardingEnabled,
         )
       }
+      if (!quietHoursInputValid) {
+        item {
+          Text(
+            "Use 24-hour HH:mm format (example: 22:00).",
+            style = mobileCaption1,
+            color = mobileDanger,
+          )
+        }
+      }
       item {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
           Button(
@@ -856,7 +899,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
                 end = notificationQuietEndDraft,
               )
             },
-            enabled = notificationForwardingEnabled,
+            enabled = notificationForwardingEnabled && quietHoursInputValid,
             colors = settingsPrimaryButtonColors(),
             shape = RoundedCornerShape(14.dp),
           ) {
@@ -1225,6 +1268,12 @@ fun SettingsSheet(viewModel: MainViewModel) {
       item { Spacer(modifier = Modifier.height(24.dp)) }
     }
   }
+}
+
+private val hourMinuteRegex = Regex("^([01]\\d|2[0-3]):[0-5]\\d$")
+
+private fun isValidHourMinute(value: String): Boolean {
+  return hourMinuteRegex.matches(value.trim())
 }
 
 private data class InstalledApp(
