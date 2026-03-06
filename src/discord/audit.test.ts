@@ -104,4 +104,33 @@ describe("discord audit", () => {
     expect(collected.channelIds).toEqual([]);
     expect(collected.unresolvedChannels).toBe(0);
   });
+
+  it("collects audit channel ids without resolving SecretRef-backed Discord tokens", async () => {
+    const { collectDiscordAuditChannelIds } = await import("./audit.js");
+
+    const cfg = {
+      channels: {
+        discord: {
+          enabled: true,
+          token: {
+            source: "env",
+            provider: "default",
+            id: "DISCORD_BOT_TOKEN",
+          },
+          guilds: {
+            "123": {
+              channels: {
+                "111": { allow: true },
+                general: { allow: true },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as import("../config/config.js").OpenClawConfig;
+
+    const collected = collectDiscordAuditChannelIds({ cfg, accountId: "default" });
+    expect(collected.channelIds).toEqual(["111"]);
+    expect(collected.unresolvedChannels).toBe(1);
+  });
 });

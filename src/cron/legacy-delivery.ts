@@ -5,6 +5,12 @@ export function hasLegacyDeliveryHints(payload: Record<string, unknown>) {
   if (typeof payload.bestEffortDeliver === "boolean") {
     return true;
   }
+  if (typeof payload.channel === "string" && payload.channel.trim()) {
+    return true;
+  }
+  if (typeof payload.provider === "string" && payload.provider.trim()) {
+    return true;
+  }
   if (typeof payload.to === "string" && payload.to.trim()) {
     return true;
   }
@@ -17,7 +23,11 @@ export function buildDeliveryFromLegacyPayload(
   const deliver = payload.deliver;
   const mode = deliver === false ? "none" : "announce";
   const channelRaw =
-    typeof payload.channel === "string" ? payload.channel.trim().toLowerCase() : "";
+    typeof payload.channel === "string" && payload.channel.trim()
+      ? payload.channel.trim().toLowerCase()
+      : typeof payload.provider === "string"
+        ? payload.provider.trim().toLowerCase()
+        : "";
   const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
   const next: Record<string, unknown> = { mode };
   if (channelRaw) {
@@ -38,6 +48,9 @@ export function stripLegacyDeliveryFields(payload: Record<string, unknown>) {
   }
   if ("channel" in payload) {
     delete payload.channel;
+  }
+  if ("provider" in payload) {
+    delete payload.provider;
   }
   if ("to" in payload) {
     delete payload.to;

@@ -21,6 +21,19 @@ import os
 import sys
 from pathlib import Path
 
+SUPPORTED_ASPECT_RATIOS = [
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
+]
+
 
 def get_api_key(provided_key: str | None) -> str | None:
     """Get API key from argument first, then environment."""
@@ -55,6 +68,12 @@ def main():
         choices=["1K", "2K", "4K"],
         default="1K",
         help="Output resolution: 1K (default), 2K, or 4K"
+    )
+    parser.add_argument(
+        "--aspect-ratio", "-a",
+        choices=SUPPORTED_ASPECT_RATIOS,
+        default=None,
+        help=f"Output aspect ratio (default: model decides). Options: {', '.join(SUPPORTED_ASPECT_RATIOS)}"
     )
     parser.add_argument(
         "--api-key", "-k",
@@ -127,14 +146,17 @@ def main():
         print(f"Generating image with resolution {output_resolution}...")
 
     try:
+        # Build image config with optional aspect ratio
+        image_cfg_kwargs = {"image_size": output_resolution}
+        if args.aspect_ratio:
+            image_cfg_kwargs["aspect_ratio"] = args.aspect_ratio
+
         response = client.models.generate_content(
             model="gemini-3-pro-image-preview",
             contents=contents,
             config=types.GenerateContentConfig(
                 response_modalities=["TEXT", "IMAGE"],
-                image_config=types.ImageConfig(
-                    image_size=output_resolution
-                )
+                image_config=types.ImageConfig(**image_cfg_kwargs)
             )
         )
 
