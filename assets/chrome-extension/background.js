@@ -1,5 +1,20 @@
 import { buildRelayWsUrl, isRetryableReconnectError, reconnectDelayMs } from './background-utils.js'
 
+/**
+ * Typed error thrown when an in-flight relay operation is aborted because the
+ * relay WebSocket disconnected or the service worker was suspended. Callers
+ * can use `instanceof RelayDisconnectedError` to distinguish a disconnect
+ * abort from a genuine operation failure and avoid incorrect retry behaviour.
+ */
+export class RelayDisconnectedError extends Error {
+  /** @param {string} reason */
+  constructor(reason) {
+    super(`Relay disconnected (${reason})`)
+    this.name = 'RelayDisconnectedError'
+    this.reason = reason
+  }
+}
+
 const DEFAULT_PORT = 18792
 
 const BADGE = {
@@ -199,8 +214,12 @@ function onRelayClosed(reason) {
 
   for (const [id, p] of pending.entries()) {
     pending.delete(id)
-    p.reject(new Error(`Relay disconnected (${reason})`))
+    p.reject(new RelayDisconnectedError(reason))
   }
+
+  // Fail-safe: never leave a tab locked after relay drops. Moved here from
+  // PR #36938 so the clear is co-located with all other disconnect teardown.
+  tabOperationLocks.clear()
 
   reattachPending.clear()
 
@@ -939,6 +958,36 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       })
     }
   }
+})
+
+// Service worker suspension teardown.
+//
+// Chrome can suspend the MV3 service worker at any time, including mid-await
+// inside an attach/detach operation. When this happens the `try/finally` in
+// `connectOrToggleForActiveTab` never runs, leaving `tabOperationLocks` set.
+// The in-memory Set is destroyed on suspension, but `rehydrateState()` on the
+// next wakeup restores tab entries without knowing which ones had locks held —
+// so without this handler a suspended-then-resumed SW could have entries in
+// `tabs` that are permanently un-clickable.
+//
+// `chrome.runtime.onSuspend` fires synchronously before the SW is frozen, giving
+// us one last chance to clean up transient state and reject any in-flight ops.
+chrome.runtime.onSuspend.addListener(() => {
+  tabOperationLocks.clear()
+
+  for (const [id, p] of pending.entries()) {
+    pending.delete(id)
+    p.reject(new RelayDisconnectedError('sw-suspend'))
+  }
+
+  if (relayWs) {
+    relayWs.onclose = null
+    relayWs.onerror = null
+    relayWs.close(1001, 'service worker suspended')
+    relayWs = null
+  }
+
+  cancelReconnect()
 })
 
 // Rehydrate state on service worker startup. Split: rehydration is the gate
