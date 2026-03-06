@@ -17,9 +17,23 @@ Multi-image editing (up to 14 images):
 """
 
 import argparse
+import ipaddress
 import os
+import re
+import socket
 import sys
+from io import BytesIO
 from pathlib import Path
+from urllib import error, parse, request
+
+
+MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
+REMOTE_IMAGE_TIMEOUT_SEC = 20
+
+
+class NoRedirectHandler(request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def get_api_key(provided_key: str | None) -> str | None:
@@ -27,6 +41,127 @@ def get_api_key(provided_key: str | None) -> str | None:
     if provided_key:
         return provided_key
     return os.environ.get("GEMINI_API_KEY")
+
+
+def is_remote_image_url(image_source: str) -> bool:
+    parsed = parse.urlparse(image_source)
+    return parsed.scheme.lower() in {"http", "https"}
+
+
+def _looks_like_windows_drive_path(image_source: str) -> bool:
+    return bool(re.match(r"^[a-zA-Z]:[\\/]", image_source))
+
+
+def _is_blocked_remote_ip(address: str) -> bool:
+    ip = ipaddress.ip_address(address)
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def validate_remote_image_url(image_url: str) -> parse.ParseResult:
+    parsed = parse.urlparse(image_url)
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"}:
+        if scheme == "file":
+            raise ValueError(
+                f"Unsupported input image URL '{image_url}'. "
+                "Use a local path instead of file:// URLs."
+            )
+        raise ValueError(
+            f"Unsupported input image URL '{image_url}'. Only public http(s) URLs are supported."
+        )
+    if not parsed.hostname:
+        raise ValueError(f"Invalid input image URL '{image_url}': hostname is required.")
+    if parsed.username or parsed.password:
+        raise ValueError(
+            f"Unsupported input image URL '{image_url}': embedded credentials are not allowed."
+        )
+
+    try:
+        resolved = socket.getaddrinfo(
+            parsed.hostname,
+            parsed.port or (443 if scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise ValueError(f"Could not resolve input image URL '{image_url}': {exc}.") from exc
+
+    blocked = sorted(
+        {
+            entry[4][0]
+            for entry in resolved
+            if entry[4] and entry[4][0] and _is_blocked_remote_ip(entry[4][0])
+        }
+    )
+    if blocked:
+        raise ValueError(
+            f"Unsafe input image URL '{image_url}': private, loopback, or "
+            f"special-use hosts are not allowed ({', '.join(blocked)})."
+        )
+    return parsed
+
+
+def load_input_image(image_source: str, pil_image_module):
+    if is_remote_image_url(image_source):
+        validate_remote_image_url(image_source)
+        opener = request.build_opener(NoRedirectHandler())
+        req = request.Request(
+            image_source,
+            headers={"User-Agent": "OpenClaw nano-banana-pro/1.0"},
+        )
+        try:
+            with opener.open(req, timeout=REMOTE_IMAGE_TIMEOUT_SEC) as response:
+                redirected_to = response.geturl()
+                if redirected_to != image_source:
+                    raise ValueError(
+                        "Redirected input image URLs are not supported for safety. "
+                        f"Re-run with the final asset URL: {redirected_to}"
+                    )
+                image_bytes = response.read(MAX_REMOTE_IMAGE_BYTES + 1)
+        except error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                location = exc.headers.get("Location")
+                detail = f" Redirect target: {location}" if location else ""
+                raise ValueError(
+                    f"Redirected input image URLs are not supported for safety.{detail}"
+                ) from exc
+            raise ValueError(
+                f"Error downloading input image '{image_source}': HTTP {exc.code}."
+            ) from exc
+        except error.URLError as exc:
+            raise ValueError(
+                f"Error downloading input image '{image_source}': {exc.reason}."
+            ) from exc
+
+        if len(image_bytes) > MAX_REMOTE_IMAGE_BYTES:
+            raise ValueError(
+                f"Input image URL '{image_source}' exceeded the "
+                f"{MAX_REMOTE_IMAGE_BYTES // (1024 * 1024)} MB download limit."
+            )
+        with pil_image_module.open(BytesIO(image_bytes)) as img:
+            return img.copy()
+
+    parsed = parse.urlparse(image_source)
+    if parsed.scheme and not _looks_like_windows_drive_path(image_source):
+        if parsed.scheme.lower() == "file":
+            raise ValueError(
+                f"Unsupported input image URL '{image_source}'. "
+                "Use a local path instead of file:// URLs."
+            )
+        raise ValueError(
+            f"Unsupported input image source '{image_source}'. "
+            "Use a local path or a public http(s) URL."
+        )
+
+    local_path = Path(image_source).expanduser()
+    with pil_image_module.open(local_path) as img:
+        return img.copy()
 
 
 def main():
@@ -48,7 +183,10 @@ def main():
         action="append",
         dest="input_images",
         metavar="IMAGE",
-        help="Input image path(s) for editing/composition. Can be specified multiple times (up to 14 images)."
+        help=(
+            "Input image path(s) for editing/composition. "
+            "Can be specified multiple times (up to 14 images)."
+        ),
     )
     parser.add_argument(
         "--resolution", "-r",
@@ -89,15 +227,17 @@ def main():
     output_resolution = args.resolution
     if args.input_images:
         if len(args.input_images) > 14:
-            print(f"Error: Too many input images ({len(args.input_images)}). Maximum is 14.", file=sys.stderr)
+            print(
+                f"Error: Too many input images ({len(args.input_images)}). Maximum is 14.",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
         max_input_dim = 0
         for img_path in args.input_images:
             try:
-                with PILImage.open(img_path) as img:
-                    copied = img.copy()
-                    width, height = copied.size
+                copied = load_input_image(img_path, PILImage)
+                width, height = copied.size
                 input_images.append(copied)
                 print(f"Loaded input image: {img_path}")
 
@@ -115,13 +255,19 @@ def main():
                 output_resolution = "2K"
             else:
                 output_resolution = "1K"
-            print(f"Auto-detected resolution: {output_resolution} (from max input dimension {max_input_dim})")
+            print(
+                f"Auto-detected resolution: {output_resolution} "
+                f"(from max input dimension {max_input_dim})"
+            )
 
     # Build contents (images first if editing, prompt only if generating)
     if input_images:
         contents = [*input_images, args.prompt]
         img_count = len(input_images)
-        print(f"Processing {img_count} image{'s' if img_count > 1 else ''} with resolution {output_resolution}...")
+        print(
+            f"Processing {img_count} image{'s' if img_count > 1 else ''} "
+            f"with resolution {output_resolution}..."
+        )
     else:
         contents = args.prompt
         print(f"Generating image with resolution {output_resolution}...")
