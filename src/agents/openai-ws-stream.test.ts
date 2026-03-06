@@ -594,6 +594,25 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.content).toEqual([]);
     expect(msg.stopReason).toBe("stop");
   });
+
+  it("skips malformed message content entries", () => {
+    const response = {
+      ...makeResponseObject("resp_8"),
+      output: [
+        {
+          type: "message",
+          id: "item_1",
+          role: "assistant",
+          content: [null, { type: "output_text", text: "ok" }, { foo: "bar" }],
+        },
+      ],
+    } as unknown as ResponseObject;
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+
+    expect(msg.content).toEqual([{ type: "text", text: "ok" }]);
+    expect(msg.stopReason).toBe("stop");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
