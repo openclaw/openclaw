@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { AUTO_AUDIO_KEY_PROVIDERS, DEFAULT_AUDIO_MODELS } from "./defaults.js";
+import {
+  AUTO_AUDIO_KEY_PROVIDERS,
+  AUTO_VIDEO_KEY_PROVIDERS,
+  DEFAULT_AUDIO_MODELS,
+} from "./defaults.js";
 
 describe("DEFAULT_AUDIO_MODELS", () => {
   it("includes Mistral Voxtral default", () => {
@@ -10,5 +14,11 @@ describe("DEFAULT_AUDIO_MODELS", () => {
 describe("AUTO_AUDIO_KEY_PROVIDERS", () => {
   it("includes mistral auto key resolution", () => {
     expect(AUTO_AUDIO_KEY_PROVIDERS).toContain("mistral");
+  });
+});
+
+describe("AUTO_VIDEO_KEY_PROVIDERS", () => {
+  it("includes moonshot auto key resolution", () => {
+    expect(AUTO_VIDEO_KEY_PROVIDERS).toContain("moonshot");
   });
 });

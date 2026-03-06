@@ -4,6 +4,7 @@ read_when:
   - Running OpenClaw behind an identity-aware proxy
   - Setting up Pomerium, Caddy, or nginx with OAuth in front of OpenClaw
   - Fixing WebSocket 1008 unauthorized errors with reverse proxy setups
+  - Deciding where to set HSTS and other HTTP hardening headers
 ---
 
 # Trusted Proxy Auth
@@ -33,6 +34,18 @@ Use `trusted-proxy` auth mode when:
 3. OpenClaw checks that the request came from a **trusted proxy IP** (configured in `gateway.trustedProxies`)
 4. OpenClaw extracts the user identity from the configured header
 5. If everything checks out, the request is authorized
+
+## Control UI Pairing Behavior
+
+When `gateway.auth.mode = "trusted-proxy"` is active and the request passes
+trusted-proxy checks, Control UI WebSocket sessions can connect without device
+pairing identity.
+
+Implications:
+
+- Pairing is no longer the primary gate for Control UI access in this mode.
+- Your reverse proxy auth policy and `allowUsers` become the effective access control.
+- Keep gateway ingress locked to trusted proxy IPs only (`gateway.trustedProxies` + firewall).
 
 ## Configuration
 
@@ -74,6 +87,52 @@ If `gateway.bind` is `loopback`, include a loopback proxy address in
 | `gateway.auth.trustedProxy.userHeader`      | Yes      | Header name containing the authenticated user identity                      |
 | `gateway.auth.trustedProxy.requiredHeaders` | No       | Additional headers that must be present for the request to be trusted       |
 | `gateway.auth.trustedProxy.allowUsers`      | No       | Allowlist of user identities. Empty means allow all authenticated users.    |
+
+## TLS termination and HSTS
+
+Use one TLS termination point and apply HSTS there.
+
+### Recommended pattern: proxy TLS termination
+
+When your reverse proxy handles HTTPS for `https://control.example.com`, set
+`Strict-Transport-Security` at the proxy for that domain.
+
+- Good fit for internet-facing deployments.
+- Keeps certificate + HTTP hardening policy in one place.
+- OpenClaw can stay on loopback HTTP behind the proxy.
+
+Example header value:
+
+```text
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+```
+
+### Gateway TLS termination
+
+If OpenClaw itself serves HTTPS directly (no TLS-terminating proxy), set:
+
+```json5
+{
+  gateway: {
+    tls: { enabled: true },
+    http: {
+      securityHeaders: {
+        strictTransportSecurity: "max-age=31536000; includeSubDomains",
+      },
+    },
+  },
+}
+```
+
+`strictTransportSecurity` accepts a string header value, or `false` to disable explicitly.
+
+### Rollout guidance
+
+- Start with a short max age first (for example `max-age=300`) while validating traffic.
+- Increase to long-lived values (for example `max-age=31536000`) only after confidence is high.
+- Add `includeSubDomains` only if every subdomain is HTTPS-ready.
+- Use preload only if you intentionally meet preload requirements for your full domain set.
+- Loopback-only local development does not benefit from HSTS.
 
 ## Proxy Setup Examples
 

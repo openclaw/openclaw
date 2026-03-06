@@ -73,7 +73,14 @@ describe("web auto-reply", () => {
   }
 
   async function withMediaCap<T>(mediaMaxMb: number, run: () => Promise<T>): Promise<T> {
-    setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb } } }));
+    setLoadConfigMock(() => ({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          mediaMaxMb,
+        },
+      },
+    }));
     try {
       return await run();
     } finally {
@@ -117,7 +124,7 @@ describe("web auto-reply", () => {
     });
   }
 
-  it("compresses common formats to jpeg under the cap", { timeout: 45_000 }, async () => {
+  it("compresses common formats to jpeg under the cap", async () => {
     const formats = [
       {
         name: "png",
@@ -136,7 +143,8 @@ describe("web auto-reply", () => {
           sharp(buf, {
             raw: { width: opts.width, height: opts.height, channels: 3 },
           })
-            .jpeg({ quality: 90 })
+            // Keep source > cap with fewer pixels so the test runs faster.
+            .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
             .toBuffer(),
       },
       {
@@ -151,8 +159,8 @@ describe("web auto-reply", () => {
       },
     ] as const;
 
-    const width = 360;
-    const height = 360;
+    const width = 320;
+    const height = 320;
     const sharedRaw = crypto.randomBytes(width * height * 3);
 
     const renderedFormats = await Promise.all(
@@ -214,7 +222,7 @@ describe("web auto-reply", () => {
     });
   });
 
-  it("honors mediaMaxMb from config", async () => {
+  it("honors channels.whatsapp.mediaMaxMb for outbound auto-replies", async () => {
     const bigPng = await sharp({
       create: {
         width: 256,
@@ -233,6 +241,53 @@ describe("web auto-reply", () => {
       messageId: "msg1",
       mediaMaxMb: SMALL_MEDIA_CAP_MB,
     });
+  });
+
+  it("prefers per-account WhatsApp media caps for outbound auto-replies", async () => {
+    const bigPng = await sharp({
+      create: {
+        width: 256,
+        height: 256,
+        channels: 3,
+        background: { r: 255, g: 0, b: 0 },
+      },
+    })
+      .png({ compressionLevel: 0 })
+      .toBuffer();
+    expect(bigPng.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
+
+    setLoadConfigMock(() => ({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          mediaMaxMb: 1,
+          accounts: {
+            work: {
+              mediaMaxMb: SMALL_MEDIA_CAP_MB,
+            },
+          },
+        },
+      },
+    }));
+
+    try {
+      const sendMedia = vi.fn();
+      const { reply, dispatch } = await setupSingleInboundMessage({
+        resolverValue: { text: "hi", mediaUrl: "https://example.com/account-big.png" },
+        sendMedia,
+      });
+      const fetchMock = mockFetchMediaBuffer(bigPng, "image/png");
+
+      await dispatch("msg-account-cap", { accountId: "work" });
+
+      const payload = getSingleImagePayload(sendMedia);
+      expect(payload.image.length).toBeLessThanOrEqual(SMALL_MEDIA_CAP_BYTES);
+      expect(payload.mimetype).toBe("image/jpeg");
+      expect(reply).not.toHaveBeenCalled();
+      fetchMock.mockRestore();
+    } finally {
+      resetLoadConfigMock();
+    }
   });
   it("falls back to text when media is unsupported", async () => {
     const sendMedia = vi.fn();

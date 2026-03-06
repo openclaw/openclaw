@@ -8,7 +8,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError:
+    yaml = None
 
 MAX_SKILL_NAME_LENGTH = 64
 
@@ -21,6 +24,44 @@ def _extract_frontmatter(content: str) -> Optional[str]:
         if lines[i].strip() == "---":
             return "\n".join(lines[1:i])
     return None
+
+
+def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]:
+    """
+    Minimal fallback parser used when PyYAML is unavailable.
+    Supports simple `key: value` mappings used by SKILL.md frontmatter.
+    """
+    parsed: dict[str, str] = {}
+    current_key: Optional[str] = None
+    for raw_line in frontmatter_text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        is_indented = raw_line[:1].isspace()
+        if is_indented:
+            if current_key is None:
+                return None
+            current_value = parsed[current_key]
+            parsed[current_key] = (
+                f"{current_value}\n{stripped}" if current_value else stripped
+            )
+            continue
+
+        if ":" not in stripped:
+            return None
+        key, value = stripped.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            return None
+        if (value.startswith('"') and value.endswith('"')) or (
+            value.startswith("'") and value.endswith("'")
+        ):
+            value = value[1:-1]
+        parsed[key] = value
+        current_key = key
+    return parsed
 
 
 def validate_skill(skill_path):
@@ -39,12 +80,20 @@ def validate_skill(skill_path):
     frontmatter_text = _extract_frontmatter(content)
     if frontmatter_text is None:
         return False, "Invalid frontmatter format"
-    try:
-        frontmatter = yaml.safe_load(frontmatter_text)
-        if not isinstance(frontmatter, dict):
-            return False, "Frontmatter must be a YAML dictionary"
-    except yaml.YAMLError as e:
-        return False, f"Invalid YAML in frontmatter: {e}"
+    if yaml is not None:
+        try:
+            frontmatter = yaml.safe_load(frontmatter_text)
+            if not isinstance(frontmatter, dict):
+                return False, "Frontmatter must be a YAML dictionary"
+        except yaml.YAMLError as e:
+            return False, f"Invalid YAML in frontmatter: {e}"
+    else:
+        frontmatter = _parse_simple_frontmatter(frontmatter_text)
+        if frontmatter is None:
+            return (
+                False,
+                "Invalid YAML in frontmatter: unsupported syntax without PyYAML installed",
+            )
 
     allowed_properties = {"name", "description", "license", "allowed-tools", "metadata"}
 

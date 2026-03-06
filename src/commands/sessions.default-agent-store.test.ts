@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
 const loadConfigMock = vi.hoisted(() =>
@@ -25,6 +25,7 @@ const resolveStorePathMock = vi.hoisted(() =>
     return `/tmp/sessions-${opts?.agentId ?? "missing"}.json`;
   }),
 );
+const loadSessionStoreMock = vi.hoisted(() => vi.fn(() => ({})));
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -39,7 +40,7 @@ vi.mock("../config/sessions.js", async (importOriginal) => {
   return {
     ...actual,
     resolveStorePath: resolveStorePathMock,
-    loadSessionStore: vi.fn(() => ({})),
+    loadSessionStore: loadSessionStoreMock,
   };
 });
 
@@ -58,6 +59,67 @@ function createRuntime(): { runtime: RuntimeEnv; logs: string[] } {
 }
 
 describe("sessionsCommand default store agent selection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveStorePathMock.mockImplementation(
+      (_store: string | undefined, opts?: { agentId?: string }) => {
+        return `/tmp/sessions-${opts?.agentId ?? "missing"}.json`;
+      },
+    );
+    loadSessionStoreMock.mockImplementation(() => ({}));
+  });
+
+  it("includes agentId on sessions rows for --all-agents JSON output", async () => {
+    resolveStorePathMock.mockClear();
+    loadSessionStoreMock.mockReset();
+    loadSessionStoreMock
+      .mockReturnValueOnce({
+        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
+      })
+      .mockReturnValueOnce({
+        voice_row: { sessionId: "s2", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+      });
+    const { runtime, logs } = createRuntime();
+
+    await sessionsCommand({ allAgents: true, json: true }, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      allAgents?: boolean;
+      sessions?: Array<{ key: string; agentId?: string }>;
+    };
+    expect(payload.allAgents).toBe(true);
+    expect(payload.sessions?.map((session) => session.agentId)).toContain("main");
+    expect(payload.sessions?.map((session) => session.agentId)).toContain("voice");
+  });
+
+  it("avoids duplicate rows when --all-agents resolves to a shared store path", async () => {
+    resolveStorePathMock.mockReset();
+    resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");
+    loadSessionStoreMock.mockReset();
+    loadSessionStoreMock.mockReturnValue({
+      "agent:main:room": { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
+      "agent:voice:room": { sessionId: "s2", updatedAt: Date.now() - 30_000, model: "pi:opus" },
+    });
+    const { runtime, logs } = createRuntime();
+
+    await sessionsCommand({ allAgents: true, json: true }, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      count?: number;
+      stores?: Array<{ agentId: string; path: string }>;
+      allAgents?: boolean;
+      sessions?: Array<{ key: string; agentId?: string }>;
+    };
+    expect(payload.count).toBe(2);
+    expect(payload.allAgents).toBe(true);
+    expect(payload.stores).toEqual([{ agentId: "main", path: "/tmp/shared-sessions.json" }]);
+    expect(payload.sessions?.map((session) => session.agentId).toSorted()).toEqual([
+      "main",
+      "voice",
+    ]);
+    expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
+  });
+
   it("uses configured default agent id when resolving implicit session store path", async () => {
     resolveStorePathMock.mockClear();
     const { runtime, logs } = createRuntime();
@@ -68,5 +130,27 @@ describe("sessionsCommand default store agent selection", () => {
       agentId: "voice",
     });
     expect(logs[0]).toContain("Session store: /tmp/sessions-voice.json");
+  });
+
+  it("uses all configured agent stores with --all-agents", async () => {
+    resolveStorePathMock.mockClear();
+    loadSessionStoreMock.mockReset();
+    loadSessionStoreMock
+      .mockReturnValueOnce({
+        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
+      })
+      .mockReturnValueOnce({});
+    const { runtime, logs } = createRuntime();
+
+    await sessionsCommand({ allAgents: true }, runtime);
+
+    expect(resolveStorePathMock).toHaveBeenCalledWith("/tmp/sessions-{agentId}.json", {
+      agentId: "main",
+    });
+    expect(resolveStorePathMock).toHaveBeenCalledWith("/tmp/sessions-{agentId}.json", {
+      agentId: "voice",
+    });
+    expect(logs[0]).toContain("Session stores: 2 (main, voice)");
+    expect(logs[2]).toContain("Agent");
   });
 });

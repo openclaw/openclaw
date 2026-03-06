@@ -52,7 +52,9 @@ function expectPrimaryProbeSuccess(
 ) {
   expect(result.result).toBe(expectedResult);
   expect(run).toHaveBeenCalledTimes(1);
-  expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+  expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+    allowRateLimitCooldownProbe: true,
+  });
 }
 
 describe("runWithModelFallback – probe logic", () => {
@@ -163,7 +165,7 @@ describe("runWithModelFallback – probe logic", () => {
     expectPrimaryProbeSuccess(result, run, "recovered");
   });
 
-  it("does NOT probe non-primary candidates during cooldown", async () => {
+  it("attempts non-primary fallbacks during rate-limit cooldown after primary probe failure", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -182,25 +184,27 @@ describe("runWithModelFallback – probe logic", () => {
     const almostExpired = NOW + 30 * 1000; // 30s remaining
     mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);
 
-    // Primary probe fails with 429
+    // Primary probe fails with 429; fallback should still be attempted for rate_limit cooldowns.
     const run = vi
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
-      .mockResolvedValue("should-not-reach");
+      .mockResolvedValue("fallback-ok");
 
-    try {
-      await runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        run,
-      });
-      expect.unreachable("should have thrown since all candidates exhausted");
-    } catch {
-      // Primary was probed (i === 0 + within margin), non-primary were skipped
-      expect(run).toHaveBeenCalledTimes(1); // only primary was actually called
-      expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
-    }
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("fallback-ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
+      allowRateLimitCooldownProbe: true,
+    });
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
+      allowRateLimitCooldownProbe: true,
+    });
   });
 
   it("throttles probe when called within 30s interval", async () => {
@@ -321,7 +325,11 @@ describe("runWithModelFallback – probe logic", () => {
       run,
     });
 
-    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini");
-    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
+      allowRateLimitCooldownProbe: true,
+    });
+    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-4.1-mini", {
+      allowRateLimitCooldownProbe: true,
+    });
   });
 });

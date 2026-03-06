@@ -7,6 +7,7 @@ import { createIMessageTestPlugin } from "../test-utils/imessage-test-plugin.js"
 import {
   extractHookToken,
   isHookAgentAllowed,
+  normalizeHookDispatchSessionKey,
   resolveHookSessionKey,
   resolveHookTargetAgentId,
   normalizeAgentPayload,
@@ -278,6 +279,24 @@ describe("gateway hooks helpers", () => {
       source: "request",
     });
     expect(resolvedKey).toEqual({ ok: true, value: "hook:ingress" });
+  });
+
+  test("normalizeHookDispatchSessionKey strips duplicate target agent prefix", () => {
+    expect(
+      normalizeHookDispatchSessionKey({
+        sessionKey: "agent:hooks:slack:channel:c123",
+        targetAgentId: "hooks",
+      }),
+    ).toBe("slack:channel:c123");
+  });
+
+  test("normalizeHookDispatchSessionKey preserves non-target agent scoped keys", () => {
+    expect(
+      normalizeHookDispatchSessionKey({
+        sessionKey: "agent:main:slack:channel:c123",
+        targetAgentId: "hooks",
+      }),
+    ).toBe("agent:main:slack:channel:c123");
   });
 
   test("resolveHooksConfig validates defaultSessionKey and generated fallback against prefixes", () => {
