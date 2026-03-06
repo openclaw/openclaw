@@ -5,6 +5,8 @@ describe("provider-usage.shared", () => {
   it("normalizes supported usage provider ids", () => {
     expect(resolveUsageProviderId("z-ai")).toBe("zai");
     expect(resolveUsageProviderId(" GOOGLE-GEMINI-CLI ")).toBe("google-gemini-cli");
+    expect(resolveUsageProviderId(" moonshot ")).toBe("moonshot");
+    expect(resolveUsageProviderId(" kimi-coding ")).toBe("moonshot");
     expect(resolveUsageProviderId("unknown-provider")).toBeUndefined();
     expect(resolveUsageProviderId()).toBeUndefined();
   });

@@ -1,5 +1,10 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { SessionsUsageResult, CostUsageSummary, SessionUsageTimeSeries } from "../types.ts";
+import type {
+  SessionsUsageResult,
+  CostUsageSummary,
+  ProviderUsageSummary,
+  SessionUsageTimeSeries,
+} from "../types.ts";
 import type { SessionLogEntry } from "../views/usage.ts";
 
 export type UsageState = {
@@ -8,6 +13,8 @@ export type UsageState = {
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
+  usageProviderSummary: ProviderUsageSummary | null;
+  usageProviderSummaryError: string | null;
   usageError: string | null;
   usageStartDate: string;
   usageEndDate: string;
@@ -199,6 +206,17 @@ export async function loadUsage(
   }
   state.usageLoading = true;
   state.usageError = null;
+  state.usageProviderSummaryError = null;
+  const loadProviderQuota = async () => {
+    try {
+      const quotaRes = await client.request("usage.status");
+      state.usageProviderSummary = quotaRes as ProviderUsageSummary;
+      state.usageProviderSummaryError = null;
+    } catch (err) {
+      state.usageProviderSummary = null;
+      state.usageProviderSummaryError = toErrorMessage(err);
+    }
+  };
   try {
     const startDate = overrides?.startDate ?? state.usageStartDate;
     const endDate = overrides?.endDate ?? state.usageEndDate;
@@ -252,6 +270,7 @@ export async function loadUsage(
   } finally {
     state.usageLoading = false;
   }
+  void loadProviderQuota();
 }
 
 export const __test = {

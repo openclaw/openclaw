@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -6,6 +6,21 @@ import ts from "typescript";
 const baseTestSuffixes = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
 
 export function resolveRepoRoot(importMetaUrl) {
+  let currentDir = path.dirname(fileURLToPath(importMetaUrl));
+  while (true) {
+    if (
+      existsSync(path.join(currentDir, "package.json")) &&
+      existsSync(path.join(currentDir, "src"))
+    ) {
+      return currentDir;
+    }
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      break;
+    }
+    currentDir = parentDir;
+  }
+
   return path.resolve(path.dirname(fileURLToPath(importMetaUrl)), "..", "..");
 }
 

@@ -111,17 +111,19 @@ describe("resolveProviderAuths key normalization", () => {
     await withSuiteHome(
       async () => {
         const auths = await resolveProviderAuths({
-          providers: ["zai", "minimax", "xiaomi"],
+          providers: ["zai", "minimax", "moonshot", "xiaomi"],
         });
         expect(auths).toEqual([
           { provider: "zai", token: "zai-key" },
           { provider: "minimax", token: "minimax-key" },
+          { provider: "moonshot", token: "moonshot-key" },
           { provider: "xiaomi", token: "xiaomi-key" },
         ]);
       },
       {
         ZAI_API_KEY: "zai-\r\nkey",
         MINIMAX_API_KEY: "minimax-\r\nkey",
+        MOONSHOT_API_KEY: "moonshot-\r\nkey",
         XIAOMI_API_KEY: "xiaomi-\r\nkey",
       },
     );
@@ -255,6 +257,11 @@ describe("resolveProviderAuths key normalization", () => {
                 models: [modelDef],
                 apiKey: "cfg-minimax-key",
               },
+              moonshot: {
+                baseUrl: "https://api.moonshot.ai/v1",
+                models: [modelDef],
+                apiKey: "cfg-moonshot-key",
+              },
               xiaomi: {
                 baseUrl: "https://api.xiaomi.example",
                 models: [modelDef],
@@ -265,11 +272,12 @@ describe("resolveProviderAuths key normalization", () => {
         });
 
         const auths = await resolveProviderAuths({
-          providers: ["zai", "minimax", "xiaomi"],
+          providers: ["zai", "minimax", "moonshot", "xiaomi"],
         });
         expect(auths).toEqual([
           { provider: "zai", token: "cfg-zai-key" },
           { provider: "minimax", token: "cfg-minimax-key" },
+          { provider: "moonshot", token: "cfg-moonshot-key" },
           { provider: "xiaomi", token: "cfg-xiaomi-key" },
         ]);
       },
@@ -278,6 +286,10 @@ describe("resolveProviderAuths key normalization", () => {
         Z_AI_API_KEY: undefined,
         MINIMAX_API_KEY: undefined,
         MINIMAX_CODE_PLAN_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        KIMI_BALANCE_API_KEY: undefined,
+        KIMICODE_API_KEY: undefined,
         XIAOMI_API_KEY: undefined,
       },
     );
@@ -287,7 +299,7 @@ describe("resolveProviderAuths key normalization", () => {
     await withSuiteHome(
       async () => {
         const auths = await resolveProviderAuths({
-          providers: ["zai", "minimax", "xiaomi"],
+          providers: ["zai", "minimax", "moonshot", "xiaomi"],
         });
         expect(auths).toEqual([]);
       },
@@ -296,7 +308,36 @@ describe("resolveProviderAuths key normalization", () => {
         Z_AI_API_KEY: undefined,
         MINIMAX_API_KEY: undefined,
         MINIMAX_CODE_PLAN_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        KIMI_BALANCE_API_KEY: undefined,
+        KIMICODE_API_KEY: undefined,
         XIAOMI_API_KEY: undefined,
+      },
+    );
+  });
+
+  it("accepts kimi-coding profiles for moonshot usage auth", async () => {
+    await withSuiteHome(
+      async (home) => {
+        await writeAuthProfiles(home, {
+          "kimi-coding:default": {
+            type: "api_key",
+            provider: "kimi-coding",
+            key: "kimi-coding-key",
+          },
+        });
+
+        const auths = await resolveProviderAuths({
+          providers: ["moonshot"],
+        });
+        expect(auths).toEqual([{ provider: "moonshot", token: "kimi-coding-key" }]);
+      },
+      {
+        MOONSHOT_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        KIMI_BALANCE_API_KEY: undefined,
+        KIMICODE_API_KEY: undefined,
       },
     );
   });

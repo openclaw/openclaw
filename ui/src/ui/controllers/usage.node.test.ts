@@ -10,6 +10,8 @@ function createState(request: RequestFn, overrides: Partial<UsageState> = {}): U
     usageLoading: false,
     usageResult: null,
     usageCostSummary: null,
+    usageProviderSummary: null,
+    usageProviderSummaryError: null,
     usageError: null,
     usageStartDate: "2026-02-16",
     usageEndDate: "2026-02-16",
@@ -66,6 +68,7 @@ describe("usage controller date interpretation params", () => {
     await loadUsage(state);
 
     expectSpecificTimezoneCalls(request, 1);
+    expect(request).toHaveBeenNthCalledWith(3, "usage.status");
   });
 
   it("sends utc mode without offset when usage timezone is utc", async () => {
@@ -86,6 +89,7 @@ describe("usage controller date interpretation params", () => {
       endDate: "2026-02-16",
       mode: "utc",
     });
+    expect(request).toHaveBeenNthCalledWith(3, "usage.status");
   });
 
   it("captures useful error strings in loadUsage", async () => {
@@ -139,20 +143,22 @@ describe("usage controller date interpretation params", () => {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
     });
+    expect(request).toHaveBeenNthCalledWith(5, "usage.status");
 
     // Subsequent loads for the same gateway should skip mode/utcOffset immediately.
     await loadUsage(state);
 
-    expect(request).toHaveBeenNthCalledWith(5, "sessions.usage", {
+    expect(request).toHaveBeenNthCalledWith(6, "sessions.usage", {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
       limit: 1000,
       includeContextWeight: true,
     });
-    expect(request).toHaveBeenNthCalledWith(6, "usage.cost", {
+    expect(request).toHaveBeenNthCalledWith(7, "usage.cost", {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
     });
+    expect(request).toHaveBeenNthCalledWith(8, "usage.status");
 
     // Persisted flag should survive cache resets (simulating app reload).
     __test.resetLegacyUsageDateParamsCache();

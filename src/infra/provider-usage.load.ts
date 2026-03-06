@@ -1,3 +1,4 @@
+import { logVerbose } from "../globals.js";
 import { resolveFetch } from "./fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
@@ -6,6 +7,7 @@ import {
   fetchCopilotUsage,
   fetchGeminiUsage,
   fetchMinimaxUsage,
+  fetchMoonshotUsage,
   fetchZaiUsage,
 } from "./provider-usage.fetch.js";
 import {
@@ -30,6 +32,27 @@ type UsageSummaryOptions = {
   fetch?: typeof fetch;
 };
 
+function isAbortLikeError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  if (err.name === "AbortError") {
+    return true;
+  }
+  const message = err.message.toLowerCase();
+  return message.includes("operation was aborted") || message.includes("aborted");
+}
+
+function formatProviderError(err: unknown): string {
+  if (isAbortLikeError(err)) {
+    return "Timeout";
+  }
+  if (err instanceof Error) {
+    return err.message || err.name || String(err);
+  }
+  return String(err);
+}
+
 export async function loadProviderUsageSummary(
   opts: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
@@ -52,32 +75,43 @@ export async function loadProviderUsageSummary(
   const tasks = auths.map((auth) =>
     withTimeout(
       (async (): Promise<ProviderUsageSnapshot> => {
-        switch (auth.provider) {
-          case "anthropic":
-            return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn);
-          case "github-copilot":
-            return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
-          case "google-gemini-cli":
-            return await fetchGeminiUsage(auth.token, timeoutMs, fetchFn, auth.provider);
-          case "openai-codex":
-            return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
-          case "minimax":
-            return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
-          case "xiaomi":
-            return {
-              provider: "xiaomi",
-              displayName: PROVIDER_LABELS.xiaomi,
-              windows: [],
-            };
-          case "zai":
-            return await fetchZaiUsage(auth.token, timeoutMs, fetchFn);
-          default:
-            return {
-              provider: auth.provider,
-              displayName: PROVIDER_LABELS[auth.provider],
-              windows: [],
-              error: "Unsupported provider",
-            };
+        try {
+          switch (auth.provider) {
+            case "anthropic":
+              return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn);
+            case "github-copilot":
+              return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
+            case "google-gemini-cli":
+              return await fetchGeminiUsage(auth.token, timeoutMs, fetchFn, auth.provider);
+            case "openai-codex":
+              return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
+            case "minimax":
+              return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
+            case "moonshot":
+              return await fetchMoonshotUsage(auth.token, timeoutMs, fetchFn);
+            case "xiaomi":
+              return {
+                provider: "xiaomi",
+                displayName: PROVIDER_LABELS.xiaomi,
+                windows: [],
+              };
+            case "zai":
+              return await fetchZaiUsage(auth.token, timeoutMs, fetchFn);
+            default:
+              return {
+                provider: auth.provider,
+                displayName: PROVIDER_LABELS[auth.provider],
+                windows: [],
+                error: "Unsupported provider",
+              };
+          }
+        } catch (err) {
+          return {
+            provider: auth.provider,
+            displayName: PROVIDER_LABELS[auth.provider],
+            windows: [],
+            error: formatProviderError(err),
+          };
         }
       })(),
       timeoutMs + 1000,
@@ -91,6 +125,11 @@ export async function loadProviderUsageSummary(
   );
 
   const snapshots = await Promise.all(tasks);
+  for (const snapshot of snapshots) {
+    if (snapshot.error) {
+      logVerbose(`[usage] ${snapshot.provider} quota fetch failed: ${snapshot.error}`);
+    }
+  }
   const providers = snapshots.filter((entry) => {
     if (entry.windows.length > 0) {
       return true;
