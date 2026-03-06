@@ -252,6 +252,24 @@ const mockFailedThenSuccessfulAttempt = (errorMessage = "rate limit") => {
     );
 };
 
+const mockPromptErrorThenSuccessfulAttempt = (errorMessage: string) => {
+  runEmbeddedAttemptMock
+    .mockResolvedValueOnce(
+      makeAttempt({
+        promptError: new Error(errorMessage),
+      }),
+    )
+    .mockResolvedValueOnce(
+      makeAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildAssistant({
+          stopReason: "stop",
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+};
+
 async function runAutoPinnedOpenAiTurn(params: {
   agentDir: string;
   workspaceDir: string;
@@ -307,6 +325,28 @@ async function runAutoPinnedRotationCase(params: {
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
     mockFailedThenSuccessfulAttempt(params.errorMessage);
+    await runAutoPinnedOpenAiTurn({
+      agentDir,
+      workspaceDir,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+    });
+
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+    const usageStats = await readUsageStats(agentDir);
+    return { usageStats };
+  });
+}
+
+async function runAutoPinnedPromptErrorRotationCase(params: {
+  errorMessage: string;
+  sessionKey: string;
+  runId: string;
+}) {
+  runEmbeddedAttemptMock.mockClear();
+  return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+    await writeAuthStore(agentDir);
+    mockPromptErrorThenSuccessfulAttempt(params.errorMessage);
     await runAutoPinnedOpenAiTurn({
       agentDir,
       workspaceDir,
@@ -639,13 +679,24 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
   });
 
-  it("rotates for overloaded prompt failures across auto-pinned profiles", async () => {
+  it("rotates for overloaded assistant failures across auto-pinned profiles", async () => {
     const { usageStats } = await runAutoPinnedRotationCase({
       errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       sessionKey: "agent:test:overloaded-rotation",
       runId: "run:overloaded-rotation",
     });
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+  });
+
+  it("rotates for overloaded prompt failures across auto-pinned profiles", async () => {
+    const { usageStats } = await runAutoPinnedPromptErrorRotationCase({
+      errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      sessionKey: "agent:test:overloaded-prompt-rotation",
+      runId: "run:overloaded-prompt-rotation",
+    });
+    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
   });
 
   it("rotates on timeout without cooling down the timed-out profile", async () => {

@@ -14,6 +14,7 @@ import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
   isProfileInCooldown,
+  type AuthProfileFailureReason,
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
@@ -45,6 +46,7 @@ import {
   isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isOverloadedErrorMessage,
   parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
@@ -724,7 +726,7 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
-        reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
+        reason?: AuthProfileFailureReason | null;
         config?: RunEmbeddedPiAgentParams["config"];
         agentDir?: RunEmbeddedPiAgentParams["agentDir"];
       }) => {
@@ -739,6 +741,22 @@ export async function runEmbeddedPiAgent(
           cfg: params.config,
           agentDir,
         });
+      };
+      const resolveAuthProfileFailureReason = (
+        failoverReason: FailoverReason | null,
+      ): AuthProfileFailureReason | null => {
+        if (!failoverReason || failoverReason === "timeout") {
+          return null;
+        }
+        return failoverReason;
+      };
+      const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
+        if (reason !== "overloaded") {
+          return;
+        }
+        overloadFailoverAttempts += 1;
+        const delayMs = computeBackoff(OVERLOAD_FAILOVER_BACKOFF_POLICY, overloadFailoverAttempts);
+        await sleepWithAbort(delayMs, params.abortSignal);
       };
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
@@ -1165,9 +1183,13 @@ export async function runEmbeddedPiAgent(
               };
             }
             const promptFailoverReason = classifyFailoverReason(errorText);
+            const promptProfileFailureReason = resolveAuthProfileFailureReason(
+              errorText,
+              promptFailoverReason,
+            );
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
-              reason: promptFailoverReason,
+              reason: promptProfileFailureReason,
             });
             if (
               isFailoverErrorMessage(errorText) &&
@@ -1218,6 +1240,10 @@ export async function runEmbeddedPiAgent(
           const billingFailure = isBillingAssistantError(lastAssistant);
           const failoverFailure = isFailoverAssistantError(lastAssistant);
           const assistantFailoverReason = classifyFailoverReason(lastAssistant?.errorMessage ?? "");
+          const assistantProfileFailureReason = resolveAuthProfileFailureReason(
+            lastAssistant?.errorMessage ?? "",
+            assistantFailoverReason,
+          );
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
 
@@ -1257,10 +1283,7 @@ export async function runEmbeddedPiAgent(
 
           if (shouldRotate) {
             if (lastProfileId) {
-              const reason =
-                timedOut || assistantFailoverReason === "timeout"
-                  ? "timeout"
-                  : (assistantFailoverReason ?? "unknown");
+              const reason = timedOut ? "timeout" : assistantProfileFailureReason;
               // Skip cooldown for timeouts: a timeout is model/network-specific,
               // not an auth issue. Marking the profile would poison fallback models
               // on the same provider (e.g. gpt-5.3 timeout blocks gpt-5.2).
