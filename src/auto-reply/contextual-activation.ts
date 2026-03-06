@@ -18,10 +18,14 @@ export type ContextualActivationConfig = {
   model: string;
   /** Fallback models tried in order if the primary model fails. */
   fallbacks?: string[];
-  /** Custom system prompt for the peeking (join) decision. If omitted, a default prompt is used. */
+  /** Fully replace the default peeking (join) decision prompt. */
   prompt?: string;
-  /** Custom system prompt for the disengage decision. If omitted, a default prompt is used. */
+  /** Extra rules appended to the default peeking prompt (ignored when `prompt` is set). */
+  promptExtra?: string;
+  /** Fully replace the default disengage decision prompt. */
   disengagePrompt?: string;
+  /** Extra rules appended to the default disengage prompt (ignored when `disengagePrompt` is set). */
+  disengagePromptExtra?: string;
   /** Maximum recent messages to include in the decision context. Default: 15. */
   contextMessages?: number;
   /** Base probability (0-1) of even calling the decision model when peeking. Default: 1. */
@@ -588,10 +592,12 @@ export async function shouldParticipateInGroup(params: {
 
   if (state.mode === "engaged") {
     // --- ENGAGED MODE: ask if we should disengage ---
-    const systemPrompt = (config.disengagePrompt ?? DEFAULT_DISENGAGE_PROMPT).replace(
-      /\{botName\}/g,
-      botLabel,
-    );
+    const baseDisengage =
+      config.disengagePrompt ??
+      (config.disengagePromptExtra
+        ? `${DEFAULT_DISENGAGE_PROMPT}\n\n**Additional rules:**\n${config.disengagePromptExtra}`
+        : DEFAULT_DISENGAGE_PROMPT);
+    const systemPrompt = baseDisengage.replace(/\{botName\}/g, botLabel);
     const userPrompt = [
       "**Recent group chat messages:**",
       chatContent,
@@ -665,7 +671,12 @@ export async function shouldParticipateInGroup(params: {
     return { shouldProcess: false };
   }
 
-  const systemPrompt = (config.prompt ?? DEFAULT_PEEKING_PROMPT).replace(/\{botName\}/g, botLabel);
+  const basePeeking =
+    config.prompt ??
+    (config.promptExtra
+      ? `${DEFAULT_PEEKING_PROMPT}\n\n**Additional rules:**\n${config.promptExtra}`
+      : DEFAULT_PEEKING_PROMPT);
+  const systemPrompt = basePeeking.replace(/\{botName\}/g, botLabel);
   const userPrompt = [
     "**Recent group chat messages:**",
     chatContent,
