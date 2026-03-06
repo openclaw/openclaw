@@ -47,6 +47,7 @@ function rewriteRequestUrl(input: RequestInfo | URL): { url: string; original: s
 }
 
 function registerAzureApiVersionsFromConfig(cfg?: OpenClawConfig): void {
+  azureApiVersionByHost.clear();
   const providers = cfg?.models?.providers;
   if (!providers) {
     return;
@@ -69,8 +70,9 @@ function registerAzureApiVersionsFromConfig(cfg?: OpenClawConfig): void {
 }
 
 export function ensureAzureApiVersionFetchWrapper(cfg?: OpenClawConfig): void {
+  // Always re-register before the early-return guard so the map reflects the
+  // current config even after the wrapper is already installed.
   registerAzureApiVersionsFromConfig(cfg);
-
   const currentFetch = globalThis.fetch as FetchWithMarker | undefined;
   if (!currentFetch || currentFetch[FETCH_WRAPPED]) {
     return;
