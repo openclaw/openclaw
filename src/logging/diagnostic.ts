@@ -25,13 +25,26 @@ let lastActivityAt = 0;
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
 const MIN_STUCK_SESSION_WARN_MS = 1_000;
 const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_STUCK_SESSION_AUTO_RECOVER_MS = 300_000;
+const MIN_STUCK_SESSION_AUTO_RECOVER_MS = 30_000;
 let commandPollBackoffRuntimePromise: Promise<
   typeof import("../agents/command-poll-backoff.runtime.js")
 > | null = null;
+let embeddedRunnerRuntimePromise: Promise<
+  typeof import("../agents/pi-embedded-runner/runs.js")
+> | null = null;
+
+/** Sessions already auto-recovered this heartbeat cycle — avoid repeated aborts. */
+const autoRecoveredSessions = new Set<string>();
 
 function loadCommandPollBackoffRuntime() {
   commandPollBackoffRuntimePromise ??= import("../agents/command-poll-backoff.runtime.js");
   return commandPollBackoffRuntimePromise;
+}
+
+function loadEmbeddedRunnerRuntime() {
+  embeddedRunnerRuntimePromise ??= import("../agents/pi-embedded-runner/runs.js");
+  return embeddedRunnerRuntimePromise;
 }
 
 function markActivity() {
@@ -48,6 +61,25 @@ export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
     return DEFAULT_STUCK_SESSION_WARN_MS;
   }
   return rounded;
+}
+
+/**
+ * Resolves the auto-recovery threshold. Returns null if auto-recovery is
+ * explicitly disabled (value === 0).
+ */
+export function resolveStuckSessionAutoRecoverMs(config?: OpenClawConfig): number | null {
+  const raw = config?.diagnostics?.stuckSessionAutoRecoverMs;
+  if (raw === 0) {
+    return null;
+  }
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_STUCK_SESSION_AUTO_RECOVER_MS;
+  }
+  const rounded = Math.floor(raw);
+  if (rounded < MIN_STUCK_SESSION_AUTO_RECOVER_MS) {
+    return DEFAULT_STUCK_SESSION_AUTO_RECOVER_MS;
+  }
+  return Math.min(rounded, MAX_STUCK_SESSION_WARN_MS);
 }
 
 export function logWebhookReceived(params: {
@@ -204,6 +236,9 @@ export function logSessionStateChange(
   state.lastActivity = Date.now();
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
+    if (state.sessionId) {
+      autoRecoveredSessions.delete(state.sessionId);
+    }
   }
   if (!isProbeSession && diag.isEnabled("debug")) {
     diag.debug(
@@ -394,15 +429,52 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
         diag.debug(`command-poll-backoff prune failed: ${String(err)}`);
       });
 
+    const autoRecoverMs = resolveStuckSessionAutoRecoverMs(heartbeatConfig);
+
     for (const [, state] of diagnosticSessionStates) {
       const ageMs = now - state.lastActivity;
-      if (state.state === "processing" && ageMs > stuckSessionWarnMs) {
-        logSessionStuck({
-          sessionId: state.sessionId,
-          sessionKey: state.sessionKey,
-          state: state.state,
-          ageMs,
-        });
+      if (state.state !== "processing" || ageMs <= stuckSessionWarnMs) {
+        continue;
+      }
+
+      logSessionStuck({
+        sessionId: state.sessionId,
+        sessionKey: state.sessionKey,
+        state: state.state,
+        ageMs,
+      });
+
+      const sessionId = state.sessionId;
+      if (
+        autoRecoverMs !== null &&
+        sessionId &&
+        ageMs > autoRecoverMs &&
+        !sessionId.startsWith("probe-") &&
+        !autoRecoveredSessions.has(sessionId)
+      ) {
+        autoRecoveredSessions.add(sessionId);
+        diag.warn(
+          `auto-recovering stuck session: sessionId=${sessionId} age=${Math.round(ageMs / 1000)}s threshold=${Math.round(autoRecoverMs / 1000)}s`,
+        );
+        void loadEmbeddedRunnerRuntime()
+          .then(({ abortEmbeddedPiRun }) => {
+            const aborted = abortEmbeddedPiRun(sessionId);
+            if (aborted) {
+              diag.warn(`auto-recovery abort sent: sessionId=${sessionId}`);
+            } else {
+              diag.debug(`auto-recovery: no active run to abort for sessionId=${sessionId}`);
+            }
+            emitDiagnosticEvent({
+              type: "session.auto_recover",
+              sessionId,
+              sessionKey: state.sessionKey,
+              ageMs,
+              aborted,
+            });
+          })
+          .catch((err) => {
+            diag.error(`auto-recovery failed: sessionId=${sessionId} error="${String(err)}"`);
+          });
       }
     }
   }, 30_000);
@@ -427,6 +499,7 @@ export function resetDiagnosticStateForTest(): void {
   webhookStats.errors = 0;
   webhookStats.lastReceived = 0;
   lastActivityAt = 0;
+  autoRecoveredSessions.clear();
   stopDiagnosticHeartbeat();
 }
 
