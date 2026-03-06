@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SandboxDockerSettings } from "../../config/types.sandbox.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
@@ -34,8 +35,8 @@ type DangerousSandboxDockerBooleanKey = (typeof DANGEROUS_SANDBOX_DOCKER_BOOLEAN
 type DangerousSandboxDockerBooleans = Pick<SandboxDockerConfig, DangerousSandboxDockerBooleanKey>;
 
 function resolveDangerousSandboxDockerBooleans(
-  agentDocker?: Partial<SandboxDockerConfig>,
-  globalDocker?: Partial<SandboxDockerConfig>,
+  agentDocker?: SandboxDockerSettings,
+  globalDocker?: SandboxDockerSettings,
 ): DangerousSandboxDockerBooleans {
   const resolved = {} as DangerousSandboxDockerBooleans;
   for (const key of DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS) {
@@ -75,15 +76,18 @@ export function resolveSandboxScope(params: {
 
 export function resolveSandboxDockerConfig(params: {
   scope: SandboxScope;
-  globalDocker?: Partial<SandboxDockerConfig>;
-  agentDocker?: Partial<SandboxDockerConfig>;
+  globalDocker?: SandboxDockerSettings;
+  agentDocker?: SandboxDockerSettings;
 }): SandboxDockerConfig {
   const agentDocker = params.scope === "shared" ? undefined : params.agentDocker;
   const globalDocker = params.globalDocker;
 
-  const env = agentDocker?.env
-    ? { ...(globalDocker?.env ?? { LANG: "C.UTF-8" }), ...agentDocker.env }
-    : (globalDocker?.env ?? { LANG: "C.UTF-8" });
+  // SecretRef values in env are resolved to plain strings before this function runs.
+  const env = (
+    agentDocker?.env
+      ? { ...(globalDocker?.env ?? { LANG: "C.UTF-8" }), ...agentDocker.env }
+      : (globalDocker?.env ?? { LANG: "C.UTF-8" })
+  ) as Record<string, string>;
 
   const ulimits = agentDocker?.ulimits
     ? { ...globalDocker?.ulimits, ...agentDocker.ulimits }
