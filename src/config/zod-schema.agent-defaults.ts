@@ -99,7 +99,7 @@ export const AgentDefaultsSchema = z
         qualityGuard: z
           .object({
             enabled: z.boolean().optional(),
-            maxRetries: z.number().int().min(0).max(3).optional(),
+            maxRetries: z.number().int().nonnegative().optional(),
           })
           .strict()
           .optional(),

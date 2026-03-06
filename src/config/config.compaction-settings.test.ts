@@ -89,4 +89,24 @@ describe("config compaction settings", () => {
       },
     );
   });
+
+  it("preserves oversized quality guard retry values for runtime clamping", async () => {
+    await withTempHomeConfig(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              qualityGuard: {
+                maxRetries: 99,
+              },
+            },
+          },
+        },
+      },
+      async () => {
+        const cfg = loadConfig();
+        expect(cfg.agents?.defaults?.compaction?.qualityGuard?.maxRetries).toBe(99);
+      },
+    );
+  });
 });
