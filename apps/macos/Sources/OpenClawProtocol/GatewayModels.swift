@@ -1908,22 +1908,92 @@ public struct AgentSummary: Codable, Sendable {
     }
 }
 
+public struct AgentsAuthProvidersParams: Codable, Sendable {}
+
+public struct AgentsAuthProvidersResult: Codable, Sendable {
+    public let providers: [[String: AnyCodable]]
+
+    public init(
+        providers: [[String: AnyCodable]])
+    {
+        self.providers = providers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providers
+    }
+}
+
+public struct AgentsAuthSetParams: Codable, Sendable {
+    public let agentid: String
+    public let authchoice: String
+    public let apikey: String?
+    public let useenvvar: Bool?
+
+    public init(
+        agentid: String,
+        authchoice: String,
+        apikey: String?,
+        useenvvar: Bool?)
+    {
+        self.agentid = agentid
+        self.authchoice = authchoice
+        self.apikey = apikey
+        self.useenvvar = useenvvar
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case authchoice = "authChoice"
+        case apikey = "apiKey"
+        case useenvvar = "useEnvVar"
+    }
+}
+
+public struct AgentsAuthSetResult: Codable, Sendable {
+    public let ok: Bool
+    public let agentid: String
+    public let model: String?
+
+    public init(
+        ok: Bool,
+        agentid: String,
+        model: String?)
+    {
+        self.ok = ok
+        self.agentid = agentid
+        self.model = model
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case agentid = "agentId"
+        case model
+    }
+}
+
 public struct AgentsCreateParams: Codable, Sendable {
     public let name: String
-    public let workspace: String
+    public let workspace: String?
     public let emoji: String?
     public let avatar: String?
+    public let model: String?
+    public let copyauthfromdefault: Bool?
 
     public init(
         name: String,
-        workspace: String,
+        workspace: String?,
         emoji: String?,
-        avatar: String?)
+        avatar: String?,
+        model: String?,
+        copyauthfromdefault: Bool?)
     {
         self.name = name
         self.workspace = workspace
         self.emoji = emoji
         self.avatar = avatar
+        self.model = model
+        self.copyauthfromdefault = copyauthfromdefault
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1931,6 +2001,8 @@ public struct AgentsCreateParams: Codable, Sendable {
         case workspace
         case emoji
         case avatar
+        case model
+        case copyauthfromdefault = "copyAuthFromDefault"
     }
 }
 
