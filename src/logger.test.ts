@@ -11,6 +11,7 @@ import {
   setLoggerOverride,
   stripRedundantSubsystemPrefixForConsole,
 } from "./logging.js";
+import { __test__ as loggerTestExports } from "./logging/logger.js";
 import type { RuntimeEnv } from "./runtime.js";
 
 describe("logger helpers", () => {
@@ -168,3 +169,31 @@ function localDateString(date: Date) {
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
+
+describe("rolling log date rotation", () => {
+  it("formatLocalDate produces correct date strings across midnight", () => {
+    const day1 = new Date(2026, 2, 5);
+    const day2 = new Date(2026, 2, 6);
+
+    expect(loggerTestExports.formatLocalDate(day1)).toBe("2026-03-05");
+    expect(loggerTestExports.formatLocalDate(day2)).toBe("2026-03-06");
+  });
+
+  it("defaultRollingPathForToday returns different paths on different days", () => {
+    vi.useFakeTimers();
+
+    const march5 = new Date(2026, 2, 5, 23, 59, 59);
+    vi.setSystemTime(march5);
+    const pathDay1 = loggerTestExports.defaultRollingPathForToday();
+
+    const march6 = new Date(2026, 2, 6, 0, 0, 1);
+    vi.setSystemTime(march6);
+    const pathDay2 = loggerTestExports.defaultRollingPathForToday();
+
+    expect(pathDay1).toContain("2026-03-05");
+    expect(pathDay2).toContain("2026-03-06");
+    expect(pathDay1).not.toBe(pathDay2);
+
+    vi.useRealTimers();
+  });
+});

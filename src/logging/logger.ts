@@ -139,15 +139,26 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   }
 
   fs.mkdirSync(path.dirname(settings.file), { recursive: true });
-  // Clean up stale rolling logs when using a dated log filename.
-  if (isRollingPath(settings.file)) {
+  const rolling = isRollingPath(settings.file);
+  if (rolling) {
     pruneOldRollingLogs(path.dirname(settings.file));
   }
-  let currentFileBytes = getCurrentLogFileBytes(settings.file);
+  let currentFile = settings.file;
+  let currentFileBytes = getCurrentLogFileBytes(currentFile);
   let warnedAboutSizeCap = false;
 
   logger.attachTransport((logObj: LogObj) => {
     try {
+      if (rolling) {
+        const todayPath = defaultRollingPathForToday();
+        if (todayPath !== currentFile) {
+          currentFile = todayPath;
+          fs.mkdirSync(path.dirname(currentFile), { recursive: true });
+          currentFileBytes = getCurrentLogFileBytes(currentFile);
+          warnedAboutSizeCap = false;
+          pruneOldRollingLogs(path.dirname(currentFile));
+        }
+      }
       const time = formatLocalIsoWithOffset(logObj.date ?? new Date());
       const line = JSON.stringify({ ...logObj, time });
       const payload = `${line}\n`;
@@ -160,16 +171,16 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
             time: formatLocalIsoWithOffset(new Date()),
             level: "warn",
             subsystem: "logging",
-            message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
+            message: `log file size cap reached; suppressing writes file=${currentFile} maxFileBytes=${settings.maxFileBytes}`,
           });
-          appendLogLine(settings.file, `${warningLine}\n`);
+          appendLogLine(currentFile, `${warningLine}\n`);
           process.stderr.write(
-            `[openclaw] log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}\n`,
+            `[openclaw] log file size cap reached; suppressing writes file=${currentFile} maxFileBytes=${settings.maxFileBytes}\n`,
           );
         }
         return;
       }
-      if (appendLogLine(settings.file, payload)) {
+      if (appendLogLine(currentFile, payload)) {
         currentFileBytes = nextBytes;
       }
     } catch {
@@ -297,6 +308,8 @@ export function registerLogTransport(transport: LogTransport): () => void {
 
 export const __test__ = {
   shouldSkipLoadConfigFallback,
+  formatLocalDate,
+  defaultRollingPathForToday,
 };
 
 function formatLocalDate(date: Date): string {
