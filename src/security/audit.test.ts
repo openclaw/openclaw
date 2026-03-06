@@ -1201,6 +1201,31 @@ description: test skill
     expect(finding?.detail).not.toContain("did you mean");
   });
 
+  it("flags ineffective gateway.nodes.overrides.*.denyCommands entries", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          overrides: {
+            "node-a": {
+              denyCommands: ["camera.*", "camera.snapx"],
+            },
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+
+    const finding = res.findings.find(
+      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain('gateway.nodes.overrides["node-a"].denyCommands: camera.*');
+    expect(finding?.detail).toContain(
+      'gateway.nodes.overrides["node-a"].denyCommands: camera.snapx',
+    );
+  });
+
   it("scores dangerous gateway.nodes.allowCommands by exposure", async () => {
     const cases: Array<{
       name: string;
@@ -1242,12 +1267,55 @@ description: test skill
     );
   });
 
+  it("flags dangerous gateway.nodes.overrides.*.allowCommands entries", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "loopback",
+        nodes: {
+          overrides: {
+            "node-a": {
+              allowCommands: ["camera.snap", "screen.record"],
+            },
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "gateway.nodes.allow_commands_dangerous",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain('gateway.nodes.overrides["node-a"].allowCommands');
+    expect(finding?.detail).toContain("camera.snap");
+    expect(finding?.detail).toContain("screen.record");
+  });
+
   it("does not flag dangerous allowCommands entries when denied again", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
         nodes: {
           allowCommands: ["camera.snap", "screen.record"],
           denyCommands: ["camera.snap", "screen.record"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
+  });
+
+  it("does not flag dangerous overrides allowCommands entries when denied again", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          denyCommands: ["camera.snap"],
+          overrides: {
+            "node-a": {
+              allowCommands: ["camera.snap", "screen.record"],
+              denyCommands: ["screen.record"],
+            },
+          },
         },
       },
     };

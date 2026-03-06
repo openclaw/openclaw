@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { GatewayNodeOverrideConfig } from "../config/types.gateway.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
@@ -172,20 +173,64 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
 
 export function resolveNodeCommandAllowlist(
   cfg: OpenClawConfig,
-  node?: Pick<NodeSession, "platform" | "deviceFamily">,
+  node?: Pick<NodeSession, "platform" | "deviceFamily"> &
+    Partial<Pick<NodeSession, "nodeId" | "displayName">>,
 ): Set<string> {
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
   const base = PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown;
-  const extra = cfg.gateway?.nodes?.allowCommands ?? [];
-  const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
-  const allow = new Set([...base, ...extra].map((cmd) => cmd.trim()).filter(Boolean));
-  for (const blocked of deny) {
-    const trimmed = blocked.trim();
-    if (trimmed) {
-      allow.delete(trimmed);
-    }
+
+  // Global config
+  const extraGlobal = cfg.gateway?.nodes?.allowCommands ?? [];
+  const denyGlobal = cfg.gateway?.nodes?.denyCommands ?? [];
+
+  // Per-node override lookup
+  const override = resolveNodeOverride(cfg, node);
+  const extraNode = override?.allowCommands ?? [];
+  const denyNode = override?.denyCommands ?? [];
+
+  // Merge: base + global allow + per-node allow
+  const allow = new Set(
+    [...base, ...extraGlobal, ...extraNode].map((cmd) => cmd.trim()).filter(Boolean),
+  );
+
+  // Remove: global deny + per-node deny
+  for (const cmd of [...denyGlobal, ...denyNode].map((c) => c.trim()).filter(Boolean)) {
+    allow.delete(cmd);
   }
   return allow;
+}
+
+function resolveNodeOverride(
+  cfg: OpenClawConfig,
+  node?: Partial<Pick<NodeSession, "nodeId" | "displayName">>,
+): GatewayNodeOverrideConfig | undefined {
+  const overrides = cfg.gateway?.nodes?.overrides;
+  if (!overrides || !node) {
+    return undefined;
+  }
+  // 1. nodeId exact match
+  if (node.nodeId && overrides[node.nodeId]) {
+    return overrides[node.nodeId];
+  }
+  // 2. displayName exact match
+  if (node.displayName && overrides[node.displayName]) {
+    return overrides[node.displayName];
+  }
+  // 3. nodeId prefix match (longest prefix wins; skip empty keys)
+  if (node.nodeId) {
+    let bestKey: string | undefined;
+    for (const key of Object.keys(overrides)) {
+      if (key && node.nodeId.startsWith(key)) {
+        if (!bestKey || key.length > bestKey.length) {
+          bestKey = key;
+        }
+      }
+    }
+    if (bestKey) {
+      return overrides[bestKey];
+    }
+  }
+  return undefined;
 }
 
 export function isNodeCommandAllowed(params: {

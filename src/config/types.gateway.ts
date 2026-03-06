@@ -331,6 +331,13 @@ export type GatewayHttpConfig = {
   securityHeaders?: GatewayHttpSecurityHeadersConfig;
 };
 
+export type GatewayNodeOverrideConfig = {
+  /** Additional node.invoke commands to allow for this specific node. */
+  allowCommands?: string[];
+  /** Commands to deny for this specific node (merged with global denyCommands). */
+  denyCommands?: string[];
+};
+
 export type GatewayNodesConfig = {
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
@@ -343,6 +350,11 @@ export type GatewayNodesConfig = {
   allowCommands?: string[];
   /** Commands to deny even if they appear in the defaults or node claims. */
   denyCommands?: string[];
+  /**
+   * Per-node overrides keyed by node displayName, nodeId, or nodeId prefix.
+   * Match precedence: nodeId exact, then displayName exact, then longest nodeId prefix.
+   */
+  overrides?: Record<string, GatewayNodeOverrideConfig>;
 };
 
 export type GatewayToolsConfig = {

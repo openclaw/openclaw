@@ -774,6 +774,17 @@ export const OpenClawSchema = z
               .optional(),
             allowCommands: z.array(z.string()).optional(),
             denyCommands: z.array(z.string()).optional(),
+            overrides: z
+              .record(
+                z.string(),
+                z
+                  .object({
+                    allowCommands: z.array(z.string()).optional(),
+                    denyCommands: z.array(z.string()).optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
           })
           .strict()
           .optional(),

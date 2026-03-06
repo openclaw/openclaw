@@ -198,6 +198,89 @@ function normalizeNodeCommand(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+type NodeCommandConfigEntry = {
+  path: string;
+  values: string[];
+  overrideKey?: string;
+};
+
+function formatNodeOverrideConfigPath(
+  key: string,
+  field: "allowCommands" | "denyCommands",
+): string {
+  return `gateway.nodes.overrides[${JSON.stringify(key)}].${field}`;
+}
+
+function listConfiguredNodeAllowCommandEntries(cfg: OpenClawConfig): NodeCommandConfigEntry[] {
+  const out: NodeCommandConfigEntry[] = [];
+  const globalAllow = cfg.gateway?.nodes?.allowCommands;
+  if (Array.isArray(globalAllow)) {
+    const values = globalAllow.map(normalizeNodeCommand).filter(Boolean);
+    if (values.length > 0) {
+      out.push({ path: "gateway.nodes.allowCommands", values });
+    }
+  }
+
+  const overrides = cfg.gateway?.nodes?.overrides;
+  if (!overrides) {
+    return out;
+  }
+  for (const [key, override] of Object.entries(overrides)) {
+    if (!override) {
+      continue;
+    }
+    const allow = override.allowCommands;
+    if (!Array.isArray(allow)) {
+      continue;
+    }
+    const values = allow.map(normalizeNodeCommand).filter(Boolean);
+    if (values.length === 0) {
+      continue;
+    }
+    out.push({
+      path: formatNodeOverrideConfigPath(key, "allowCommands"),
+      values,
+      overrideKey: key,
+    });
+  }
+  return out;
+}
+
+function listConfiguredNodeDenyCommandEntries(cfg: OpenClawConfig): NodeCommandConfigEntry[] {
+  const out: NodeCommandConfigEntry[] = [];
+  const globalDeny = cfg.gateway?.nodes?.denyCommands;
+  if (Array.isArray(globalDeny)) {
+    const values = globalDeny.map(normalizeNodeCommand).filter(Boolean);
+    if (values.length > 0) {
+      out.push({ path: "gateway.nodes.denyCommands", values });
+    }
+  }
+
+  const overrides = cfg.gateway?.nodes?.overrides;
+  if (!overrides) {
+    return out;
+  }
+  for (const [key, override] of Object.entries(overrides)) {
+    if (!override) {
+      continue;
+    }
+    const deny = override.denyCommands;
+    if (!Array.isArray(deny)) {
+      continue;
+    }
+    const values = deny.map(normalizeNodeCommand).filter(Boolean);
+    if (values.length === 0) {
+      continue;
+    }
+    out.push({
+      path: formatNodeOverrideConfigPath(key, "denyCommands"),
+      values,
+      overrideKey: key,
+    });
+  }
+  return out;
+}
+
 function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
   const baseCfg: OpenClawConfig = {
     ...cfg,
@@ -969,21 +1052,31 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
 
 export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const denyListRaw = cfg.gateway?.nodes?.denyCommands;
-  if (!Array.isArray(denyListRaw) || denyListRaw.length === 0) {
-    return findings;
-  }
-
-  const denyList = denyListRaw.map(normalizeNodeCommand).filter(Boolean);
-  if (denyList.length === 0) {
+  const denyEntries = listConfiguredNodeDenyCommandEntries(cfg);
+  if (denyEntries.length === 0) {
     return findings;
   }
 
   const knownCommands = listKnownNodeCommands(cfg);
-  const patternLike = denyList.filter((entry) => looksLikeNodeCommandPattern(entry));
-  const unknownExact = denyList.filter(
-    (entry) => !looksLikeNodeCommandPattern(entry) && !knownCommands.has(entry),
-  );
+  for (const entry of listConfiguredNodeAllowCommandEntries(cfg)) {
+    for (const value of entry.values) {
+      knownCommands.add(value);
+    }
+  }
+
+  const patternLike: string[] = [];
+  const unknownExact: string[] = [];
+  for (const entry of denyEntries) {
+    for (const value of entry.values) {
+      if (looksLikeNodeCommandPattern(value)) {
+        patternLike.push(`${entry.path}: ${value}`);
+        continue;
+      }
+      if (!knownCommands.has(value)) {
+        unknownExact.push(`${entry.path}: ${value}`);
+      }
+    }
+  }
   if (patternLike.length === 0 && unknownExact.length === 0) {
     return findings;
   }
@@ -1012,9 +1105,9 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
   findings.push({
     checkId: "gateway.nodes.deny_commands_ineffective",
     severity: "warn",
-    title: "Some gateway.nodes.denyCommands entries are ineffective",
+    title: "Some node denyCommands entries are ineffective",
     detail:
-      "gateway.nodes.denyCommands uses exact node command-name matching only (for example `system.run`), not shell-text filtering inside a command payload.\n" +
+      "gateway.nodes.denyCommands uses exact node command-name matching only (global and per-node overrides, for example `system.run`), not shell-text filtering inside a command payload.\n" +
       detailParts.map((entry) => `- ${entry}`).join("\n"),
     remediation:
       `Use exact command names (for example: ${examples.join(", ")}). ` +
@@ -1028,21 +1121,33 @@ export function collectNodeDangerousAllowCommandFindings(
   cfg: OpenClawConfig,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const allowRaw = cfg.gateway?.nodes?.allowCommands;
-  if (!Array.isArray(allowRaw) || allowRaw.length === 0) {
+  const allowEntries = listConfiguredNodeAllowCommandEntries(cfg);
+  if (allowEntries.length === 0) {
     return findings;
   }
 
-  const allow = new Set(allowRaw.map(normalizeNodeCommand).filter(Boolean));
-  if (allow.size === 0) {
-    return findings;
+  const globalDeny = new Set((cfg.gateway?.nodes?.denyCommands ?? []).map(normalizeNodeCommand));
+  const dangerousEntries: string[] = [];
+  for (const entry of allowEntries) {
+    const allowSet = new Set(entry.values);
+    const denySet = new Set(globalDeny);
+    if (entry.overrideKey) {
+      const overrideDeny = cfg.gateway?.nodes?.overrides?.[entry.overrideKey]?.denyCommands;
+      if (Array.isArray(overrideDeny)) {
+        for (const cmd of overrideDeny.map(normalizeNodeCommand).filter(Boolean)) {
+          denySet.add(cmd);
+        }
+      }
+    }
+    const dangerousAllowed = DEFAULT_DANGEROUS_NODE_COMMANDS.filter(
+      (cmd) => allowSet.has(cmd) && !denySet.has(cmd),
+    );
+    if (dangerousAllowed.length === 0) {
+      continue;
+    }
+    dangerousEntries.push(`${entry.path}: ${dangerousAllowed.join(", ")}`);
   }
-
-  const deny = new Set((cfg.gateway?.nodes?.denyCommands ?? []).map(normalizeNodeCommand));
-  const dangerousAllowed = DEFAULT_DANGEROUS_NODE_COMMANDS.filter(
-    (cmd) => allow.has(cmd) && !deny.has(cmd),
-  );
-  if (dangerousAllowed.length === 0) {
+  if (dangerousEntries.length === 0) {
     return findings;
   }
 
@@ -1051,10 +1156,11 @@ export function collectNodeDangerousAllowCommandFindings(
     severity: isGatewayRemotelyExposed(cfg) ? "critical" : "warn",
     title: "Dangerous node commands explicitly enabled",
     detail:
-      `gateway.nodes.allowCommands includes: ${dangerousAllowed.join(", ")}. ` +
-      "These commands can trigger high-impact device actions (camera/screen/contacts/calendar/reminders/SMS).",
+      "Dangerous node commands are enabled by these settings:\n" +
+      dangerousEntries.map((entry) => `- ${entry}`).join("\n") +
+      "\nThese commands can trigger high-impact device actions (camera/screen/contacts/calendar/reminders/SMS).",
     remediation:
-      "Remove these entries from gateway.nodes.allowCommands (recommended). " +
+      "Remove these entries from gateway.nodes.allowCommands / gateway.nodes.overrides.*.allowCommands (recommended). " +
       "If you keep them, treat gateway auth as full operator access and keep gateway exposure local/tailnet-only.",
   });
 
