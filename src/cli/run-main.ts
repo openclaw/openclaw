@@ -6,7 +6,10 @@ import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
-import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
+import {
+  installUnhandledRejectionHandler,
+  isTransientNetworkError,
+} from "../infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "../logging.js";
 import { getCommandPathWithRootOptions, getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
@@ -97,6 +100,13 @@ export async function runCli(argv: string[] = process.argv) {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
+    if (isTransientNetworkError(error)) {
+      console.warn(
+        "[openclaw] Non-fatal uncaught exception (continuing):",
+        formatUncaughtError(error),
+      );
+      return;
+    }
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
     process.exit(1);
   });

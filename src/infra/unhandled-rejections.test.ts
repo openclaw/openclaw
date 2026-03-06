@@ -157,3 +157,41 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(false);
   });
 });
+
+describe("isTransientNetworkError — undici TLS session resumption", () => {
+  it("returns true for undici TLS session resumption TypeError with matching stack", () => {
+    const error = new TypeError("Cannot read properties of null (reading 'setSession')");
+    error.stack = [
+      "TypeError: Cannot read properties of null (reading 'setSession')",
+      "    at TLSSocket.setSession (node:_tls_wrap:1132:16)",
+      "    at Client.connect (node_modules/undici/lib/core/connect.js:70:20)",
+    ].join("\n");
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true with _tls_wrap in stack and undici path", () => {
+    const error = new TypeError("Cannot read properties of null (reading 'setSession')");
+    error.stack = [
+      "TypeError: Cannot read properties of null (reading 'setSession')",
+      "    at TLSSocket.setSession (node:_tls_wrap:1132:16)",
+      "    at buildConnector (file:///app/node_modules/undici/lib/core/connect.js:72:9)",
+    ].join("\n");
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns false for unrelated TypeError mentioning setSession without TLS+undici stack", () => {
+    const error = new TypeError("Cannot read properties of null (reading 'setSession')");
+    error.stack = [
+      "TypeError: Cannot read properties of null (reading 'setSession')",
+      "    at Object.myCode (src/my-module.ts:10:5)",
+    ].join("\n");
+    expect(isTransientNetworkError(error)).toBe(false);
+  });
+
+  it("returns false for TypeError with setSession message but no TLS stack at all", () => {
+    const error = new TypeError("Cannot read properties of null (reading 'setSession')");
+    // No stack set — stack won't contain TLS/undici markers
+    error.stack = "TypeError: Cannot read properties of null (reading 'setSession')";
+    expect(isTransientNetworkError(error)).toBe(false);
+  });
+});
