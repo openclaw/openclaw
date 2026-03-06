@@ -1,0 +1,162 @@
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+
+export const MEGANOVA_BASE_URL = "https://api.meganova.ai/v1";
+
+export const MEGANOVA_MODEL_CATALOG: ModelDefinitionConfig[] = [
+  // --- Reasoning models ---
+  {
+    id: "zai-org/GLM-5",
+    name: "GLM 5",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 202752,
+    maxTokens: 32768,
+    cost: { input: 0.8, output: 2.56, cacheRead: 0.8, cacheWrite: 2.56 },
+  },
+  {
+    id: "zai-org/GLM-4.7",
+    name: "GLM 4.7",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 202752,
+    maxTokens: 8192,
+    cost: { input: 0.2, output: 0.8, cacheRead: 0.2, cacheWrite: 0.8 },
+  },
+  {
+    id: "zai-org/GLM-4.6",
+    name: "GLM 4.6",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 202752,
+    maxTokens: 8192,
+    cost: { input: 0.45, output: 1.9, cacheRead: 0.45, cacheWrite: 1.9 },
+  },
+  {
+    id: "deepseek-ai/DeepSeek-R1-0528",
+    name: "DeepSeek R1 0528",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 163840,
+    maxTokens: 32768,
+    cost: { input: 0.5, output: 2.15, cacheRead: 0.5, cacheWrite: 2.15 },
+  },
+  {
+    id: "deepseek-ai/DeepSeek-V3.1",
+    name: "DeepSeek V3.1",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 163840,
+    maxTokens: 8192,
+    cost: { input: 0.27, output: 1.0, cacheRead: 0.27, cacheWrite: 1.0 },
+  },
+  {
+    id: "moonshotai/Kimi-K2-Thinking",
+    name: "Kimi K2 Thinking",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 262144,
+    maxTokens: 32768,
+    cost: { input: 0.6, output: 2.6, cacheRead: 0.6, cacheWrite: 2.6 },
+  },
+
+  // --- Open-source / general models ---
+  {
+    id: "deepseek-ai/DeepSeek-V3.2",
+    name: "DeepSeek V3.2",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 163840,
+    maxTokens: 8192,
+    cost: { input: 0.26, output: 0.38, cacheRead: 0.26, cacheWrite: 0.38 },
+  },
+  {
+    id: "deepseek-ai/DeepSeek-V3-0324",
+    name: "DeepSeek V3 0324",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 163840,
+    maxTokens: 8192,
+    cost: { input: 0.25, output: 0.88, cacheRead: 0.25, cacheWrite: 0.88 },
+  },
+  {
+    id: "meta-llama/Llama-3.3-70B-Instruct",
+    name: "Llama 3.3 70B Instruct",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 131072,
+    maxTokens: 10000,
+    cost: { input: 0.1, output: 0.3, cacheRead: 0.1, cacheWrite: 0.3 },
+  },
+  {
+    id: "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    name: "Qwen3 235B A22B Instruct",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 262144,
+    maxTokens: 32768,
+    cost: { input: 0.09, output: 0.57, cacheRead: 0.09, cacheWrite: 0.57 },
+  },
+  {
+    id: "moonshotai/Kimi-K2.5",
+    name: "Kimi K2.5",
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 262144,
+    maxTokens: 32768,
+    cost: { input: 0.45, output: 2.8, cacheRead: 0.45, cacheWrite: 2.8 },
+  },
+  {
+    id: "MiniMaxAI/MiniMax-M2.1",
+    name: "MiniMax M2.1",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 196608,
+    maxTokens: 8192,
+    cost: { input: 0.28, output: 1.2, cacheRead: 0.28, cacheWrite: 1.2 },
+  },
+  {
+    id: "MiniMaxAI/MiniMax-M2.5",
+    name: "MiniMax M2.5",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 204800,
+    maxTokens: 8192,
+    cost: { input: 0.3, output: 1.2, cacheRead: 0.3, cacheWrite: 1.2 },
+  },
+  {
+    id: "XiaomiMiMo/MiMo-V2-Flash",
+    name: "MiMo V2 Flash",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 262144,
+    maxTokens: 8192,
+    cost: { input: 0.1, output: 0.3, cacheRead: 0.1, cacheWrite: 0.3 },
+  },
+  {
+    id: "mistralai/Mistral-Nemo-Instruct-2407",
+    name: "Mistral Nemo Instruct",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 131072,
+    maxTokens: 8192,
+    cost: { input: 0.02, output: 0.04, cacheRead: 0.02, cacheWrite: 0.04 },
+  },
+];
+
+export function buildMeganovaModelDefinition(
+  model: (typeof MEGANOVA_MODEL_CATALOG)[number],
+): ModelDefinitionConfig {
+  return {
+    id: model.id,
+    name: model.name,
+    api: "openai-completions",
+    reasoning: model.reasoning,
+    input: model.input,
+    cost: model.cost,
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+    compat: {
+      supportsReasoningEffort: false,
+    },
+  };
+}
