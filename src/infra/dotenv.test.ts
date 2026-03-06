@@ -164,4 +164,25 @@ describe("loadDotEnv", () => {
       });
     });
   });
+
+  it("does not treat dollar-prefixed literals as env references", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          "PRICE=cost-$5\nPASSWORD=abc$5word\nBRACED=keep-${5}\n",
+        );
+        process.chdir(cwdDir);
+        delete process.env.PRICE;
+        delete process.env.PASSWORD;
+        delete process.env.BRACED;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.PRICE).toBe("cost-$5");
+        expect(process.env.PASSWORD).toBe("abc$5word");
+        expect(process.env.BRACED).toBe("keep-${5}");
+      });
+    });
+  });
 });

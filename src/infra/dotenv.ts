@@ -3,7 +3,7 @@ import path from "node:path";
 import dotenv from "dotenv";
 import { resolveConfigDir } from "../utils.js";
 
-const ENV_REFERENCE_PATTERN = /\$\{([A-Za-z0-9_]+)\}|\$([A-Za-z0-9_]+)/g;
+const ENV_REFERENCE_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
 
 function expandEnvReferences(
   parsed: Record<string, string>,
