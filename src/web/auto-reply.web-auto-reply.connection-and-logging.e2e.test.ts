@@ -201,6 +201,65 @@ describe("web auto-reply connection", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
   });
 
+  it("clears stale auth when logged-out close reasons are reported", async () => {
+    const sessionModule = await import("./session.js");
+    const waitForCredsSpy = vi
+      .spyOn(sessionModule, "waitForCredsSaveQueue")
+      .mockResolvedValue(undefined);
+    const logoutSpy = vi.spyOn(sessionModule, "logoutWeb").mockResolvedValue(true);
+    let closeSpy: ReturnType<typeof vi.fn> | undefined;
+
+    try {
+      const closeResolvers: Array<(reason?: unknown) => void> = [];
+      const sleep = vi.fn(async () => {});
+      const listenerFactory = vi.fn(async () => {
+        const onClose = new Promise<unknown>((res) => {
+          closeResolvers.push(res);
+        });
+        closeSpy = vi.fn(async () => {});
+        return { close: closeSpy, onClose };
+      });
+
+      const { runtime, run } = startMonitorWebChannel({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory,
+        sleep,
+        reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+      });
+
+      await Promise.resolve();
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+
+      closeResolvers.shift()?.({
+        status: 401,
+        isLoggedOut: true,
+        error: "Connection Failure",
+      });
+
+      await run;
+
+      expect(logoutSpy).toHaveBeenCalledTimes(1);
+      expect(waitForCredsSpy).toHaveBeenCalledTimes(1);
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("session logged out"));
+      if (!closeSpy) {
+        throw new Error("expected listener close spy");
+      }
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      const logoutArgs = logoutSpy.mock.calls[0]?.[0] as { authDir: string };
+      expect(waitForCredsSpy).toHaveBeenCalledWith(logoutArgs.authDir);
+      const closeOrder = closeSpy.mock.invocationCallOrder[0];
+      const waitOrder = waitForCredsSpy.mock.invocationCallOrder[0];
+      const logoutOrder = logoutSpy.mock.invocationCallOrder[0];
+      expect(closeOrder).toBeLessThan(waitOrder);
+      expect(waitOrder).toBeLessThan(logoutOrder);
+    } finally {
+      logoutSpy.mockRestore();
+      waitForCredsSpy.mockRestore();
+    }
+  });
+
   it("forces reconnect when watchdog closes without onClose", async () => {
     vi.useFakeTimers();
     try {

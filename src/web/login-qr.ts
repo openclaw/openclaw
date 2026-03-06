@@ -12,6 +12,7 @@ import {
   getStatusCode,
   logoutWeb,
   readWebSelfId,
+  waitForCredsSaveQueue,
   waitForWaConnection,
   webAuthExists,
 } from "./session.js";
@@ -88,6 +89,7 @@ async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
     info("WhatsApp asked for a restart after pairing (code 515); retrying connection once…"),
   );
   closeSocket(login.sock);
+  await waitForCredsSaveQueue(login.authDir);
   try {
     const sock = await createWaSocket(false, login.verbose, {
       authDir: login.authDir,
@@ -260,6 +262,9 @@ export async function waitForWebLogin(
 
     if (login.error) {
       if (login.errorStatus === DisconnectReason.loggedOut) {
+        // Ensure the active socket is down and pending creds writes are drained before auth cleanup.
+        closeSocket(login.sock);
+        await waitForCredsSaveQueue(login.authDir);
         await logoutWeb({
           authDir: login.authDir,
           isLegacyAuthDir: login.isLegacyAuthDir,

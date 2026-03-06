@@ -31,17 +31,28 @@ export {
   webAuthExists,
 } from "./auth-store.js";
 
-let credsSaveQueue: Promise<void> = Promise.resolve();
+const credsSaveQueues = new Map<string, Promise<void>>();
+function getCredsSaveQueue(authDir: string): Promise<void> | undefined {
+  return credsSaveQueues.get(authDir);
+}
+
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
   logger: ReturnType<typeof getChildLogger>,
 ): void {
-  credsSaveQueue = credsSaveQueue
+  const nextQueue = (getCredsSaveQueue(authDir) ?? Promise.resolve())
     .then(() => safeSaveCreds(authDir, saveCreds, logger))
     .catch((err) => {
       logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
     });
+  credsSaveQueues.set(authDir, nextQueue);
+  void nextQueue.finally(() => {
+    // Keep memory bounded: clear settled queue slots once no newer queue replaced them.
+    if (credsSaveQueues.get(authDir) === nextQueue) {
+      credsSaveQueues.delete(authDir);
+    }
+  });
 }
 
 async function safeSaveCreds(
@@ -80,6 +91,34 @@ async function safeSaveCreds(
     }
   } catch (err) {
     logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
+  }
+}
+
+export async function waitForCredsSaveQueue(authDir?: string): Promise<void> {
+  if (authDir) {
+    while (true) {
+      const queue = getCredsSaveQueue(authDir);
+      if (!queue) {
+        return;
+      }
+      await queue;
+      // Late creds updates can enqueue a newer promise while we were waiting.
+      if (getCredsSaveQueue(authDir) === queue) {
+        return;
+      }
+    }
+  }
+
+  while (true) {
+    const snapshot = [...credsSaveQueues.values()];
+    if (snapshot.length === 0) {
+      return;
+    }
+    await Promise.all(snapshot);
+    const current = [...credsSaveQueues.values()];
+    if (current.every((queue) => snapshot.includes(queue))) {
+      return;
+    }
   }
 }
 
@@ -184,10 +223,51 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 }
 
 export function getStatusCode(err: unknown) {
-  return (
-    (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-    (err as { status?: number })?.status
-  );
+  const queue: unknown[] = [err];
+  const seen = new Set<unknown>();
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+
+    const outputStatus = (current as { output?: { statusCode?: unknown } })?.output?.statusCode;
+    if (typeof outputStatus === "number") {
+      return outputStatus;
+    }
+
+    const statusCode = (current as { statusCode?: unknown })?.statusCode;
+    if (typeof statusCode === "number") {
+      return statusCode;
+    }
+
+    const status = (current as { status?: unknown })?.status;
+    if (typeof status === "number") {
+      return status;
+    }
+
+    const error = (current as { error?: unknown })?.error;
+    if (error) {
+      queue.push(error);
+    }
+
+    const lastDisconnect = (current as { lastDisconnect?: unknown })?.lastDisconnect;
+    if (lastDisconnect) {
+      queue.push(lastDisconnect);
+    }
+
+    const cause = (current as { cause?: unknown })?.cause;
+    if (cause) {
+      queue.push(cause);
+    }
+  }
+
+  return undefined;
 }
 
 function safeStringify(value: unknown, limit = 800): string {

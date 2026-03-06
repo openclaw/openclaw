@@ -22,7 +22,13 @@ import {
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
+import {
+  formatError,
+  getWebAuthAgeMs,
+  logoutWeb,
+  readWebSelfId,
+  waitForCredsSaveQueue,
+} from "../session.js";
 import { DEFAULT_WEB_MEDIA_BYTES } from "./constants.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
@@ -401,10 +407,29 @@ export async function monitorWebChannel(
     });
 
     if (loggedOut) {
+      await closeListener();
+      try {
+        await waitForCredsSaveQueue(account.authDir);
+        const cleared = await logoutWeb({
+          authDir: account.authDir,
+          isLegacyAuthDir: account.isLegacyAuthDir,
+          runtime,
+        });
+        if (!cleared) {
+          reconnectLogger.warn(
+            { connectionId },
+            "web reconnect: failed to clear stale auth on logged-out disconnect",
+          );
+        }
+      } catch (err) {
+        reconnectLogger.warn(
+          { connectionId, error: String(err) },
+          "web reconnect: auth cleanup failed on logged-out disconnect",
+        );
+      }
       runtime.error(
         `WhatsApp session logged out. Run \`${formatCliCommand("openclaw channels login --channel web")}\` to relink.`,
       );
-      await closeListener();
       break;
     }
 
