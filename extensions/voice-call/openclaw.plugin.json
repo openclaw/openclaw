@@ -591,7 +591,17 @@
               },
               "emotion": {
                 "type": "string",
-                "enum": ["happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whisper"]
+                "enum": [
+                  "happy",
+                  "sad",
+                  "angry",
+                  "fearful",
+                  "disgusted",
+                  "surprised",
+                  "calm",
+                  "fluent",
+                  "whisper"
+                ]
               },
               "languageBoost": {
                 "type": "string"
