@@ -94,14 +94,16 @@ export function normalizeToolParameters(
 
     // OpenRouter passes Gemini models through as "google/gemini-..." IDs.
     if (normalizedModelProvider === "openrouter") {
-      return normalizedModelId.startsWith("google/gemini") || normalizedModelId.startsWith("google/gemini-");
+      return (
+        normalizedModelId.startsWith("google/gemini") ||
+        normalizedModelId.startsWith("google/gemini-")
+      );
     }
 
     return false;
   }
 
-  const isGeminiProvider =
-    isGeminiProxyModel();
+  const isGeminiProvider = isGeminiProxyModel();
   const isAnthropicProvider = normalizedModelProvider.includes("anthropic");
   const isXai = isXaiProvider(options?.modelProvider, options?.modelId);
 

@@ -37,7 +37,10 @@ describe("normalizeToolParameters", () => {
       modelId: "google/gemini-3-flash-preview",
     });
     const params = normalized.parameters as {
-      properties?: Record<string, { patternProperties?: unknown; minLength?: unknown; properties?: Record<string, unknown> }>;
+      properties?: Record<
+        string,
+        { patternProperties?: unknown; minLength?: unknown; properties?: Record<string, unknown> }
+      >;
     };
     const value = params.properties?.value as
       | {
@@ -69,7 +72,9 @@ describe("normalizeToolParameters", () => {
       modelProvider: "openrouter",
       modelId: "anthropic/claude-opus-4-5",
     });
-    const params = normalized.parameters as { properties?: Record<string, { patternProperties?: unknown }> };
+    const params = normalized.parameters as {
+      properties?: Record<string, { patternProperties?: unknown }>;
+    };
 
     expect(params.properties?.value?.patternProperties).toBeDefined();
   });
