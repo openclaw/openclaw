@@ -384,6 +384,26 @@ export const FIELD_HELP: Record<string, string> = {
     "Disables Control UI device identity checks and relies on token/password only. Use only for short-lived debugging on trusted networks, then turn it off immediately.",
   "gateway.http.endpoints.chatCompletions.enabled":
     "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
+  "gateway.http.endpoints.chatCompletions.maxBodyBytes":
+    "Max request body size in bytes for `/v1/chat/completions` (default: 20MB).",
+  "gateway.http.endpoints.chatCompletions.maxImageParts":
+    "Max number of `image_url` parts accepted from the latest user message (default: 8).",
+  "gateway.http.endpoints.chatCompletions.maxTotalImageBytes":
+    "Max cumulative decoded bytes across all `image_url` parts in one request (default: 20MB).",
+  "gateway.http.endpoints.chatCompletions.images":
+    "Image fetch/validation controls for OpenAI-compatible `image_url` parts.",
+  "gateway.http.endpoints.chatCompletions.images.allowUrl":
+    "Allow server-side URL fetches for `image_url` parts (default: false; data URIs remain supported).",
+  "gateway.http.endpoints.chatCompletions.images.urlAllowlist":
+    "Optional hostname allowlist for `image_url` URL fetches; supports exact hosts and `*.example.com` wildcards.",
+  "gateway.http.endpoints.chatCompletions.images.allowedMimes":
+    "Allowed MIME types for `image_url` parts (case-insensitive list).",
+  "gateway.http.endpoints.chatCompletions.images.maxBytes":
+    "Max bytes per fetched/decoded `image_url` image (default: 10MB).",
+  "gateway.http.endpoints.chatCompletions.images.maxRedirects":
+    "Max HTTP redirects allowed when fetching `image_url` URLs (default: 3).",
+  "gateway.http.endpoints.chatCompletions.images.timeoutMs":
+    "Timeout in milliseconds for `image_url` URL fetches (default: 10000).",
   "gateway.reload.mode":
     'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies in-process, and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
   "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
@@ -907,6 +927,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Selects which plugins own exclusive runtime slots such as memory so only one plugin provides that capability. Use explicit slot ownership to avoid overlapping providers with conflicting behavior.",
   "plugins.slots.memory":
     'Select the active memory plugin by id, or "none" to disable memory plugins.',
+  "plugins.slots.contextEngine":
+    "Selects the active context engine plugin by id so one plugin provides context orchestration behavior.",
   "plugins.entries":
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":

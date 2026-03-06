@@ -8,41 +8,6 @@ import {
   runOpenAIOAuthTlsPreflight,
 } from "./oauth-tls-preflight.js";
 
-const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
-const OPENAI_RESPONSES_WRITE_SCOPE = "api.responses.write";
-
-function extractResponsesScopeErrorMessage(status: number, bodyText: string): string | null {
-  if (status !== 401) {
-    return null;
-  }
-  const normalized = bodyText.toLowerCase();
-  if (
-    normalized.includes("missing scope") &&
-    normalized.includes(OPENAI_RESPONSES_WRITE_SCOPE.toLowerCase())
-  ) {
-    return bodyText.trim() || `Missing scopes: ${OPENAI_RESPONSES_WRITE_SCOPE}`;
-  }
-  return null;
-}
-
-async function detectMissingResponsesWriteScope(accessToken: string): Promise<string | null> {
-  try {
-    const response = await fetch(OPENAI_RESPONSES_ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: "{}",
-    });
-    const bodyText = await response.text();
-    return extractResponsesScopeErrorMessage(response.status, bodyText);
-  } catch {
-    // Best effort only: network/TLS issues should not block successful OAuth completion.
-    return null;
-  }
-}
-
 export async function loginOpenAICodexOAuth(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -76,7 +41,7 @@ export async function loginOpenAICodexOAuth(params: {
 
   const spin = prompter.progress("Starting OAuth flow…");
   try {
-    const { onAuth, onPrompt } = createVpsAwareOAuthHandlers({
+    const { onAuth: baseOnAuth, onPrompt } = createVpsAwareOAuthHandlers({
       isRemote,
       prompter,
       runtime,
@@ -86,22 +51,10 @@ export async function loginOpenAICodexOAuth(params: {
     });
 
     const creds = await loginOpenAICodex({
-      onAuth,
+      onAuth: baseOnAuth,
       onPrompt,
       onProgress: (msg) => spin.update(msg),
     });
-    if (creds?.access) {
-      const scopeError = await detectMissingResponsesWriteScope(creds.access);
-      if (scopeError) {
-        throw new Error(
-          [
-            `OpenAI OAuth token is missing required scope: ${OPENAI_RESPONSES_WRITE_SCOPE}.`,
-            `Provider response: ${scopeError}`,
-            "Re-authenticate with OpenAI Codex OAuth or use OPENAI_API_KEY with openai/* models.",
-          ].join(" "),
-        );
-      }
-    }
     spin.stop("OpenAI OAuth complete");
     return creds ?? null;
   } catch (err) {
