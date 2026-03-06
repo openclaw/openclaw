@@ -105,6 +105,9 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
     throw new Error('isolated cron jobs require payload.kind="agentTurn"');
   }
+  if (job.sessionTarget === "reuse" && job.payload.kind !== "agentTurn") {
+    throw new Error('reuse cron jobs require payload.kind="agentTurn"');
+  }
 }
 
 function assertMainSessionAgentId(
@@ -156,8 +159,10 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
     job.delivery.to = target;
     return;
   }
-  if (job.sessionTarget !== "isolated") {
-    throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
+  if (job.sessionTarget !== "isolated" && job.sessionTarget !== "reuse") {
+    throw new Error(
+      'cron channel delivery config is only supported for sessionTarget="isolated" or "reuse"',
+    );
   }
   if (job.delivery.channel === "telegram") {
     const telegramError = validateTelegramDeliveryTarget(job.delivery.to);
