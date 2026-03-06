@@ -38,17 +38,26 @@ function evictOldestChat(): void {
 export function recordSentMessage(chatId: number | string, messageId: number): void {
   const key = getChatKey(chatId);
   
-  // Evict oldest chat if at capacity
-  if (sentMessages.size >= MAX_CHATS && !sentMessages.has(key)) {
+  const exists = sentMessages.has(key);
+  
+  // Evict oldest chat if at capacity and this is a new chat
+  if (sentMessages.size >= MAX_CHATS && !exists) {
     evictOldestChat();
   }
   
   let entry = sentMessages.get(key);
   if (!entry) {
     entry = { timestamps: new Map() };
-    sentMessages.set(key, entry);
   }
+  
   entry.timestamps.set(messageId, Date.now());
+  
+  // LRU: move to end by re-inserting (even for existing chats)
+  if (exists) {
+    sentMessages.delete(key);
+  }
+  sentMessages.set(key, entry);
+  
   // Periodic cleanup
   if (entry.timestamps.size > 100) {
     cleanupExpired(entry);
