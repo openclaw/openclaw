@@ -12,6 +12,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 const {
+  formatContextFooterLine,
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
@@ -172,5 +173,39 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
+  });
+});
+
+describe("formatContextFooterLine", () => {
+  it("formats compact footer with token counts", () => {
+    const line = formatContextFooterLine({
+      totalTokens: 87000,
+      contextTokens: 200000,
+      deltaTokens: 3200,
+    });
+    expect(line).toBe("[ctx: 87k/200k · +3.2k this msg]");
+  });
+
+  it("formats full footer with session key", () => {
+    const line = formatContextFooterLine({
+      totalTokens: 150000,
+      contextTokens: 200000,
+      deltaTokens: 5000,
+      format: "full",
+      sessionKey: "agent:main:telegram:direct:12345",
+    });
+    expect(line).toContain("[ctx: 150k/200k · +5.0k this msg]");
+    expect(line).toContain("session `agent:main:telegram:direct:12345`");
+  });
+
+  it("compact format ignores session key", () => {
+    const line = formatContextFooterLine({
+      totalTokens: 1000,
+      contextTokens: 8000,
+      deltaTokens: 200,
+      format: "compact",
+      sessionKey: "agent:main:main",
+    });
+    expect(line).toBe("[ctx: 1.0k/8.0k · +200 this msg]");
   });
 });

@@ -44,7 +44,11 @@ import {
   hasSessionRelatedCronJobs,
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
-import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
+import {
+  appendUsageLine,
+  formatContextFooterLine,
+  formatResponseUsageLine,
+} from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
@@ -687,6 +691,29 @@ export async function runReplyAgent(params: {
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+
+    const contextFooterCfg = cfg.agents?.defaults?.contextFooter;
+    if (contextFooterCfg?.enabled && hasNonzeroUsage(usage) && contextTokensUsed > 0) {
+      const normalizedChannel = (replyToChannel ?? "").toLowerCase().trim();
+      const allowedChannels = contextFooterCfg.channels?.map((c) => c.toLowerCase().trim()) ?? [
+        "telegram",
+        "signal",
+        "discord",
+      ];
+      if (normalizedChannel && allowedChannels.includes(normalizedChannel)) {
+        const input = usage?.input ?? 0;
+        const output = usage?.output ?? 0;
+        const totalTokens = usage?.total ?? input + output;
+        const footerLine = formatContextFooterLine({
+          totalTokens,
+          contextTokens: contextTokensUsed,
+          deltaTokens: output,
+          format: contextFooterCfg.format ?? "compact",
+          sessionKey: contextFooterCfg.format === "full" ? sessionKey : undefined,
+        });
+        finalPayloads = appendUsageLine(finalPayloads, footerLine);
+      }
     }
 
     return finalizeWithFollowup(

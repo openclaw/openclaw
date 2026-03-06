@@ -187,6 +187,14 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    contextFooter: z
+      .object({
+        enabled: z.boolean().optional(),
+        format: z.enum(["compact", "full"]).optional(),
+        channels: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

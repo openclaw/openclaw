@@ -119,6 +119,24 @@ export const formatResponseUsageLine = (params: {
   return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
 };
 
+export const formatContextFooterLine = (params: {
+  totalTokens: number;
+  contextTokens: number;
+  deltaTokens: number;
+  format?: "compact" | "full";
+  sessionKey?: string;
+}): string => {
+  const { totalTokens, contextTokens, deltaTokens, format = "compact" } = params;
+  const usedLabel = formatTokenCount(totalTokens);
+  const limitLabel = formatTokenCount(contextTokens);
+  const deltaLabel = formatTokenCount(deltaTokens);
+  const base = `[ctx: ${usedLabel}/${limitLabel} · +${deltaLabel} this msg]`;
+  if (format === "full" && params.sessionKey) {
+    return `${base} · session \`${params.sessionKey}\``;
+  }
+  return base;
+};
+
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
   let index = -1;
   for (let i = payloads.length - 1; i >= 0; i -= 1) {

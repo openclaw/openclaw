@@ -284,6 +284,15 @@ export type AgentDefaultsConfig = {
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
+  /** Optional context utilization footer appended to assistant replies on messaging channels. */
+  contextFooter?: {
+    /** Enable the footer (default: false). */
+    enabled?: boolean;
+    /** Footer format: "compact" (default) or "full" (includes session key). */
+    format?: "compact" | "full";
+    /** Channels to show the footer on (default: ["telegram", "signal", "discord"]). */
+    channels?: string[];
+  };
 };
 
 export type AgentCompactionMode = "default" | "safeguard";
