@@ -251,7 +251,7 @@ type PerplexityConfig = {
   apiKey?: string;
 };
 
-type PerplexityApiKeySource = "config" | "perplexity_env" | "none";
+type PerplexityApiKeySource = "config" | "perplexity_env" | "openrouter_env" | "none";
 
 type GrokConfig = {
   apiKey?: string;
@@ -573,6 +573,13 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
   const fromEnvPerplexity = normalizeApiKey(process.env.PERPLEXITY_API_KEY);
   if (fromEnvPerplexity) {
     return { apiKey: fromEnvPerplexity, source: "perplexity_env" };
+  }
+
+  // Fall back to OpenRouter key so that users who route Perplexity via
+  // OpenRouter don't need to set a separate PERPLEXITY_API_KEY env var.
+  const fromEnvOpenRouter = normalizeApiKey(process.env.OPENROUTER_API_KEY);
+  if (fromEnvOpenRouter) {
+    return { apiKey: fromEnvOpenRouter, source: "openrouter_env" };
   }
 
   return { apiKey: undefined, source: "none" };
