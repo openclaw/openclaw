@@ -76,12 +76,14 @@ type AnnounceRetryConfig = {
 
 function resolveAnnounceRetryConfig(cfg: ReturnType<typeof loadConfig>): AnnounceRetryConfig {
   const retry = cfg.agents?.defaults?.subagents?.announceRetry;
-  const minDelayMs =
+  // Clamp minDelayMs to timer-safe maximum
+  const rawMinDelayMs =
     typeof retry?.minDelayMs === "number" &&
     Number.isFinite(retry.minDelayMs) &&
     retry.minDelayMs > 0
       ? Math.floor(retry.minDelayMs)
       : DEFAULT_ANNOUNCE_RETRY_MIN_DELAY_MS;
+  const minDelayMs = Math.min(rawMinDelayMs, MAX_TIMER_SAFE_TIMEOUT_MS);
   const rawMaxDelayMs =
     typeof retry?.maxDelayMs === "number" &&
     Number.isFinite(retry.maxDelayMs) &&
