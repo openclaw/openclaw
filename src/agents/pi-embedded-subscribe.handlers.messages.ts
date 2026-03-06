@@ -70,8 +70,23 @@ export function handleMessageStart(
   // Start-of-message is a safer reset point than message_end: some providers
   // may deliver late text_end updates after message_end, which would otherwise
   // re-trigger block replies.
+
+  // Add cross-turn separator after resetting if this is not the first assistant message
+  // This prevents text concatenation when blockStreaming is enabled (fixes #35308)
+  const needsSeparator = ctx.state.deltaBuffer.trim();
+
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
-  // Use assistant message_start as the earliest "writing" signal for typing.
+
+  if (needsSeparator) {
+    ctx.state.deltaBuffer = “\n\n”;
+    if (ctx.blockChunker) {
+      ctx.blockChunker.append(“\n\n”);
+    } else {
+      ctx.state.blockBuffer = “\n\n”;
+    }
+  }
+
+  // Use assistant message_start as the earliest “writing” signal for typing.
   void ctx.params.onAssistantMessageStart?.();
 }
 
