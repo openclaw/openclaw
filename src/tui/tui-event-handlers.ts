@@ -192,6 +192,8 @@ export function createEventHandlers(context: EventHandlerContext) {
 
       if (shouldUpdate) {
         state.currentSessionKey = evt.sessionKey;
+        // Also update lastSessionKey to prevent spurious session reset on next event
+        lastSessionKey = evt.sessionKey;
       }
     }
     if (finalizedRuns.has(evt.runId)) {
