@@ -28,6 +28,7 @@ import {
   handleUsageCommand,
 } from "./commands-session.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
+import { handleSummarizeCommand } from "./commands-summarize.js";
 import { handleTtsCommands } from "./commands-tts.js";
 import type {
   CommandHandler,
@@ -44,6 +45,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       // Plugin commands are processed first, before built-in commands
       handlePluginCommand,
       handleBashCommand,
+      handleSummarizeCommand,
       handleActivationCommand,
       handleSendPolicyCommand,
       handleUsageCommand,

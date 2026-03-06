@@ -101,7 +101,18 @@ vi.mock("./session-updates.js", () => ({
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
+  randomIdempotencyKey: () => "idem-summarize-test",
 }));
+
+const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
+vi.mock("../../process/exec.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
+  return {
+    ...actual,
+    runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+  };
+});
 
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
@@ -185,6 +196,141 @@ describe("handleCommands gating", () => {
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("/debug is disabled");
+  });
+});
+
+describe("/summarize command", () => {
+  beforeEach(() => {
+    runCommandWithTimeoutMock.mockReset();
+    callGatewayMock.mockReset();
+  });
+
+  it("returns usage when input is missing", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/summarize", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Usage: /summarize");
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
+  it("runs summarize with YouTube auto mode for YouTube links", async () => {
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: JSON.stringify({
+        extracted: {
+          title: "Example Video",
+          content: "Transcript:\nSegment one.\nSegment two.",
+        },
+      }),
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+    callGatewayMock.mockResolvedValueOnce({
+      result: { payloads: [{ text: "Short video summary." }] },
+    });
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/summarize https://youtu.be/dQw4w9WgXcQ", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toBe("Short video summary.");
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      [
+        "summarize",
+        "https://youtu.be/dqw4w9wgxcq",
+        "--youtube",
+        "auto",
+        "--extract",
+        "--json",
+        "--plain",
+        "--no-color",
+      ],
+      {
+        timeoutMs: 120_000,
+        noOutputTimeoutMs: 45_000,
+      },
+    );
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        expectFinal: true,
+        params: expect.objectContaining({
+          deliver: false,
+          channel: "webchat",
+          thinking: "low",
+          timeout: 120,
+        }),
+      }),
+    );
+  });
+
+  it("runs summarize without YouTube flag for non-YouTube targets", async () => {
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "Article summary.",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/summarize https://example.com/article", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toBe("Article summary.");
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      ["summarize", "https://example.com/article", "--force-summary", "--length", "medium"],
+      expect.objectContaining({
+        timeoutMs: 120_000,
+        noOutputTimeoutMs: 45_000,
+      }),
+    );
+  });
+
+  it("reports a missing runtime binary with actionable guidance", async () => {
+    runCommandWithTimeoutMock.mockRejectedValueOnce(
+      Object.assign(new Error("spawn summarize ENOENT"), { code: "ENOENT" }),
+    );
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/summarize https://example.com", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("CLI not found");
+    expect(result.reply?.text).toContain("Docker");
+  });
+
+  it("ignores unauthorized /summarize senders", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/summarize https://example.com", cfg);
+    params.command.isAuthorizedSender = false;
+    params.command.senderId = "unauthorized";
+
+    const result = await handleCommands(params);
+    expect(result).toEqual({ shouldContinue: false });
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 });
 

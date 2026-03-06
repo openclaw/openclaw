@@ -166,6 +166,21 @@ function buildChatCommands(): ChatCommandDefinition[] {
       ],
     }),
     defineChatCommand({
+      key: "summarize",
+      nativeName: "summarize",
+      description: "Summarize a URL, file path, or YouTube link.",
+      textAlias: "/summarize",
+      category: "tools",
+      args: [
+        {
+          name: "input",
+          description: "URL, path, or text input",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "status",
       nativeName: "status",
       description: "Show current status.",
