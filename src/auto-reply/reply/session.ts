@@ -562,7 +562,7 @@ export async function initSessionState(params: {
 
   // Archive old transcript so it doesn't accumulate on disk (#14869).
   if (previousSessionEntry?.sessionId) {
-    archiveSessionTranscripts({
+    const archived = archiveSessionTranscripts({
       sessionId: previousSessionEntry.sessionId,
       storePath,
       sessionFile: previousSessionEntry.sessionFile,
@@ -577,6 +577,7 @@ export async function initSessionState(params: {
           previousSessionEntry,
           archiveReason: "reset",
           archiveSource: "auto-reply:init-session",
+          archived,
         }),
       );
     }

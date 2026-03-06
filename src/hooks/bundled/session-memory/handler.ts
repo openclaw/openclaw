@@ -75,11 +75,15 @@ async function getRecentSessionContent(
   }
 }
 
+function getArchivePrefixes(baseName: string): string[] {
+  return [`${baseName}.reset.`, `${baseName}.deleted.`];
+}
+
 /**
  * Try the active transcript first; if /new already rotated it,
- * fallback to the latest .jsonl.reset.* sibling.
+ * fallback to the latest archived sibling.
  */
-async function getRecentSessionContentWithResetFallback(
+async function getRecentSessionContentWithArchiveFallback(
   sessionFilePath: string,
   messageCount: number = 15,
 ): Promise<string | null> {
@@ -91,21 +95,22 @@ async function getRecentSessionContentWithResetFallback(
   try {
     const dir = path.dirname(sessionFilePath);
     const base = path.basename(sessionFilePath);
-    const resetPrefix = `${base}.reset.`;
     const files = await fs.readdir(dir);
-    const resetCandidates = files.filter((name) => name.startsWith(resetPrefix)).toSorted();
+    const archiveCandidates = files
+      .filter((name) => getArchivePrefixes(base).some((prefix) => name.startsWith(prefix)))
+      .toSorted();
 
-    if (resetCandidates.length === 0) {
+    if (archiveCandidates.length === 0) {
       return primary;
     }
 
-    const latestResetPath = path.join(dir, resetCandidates[resetCandidates.length - 1]);
-    const fallback = await getRecentSessionContent(latestResetPath, messageCount);
+    const latestArchivePath = path.join(dir, archiveCandidates[archiveCandidates.length - 1]);
+    const fallback = await getRecentSessionContent(latestArchivePath, messageCount);
 
     if (fallback) {
-      log.debug("Loaded session content from reset fallback", {
+      log.debug("Loaded session content from archive fallback", {
         sessionFilePath,
-        latestResetPath,
+        latestArchivePath,
       });
     }
 
@@ -174,6 +179,26 @@ async function findPreviousSessionFile(params: {
   return undefined;
 }
 
+async function resolveArchivedSessionFile(archived: unknown): Promise<string | undefined> {
+  if (!Array.isArray(archived)) {
+    return undefined;
+  }
+
+  const candidates = archived.filter(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    const candidate = candidates[i];
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Try the next archived candidate.
+    }
+  }
+  return undefined;
+}
+
 /**
  * Save session context to memory when /new or /reset command is triggered
  */
@@ -209,9 +234,13 @@ const saveSessionToMemory: HookHandler = async (event) => {
     >;
     const currentSessionId = sessionEntry.sessionId as string;
     let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
+    const archivedSessionFile = await resolveArchivedSessionFile(context.archived);
+    if (archivedSessionFile) {
+      currentSessionFile = archivedSessionFile;
+    }
 
     // If sessionFile is empty or looks like a new/reset file, try to find the previous session file.
-    if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
+    if (!archivedSessionFile && (!currentSessionFile || currentSessionFile.includes(".reset."))) {
       const sessionsDirs = new Set<string>();
       if (currentSessionFile) {
         sessionsDirs.add(path.dirname(currentSessionFile));
@@ -252,8 +281,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
     let sessionContent: string | null = null;
 
     if (sessionFile) {
-      // Get recent conversation content, with fallback to rotated reset transcript.
-      sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
+      // Get recent conversation content, with fallback to rotated archive transcripts.
+      sessionContent = await getRecentSessionContentWithArchiveFallback(sessionFile, messageCount);
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,

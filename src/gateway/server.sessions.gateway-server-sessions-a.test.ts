@@ -916,6 +916,7 @@ describe("gateway server sessions", () => {
     });
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
     expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({

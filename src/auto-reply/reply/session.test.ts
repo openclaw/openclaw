@@ -1518,51 +1518,54 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const sessionKey = "agent:main:telegram:dm:user-idle-hook";
     const existingSessionId = "existing-session-idle-hook";
     const triggerHookSpy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
-    await seedSessionStoreWithOverrides({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-      overrides: {
-        updatedAt: Date.now() - 10 * 60_000,
-        verboseLevel: "on",
-      },
-    });
-
-    const cfg = {
-      session: { store: storePath, idleMinutes: 1 },
-    } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        Body: "hello after idle timeout",
-        RawBody: "hello after idle timeout",
-        CommandBody: "hello after idle timeout",
-        From: "user-idle-hook",
-        To: "bot",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        Provider: "telegram",
-        Surface: "telegram",
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(false);
-    expect(result.previousSessionEntry?.sessionId).toBe(existingSessionId);
-    expect(triggerHookSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "session",
-        action: "archived",
+    try {
+      await seedSessionStoreWithOverrides({
+        storePath,
         sessionKey,
-        context: expect.objectContaining({
-          archiveReason: "reset",
-          previousSessionEntry: expect.objectContaining({ sessionId: existingSessionId }),
+        sessionId: existingSessionId,
+        overrides: {
+          updatedAt: Date.now() - 10 * 60_000,
+          verboseLevel: "on",
+        },
+      });
+
+      const cfg = {
+        session: { store: storePath, idleMinutes: 1 },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello after idle timeout",
+          RawBody: "hello after idle timeout",
+          CommandBody: "hello after idle timeout",
+          From: "user-idle-hook",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.previousSessionEntry?.sessionId).toBe(existingSessionId);
+      expect(triggerHookSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "session",
+          action: "archived",
+          sessionKey,
+          context: expect.objectContaining({
+            archiveReason: "reset",
+            previousSessionEntry: expect.objectContaining({ sessionId: existingSessionId }),
+          }),
         }),
-      }),
-    );
-    triggerHookSpy.mockRestore();
+      );
+    } finally {
+      triggerHookSpy.mockRestore();
+    }
   });
 
   it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {

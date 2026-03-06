@@ -274,6 +274,39 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Archived and saved");
   });
 
+  it("loads archived transcript content from deleted session files", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-deleted-");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const deletedArchive = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "deleted-session.jsonl.deleted.2026-03-06T03-00-00.000Z",
+      content: createMockSessionContent([
+        { role: "user", content: "Remember this deleted thread" },
+        { role: "assistant", content: "Deleted transcript recovered" },
+      ]),
+    });
+
+    const event = createHookEvent("session", "archived", "agent:main:telegram:direct:123", {
+      cfg: {
+        agents: { defaults: { workspace: tempDir } },
+      } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "deleted-session" },
+      sessionEntry: { sessionId: "deleted-session" },
+      archiveReason: "deleted",
+      archived: [deletedArchive],
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files).toHaveLength(1);
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+    expect(memoryContent).toContain("user: Remember this deleted thread");
+    expect(memoryContent).toContain("assistant: Deleted transcript recovered");
+  });
+
   it("filters out non-message entries (tool calls, system)", async () => {
     // Create session with mixed entry types
     const sessionContent = createMockSessionContent([
