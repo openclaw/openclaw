@@ -810,8 +810,8 @@ export function renderApp(state: AppViewState) {
                 },
                 onModelChange: (agentId, modelId) => {
                   if (!configValue) {
-                    state.lastError =
-                      "Config not loaded yet. Wait for config to load or click Reload Config.";
+                    // Defensive guard: inputs are disabled when configValue is null, but keep
+                    // this in case handlers are ever invoked programmatically.
                     return;
                   }
                   const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
@@ -848,8 +848,8 @@ export function renderApp(state: AppViewState) {
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
                   if (!configValue) {
-                    state.lastError =
-                      "Config not loaded yet. Wait for config to load or click Reload Config.";
+                    // Defensive guard: inputs are disabled when configValue is null, but keep
+                    // this in case handlers are ever invoked programmatically.
                     return;
                   }
                   const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
