@@ -8,6 +8,7 @@ import {
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
+  isPeriodicUsageLimitErrorMessage,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
@@ -841,6 +842,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isJsonApiInternalServerError(raw)) {
     return "timeout";
+  }
+  if (isPeriodicUsageLimitErrorMessage(raw)) {
+    return isBillingErrorMessage(raw) ? "billing" : "rate_limit";
   }
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";
