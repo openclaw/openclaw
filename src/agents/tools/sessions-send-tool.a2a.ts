@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
@@ -123,7 +123,7 @@ export async function runSessionsSendA2AFlow(params: {
       try {
         const requesterSessionKey = params.requesterSessionKey?.trim() || undefined;
         const requesterAgentId = requesterSessionKey
-          ? resolveAgentIdFromSessionKey(requesterSessionKey)
+          ? parseAgentSessionKey(requesterSessionKey)?.agentId
           : undefined;
         await callGateway({
           method: "send",

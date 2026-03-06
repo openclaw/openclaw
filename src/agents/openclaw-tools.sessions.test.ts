@@ -829,8 +829,8 @@ describe("sessions tools", () => {
       channel: "discord",
       message: "announce now",
       sessionKey: requesterKey,
-      agentId: "main",
     });
+    expect(sendParams.agentId).toBeUndefined();
   });
 
   it("subagents lists active and recent runs", async () => {
