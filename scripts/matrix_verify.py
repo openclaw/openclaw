@@ -16,6 +16,11 @@ Dependencies: requests, cryptography
     pip install requests cryptography
     (consider using a venv: python3 -m venv .venv && source .venv/bin/activate)
 
+Compatibility:
+    Requires the verifying client to support hkdf-hmac-sha256.v2 (Element X,
+    FluffyChat, recent Element Web/Desktop). Older libolm-based clients that
+    only offer hkdf-hmac-sha256 (v1) will be rejected.
+
 Flow:
  1. Loads credentials from the OpenClaw config
  2. Fetches the device's Ed25519 public key from the homeserver
@@ -465,7 +470,12 @@ class SASVerifier:
             print(f"    {emoji}  {name}")
         print("=" * 54)
 
-        yn = input("\nDo the emojis match? (Y/N) ").strip().lower()
+        while True:
+            yn = input("\nDo the emojis match? (Y/N) ").strip().lower()
+            if yn in ("y", "n"):
+                break
+            print("Please enter Y or N.")
+
         if yn == "y":
             print("Match confirmed.")
             self._send_our_mac()
@@ -474,7 +484,7 @@ class SASVerifier:
                 self._verify_their_mac(*self._pending_mac)
                 self._pending_mac = None
         else:
-            self._cancel("Emoji mismatch" if yn == "n" else "User cancelled")
+            self._cancel("Emoji mismatch")
 
     def _send_our_mac(self):
         key_id = f"ed25519:{self.did}"
