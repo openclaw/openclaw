@@ -3,6 +3,7 @@
 Quick validation script for skills - minimal version
 """
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -64,6 +65,46 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
     return parsed
 
 
+def _coerce_allowed_tools(value):
+    """
+    Normalize allowed-tools into a list when possible.
+
+    The fallback parser (used without PyYAML) returns multiline values as strings,
+    so we accept simple "- tool" lines and JSON-style string arrays.
+    """
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = json.loads(stripped)
+                return parsed
+            except json.JSONDecodeError:
+                pass
+
+        lines = [line.strip() for line in value.splitlines() if line.strip()]
+        if lines and all(line.startswith("- ") and len(line) > 2 for line in lines):
+            return [line[2:].strip() for line in lines]
+
+    return value
+
+
+def _validate_allowed_tools(value):
+    if value is None:
+        return True, None
+
+    normalized = _coerce_allowed_tools(value)
+    if not isinstance(normalized, list):
+        return False, "'allowed-tools' must be a list of tool names"
+
+    for idx, tool in enumerate(normalized, start=1):
+        if not isinstance(tool, str):
+            return False, f"'allowed-tools' entry #{idx} must be a string"
+        if not tool.strip():
+            return False, f"'allowed-tools' entry #{idx} cannot be empty"
+
+    return True, None
+
+
 def validate_skill(skill_path):
     """Basic validation of a skill"""
     skill_path = Path(skill_path)
@@ -110,6 +151,12 @@ def validate_skill(skill_path):
         return False, "Missing 'name' in frontmatter"
     if "description" not in frontmatter:
         return False, "Missing 'description' in frontmatter"
+
+    allowed_tools_valid, allowed_tools_error = _validate_allowed_tools(
+        frontmatter.get("allowed-tools")
+    )
+    if not allowed_tools_valid:
+        return False, allowed_tools_error
 
     name = frontmatter.get("name", "")
     if not isinstance(name, str):
