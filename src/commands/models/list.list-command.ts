@@ -38,12 +38,14 @@ export async function modelsListCommand(
   let modelRegistry: ModelRegistry | undefined;
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
+  let discoveredKeys = new Set<string>();
   try {
     const loaded = await loadModelRegistry(cfg);
     modelRegistry = loaded.registry;
     models = loaded.models;
     availableKeys = loaded.availableKeys;
     availabilityErrorMessage = loaded.availabilityErrorMessage;
+    discoveredKeys = loaded.discoveredKeys;
   } catch (err) {
     runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
     process.exitCode = 1;
@@ -54,8 +56,6 @@ export async function modelsListCommand(
       `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
     );
   }
-  const discoveredKeys = new Set(models.map((model) => modelKey(model.provider, model.id)));
-
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
 
