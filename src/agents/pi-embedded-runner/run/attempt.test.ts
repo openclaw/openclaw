@@ -13,6 +13,7 @@ import {
   shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
+  wrapStreamFnCapMaxRetryDelay,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
@@ -456,6 +457,60 @@ describe("wrapOllamaCompatNumCtx", () => {
     expect(baseFn).toHaveBeenCalledTimes(1);
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
     expect(downstream).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("wrapStreamFnCapMaxRetryDelay", () => {
+  it("applies cap when no maxRetryDelayMs is provided", () => {
+    let seenMaxRetryDelayMs: unknown;
+    const baseFn = vi.fn((_model, _context, options) => {
+      seenMaxRetryDelayMs = (options as { maxRetryDelayMs?: unknown } | undefined)?.maxRetryDelayMs;
+      return {} as never;
+    });
+
+    const wrapped = wrapStreamFnCapMaxRetryDelay(baseFn as never, 5000);
+    void wrapped({} as never, {} as never, undefined);
+
+    expect(seenMaxRetryDelayMs).toBe(5000);
+  });
+
+  it("caps larger caller-provided maxRetryDelayMs", () => {
+    let seenMaxRetryDelayMs: unknown;
+    const baseFn = vi.fn((_model, _context, options) => {
+      seenMaxRetryDelayMs = (options as { maxRetryDelayMs?: unknown } | undefined)?.maxRetryDelayMs;
+      return {} as never;
+    });
+
+    const wrapped = wrapStreamFnCapMaxRetryDelay(baseFn as never, 5000);
+    void wrapped({} as never, {} as never, { maxRetryDelayMs: 60_000 } as never);
+
+    expect(seenMaxRetryDelayMs).toBe(5000);
+  });
+
+  it("preserves smaller positive caller-provided maxRetryDelayMs", () => {
+    let seenMaxRetryDelayMs: unknown;
+    const baseFn = vi.fn((_model, _context, options) => {
+      seenMaxRetryDelayMs = (options as { maxRetryDelayMs?: unknown } | undefined)?.maxRetryDelayMs;
+      return {} as never;
+    });
+
+    const wrapped = wrapStreamFnCapMaxRetryDelay(baseFn as never, 5000);
+    void wrapped({} as never, {} as never, { maxRetryDelayMs: 1200 } as never);
+
+    expect(seenMaxRetryDelayMs).toBe(1200);
+  });
+
+  it("respects explicit non-positive caller maxRetryDelayMs", () => {
+    let seenMaxRetryDelayMs: unknown;
+    const baseFn = vi.fn((_model, _context, options) => {
+      seenMaxRetryDelayMs = (options as { maxRetryDelayMs?: unknown } | undefined)?.maxRetryDelayMs;
+      return {} as never;
+    });
+
+    const wrapped = wrapStreamFnCapMaxRetryDelay(baseFn as never, 5000);
+    void wrapped({} as never, {} as never, { maxRetryDelayMs: 0 } as never);
+
+    expect(seenMaxRetryDelayMs).toBe(0);
   });
 });
 

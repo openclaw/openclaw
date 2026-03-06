@@ -240,6 +240,27 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
     });
 }
 
+const GOOGLE_OAUTH_MAX_RETRY_DELAY_MS = 5_000;
+
+export function wrapStreamFnCapMaxRetryDelay(
+  baseFn: StreamFn,
+  maxRetryDelayMs: number,
+): StreamFn {
+  const capMs = Math.max(1, Math.floor(maxRetryDelayMs));
+  return (model, context, options) => {
+    const requested =
+      typeof options?.maxRetryDelayMs === "number" && Number.isFinite(options.maxRetryDelayMs)
+        ? Math.floor(options.maxRetryDelayMs)
+        : undefined;
+    const resolvedMaxRetryDelayMs =
+      requested === undefined || requested > 0 ? Math.min(requested ?? capMs, capMs) : requested;
+    return baseFn(model, context, {
+      ...options,
+      maxRetryDelayMs: resolvedMaxRetryDelayMs,
+    });
+  };
+}
+
 function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {
   const trimmed = rawName.trim();
   if (!trimmed) {
@@ -1371,6 +1392,14 @@ export async function runEmbeddedAttempt(
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
+        );
+      }
+      if (params.provider === "google-gemini-cli" || params.provider === "google-antigravity") {
+        // Cloud Code Assist OAuth can request long Retry-After delays (up to 60s),
+        // which looks like a hard hang during multi-step tool-call turns.
+        activeSession.agent.streamFn = wrapStreamFnCapMaxRetryDelay(
+          activeSession.agent.streamFn,
+          GOOGLE_OAUTH_MAX_RETRY_DELAY_MS,
         );
       }
 
