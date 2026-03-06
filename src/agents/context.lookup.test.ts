@@ -34,6 +34,37 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
   });
 
+  it("adds GPT-5.4 context windows from forward-compat discovery fallbacks", async () => {
+    vi.doMock("../config/config.js", () => ({
+      loadConfig: () => ({
+        models: { providers: {} },
+      }),
+    }));
+    vi.doMock("./models-config.js", () => ({
+      ensureOpenClawModelsJson: vi.fn(async () => {}),
+    }));
+    vi.doMock("./agent-paths.js", () => ({
+      resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
+    }));
+    vi.doMock("./pi-model-discovery.js", () => ({
+      discoverAuthStorage: vi.fn(() => ({})),
+      discoverModels: vi.fn(() => ({
+        getAll: () => [
+          {
+            provider: "openai",
+            id: "gpt-5.2",
+            contextWindow: 400_000,
+          },
+        ],
+      })),
+    }));
+
+    const { lookupContextTokens } = await import("./context.js");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(lookupContextTokens("gpt-5.4")).toBe(1_050_000);
+    expect(lookupContextTokens("gpt-5.4-pro")).toBe(1_050_000);
+  });
+
   it("does not skip eager warmup when --profile is followed by -- terminator", async () => {
     const loadConfigMock = vi.fn(() => ({ models: {} }));
     vi.doMock("../config/config.js", () => ({
