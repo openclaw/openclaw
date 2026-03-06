@@ -1,32 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCronStoreHarness } from "./service.test-harness.js";
 import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
-let fixtureRoot = "";
-let fixtureCount = 0;
-
-beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-store-"));
-});
-
-afterAll(async () => {
-  if (!fixtureRoot) {
-    return;
-  }
-  await fs.rm(fixtureRoot, { recursive: true, force: true });
-});
-
-async function makeStorePath() {
-  const dir = path.join(fixtureRoot, `case-${fixtureCount++}`);
-  await fs.mkdir(dir, { recursive: true });
-  return {
-    dir,
-    storePath: path.join(dir, "jobs.json"),
-  };
-}
+const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-store-" });
 
 function makeStore(jobId: string, enabled: boolean): CronStoreFile {
   const now = Date.now();
@@ -72,6 +51,7 @@ describe("cron store", () => {
 
   it("throws when store contains invalid JSON", async () => {
     const store = await makeStorePath();
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, "{ not json", "utf-8");
     await expect(loadCronStore(store.storePath)).rejects.toThrow(/Failed to parse cron store/i);
   });

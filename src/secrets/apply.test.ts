@@ -117,16 +117,6 @@ async function applyPlanAndReadConfig<T>(
   return JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as T;
 }
 
-async function expectInvalidTargetPath(
-  fixture: ApplyFixture,
-  target: SecretsApplyPlan["targets"][number],
-): Promise<void> {
-  const plan = createPlan({ targets: [target] });
-  await expect(runSecretsApply({ plan, env: fixture.env, write: false })).rejects.toThrow(
-    "Invalid plan target path",
-  );
-}
-
 function createPlan(params: {
   targets: SecretsApplyPlan["targets"];
   options?: SecretsApplyPlan["options"];
@@ -213,6 +203,87 @@ describe("secrets apply", () => {
     const nextEnv = await fs.readFile(fixture.envPath, "utf8");
     expect(nextEnv).not.toContain("sk-openai-plaintext");
     expect(nextEnv).toContain("UNRELATED=value");
+  });
+
+  it("applies auth-profiles sibling ref targets to the scoped agent store", async () => {
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "auth-profiles.api_key.key",
+          path: "profiles.openai:default.key",
+          pathSegments: ["profiles", "openai:default", "key"],
+          agentId: "main",
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    };
+
+    const result = await runSecretsApply({ plan, env: fixture.env, write: true });
+    expect(result.changed).toBe(true);
+    expect(result.changedFiles).toContain(fixture.authStorePath);
+
+    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+      profiles: { "openai:default": { key?: string; keyRef?: unknown } };
+    };
+    expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
+    expect(nextAuthStore.profiles["openai:default"].keyRef).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
+  });
+
+  it("creates a new auth-profiles mapping when provider metadata is supplied", async () => {
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "auth-profiles.token.token",
+          path: "profiles.openai:bot.token",
+          pathSegments: ["profiles", "openai:bot", "token"],
+          agentId: "main",
+          authProfileProvider: "openai",
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    };
+
+    await runSecretsApply({ plan, env: fixture.env, write: true });
+    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+      profiles: {
+        "openai:bot": {
+          type: string;
+          provider: string;
+          tokenRef?: unknown;
+        };
+      };
+    };
+    expect(nextAuthStore.profiles["openai:bot"]).toEqual({
+      type: "token",
+      provider: "openai",
+      tokenRef: {
+        source: "env",
+        provider: "default",
+        id: "OPENAI_API_KEY",
+      },
+    });
   });
 
   it("is idempotent on repeated write applies", async () => {
@@ -317,19 +388,161 @@ describe("secrets apply", () => {
     expect(rawConfig).not.toContain("sk-skill-plaintext");
   });
 
-  it.each([
-    createOpenAiProviderTarget({
-      path: "models.providers.openai.baseUrl",
-      pathSegments: ["models", "providers", "openai", "baseUrl"],
-    }),
-    {
-      type: "skills.entries.apiKey",
-      path: "skills.entries.__proto__.apiKey",
-      pathSegments: ["skills", "entries", "__proto__", "apiKey"],
-      ref: OPENAI_API_KEY_ENV_REF,
-    } satisfies SecretsApplyPlan["targets"][number],
-  ])("rejects invalid target path: %s", async (target) => {
-    await expectInvalidTargetPath(fixture, target);
+  it("applies non-legacy target types", async () => {
+    await fs.writeFile(
+      fixture.configPath,
+      `${JSON.stringify(
+        {
+          talk: {
+            apiKey: "sk-talk-plaintext",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "talk.apiKey",
+          path: "talk.apiKey",
+          pathSegments: ["talk", "apiKey"],
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    };
+
+    const result = await runSecretsApply({ plan, env: fixture.env, write: true });
+    expect(result.changed).toBe(true);
+
+    const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+      talk?: { apiKey?: unknown };
+    };
+    expect(nextConfig.talk?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
+  });
+
+  it("applies array-indexed targets for agent memory search", async () => {
+    await fs.writeFile(
+      fixture.configPath,
+      `${JSON.stringify(
+        {
+          agents: {
+            list: [
+              {
+                id: "main",
+                memorySearch: {
+                  remote: {
+                    apiKey: "sk-memory-plaintext",
+                  },
+                },
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "agents.list[].memorySearch.remote.apiKey",
+          path: "agents.list.0.memorySearch.remote.apiKey",
+          pathSegments: ["agents", "list", "0", "memorySearch", "remote", "apiKey"],
+          ref: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    };
+
+    fixture.env.MEMORY_REMOTE_API_KEY = "sk-memory-live-env";
+    const result = await runSecretsApply({ plan, env: fixture.env, write: true });
+    expect(result.changed).toBe(true);
+
+    const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+      agents?: {
+        list?: Array<{
+          memorySearch?: {
+            remote?: {
+              apiKey?: unknown;
+            };
+          };
+        }>;
+      };
+    };
+    expect(nextConfig.agents?.list?.[0]?.memorySearch?.remote?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MEMORY_REMOTE_API_KEY",
+    });
+  });
+
+  it("rejects plan targets that do not match allowed secret-bearing paths", async () => {
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "models.providers.apiKey",
+          path: "models.providers.openai.baseUrl",
+          pathSegments: ["models", "providers", "openai", "baseUrl"],
+          providerId: "openai",
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      ],
+    };
+
+    await expect(runSecretsApply({ plan, env: fixture.env, write: false })).rejects.toThrow(
+      "Invalid plan target path",
+    );
+  });
+
+  it("rejects plan targets with forbidden prototype-like path segments", async () => {
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "skills.entries.apiKey",
+          path: "skills.entries.__proto__.apiKey",
+          pathSegments: ["skills", "entries", "__proto__", "apiKey"],
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      ],
+    };
+
+    await expect(runSecretsApply({ plan, env: fixture.env, write: false })).rejects.toThrow(
+      "Invalid plan target path",
+    );
   });
 
   it("applies provider upserts and deletes from plan", async () => {

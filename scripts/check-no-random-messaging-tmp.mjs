@@ -1,25 +1,17 @@
 #!/usr/bin/env node
 
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import ts from "typescript";
-import {
-  collectTypeScriptFiles,
-  resolveRepoRoot,
-  runAsScript,
-  toLine,
-  unwrapExpression,
-} from "./lib/ts-guard-utils.mjs";
+import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
+import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
 
-const repoRoot = resolveRepoRoot(import.meta.url);
 const sourceRoots = [
-  path.join(repoRoot, "src", "channels"),
-  path.join(repoRoot, "src", "infra", "outbound"),
-  path.join(repoRoot, "src", "line"),
-  path.join(repoRoot, "src", "media-understanding"),
-  path.join(repoRoot, "extensions"),
+  "src/channels",
+  "src/infra/outbound",
+  "src/line",
+  "src/media-understanding",
+  "extensions",
 ];
-const allowedCallsites = new Set([path.join(repoRoot, "extensions", "feishu", "src", "dedup.ts")]);
+const allowedRelativePaths = new Set(["extensions/feishu/src/dedup.ts"]);
 
 function collectOsTmpdirImports(sourceFile) {
   const osModuleSpecifiers = new Set(["node:os", "os"]);
@@ -82,40 +74,16 @@ export function findMessagingTmpdirCallLines(content, fileName = "source.ts") {
 }
 
 export async function main() {
-  const files = (
-    await Promise.all(
-      sourceRoots.map(
-        async (dir) =>
-          await collectTypeScriptFiles(dir, {
-            ignoreMissing: true,
-          }),
-      ),
-    )
-  ).flat();
-  const violations = [];
-
-  for (const filePath of files) {
-    if (allowedCallsites.has(filePath)) {
-      continue;
-    }
-    const content = await fs.readFile(filePath, "utf8");
-    for (const line of findMessagingTmpdirCallLines(content, filePath)) {
-      violations.push(`${path.relative(repoRoot, filePath)}:${line}`);
-    }
-  }
-
-  if (violations.length === 0) {
-    return;
-  }
-
-  console.error("Found os.tmpdir()/tmpdir() usage in messaging/channel runtime sources:");
-  for (const violation of violations) {
-    console.error(`- ${violation}`);
-  }
-  console.error(
-    "Use resolvePreferredOpenClawTmpDir() or plugin-sdk temp helpers instead of host tmp defaults.",
-  );
-  process.exit(1);
+  await runCallsiteGuard({
+    importMetaUrl: import.meta.url,
+    sourceRoots,
+    findCallLines: findMessagingTmpdirCallLines,
+    skipRelativePath: (relativePath) => allowedRelativePaths.has(relativePath),
+    header: "Found os.tmpdir()/tmpdir() usage in messaging/channel runtime sources:",
+    footer:
+      "Use resolvePreferredOpenClawTmpDir() or plugin-sdk temp helpers instead of host tmp defaults.",
+    sortViolations: false,
+  });
 }
 
 runAsScript(import.meta.url, main);

@@ -1,3 +1,8 @@
+import {
+  DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
+  DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
+} from "../discord/monitor/timeouts.js";
+import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { IRC_FIELD_HELP } from "./schema.irc.js";
 
 export const FIELD_HELP: Record<string, string> = {
@@ -45,6 +50,11 @@ export const FIELD_HELP: Record<string, string> = {
     'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
   "logging.redactPatterns":
     "Additional custom redact regex patterns applied to log output before emission/storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+  cli: "CLI presentation controls for local command output behavior such as banner and tagline style. Use this section to keep startup output aligned with operator preference without changing runtime behavior.",
+  "cli.banner":
+    "CLI startup banner controls for title/version line and tagline style behavior. Keep banner enabled for fast version/context checks, then tune tagline mode to your preferred noise level.",
+  "cli.banner.taglineMode":
+    'Controls tagline style in the CLI startup banner: "random" (default) picks from the rotating tagline pool, "default" always shows the neutral default tagline, and "off" hides tagline text while keeping the banner version line.',
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
@@ -157,7 +167,7 @@ export const FIELD_HELP: Record<string, string> = {
   "acp.enabled":
     "Global ACP feature gate. Keep disabled unless ACP runtime + policy are configured.",
   "acp.dispatch.enabled":
-    "Independent dispatch gate for ACP session turns. Disable to keep ACP commands available while blocking ACP turn execution.",
+    "Independent dispatch gate for ACP session turns (default: true). Set false to keep ACP commands available while blocking ACP turn execution.",
   "acp.backend":
     "Default ACP runtime backend id (for example: acpx). Must match a registered ACP runtime plugin backend.",
   "acp.defaultAgent":
@@ -198,6 +208,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
   "agents.list":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
+  "agents.list[].runtime":
+    "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
+  "agents.list[].runtime.type":
+    'Runtime type for this agent: "embedded" (default OpenClaw runtime) or "acp" (ACP harness defaults).',
+  "agents.list[].runtime.acp":
+    "ACP runtime defaults for this agent when runtime.type=acp. Binding-level ACP overrides still take precedence per conversation.",
+  "agents.list[].runtime.acp.agent":
+    "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude).",
+  "agents.list[].runtime.acp.backend":
+    "Optional ACP backend override for this agent's ACP sessions (falls back to global acp.backend).",
+  "agents.list[].runtime.acp.mode":
+    "Optional ACP session mode default for this agent (persistent or oneshot).",
+  "agents.list[].runtime.acp.cwd":
+    "Optional default working directory for this agent's ACP sessions.",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
   "agents.defaults.heartbeat.suppressToolErrorWarnings":
@@ -391,7 +415,9 @@ export const FIELD_HELP: Record<string, string> = {
   "audio.transcription.timeoutSeconds":
     "Maximum time allowed for the transcription command to finish before it is aborted. Increase this for longer recordings, and keep it tight in latency-sensitive deployments.",
   bindings:
-    "Static routing bindings that pin inbound conversations to specific agent IDs by match rules. Use bindings for deterministic ownership when dynamic routing should not decide.",
+    "Top-level binding rules for routing and persistent ACP conversation ownership. Use type=route for normal routing and type=acp for persistent ACP harness bindings.",
+  "bindings[].type":
+    'Binding kind. Use "route" (or omit for legacy route entries) for normal routing, and "acp" for persistent ACP conversation bindings.',
   "bindings[].agentId":
     "Target agent ID that receives traffic when the corresponding binding match rule is satisfied. Use valid configured agent IDs only so routing does not fail at runtime.",
   "bindings[].match":
@@ -412,6 +438,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional team/workspace ID constraint used by providers that scope chats under teams. Add this when you need bindings isolated to one workspace context.",
   "bindings[].match.roles":
     "Optional role-based filter list used by providers that attach roles to chat context. Use this to route privileged or operational role traffic to specialized agents.",
+  "bindings[].acp":
+    "Optional per-binding ACP overrides for bindings[].type=acp. This layer overrides agents.list[].runtime.acp defaults for the matched conversation.",
+  "bindings[].acp.mode": "ACP session mode override for this binding (persistent or oneshot).",
+  "bindings[].acp.label":
+    "Human-friendly label for ACP status/diagnostics in this bound conversation.",
+  "bindings[].acp.cwd": "Working directory override for ACP sessions created from this binding.",
+  "bindings[].acp.backend":
+    "ACP backend override for this binding (falls back to agent runtime ACP backend, then global acp.backend).",
   broadcast:
     "Broadcast routing map for sending the same outbound message to multiple peer IDs per source conversation. Keep this minimal and audited because one source can fan out to many destinations.",
   "broadcast.strategy":
@@ -527,24 +561,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Ordered model preferences specifically for image understanding when you want to override shared media models. Put the most reliable multimodal model first to reduce fallback attempts.",
   "tools.media.image.scope":
     "Scope selector for when image understanding is attempted (for example only explicit requests versus broader auto-detection). Keep narrow scope in busy channels to control token and API spend.",
-  "tools.media.audio.enabled":
-    "Enable audio understanding so voice notes or audio clips can be transcribed/summarized for agent context. Disable when audio ingestion is outside policy or unnecessary for your workflows.",
-  "tools.media.audio.maxBytes":
-    "Maximum accepted audio payload size in bytes before processing is rejected or clipped by policy. Set this based on expected recording length and upstream provider limits.",
-  "tools.media.audio.maxChars":
-    "Maximum characters retained from audio understanding output to prevent oversized transcript injection. Increase for long-form dictation, or lower to keep conversational turns compact.",
-  "tools.media.audio.prompt":
-    "Instruction template guiding audio understanding output style, such as concise summary versus near-verbatim transcript. Keep wording consistent so downstream automations can rely on output format.",
-  "tools.media.audio.timeoutSeconds":
-    "Timeout in seconds for audio understanding execution before the operation is cancelled. Use longer timeouts for long recordings and tighter ones for interactive chat responsiveness.",
-  "tools.media.audio.language":
-    "Preferred language hint for audio understanding/transcription when provider support is available. Set this to improve recognition accuracy for known primary languages.",
-  "tools.media.audio.attachments":
-    "Attachment policy for audio inputs indicating which uploaded files are eligible for audio processing. Keep restrictive defaults in mixed-content channels to avoid unintended audio workloads.",
-  "tools.media.audio.models":
-    "Ordered model preferences specifically for audio understanding, used before shared media model fallback. Choose models optimized for transcription quality in your primary language/domain.",
-  "tools.media.audio.scope":
-    "Scope selector for when audio understanding runs across inbound messages and attachments. Keep focused scopes in high-volume channels to reduce cost and avoid accidental transcription.",
+  ...MEDIA_AUDIO_FIELD_HELP,
   "tools.media.video.enabled":
     "Enable video understanding so clips can be summarized into text for downstream reasoning and responses. Disable when processing video is out of policy or too expensive for your deployment.",
   "tools.media.video.maxBytes":
@@ -716,6 +733,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":
     "Max total characters across all injected workspace bootstrap files (default: 150000).",
+  "agents.defaults.bootstrapPromptTruncationWarning":
+    'Inject agent-visible warning text when bootstrap files are truncated: "off", "once" (default), or "always".',
   "agents.defaults.repoRoot":
     "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
   "agents.defaults.envelopeTimezone":
@@ -735,7 +754,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Indexes session transcripts into memory search so responses can reference prior chat turns. Keep this off unless transcript recall is needed, because indexing cost and storage usage both increase.",
   "agents.defaults.memorySearch.provider":
-    'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+    'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
   "agents.defaults.memorySearch.model":
     "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
   "agents.defaults.memorySearch.remote.baseUrl":
@@ -757,7 +776,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.local.modelPath":
     "Specifies the local embedding model source for local memory search, such as a GGUF file path or `hf:` URI. Use this only when provider is `local`, and verify model compatibility before large index rebuilds.",
   "agents.defaults.memorySearch.fallback":
-    'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
+    'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
   "agents.defaults.memorySearch.store.path":
     "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.openclaw/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
   "agents.defaults.memorySearch.store.vector.enabled":
@@ -892,6 +911,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":
     "Per-plugin enablement override for a specific entry, applied on top of global plugin policy (restart required). Use this to stage plugin rollout gradually across environments.",
+  "plugins.entries.*.hooks":
+    "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+  "plugins.entries.*.hooks.allowPromptInjection":
+    "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
   "plugins.entries.*.apiKey":
     "Optional API key field consumed by plugins that accept direct key configuration in entry settings. Use secret/env substitution and avoid committing real credentials into config files.",
   "plugins.entries.*.env":
@@ -952,6 +975,12 @@ export const FIELD_HELP: Record<string, string> = {
     'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), "off" disables this prefix, and "custom" uses identifierInstructions. Keep "strict" unless you have a specific compatibility need.',
   "agents.defaults.compaction.identifierInstructions":
     'Custom identifier-preservation instruction text used when identifierPolicy="custom". Keep this explicit and safety-focused so compaction summaries do not rewrite opaque IDs, URLs, hosts, or ports.',
+  "agents.defaults.compaction.qualityGuard":
+    "Optional quality-audit retry settings for safeguard compaction summaries. Leave this disabled unless you explicitly want summary audits and one-shot regeneration on failed checks.",
+  "agents.defaults.compaction.qualityGuard.enabled":
+    "Enables summary quality audits and regeneration retries for safeguard compaction. Default: false, so safeguard mode alone does not turn on retry behavior.",
+  "agents.defaults.compaction.qualityGuard.maxRetries":
+    "Maximum number of regeneration retries after a failed safeguard summary quality audit. Use small values to bound extra latency and token cost.",
   "agents.defaults.compaction.memoryFlush":
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":
@@ -1334,6 +1363,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow Discord to write config in response to channel events/commands (default: true).",
   "channels.discord.token":
     "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
+  "channels.discord.allowBots":
+    'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
   "channels.discord.proxy":
     "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",
   "channels.whatsapp.configWrites":
@@ -1386,7 +1417,7 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
   "channels.telegram.streaming":
-    'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
+    'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streaming":
     'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streamMode":
@@ -1407,6 +1438,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
   "channels.telegram.timeoutSeconds":
     "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
+  "channels.telegram.threadBindings.enabled":
+    "Enable Telegram conversation binding features (/focus, /unfocus, /agents, and /session idle|max-age). Overrides session.threadBindings.enabled when set.",
+  "channels.telegram.threadBindings.idleHours":
+    "Inactivity window in hours for Telegram bound sessions. Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
+  "channels.telegram.threadBindings.maxAgeHours":
+    "Optional hard max age in hours for Telegram bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
+  "channels.telegram.threadBindings.spawnSubagentSessions":
+    "Allow subagent spawns with thread=true to auto-bind Telegram current conversations when supported.",
+  "channels.telegram.threadBindings.spawnAcpSessions":
+    "Allow ACP spawns with thread=true to auto-bind Telegram current conversations when supported.",
   "channels.whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
   "channels.whatsapp.selfChatMode": "Same-phone setup (bot uses your personal WhatsApp number).",
@@ -1428,8 +1469,8 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.retry.maxDelayMs": "Maximum retry delay cap in ms for Discord outbound calls.",
   "channels.discord.retry.jitter": "Jitter factor (0-1) applied to Discord retry delays.",
   "channels.discord.maxLinesPerMessage": "Soft max line count per Discord message (default: 17).",
-  "channels.discord.eventQueue.listenerTimeout":
-    "Canonical Discord listener timeout control in ms for gateway event handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
+  "channels.discord.inboundWorker.runTimeoutMs": `Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to ${DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS} and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.`,
+  "channels.discord.eventQueue.listenerTimeout": `Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is ${DISCORD_DEFAULT_LISTENER_TIMEOUT_MS} in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.`,
   "channels.discord.eventQueue.maxQueueSize":
     "Optional Discord EventQueue capacity override (max queued events before backpressure). Set per account via channels.discord.accounts.<id>.eventQueue.maxQueueSize.",
   "channels.discord.eventQueue.maxConcurrency":
@@ -1466,6 +1507,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional PluralKit token for resolving private systems or members.",
   "channels.discord.activity": "Discord presence activity text (defaults to custom status).",
   "channels.discord.status": "Discord presence status (online, dnd, idle, invisible).",
+  "channels.discord.autoPresence.enabled":
+    "Enable automatic Discord bot presence updates based on runtime/model availability signals. When enabled: healthy=>online, degraded/unknown=>idle, exhausted/unavailable=>dnd.",
+  "channels.discord.autoPresence.intervalMs":
+    "How often to evaluate Discord auto-presence state in milliseconds (default: 30000).",
+  "channels.discord.autoPresence.minUpdateIntervalMs":
+    "Minimum time between actual Discord presence update calls in milliseconds (default: 15000). Prevents status spam on noisy state changes.",
+  "channels.discord.autoPresence.healthyText":
+    "Optional custom status text while runtime is healthy (online). If omitted, falls back to static channels.discord.activity when set.",
+  "channels.discord.autoPresence.degradedText":
+    "Optional custom status text while runtime/model availability is degraded or unknown (idle).",
+  "channels.discord.autoPresence.exhaustedText":
+    "Optional custom status text while runtime detects exhausted/unavailable model quota (dnd). Supports {reason} template placeholder.",
   "channels.discord.activityType":
     "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",
   "channels.discord.activityUrl": "Discord presence streaming URL (required for activityType=1).",
