@@ -1,6 +1,10 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { PluginHookBeforePromptBuildResult } from "../../../plugins/types.js";
 import {
+  applyPromptBuildHookResult,
+  buildEmbeddedHookContext,
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
@@ -43,6 +47,7 @@ describe("resolvePromptBuildHookResult", () => {
 
   it("reuses precomputed legacy before_agent_start result without invoking hook again", async () => {
     const hookRunner = createLegacyOnlyHookRunner();
+
     const result = await resolvePromptBuildHookResult({
       prompt: "hello",
       messages: [],
@@ -53,6 +58,7 @@ describe("resolvePromptBuildHookResult", () => {
 
     expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     expect(result).toEqual({
+      actions: [{ kind: "prependContext", text: "from-cache" }],
       prependContext: "from-cache",
       systemPrompt: "legacy-system",
       prependSystemContext: undefined,
@@ -62,7 +68,8 @@ describe("resolvePromptBuildHookResult", () => {
 
   it("calls legacy hook when precomputed result is absent", async () => {
     const hookRunner = createLegacyOnlyHookRunner();
-    const messages = [{ role: "user", content: "ctx" }];
+    const messages: AgentMessage[] = [{ role: "user", content: "ctx" } as AgentMessage];
+
     const result = await resolvePromptBuildHookResult({
       prompt: "hello",
       messages,
@@ -101,6 +108,57 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
     expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
   });
+
+  it("preserves legacy prependContext from one hook when another returns explicit actions", async () => {
+    const promptBuildResult = {
+      actions: [{ kind: "prependContext", text: "action ctx" }],
+    } satisfies PluginHookBeforePromptBuildResult;
+    const result = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      hookCtx: {},
+      hookRunner: {
+        hasHooks: vi.fn(() => true),
+        runBeforePromptBuild: vi.fn(async () => promptBuildResult),
+        runBeforeAgentStart: vi.fn(async () => ({
+          prependContext: "legacy ctx",
+        })),
+      },
+    });
+
+    expect(result.actions).toEqual([
+      { kind: "prependContext", text: "action ctx" },
+      { kind: "prependContext", text: "legacy ctx" },
+    ]);
+    expect(
+      applyPromptBuildHookResult({
+        prompt: "user prompt",
+        systemPromptText: "BASE",
+        hookResult: result,
+      }).effectivePrompt,
+    ).toBe("action ctx\n\nlegacy ctx\n\nuser prompt");
+  });
+
+  it("ignores malformed runtime actions payloads before merging", async () => {
+    // Simulate a JS plugin returning runtime-invalid data that bypasses TypeScript.
+    const malformedPromptBuildResult = {
+      actions: { kind: "prependContext", text: "bad shape" },
+      prependContext: "fallback ctx",
+    } as unknown as PluginHookBeforePromptBuildResult;
+    const result = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      hookCtx: {},
+      hookRunner: {
+        hasHooks: vi.fn(() => true),
+        runBeforePromptBuild: vi.fn(async () => malformedPromptBuildResult),
+        runBeforeAgentStart: vi.fn(async () => undefined),
+      },
+    });
+
+    expect(result.actions).toEqual([{ kind: "prependContext", text: "fallback ctx" }]);
+    expect(result.prependContext).toBe("fallback ctx");
+  });
 });
 
 describe("composeSystemPromptWithHookContext", () => {
@@ -125,6 +183,46 @@ describe("composeSystemPromptWithHookContext", () => {
         appendSystemContext: "  append only  ",
       }),
     ).toBe("append only");
+  });
+});
+
+describe("buildEmbeddedHookContext", () => {
+  it("preserves trigger and resolves channelId from messageChannel", () => {
+    expect(
+      buildEmbeddedHookContext({
+        agentId: "agent-1",
+        sessionKey: "session-1",
+        sessionId: "session-id-1",
+        workspaceDir: "/tmp/workspace",
+        messageProvider: "slack-provider",
+        messageChannel: "slack",
+        trigger: "cron",
+      }),
+    ).toEqual({
+      agentId: "agent-1",
+      sessionKey: "session-1",
+      sessionId: "session-id-1",
+      workspaceDir: "/tmp/workspace",
+      messageProvider: "slack-provider",
+      trigger: "cron",
+      channelId: "slack",
+    });
+  });
+
+  it("falls back channelId to messageProvider when messageChannel is absent", () => {
+    expect(
+      buildEmbeddedHookContext({
+        messageProvider: "telegram",
+      }),
+    ).toEqual({
+      agentId: undefined,
+      sessionKey: undefined,
+      sessionId: undefined,
+      workspaceDir: undefined,
+      messageProvider: "telegram",
+      trigger: undefined,
+      channelId: "telegram",
+    });
   });
 });
 
@@ -546,5 +644,76 @@ describe("decodeHtmlEntitiesInObject", () => {
   it("decodes numeric character references", () => {
     expect(decodeHtmlEntitiesInObject("&#39;hello&#39;")).toBe("'hello'");
     expect(decodeHtmlEntitiesInObject("&#x27;world&#x27;")).toBe("'world'");
+  });
+});
+
+describe("applyPromptBuildHookResult", () => {
+  it("prepends multiple contexts in-order and appends system prompt", () => {
+    const result = applyPromptBuildHookResult({
+      prompt: "user prompt",
+      systemPromptText: "BASE",
+      hookResult: {
+        actions: [
+          { kind: "prependContext", text: "ctx A" },
+          { kind: "prependContext", text: "ctx B" },
+          { kind: "appendSystemPrompt", text: "sys X" },
+          { kind: "appendSystemPrompt", text: "sys Y" },
+        ],
+      },
+    });
+
+    expect(result.effectivePrompt).toBe("ctx A\n\nctx B\n\nuser prompt");
+    expect(result.systemPromptText).toBe("BASE\n\nsys X\n\nsys Y");
+    expect(result.prependContextChars).toBe("ctx A\n\nctx B".length);
+    expect(result.appendedSystemPromptChars).toBe("sys X\n\nsys Y".length);
+  });
+
+  it("combines explicit actions with legacy system prompt fields without double-applying prompt text", () => {
+    const result = applyPromptBuildHookResult({
+      prompt: "user prompt",
+      systemPromptText: "BASE",
+      hookResult: {
+        prependContext: "legacy ctx",
+        systemPrompt: "legacy sys",
+        prependSystemContext: "prepend ctx",
+        appendSystemContext: "append ctx",
+        actions: [
+          { kind: "prependContext", text: "action ctx" },
+          { kind: "appendSystemPrompt", text: "sys tail" },
+        ],
+      },
+    });
+
+    expect(result.effectivePrompt).toBe("action ctx\n\nuser prompt");
+    expect(result.prependContextChars).toBe("action ctx".length);
+    expect(result.systemPromptText).toBe("prepend ctx\n\nlegacy sys\n\nsys tail\n\nappend ctx");
+    expect(result.systemPromptOverrideChars).toBe("legacy sys".length);
+    expect(result.prependSystemContextChars).toBe("prepend ctx".length);
+    expect(result.appendSystemContextChars).toBe("append ctx".length);
+    expect(result.appendedSystemPromptChars).toBe("sys tail".length);
+  });
+
+  it("caps prependContext and appendSystemPrompt budgets", () => {
+    const base = "BASE";
+    const longCtx = "x".repeat(9_000);
+    const longSys = "y".repeat(5_000);
+    const prompt = "user prompt";
+
+    const result = applyPromptBuildHookResult({
+      prompt,
+      systemPromptText: base,
+      hookResult: {
+        actions: [
+          { kind: "prependContext", text: longCtx },
+          { kind: "appendSystemPrompt", text: longSys },
+        ],
+      },
+    });
+
+    const contextPart = result.effectivePrompt.slice(0, -`\n\n${prompt}`.length);
+    expect(contextPart.length).toBeLessThanOrEqual(8_000);
+
+    const appendedPart = result.systemPromptText.slice(`${base}\n\n`.length);
+    expect(appendedPart.length).toBeLessThanOrEqual(4_000);
   });
 });

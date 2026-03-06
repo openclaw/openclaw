@@ -494,21 +494,35 @@ Notes:
 - Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
 - You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
 
-### Agent lifecycle hooks (`api.on`)
+### Prompt Hooks
 
-For typed runtime lifecycle hooks, use `api.on(...)`:
+To modify what the agent sees at runtime, prefer `before_prompt_build`:
+
+- `before_prompt_build` runs after session load and receives `{ prompt, messages }`.
+- Return `actions` to deterministically modify the user prompt and/or the system prompt.
+- Actions are applied in order; multiple actions are joined with blank lines (`\n\n`).
+- `prependContext` is capped at 8000 chars (UTF-16 code units).
+- `appendSystemPrompt` is capped at 4000 chars (UTF-16 code units) and is appended to the base system prompt (it does not replace it).
+
+Example: prepend context to the user prompt and append instructions to the system prompt:
 
 ```ts
 export default function register(api) {
-  api.on(
-    "before_prompt_build",
-    (event, ctx) => {
-      return {
-        prependSystemContext: "Follow company style guide.",
-      };
-    },
-    { priority: 10 },
-  );
+  api.on("before_prompt_build", ({ messages }) => {
+    return {
+      actions: [
+        {
+          kind: "prependContext",
+          text: `You have ${messages.length} prior messages.`,
+        },
+        {
+          kind: "appendSystemPrompt",
+          text: "Always include sources when you browse the web.",
+        },
+      ],
+      appendSystemContext: "Follow company style guide.",
+    };
+  });
 }
 ```
 
@@ -525,26 +539,30 @@ Core-enforced hook policy:
 
 `before_prompt_build` result fields:
 
-- `prependContext`: prepends text to the user prompt for this run. Best for turn-specific or dynamic content.
-- `systemPrompt`: full system prompt override.
+- `actions`: ordered prompt mutations such as `prependContext` and `appendSystemPrompt`.
+- `prependContext`: legacy shorthand that still prepends text to the user prompt for this run.
+- `systemPrompt`: legacy full system prompt override.
 - `prependSystemContext`: prepends text to the current system prompt.
 - `appendSystemContext`: appends text to the current system prompt.
 
 Prompt build order in embedded runtime:
 
-1. Apply `prependContext` to the user prompt.
+1. Apply `prependContext` actions and legacy `prependContext` to the user prompt.
 2. Apply `systemPrompt` override when provided.
-3. Apply `prependSystemContext + current system prompt + appendSystemContext`.
+3. Append any `appendSystemPrompt` actions to the current system prompt.
+4. Wrap the current system prompt with `prependSystemContext` and `appendSystemContext`.
 
 Merge and precedence notes:
 
 - Hook handlers run by priority (higher first).
-- For merged context fields, values are concatenated in execution order.
+- Ordered `actions` are concatenated in execution order.
+- Legacy text fields are merged in execution order.
 - `before_prompt_build` values are applied before legacy `before_agent_start` fallback values.
 
 Migration guidance:
 
-- Move static guidance from `prependContext` to `prependSystemContext` (or `appendSystemContext`) so providers can cache stable system-prefix content.
+- Prefer `actions` for additive prompt changes.
+- Move static guidance from `prependContext` to `prependSystemContext` or `appendSystemContext` so providers can cache stable system-prefix content.
 - Keep `prependContext` for per-turn dynamic context that should stay tied to the user message.
 
 ## Provider plugins (model auth)
