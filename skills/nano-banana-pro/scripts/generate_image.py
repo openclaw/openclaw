@@ -21,6 +21,19 @@ import os
 import sys
 from pathlib import Path
 
+SUPPORTED_ASPECT_RATIOS = [
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
+]
+
 
 def get_api_key(provided_key: str | None) -> str | None:
     """Get API key from argument first, then environment."""
@@ -58,9 +71,9 @@ def main():
     )
     parser.add_argument(
         "--aspect-ratio", "-a",
-        choices=["1:1", "3:4", "4:3", "9:16", "16:9"],
+        choices=SUPPORTED_ASPECT_RATIOS,
         default=None,
-        help="Output aspect ratio (default: model decides). Options: 1:1, 3:4, 4:3, 9:16, 16:9"
+        help=f"Output aspect ratio (default: model decides). Options: {', '.join(SUPPORTED_ASPECT_RATIOS)}"
     )
     parser.add_argument(
         "--api-key", "-k",
