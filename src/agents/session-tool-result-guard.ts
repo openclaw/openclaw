@@ -72,6 +72,11 @@ export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
     /**
+     * Grace window before inserting synthetic tool results for pending tool calls.
+     * Prevents premature synthetic inserts during restart/long-poll ordering jitter.
+     */
+    pendingToolResultGraceMs?: number;
+    /**
      * Optional transform applied to any message before persistence.
      */
     transformMessageForPersistence?: (message: AgentMessage) => AgentMessage;
@@ -123,6 +128,7 @@ export function installSessionToolResultGuard(
 
   const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
   const beforeWrite = opts?.beforeMessageWriteHook;
+  const pendingToolResultGraceMs = Math.max(0, opts?.pendingToolResultGraceMs ?? 30_000);
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -142,12 +148,24 @@ export function installSessionToolResultGuard(
     return msg;
   };
 
-  const flushPendingToolResults = () => {
+  const flushPendingToolResults = (
+    reason:
+      | "ttl_expired"
+      | "sanitized_drop"
+      | "new_tool_calls"
+      | "explicit_finalize" = "explicit_finalize",
+    ids?: string[],
+  ) => {
     if (pendingState.size() === 0) {
       return;
     }
+
+    const targetIds = ids?.length ? ids : pendingState.getPendingIds();
     if (allowSyntheticToolResults) {
-      for (const [id, name] of pendingState.entries()) {
+      for (const id of targetIds) {
+        const name = pendingState.getToolName(id);
+        const createdAtMs = pendingState.getCreatedAtMs(id);
+        const ageMs = typeof createdAtMs === "number" ? Date.now() - createdAtMs : undefined;
         const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
         const flushed = applyBeforeWriteHook(
           persistToolResult(persistMessage(synthetic), {
@@ -159,9 +177,24 @@ export function installSessionToolResultGuard(
         if (flushed) {
           originalAppend(flushed as never);
         }
+        // Structured telemetry for every synthetic insertion path.
+        console.warn(
+          JSON.stringify({
+            subsystem: "agents/transcript-guard",
+            event: "synthetic_tool_result_inserted",
+            reason,
+            toolCallId: id,
+            toolName: name,
+            ageMs,
+          }),
+        );
+        pendingState.delete(id);
+      }
+    } else {
+      for (const id of targetIds) {
+        pendingState.delete(id);
       }
     }
-    pendingState.clear();
   };
 
   const guardedAppend = (message: AgentMessage) => {
@@ -173,7 +206,7 @@ export function installSessionToolResultGuard(
       });
       if (sanitized.length === 0) {
         if (pendingState.shouldFlushForSanitizedDrop()) {
-          flushPendingToolResults();
+          flushPendingToolResults("sanitized_drop");
         }
         return undefined;
       }
@@ -222,12 +255,22 @@ export function installSessionToolResultGuard(
     // synthetic results (e.g. OpenAI) accumulate stale pending state when a user message
     // interrupts in-flight tool calls, leaving orphaned tool_use blocks in the transcript
     // that cause API 400 errors on subsequent requests.
-    if (pendingState.shouldFlushBeforeNonToolResult(nextRole, toolCalls.length)) {
-      flushPendingToolResults();
+    if (
+      pendingState.shouldFlushBeforeNonToolResult(
+        nextRole,
+        toolCalls.length,
+        pendingToolResultGraceMs,
+        Date.now(),
+      )
+    ) {
+      const expiredIds = pendingState.getExpiredIds(pendingToolResultGraceMs, Date.now());
+      if (expiredIds.length > 0) {
+        flushPendingToolResults("ttl_expired", expiredIds);
+      }
     }
     // If new tool calls arrive while older ones are pending, flush the old ones first.
     if (pendingState.shouldFlushBeforeNewToolCalls(toolCalls.length)) {
-      flushPendingToolResults();
+      flushPendingToolResults("new_tool_calls");
     }
 
     const finalMessage = applyBeforeWriteHook(persistMessage(nextMessage));
