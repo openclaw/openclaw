@@ -144,14 +144,18 @@ export function createSlackMessageHandler(params: {
       });
       const seenMessageKey = buildSeenMessageKey(last.message.channel, last.message.ts);
       if (!prepared) {
-        const hasMessageSource = entries.some((entry) => entry.opts.source === "message");
-        const hasAppMentionSource = entries.some((entry) => entry.opts.source === "app_mention");
-        if (seenMessageKey && hasMessageSource && !hasAppMentionSource) {
-          rememberAppMentionRetryKey(seenMessageKey);
-        }
         return;
       }
       if (seenMessageKey) {
+        pruneAppMentionRetryKeys(Date.now());
+        if (last.opts.source === "app_mention") {
+          // If app_mention wins the race and dispatches first, drop the later message dispatch.
+          appMentionDispatchedKeys.set(seenMessageKey, Date.now() + APP_MENTION_RETRY_TTL_MS);
+        } else if (last.opts.source === "message" && appMentionDispatchedKeys.has(seenMessageKey)) {
+          appMentionDispatchedKeys.delete(seenMessageKey);
+          appMentionRetryKeys.delete(seenMessageKey);
+          return;
+        }
         appMentionRetryKeys.delete(seenMessageKey);
       }
       if (entries.length > 1) {
@@ -171,11 +175,17 @@ export function createSlackMessageHandler(params: {
   const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
   const pendingTopLevelDebounceKeys = new Map<string, Set<string>>();
   const appMentionRetryKeys = new Map<string, number>();
+  const appMentionDispatchedKeys = new Map<string, number>();
 
   const pruneAppMentionRetryKeys = (now: number) => {
     for (const [key, expiresAt] of appMentionRetryKeys) {
       if (expiresAt <= now) {
         appMentionRetryKeys.delete(key);
+      }
+    }
+    for (const [key, expiresAt] of appMentionDispatchedKeys) {
+      if (expiresAt <= now) {
+        appMentionDispatchedKeys.delete(key);
       }
     }
   };
@@ -209,7 +219,13 @@ export function createSlackMessageHandler(params: {
       return;
     }
     const seenMessageKey = buildSeenMessageKey(message.channel, message.ts);
-    if (seenMessageKey && ctx.markMessageSeen(message.channel, message.ts)) {
+    const wasSeen = seenMessageKey ? ctx.markMessageSeen(message.channel, message.ts) : false;
+    if (seenMessageKey && opts.source === "message" && !wasSeen) {
+      // Prime exactly one fallback app_mention allowance immediately so a near-simultaneous
+      // app_mention is not dropped while message handling is still in-flight.
+      rememberAppMentionRetryKey(seenMessageKey);
+    }
+    if (seenMessageKey && wasSeen) {
       // Allow exactly one app_mention retry if the same ts was previously dropped
       // from the message stream before it reached dispatch.
       if (opts.source !== "app_mention" || !consumeAppMentionRetryKey(seenMessageKey)) {
