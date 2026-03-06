@@ -60,9 +60,26 @@ function parsePattern(raw: string): RegExp | null {
   return compileSafeRegex(raw, "gi");
 }
 
+// Compile the default patterns once at module load — they never change.
+const DEFAULT_COMPILED_PATTERNS: RegExp[] = DEFAULT_REDACT_PATTERNS.map(parsePattern).filter(
+  (re): re is RegExp => Boolean(re),
+);
+
+// Cache compiled RegExp[] for custom pattern sets, keyed by the joined source strings.
+const customPatternCache = new Map<string, RegExp[]>();
+
 function resolvePatterns(value?: string[]): RegExp[] {
-  const source = value?.length ? value : DEFAULT_REDACT_PATTERNS;
-  return source.map(parsePattern).filter((re): re is RegExp => Boolean(re));
+  if (!value?.length) {
+    return DEFAULT_COMPILED_PATTERNS;
+  }
+  const key = value.join("\0");
+  const cached = customPatternCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const compiled = value.map(parsePattern).filter((re): re is RegExp => Boolean(re));
+  customPatternCache.set(key, compiled);
+  return compiled;
 }
 
 function maskToken(token: string): string {
@@ -105,6 +122,14 @@ function redactText(text: string, patterns: RegExp[]): string {
   return next;
 }
 
+type CachedRedactOptions = {
+  // The logging config object reference — used to detect config reloads.
+  loggingRef: OpenClawConfig["logging"] | undefined;
+  options: RedactOptions;
+};
+
+let cachedRedactConfig: CachedRedactOptions | null = null;
+
 function resolveConfigRedaction(): RedactOptions {
   let cfg: OpenClawConfig["logging"] | undefined;
   try {
@@ -117,10 +142,16 @@ function resolveConfigRedaction(): RedactOptions {
   } catch {
     cfg = undefined;
   }
-  return {
+  // Return cached options when the logging config reference has not changed.
+  if (cachedRedactConfig && cachedRedactConfig.loggingRef === cfg) {
+    return cachedRedactConfig.options;
+  }
+  const options: RedactOptions = {
     mode: normalizeMode(cfg?.redactSensitive),
     patterns: cfg?.redactPatterns,
   };
+  cachedRedactConfig = { loggingRef: cfg, options };
+  return options;
 }
 
 export function redactSensitiveText(text: string, options?: RedactOptions): string {
