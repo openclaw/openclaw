@@ -271,6 +271,7 @@ export async function startTelegramWebhook(opts: {
         // API unreachable — don't update, let health monitor detect staleness
       }
     };
+    void ping();
     webhookHeartbeat = setInterval(ping, 10 * 60_000);
     if (typeof webhookHeartbeat === "object" && "unref" in webhookHeartbeat) {
       (webhookHeartbeat as NodeJS.Timeout).unref();

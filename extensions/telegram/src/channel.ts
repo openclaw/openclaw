@@ -505,7 +505,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         webhookPath: account.config.webhookPath,
         webhookHost: account.config.webhookHost,
         webhookPort: account.config.webhookPort,
-        setStatus: ctx.setStatus,
+        setStatus: ctx.setStatus as (status: Record<string, unknown>) => void,
       });
     },
     logoutAccount: async ({ accountId, cfg }) => {

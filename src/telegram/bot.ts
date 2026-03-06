@@ -401,6 +401,17 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     opts,
   });
 
+  // Track lastInboundAt only for message-bearing updates (not reactions/callbacks).
+  // Must be registered BEFORE registerTelegramHandlers, whose terminal handlers
+  // do not call next() and would prevent this middleware from running.
+  if (opts.setStatus) {
+    const setStatus = opts.setStatus;
+    bot.on(["message", "channel_post"], async (_ctx, next) => {
+      setStatus({ lastInboundAt: Date.now() });
+      await next();
+    });
+  }
+
   registerTelegramHandlers({
     cfg,
     accountId: account.accountId,
@@ -417,15 +428,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     processMessage,
     logger,
   });
-
-  // Track lastInboundAt only for message-bearing updates (not reactions/callbacks).
-  if (opts.setStatus) {
-    const setStatus = opts.setStatus;
-    bot.on(["message", "channel_post"], async (_ctx, next) => {
-      setStatus({ lastInboundAt: Date.now() });
-      await next();
-    });
-  }
 
   const originalStop = bot.stop.bind(bot);
   bot.stop = ((...args: Parameters<typeof originalStop>) => {
