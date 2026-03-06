@@ -474,6 +474,7 @@ describe("delivery-queue", () => {
       expect(result.failed).toBe(0);
       expect(result.skippedMaxRetries).toBe(0);
       expect(result.deferredBackoff).toBe(0);
+      expect(result.deferredTransient).toBe(0);
 
       // All entries should still be in the queue.
       const remaining = await loadPendingDeliveries(tmpDir);
@@ -502,6 +503,7 @@ describe("delivery-queue", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 1,
+        deferredTransient: 0,
       });
 
       const remaining = await loadPendingDeliveries(tmpDir);
@@ -532,6 +534,7 @@ describe("delivery-queue", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 1,
+        deferredTransient: 0,
       });
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(deliver).toHaveBeenCalledWith(
@@ -561,6 +564,7 @@ describe("delivery-queue", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 1,
+        deferredTransient: 0,
       });
       expect(firstDeliver).not.toHaveBeenCalled();
 
@@ -572,6 +576,7 @@ describe("delivery-queue", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        deferredTransient: 0,
       });
       expect(secondDeliver).toHaveBeenCalledTimes(1);
 
@@ -590,6 +595,7 @@ describe("delivery-queue", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        deferredTransient: 0,
       });
       expect(deliver).not.toHaveBeenCalled();
     });
