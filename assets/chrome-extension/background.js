@@ -202,6 +202,11 @@ function onRelayClosed(reason) {
     p.reject(new Error(`Relay disconnected (${reason})`))
   }
 
+  // Fail-safe: never leave a tab locked due to an in-flight user action when the
+  // relay drops (e.g. WS error/close mid-operation). The user should always be
+  // able to click again to recover.
+  tabOperationLocks.clear()
+
   reattachPending.clear()
 
   for (const [tabId, tab] of tabs.entries()) {
