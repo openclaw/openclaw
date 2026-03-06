@@ -43,6 +43,7 @@ export async function statusAllCommand(
       config: loadedRaw,
       commandName: "status --all",
       targetIds: getStatusCommandSecretTargetIds(),
+      mode: "summary",
     });
     const osSummary = resolveOsSummary();
     const snap = await readConfigFileSnapshot().catch(() => null);
@@ -159,7 +160,10 @@ export async function statusAllCommand(
     const agentStatus = await getAgentLocalStatuses(cfg);
     progress.tick();
     progress.setLabel("Summarizing channels…");
-    const channels = await buildChannelsTable(cfg, { showSecrets: false });
+    const channels = await buildChannelsTable(cfg, {
+      showSecrets: false,
+      sourceConfig: loadedRaw,
+    });
     progress.tick();
 
     const connectionDetailsForReport = (() => {

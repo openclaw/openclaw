@@ -251,6 +251,54 @@ describe("doctor config flow", () => {
     }
   });
 
+  it("does not crash when Telegram allowFrom repair sees unavailable SecretRef-backed credentials", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const result = await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          channels: {
+            telegram: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+              allowFrom: ["@testuser"],
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      const cfg = result.cfg as {
+        channels?: {
+          telegram?: {
+            allowFrom?: string[];
+            accounts?: Record<string, { allowFrom?: string[] }>;
+          };
+        };
+      };
+      const retainedAllowFrom =
+        cfg.channels?.telegram?.accounts?.default?.allowFrom ?? cfg.channels?.telegram?.allowFrom;
+      expect(retainedAllowFrom).toEqual(["@testuser"]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(
+        noteSpy.mock.calls.some((call) =>
+          String(call[0]).includes(
+            "configured Telegram bot credentials are unavailable in this command path",
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("converts numeric discord ids to strings on repair", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");
