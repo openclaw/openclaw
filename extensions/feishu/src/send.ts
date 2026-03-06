@@ -206,7 +206,7 @@ export async function getMessageFeishu(params: {
       };
     };
 
-    if (response.code !== 0) {
+    if (response.code !== undefined && response.code !== 0) {
       return null;
     }
 
@@ -387,7 +387,7 @@ export async function updateCardFeishu(params: {
     data: { content },
   });
 
-  if (response.code !== 0) {
+  if (response.code !== undefined && response.code !== 0) {
     throw new Error(`Feishu card update failed: ${response.msg || `code ${response.code}`}`);
   }
 }
@@ -471,7 +471,7 @@ export async function editMessageFeishu(params: {
     },
   });
 
-  if (response.code !== 0) {
+  if (response.code !== undefined && response.code !== 0) {
     throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
   }
 }
