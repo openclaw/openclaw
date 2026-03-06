@@ -49,6 +49,7 @@ export type AuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "ollama"
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
@@ -78,6 +79,7 @@ export type AuthChoiceGroupId =
   | "xai"
   | "volcengine"
   | "byteplus"
+  | "ollama"
   | "custom";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";

@@ -168,6 +168,19 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
 
+  if (authChoice === "ollama") {
+    runtime.error(
+      [
+        'Auth choice "ollama" requires interactive mode.',
+        "Use interactive onboard/configure to select a model from auto-discovered list.",
+        "Or use --auth-choice custom-api-key with --custom-base-url http://127.0.0.1:11434/v1",
+        "and --custom-model-id <model-name> for non-interactive Ollama setup.",
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return null;
+  }
+
   if (authChoice === "apiKey") {
     const resolved = await resolveApiKey({
       provider: "anthropic",
