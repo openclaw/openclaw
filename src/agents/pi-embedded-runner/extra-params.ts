@@ -44,6 +44,7 @@ export function resolveExtraParams(params: {
 }
 
 type CacheRetention = "none" | "short" | "long";
+type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
   openaiWsWarmup?: boolean;
@@ -208,6 +209,18 @@ function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   }
 }
 
+function isOpenAIPublicApiBaseUrl(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return false;
+  }
+
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === "api.openai.com";
+  } catch {
+    return baseUrl.toLowerCase().includes("api.openai.com");
+  }
+}
+
 function shouldForceResponsesStore(model: {
   api?: unknown;
   provider?: unknown;
@@ -306,6 +319,63 @@ function createOpenAIResponsesContextManagementWrapper(
                 compact_threshold: compactThreshold,
               },
             ];
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "auto" ||
+    normalized === "default" ||
+    normalized === "flex" ||
+    normalized === "priority"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function resolveOpenAIServiceTier(
+  extraParams: Record<string, unknown> | undefined,
+): OpenAIServiceTier | undefined {
+  const raw = extraParams?.serviceTier ?? extraParams?.service_tier;
+  const normalized = normalizeOpenAIServiceTier(raw);
+  if (raw !== undefined && normalized === undefined) {
+    const rawSummary = typeof raw === "string" ? raw : typeof raw;
+    log.warn(`ignoring invalid OpenAI service tier param: ${rawSummary}`);
+  }
+  return normalized;
+}
+
+function createOpenAIServiceTierWrapper(
+  baseStreamFn: StreamFn | undefined,
+  serviceTier: OpenAIServiceTier,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (
+      model.api !== "openai-responses" ||
+      model.provider !== "openai" ||
+      !isOpenAIPublicApiBaseUrl(model.baseUrl)
+    ) {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (payloadObj.service_tier === undefined) {
+            payloadObj.service_tier = serviceTier;
           }
         }
         originalOnPayload?.(payload);
@@ -1072,6 +1142,12 @@ export function applyExtraParamsToAgent(
   // Guard Google payloads against invalid negative thinking budgets emitted by
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
+  const openAIServiceTier = resolveOpenAIServiceTier(merged);
+  if (openAIServiceTier) {
+    log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
+    agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
+  }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI Responses models and auto-enable
