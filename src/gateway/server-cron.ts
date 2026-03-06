@@ -23,7 +23,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
@@ -99,6 +99,7 @@ async function postCronWebhook(params: {
   blockedLog: string;
   failedLog: string;
   logger: ReturnType<typeof getChildLogger>;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
@@ -114,6 +115,7 @@ async function postCronWebhook(params: {
         body: JSON.stringify(params.payload),
         signal: abortController.signal,
       },
+      policy: params.ssrfPolicy,
     });
     await result.release();
   } catch (err) {
@@ -311,6 +313,13 @@ export function buildGatewayCronService(params: {
       if (mode === "webhook" && to) {
         const webhookUrl = normalizeHttpWebhookUrl(to);
         if (webhookUrl) {
+          const failureAlertSsrfPolicy: SsrFPolicy | undefined = params.cfg.cron?.webhookSsrfPolicy
+            ? {
+                dangerouslyAllowPrivateNetwork:
+                  params.cfg.cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork,
+                allowedHostnames: params.cfg.cron.webhookSsrfPolicy.allowedHostnames,
+              }
+            : undefined;
           await postCronWebhook({
             webhookUrl,
             webhookToken,
@@ -323,6 +332,7 @@ export function buildGatewayCronService(params: {
             blockedLog: "cron: failure alert webhook blocked by SSRF guard",
             failedLog: "cron: failure alert webhook failed",
             logger: cronLogger,
+            ssrfPolicy: failureAlertSsrfPolicy,
           });
         } else {
           cronLogger.warn(
@@ -360,6 +370,13 @@ export function buildGatewayCronService(params: {
       if (evt.action === "finished") {
         const webhookToken = trimToOptionalString(params.cfg.cron?.webhookToken);
         const legacyWebhook = trimToOptionalString(params.cfg.cron?.webhook);
+        const webhookSsrfPolicy: SsrFPolicy | undefined = params.cfg.cron?.webhookSsrfPolicy
+          ? {
+              dangerouslyAllowPrivateNetwork:
+                params.cfg.cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork,
+              allowedHostnames: params.cfg.cron.webhookSsrfPolicy.allowedHostnames,
+            }
+          : undefined;
         const job = cron.getJob(evt.jobId);
         const legacyNotify = (job as { notify?: unknown } | undefined)?.notify === true;
         const webhookTarget = resolveCronWebhookTarget({
@@ -402,6 +419,7 @@ export function buildGatewayCronService(params: {
               blockedLog: "cron: webhook delivery blocked by SSRF guard",
               failedLog: "cron: webhook delivery failed",
               logger: cronLogger,
+              ssrfPolicy: webhookSsrfPolicy,
             });
           })();
         }
@@ -438,6 +456,7 @@ export function buildGatewayCronService(params: {
                       blockedLog: "cron: failure destination webhook blocked by SSRF guard",
                       failedLog: "cron: failure destination webhook failed",
                       logger: cronLogger,
+                      ssrfPolicy: webhookSsrfPolicy,
                     });
                   })();
                 } else {

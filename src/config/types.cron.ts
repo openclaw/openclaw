@@ -1,4 +1,10 @@
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { SecretInput } from "./types.secrets.js";
+
+export type CronWebhookSsrfPolicy = Pick<
+  SsrFPolicy,
+  "dangerouslyAllowPrivateNetwork" | "allowedHostnames"
+>;
 
 /** Error types that can trigger retries for one-shot jobs. */
 export type CronRetryOn = "rate_limit" | "network" | "timeout" | "server_error";
@@ -38,6 +44,13 @@ export type CronConfig = {
    * Prefer per-job delivery.mode="webhook" with delivery.to.
    */
   webhook?: string;
+  /**
+   * SSRF policy for cron webhook POST deliveries. By default all private/internal
+   * IP ranges are blocked. Set dangerouslyAllowPrivateNetwork: true to allow
+   * webhooks that resolve to private IPs (e.g. intranet endpoints on self-hosted
+   * deployments). Use allowedHostnames to permit only specific hosts.
+   */
+  webhookSsrfPolicy?: CronWebhookSsrfPolicy;
   /** Bearer token for cron webhook POST delivery. */
   webhookToken?: SecretInput;
   /**

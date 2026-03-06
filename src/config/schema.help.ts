@@ -1127,6 +1127,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum bytes per cron run-log file before pruning rewrites to the last keepLines entries (for example `2mb`, default `2000000`).",
   "cron.runLog.keepLines":
     "How many trailing run-log lines to retain when a file exceeds maxBytes (default `2000`). Increase for longer forensic history or lower for smaller disks.",
+  "cron.webhookSsrfPolicy":
+    "SSRF guardrail settings for cron webhook POST deliveries. By default all private/internal IP ranges are blocked. Use this only on self-hosted deployments where the webhook target is a trusted intranet endpoint.",
+  "cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Allow cron webhook deliveries to resolve to private/internal IP addresses. Set to true only on fully trusted internal networks where the webhook target is a known intranet service. Never enable on internet-exposed gateways.",
+  "cron.webhookSsrfPolicy.allowedHostnames":
+    "Explicit hostname allowlist for cron webhook SSRF checks. Only these hostnames (exact match or *.suffix) are permitted to resolve to any IP, including private ranges. Prefer this over dangerouslyAllowPrivateNetwork for a tighter scope.",
   hooks:
     "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
   "hooks.enabled":
