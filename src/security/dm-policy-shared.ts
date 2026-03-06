@@ -9,7 +9,7 @@ export function resolvePinnedMainDmOwnerFromAllowlist(params: {
   allowFrom?: Array<string | number> | null;
   normalizeEntry: (entry: string) => string | undefined;
 }): string | null {
-  if ((params.dmScope ?? "main") !== "main") {
+  if ((params.dmScope ?? "per-channel-peer") !== "main") {
     return null;
   }
   const rawAllowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : [];
