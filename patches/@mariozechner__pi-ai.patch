@@ -26,7 +26,7 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..2834ebd9e309872792e14cc41a526412
 +    return async function sseEventInjectionFetch(url, init) {
 +        const response = await globalThis.fetch(url, init);
 +        // Only transform streaming responses (SSE)
-+        const contentType = response.headers.get("content-type") || "";
++        const contentType = (response.headers.get("content-type") || "").toLowerCase();
 +        if (!contentType.includes("text/event-stream") || !response.body) {
 +            return response;
 +        }

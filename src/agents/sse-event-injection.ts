@@ -89,7 +89,7 @@ export function createSseEventInjectionFetch(): typeof globalThis.fetch {
     const response = await globalThis.fetch(url, init);
 
     // Only transform streaming responses (SSE)
-    const contentType = response.headers.get("content-type") || "";
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
     if (!contentType.includes("text/event-stream") || !response.body) {
       return response;
     }
