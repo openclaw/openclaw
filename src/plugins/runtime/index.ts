@@ -28,10 +28,28 @@ function resolveVersion(): string {
   }
 }
 
-export function createPluginRuntime(): PluginRuntime {
+function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
+  const unavailable = () => {
+    throw new Error("Plugin runtime subagent methods are only available during a gateway request.");
+  };
+  return {
+    run: unavailable,
+    waitForRun: unavailable,
+    getSessionMessages: unavailable,
+    getSession: unavailable,
+    deleteSession: unavailable,
+  };
+}
+
+export type CreatePluginRuntimeOptions = {
+  subagent?: PluginRuntime["subagent"];
+};
+
+export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const runtime = {
     version: resolveVersion(),
     config: createRuntimeConfig(),
+    subagent: _options.subagent ?? createUnavailableSubagentRuntime(),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     tts: { textToSpeechTelephony },
