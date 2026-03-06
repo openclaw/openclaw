@@ -193,17 +193,4 @@ openclaw models status
 
 ## 模型注册表（`models.json`）
 
-<Tip title="在提供商 ID 中使用句号？">
-如果你的自定义提供商 ID 包含句号（例如 `llama.cpp`），在通过 CLI 操作配置时必须使用方括号语法，以避免破坏路径解析：
-
-```bash
-# 正确：方括号语法可以保护句号作为一个完整的 Key
-/config set 'models.providers["llama.cpp"].baseUrl'=http://127.0.0.1:8080
-
-# 错误：路径解析器会将其错误地按句号分割为嵌套对象
-/config set models.providers.llama.cpp.baseUrl http://127.0.0.1:8080
-```
-
-</Tip>
-
 `models.providers` 中的自定义提供商会写入智能体目录下的 `models.json`（默认 `~/.openclaw/agents/<agentId>/models.json`）。除非 `models.mode` 设置为 `replace`，否则此文件默认会被合并。
