@@ -35,6 +35,7 @@ const discordSendMocks = vi.hoisted(() => ({
   removeOwnReactionsDiscord: vi.fn(async () => ({ removed: ["👍"] })),
   removeReactionDiscord: vi.fn(async () => ({})),
   searchMessagesDiscord: vi.fn(async () => ({})),
+  sendDiscordComponentMessage: vi.fn(async () => ({})),
   sendMessageDiscord: vi.fn(async () => ({})),
   sendPollDiscord: vi.fn(async () => ({})),
   sendStickerDiscord: vi.fn(async () => ({})),
@@ -60,6 +61,7 @@ const {
   removeOwnReactionsDiscord,
   removeReactionDiscord,
   searchMessagesDiscord,
+  sendDiscordComponentMessage,
   sendMessageDiscord,
   sendVoiceMessageDiscord,
   setChannelPermissionDiscord,
@@ -282,6 +284,35 @@ describe("handleDiscordMessagingAction", () => {
       expect.objectContaining({
         mediaUrl: "/tmp/image.png",
         mediaLocalRoots: ["/tmp/agent-root"],
+      }),
+    );
+  });
+
+  it("disables component transcript mirroring when outbound routing injected a session key", async () => {
+    sendDiscordComponentMessage.mockClear();
+
+    await handleDiscordMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        components: {
+          blocks: [{ type: "actions", buttons: [{ label: "Tap" }] }],
+        },
+        __sessionKey: "agent:main:discord:channel:123",
+        __agentId: "main",
+      },
+      enableAllActions,
+    );
+
+    expect(sendDiscordComponentMessage).toHaveBeenCalledWith(
+      "channel:123",
+      expect.objectContaining({
+        blocks: [{ type: "actions", buttons: [{ label: "Tap" }] }],
+      }),
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:channel:123",
+        agentId: "main",
+        mirrorTranscript: false,
       }),
     );
   });

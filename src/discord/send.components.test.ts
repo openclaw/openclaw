@@ -106,4 +106,30 @@ describe("sendDiscordComponentMessage", () => {
     );
     expect(appendTranscriptMock.mock.calls[0]?.[0]?.mediaUrls).toBeUndefined();
   });
+
+  it("skips transcript mirroring when delegated to the outbound layer", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.DM,
+      recipients: [{ id: "user-1" }],
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "dm-1" });
+
+    await sendDiscordComponentMessage(
+      "channel:dm-1",
+      {
+        text: "Pick an option",
+        blocks: [{ type: "actions", buttons: [{ label: "Tap" }] }],
+      },
+      {
+        rest,
+        token: "t",
+        sessionKey: "agent:main:discord:channel:dm-1",
+        agentId: "main",
+        mirrorTranscript: false,
+      },
+    );
+
+    expect(appendTranscriptMock).not.toHaveBeenCalled();
+  });
 });

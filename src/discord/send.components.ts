@@ -100,6 +100,7 @@ type DiscordComponentSendOpts = {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   filename?: string;
+  mirrorTranscript?: boolean;
 };
 
 export async function sendDiscordComponentMessage(
@@ -194,7 +195,7 @@ export async function sendDiscordComponentMessage(
   });
 
   const sessionKey = opts.sessionKey?.trim();
-  if (sessionKey) {
+  if (sessionKey && opts.mirrorTranscript !== false) {
     const transcriptText = buildComponentTranscriptMirrorText(spec, buildResult);
     if (transcriptText) {
       try {

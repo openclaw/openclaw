@@ -295,6 +295,7 @@ export async function handleDiscordMessagingAction(
           agentId: agentId ?? undefined,
           mediaUrl: mediaUrl ?? undefined,
           filename: filename ?? undefined,
+          mirrorTranscript: sessionKey ? false : undefined,
         });
         return jsonResult({ ok: true, result, components: true });
       }
