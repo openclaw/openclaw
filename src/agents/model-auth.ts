@@ -348,6 +348,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     minimax: "MINIMAX_API_KEY",
     nvidia: "NVIDIA_API_KEY",
     xiaomi: "XIAOMI_API_KEY",
+    modelscope: "MODELSCOPE_API_KEY",
     synthetic: "SYNTHETIC_API_KEY",
     venice: "VENICE_API_KEY",
     mistral: "MISTRAL_API_KEY",

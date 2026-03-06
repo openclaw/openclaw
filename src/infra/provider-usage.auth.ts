@@ -92,6 +92,13 @@ function resolveXiaomiApiKey(): string | undefined {
   });
 }
 
+function resolveModelScopeApiKey(): string | undefined {
+  return resolveProviderApiKeyFromConfigAndStore({
+    providerId: "modelscope",
+    envDirect: [process.env.MODELSCOPE_API_KEY],
+  });
+}
+
 function resolveProviderApiKeyFromConfigAndStore(params: {
   providerId: UsageProviderId;
   envDirect: Array<string | undefined>;
@@ -237,6 +244,14 @@ export async function resolveProviderAuths(params: {
     }
     if (provider === "xiaomi") {
       const apiKey = resolveXiaomiApiKey();
+      if (apiKey) {
+        auths.push({ provider, token: apiKey });
+      }
+      continue;
+    }
+
+    if (provider === "modelscope") {
+      const apiKey = resolveModelScopeApiKey();
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }

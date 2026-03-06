@@ -8,7 +8,9 @@ import {
   buildKimiCodingProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
+  buildModelScopeProvider,
   QIANFAN_DEFAULT_MODEL_ID,
+  MODELSCOPE_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
 import {
@@ -38,6 +40,7 @@ import {
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
+  MODELSCOPE_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
@@ -295,6 +298,46 @@ export function applyXiaomiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 export function applyXiaomiConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyXiaomiProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, XIAOMI_DEFAULT_MODEL_REF);
+}
+
+export function applyModelScopeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[MODELSCOPE_DEFAULT_MODEL_REF] = {
+    ...models[MODELSCOPE_DEFAULT_MODEL_REF],
+    alias: models[MODELSCOPE_DEFAULT_MODEL_REF]?.alias ?? "ModelScope",
+  };
+  const defaultProvider = buildModelScopeProvider();
+  const resolvedApi = defaultProvider.api ?? "openai-completions";
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "modelscope",
+    api: resolvedApi,
+    baseUrl: defaultProvider.baseUrl,
+    defaultModels: defaultProvider.models ?? [],
+    defaultModelId: MODELSCOPE_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyModelScopeConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyModelScopeProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: MODELSCOPE_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 /**
