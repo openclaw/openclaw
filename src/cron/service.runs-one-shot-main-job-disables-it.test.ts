@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import { createDeferred, createNoopLogger, installCronTestHooks } from "./service.test-harness.js";
+import { loadCronStore } from "./store.js";
 
 const noopLogger = createNoopLogger();
 installCronTestHooks({ logger: noopLogger });
@@ -471,8 +472,9 @@ async function loadLegacyDeliveryMigration(rawJob: Record<string, unknown>) {
 
   const cron = createStartedCronService(store.storePath);
   await cron.start();
-  const jobs = await cron.list({ includeDisabled: true });
-  const job = jobs.find((j) => j.id === rawJob.id);
+  cron.stop();
+  const loaded = await loadCronStore(store.storePath);
+  const job = loaded.jobs.find((j) => j.id === rawJob.id);
   return { store, cron, job };
 }
 
