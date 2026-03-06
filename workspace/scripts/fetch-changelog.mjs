@@ -10,7 +10,7 @@ import { chromium } from "playwright-core";
 
 const CHANGELOG_URL = "https://www.trust8004.xyz/changelog";
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT || "http://127.0.0.1:18800";
-const TIMEOUT = 30_000;
+const TIMEOUT = 60_000;
 
 async function fetchChangelog() {
   let browser;
@@ -39,57 +39,68 @@ async function fetchChangelog() {
       : browser.contexts()[0] || (await browser.newContext());
 
     const page = await context.newPage();
-    await page.goto(CHANGELOG_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
+    await page.goto(CHANGELOG_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
 
-    // Extract changelog entries from the page
-    const entries = await page.evaluate(() => {
-      const text = document.body.innerText;
-      const lines = text
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean);
-      const results = [];
-      let i = 0;
+    // Poll until changelog entries appear (Vercel challenge + page render)
+    let entries = null;
+    const deadline = Date.now() + TIMEOUT;
 
-      while (i < lines.length) {
-        // Look for date pattern YYYY-MM-DD
-        if (/^\d{4}-\d{2}-\d{2}$/.test(lines[i])) {
-          const date = lines[i];
-          const version = lines[i + 1] || "";
-          const type = lines[i + 2] || "";
-          const title = lines[i + 3] || "";
-
-          // Collect description and highlights until next date or end
-          let description = "";
-          const highlights = [];
-          let j = i + 4;
-
-          // First non-empty line after title is the description
-          if (j < lines.length && !/^\d{4}-\d{2}-\d{2}$/.test(lines[j])) {
-            description = lines[j];
-            j++;
-          }
-
-          // Remaining lines until next date are highlights
-          while (j < lines.length && !/^\d{4}-\d{2}-\d{2}$/.test(lines[j])) {
-            highlights.push(lines[j]);
-            j++;
-          }
-
-          results.push({ date, version, type, title, description, highlights });
-          i = j;
-        } else {
-          i++;
+    while (Date.now() < deadline) {
+      entries = await page.evaluate(() => {
+        const text = document.body.innerText;
+        // Check if changelog content has loaded (look for date pattern)
+        if (!/\d{4}-\d{2}-\d{2}/.test(text)) {
+          return null;
         }
-      }
 
-      return results;
-    });
+        const lines = text
+          .split("\n")
+          .map((l) => l.trim())
+          .filter(Boolean);
+        const results = [];
+        let i = 0;
+
+        while (i < lines.length) {
+          if (/^\d{4}-\d{2}-\d{2}$/.test(lines[i])) {
+            const date = lines[i];
+            const version = lines[i + 1] || "";
+            const type = lines[i + 2] || "";
+            const title = lines[i + 3] || "";
+
+            let description = "";
+            const highlights = [];
+            let j = i + 4;
+
+            if (j < lines.length && !/^\d{4}-\d{2}-\d{2}$/.test(lines[j])) {
+              description = lines[j];
+              j++;
+            }
+
+            while (j < lines.length && !/^\d{4}-\d{2}-\d{2}$/.test(lines[j])) {
+              highlights.push(lines[j]);
+              j++;
+            }
+
+            results.push({ date, version, type, title, description, highlights });
+            i = j;
+          } else {
+            i++;
+          }
+        }
+
+        return results.length > 0 ? results : null;
+      });
+
+      if (entries) {
+        break;
+      }
+      await page.waitForTimeout(3000);
+    }
 
     await page.close();
 
     if (!entries || entries.length === 0) {
-      process.stderr.write("Error: could not extract changelog entries\n");
+      process.stderr.write("Error: could not extract changelog entries within timeout\n");
       process.exit(1);
     }
 
