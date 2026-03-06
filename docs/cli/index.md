@@ -869,6 +869,8 @@ Options:
 - `--check` (exit 1=expired/missing, 2=expiring)
 - `--probe` (live probe of configured auth profiles)
 - `--probe-provider <name>`
+- `--probe-all-models`
+- `--probe-model <provider/model>` (repeat or comma-separated)
 - `--probe-profile <id>` (repeat or comma-separated)
 - `--probe-timeout <ms>`
 - `--probe-concurrency <n>`

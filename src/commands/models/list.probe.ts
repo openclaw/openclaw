@@ -81,6 +81,8 @@ export type AuthProbeSummary = {
   totalTargets: number;
   options: {
     provider?: string;
+    probeAllModels?: boolean;
+    probeModels?: string[];
     profileIds?: string[];
     timeoutMs: number;
     concurrency: number;
@@ -91,6 +93,8 @@ export type AuthProbeSummary = {
 
 export type AuthProbeOptions = {
   provider?: string;
+  probeAllModels?: boolean;
+  probeModels?: string[];
   profileIds?: string[];
   timeoutMs: number;
   concurrency: number;
@@ -137,21 +141,47 @@ function buildCandidateMap(modelCandidates: string[]): Map<string, string[]> {
   return map;
 }
 
-function selectProbeModel(params: {
+function buildExplicitProbeModelMap(probeModels: string[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const raw of probeModels) {
+    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
+    if (!parsed) {
+      continue;
+    }
+    const provider = normalizeProviderId(parsed.provider);
+    const list = map.get(provider) ?? [];
+    if (!list.includes(parsed.model)) {
+      list.push(parsed.model);
+    }
+    map.set(provider, list);
+  }
+  return map;
+}
+
+function selectProbeModels(params: {
   provider: string;
   candidates: Map<string, string[]>;
+  explicitProbeModels: Map<string, string[]>;
   catalog: Array<{ provider: string; id: string }>;
-}): { provider: string; model: string } | null {
-  const { provider, candidates, catalog } = params;
-  const direct = candidates.get(provider);
-  if (direct && direct.length > 0) {
-    return { provider, model: direct[0] };
+  probeAllModels: boolean;
+}): Array<{ provider: string; model: string }> {
+  const { provider, candidates, explicitProbeModels, catalog, probeAllModels } = params;
+  const explicit = explicitProbeModels.get(provider);
+  if (explicit && explicit.length > 0) {
+    return explicit.map((model) => ({ provider, model }));
+  }
+  const direct = candidates.get(provider) ?? [];
+  if (probeAllModels) {
+    return direct.map((model) => ({ provider, model }));
+  }
+  if (direct.length > 0) {
+    return [{ provider, model: direct[0] }];
   }
   const fromCatalog = catalog.find((entry) => entry.provider === provider);
   if (fromCatalog) {
-    return { provider: fromCatalog.provider, model: fromCatalog.id };
+    return [{ provider: fromCatalog.provider, model: fromCatalog.id }];
   }
-  return null;
+  return [];
 }
 
 function mapEligibilityReasonToProbeReasonCode(
@@ -252,6 +282,9 @@ export async function buildProbeTargets(params: {
   const refResolveCache: SecretRefResolveCache = {};
   const catalog = await loadModelCatalog({ config: cfg });
   const candidates = buildCandidateMap(modelCandidates);
+  const explicitProbeModels = buildExplicitProbeModelMap(options.probeModels ?? []);
+  const explicitProviderFilter =
+    explicitProbeModels.size > 0 ? new Set(explicitProbeModels.keys()) : null;
   const targets: AuthProbeTarget[] = [];
   const results: AuthProbeResult[] = [];
 
@@ -260,12 +293,18 @@ export async function buildProbeTargets(params: {
     if (providerFilterKey && providerKey !== providerFilterKey) {
       continue;
     }
+    if (explicitProviderFilter && !explicitProviderFilter.has(providerKey)) {
+      continue;
+    }
 
-    const model = selectProbeModel({
+    const models = selectProbeModels({
       provider: providerKey,
       candidates,
+      explicitProbeModels,
       catalog,
+      probeAllModels: options.probeAllModels === true,
     });
+    const firstModel = models[0];
 
     const profileIds = listProfilesForProvider(store, providerKey);
     const explicitOrder = (() => {
@@ -291,7 +330,7 @@ export async function buildProbeTargets(params: {
           results.push({
             provider: providerKey,
             profileId,
-            model: model ? `${model.provider}/${model.model}` : undefined,
+            model: firstModel ? `${firstModel.provider}/${firstModel.model}` : undefined,
             label,
             source: "profile",
             mode,
@@ -311,7 +350,7 @@ export async function buildProbeTargets(params: {
           const reasonCode = mapEligibilityReasonToProbeReasonCode(eligibility.reasonCode);
           results.push({
             provider: providerKey,
-            model: model ? `${model.provider}/${model.model}` : undefined,
+            model: firstModel ? `${firstModel.provider}/${firstModel.model}` : undefined,
             profileId,
             label,
             source: "profile",
@@ -330,7 +369,7 @@ export async function buildProbeTargets(params: {
         if (unresolvedRefIssue) {
           results.push({
             provider: providerKey,
-            model: model ? `${model.provider}/${model.model}` : undefined,
+            model: firstModel ? `${firstModel.provider}/${firstModel.model}` : undefined,
             profileId,
             label,
             source: "profile",
@@ -341,7 +380,7 @@ export async function buildProbeTargets(params: {
           });
           continue;
         }
-        if (!model) {
+        if (models.length === 0) {
           results.push({
             provider: providerKey,
             model: undefined,
@@ -355,14 +394,16 @@ export async function buildProbeTargets(params: {
           });
           continue;
         }
-        targets.push({
-          provider: providerKey,
-          model,
-          profileId,
-          label,
-          source: "profile",
-          mode,
-        });
+        for (const model of models) {
+          targets.push({
+            provider: providerKey,
+            model,
+            profileId,
+            label,
+            source: "profile",
+            mode,
+          });
+        }
       }
       continue;
     }
@@ -381,7 +422,7 @@ export async function buildProbeTargets(params: {
     const source = envKey ? "env" : "models.json";
     const mode = envKey?.source.includes("OAUTH_TOKEN") ? "oauth" : "api_key";
 
-    if (!model) {
+    if (models.length === 0) {
       results.push({
         provider: providerKey,
         model: undefined,
@@ -395,13 +436,15 @@ export async function buildProbeTargets(params: {
       continue;
     }
 
-    targets.push({
-      provider: providerKey,
-      model,
-      label,
-      source,
-      mode,
-    });
+    for (const model of models) {
+      targets.push({
+        provider: providerKey,
+        model,
+        label,
+        source,
+        mode,
+      });
+    }
   }
 
   return { targets, results };

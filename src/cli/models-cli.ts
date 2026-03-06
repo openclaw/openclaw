@@ -76,6 +76,16 @@ export function registerModelsCli(program: Command) {
     )
     .option("--probe", "Probe configured provider auth (live)", false)
     .option("--probe-provider <name>", "Only probe a single provider")
+    .option("--probe-all-models", "Probe all configured models in scope", false)
+    .option(
+      "--probe-model <provider/model>",
+      "Only probe specific model refs (repeat or comma-separated)",
+      (value, previous) => {
+        const next = Array.isArray(previous) ? previous : previous ? [previous] : [];
+        next.push(value);
+        return next;
+      },
+    )
     .option(
       "--probe-profile <id>",
       "Only probe specific auth profile ids (repeat or comma-separated)",
@@ -103,6 +113,8 @@ export function registerModelsCli(program: Command) {
             check: Boolean(opts.check),
             probe: Boolean(opts.probe),
             probeProvider: opts.probeProvider as string | undefined,
+            probeAllModels: Boolean(opts.probeAllModels),
+            probeModel: opts.probeModel as string | string[] | undefined,
             probeProfile: opts.probeProfile as string | string[] | undefined,
             probeTimeout: opts.probeTimeout as string | undefined,
             probeConcurrency: opts.probeConcurrency as string | undefined,

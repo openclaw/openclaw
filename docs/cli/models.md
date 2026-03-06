@@ -48,6 +48,8 @@ Options:
 - `--check` (exit 1=expired/missing, 2=expiring)
 - `--probe` (live probe of configured auth profiles)
 - `--probe-provider <name>` (probe one provider)
+- `--probe-all-models` (probe all configured models in scope)
+- `--probe-model <provider/model>` (repeat or comma-separated model refs)
 - `--probe-profile <id>` (repeat or comma-separated profile ids)
 - `--probe-timeout <ms>`
 - `--probe-concurrency <n>`

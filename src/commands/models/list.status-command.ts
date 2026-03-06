@@ -65,6 +65,8 @@ export async function modelsStatusCommand(
     check?: boolean;
     probe?: boolean;
     probeProvider?: string;
+    probeAllModels?: boolean;
+    probeModel?: string | string[];
     probeProfile?: string | string[];
     probeTimeout?: string;
     probeConcurrency?: string;
@@ -200,6 +202,42 @@ export async function modelsStatusCommand(
       .map((value) => value.trim())
       .filter(Boolean);
   })();
+  const probeModelValues = (() => {
+    if (!opts.probeModel) {
+      return [];
+    }
+    const raw = Array.isArray(opts.probeModel) ? opts.probeModel : [opts.probeModel];
+    return raw
+      .flatMap((value) => String(value ?? "").split(","))
+      .map((value) => value.trim())
+      .filter(Boolean);
+  })();
+  if (!opts.probe && (opts.probeAllModels || probeModelValues.length > 0)) {
+    throw new Error("--probe-all-models and --probe-model require --probe.");
+  }
+  if (opts.probeAllModels && probeModelValues.length > 0) {
+    throw new Error("Choose either --probe-all-models or --probe-model, not both.");
+  }
+  const probeModels = (() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of probeModelValues) {
+      if (!raw.includes("/")) {
+        throw new Error(`--probe-model requires provider/model, got "${raw}".`);
+      }
+      const parsed = parseModelRef(raw, DEFAULT_PROVIDER);
+      if (!parsed?.provider || !parsed.model) {
+        throw new Error(`Invalid --probe-model value: "${raw}".`);
+      }
+      const key = `${parsed.provider}/${parsed.model}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      out.push(key);
+    }
+    return out;
+  })();
   const probeTimeoutMs = opts.probeTimeout ? Number(opts.probeTimeout) : 8000;
   if (!Number.isFinite(probeTimeoutMs) || probeTimeoutMs <= 0) {
     throw new Error("--probe-timeout must be a positive number (ms).");
@@ -244,6 +282,8 @@ export async function modelsStatusCommand(
           modelCandidates,
           options: {
             provider: opts.probeProvider,
+            probeAllModels: Boolean(opts.probeAllModels),
+            probeModels,
             profileIds: probeProfileIds,
             timeoutMs: probeTimeoutMs,
             concurrency: probeConcurrency,

@@ -218,16 +218,27 @@ const routeModelsStatus: RouteSpec = {
     if (probeProfileValues === null) {
       return false;
     }
+    const probeModelValues = getFlagValues(argv, "--probe-model");
+    if (probeModelValues === null) {
+      return false;
+    }
     const probeProfile =
       probeProfileValues.length === 0
         ? undefined
         : probeProfileValues.length === 1
           ? probeProfileValues[0]
           : probeProfileValues;
+    const probeModel =
+      probeModelValues.length === 0
+        ? undefined
+        : probeModelValues.length === 1
+          ? probeModelValues[0]
+          : probeModelValues;
     const json = hasFlag(argv, "--json");
     const plain = hasFlag(argv, "--plain");
     const check = hasFlag(argv, "--check");
     const probe = hasFlag(argv, "--probe");
+    const probeAllModels = hasFlag(argv, "--probe-all-models");
     const { modelsStatusCommand } = await import("../../commands/models.js");
     await modelsStatusCommand(
       {
@@ -236,6 +247,8 @@ const routeModelsStatus: RouteSpec = {
         check,
         probe,
         probeProvider,
+        probeAllModels,
+        probeModel,
         probeProfile,
         probeTimeout,
         probeConcurrency,
