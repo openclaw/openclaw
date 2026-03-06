@@ -147,6 +147,14 @@ export function createSlackMessageHandler(params: {
         return;
       }
       if (seenMessageKey) {
+        if (last.opts.source === "app_mention") {
+          // If app_mention wins the race and dispatches first, drop the later message dispatch.
+          appMentionDispatchedKeys.set(seenMessageKey, Date.now() + APP_MENTION_RETRY_TTL_MS);
+        } else if (last.opts.source === "message" && appMentionDispatchedKeys.has(seenMessageKey)) {
+          appMentionDispatchedKeys.delete(seenMessageKey);
+          appMentionRetryKeys.delete(seenMessageKey);
+          return;
+        }
         appMentionRetryKeys.delete(seenMessageKey);
       }
       if (entries.length > 1) {
@@ -166,11 +174,17 @@ export function createSlackMessageHandler(params: {
   const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
   const pendingTopLevelDebounceKeys = new Map<string, Set<string>>();
   const appMentionRetryKeys = new Map<string, number>();
+  const appMentionDispatchedKeys = new Map<string, number>();
 
   const pruneAppMentionRetryKeys = (now: number) => {
     for (const [key, expiresAt] of appMentionRetryKeys) {
       if (expiresAt <= now) {
         appMentionRetryKeys.delete(key);
+      }
+    }
+    for (const [key, expiresAt] of appMentionDispatchedKeys) {
+      if (expiresAt <= now) {
+        appMentionDispatchedKeys.delete(key);
       }
     }
   };
