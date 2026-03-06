@@ -202,7 +202,12 @@ export function createEventHandlers(context: EventHandlerContext) {
             : ""
           : "";
 
-      const finalText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
+      const finalText = streamAssembler.finalize(
+        evt.runId,
+        evt.message,
+        state.showThinking,
+        evt.errorMessage,
+      );
       const suppressEmptyExternalPlaceholder =
         finalText === "(no output)" && !isLocalRunId?.(evt.runId);
       if (suppressEmptyExternalPlaceholder) {

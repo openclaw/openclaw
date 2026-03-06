@@ -142,6 +142,7 @@ export function sanitizeRenderableText(text: string): string {
 export function resolveFinalAssistantText(params: {
   finalText?: string | null;
   streamedText?: string | null;
+  errorMessage?: string | null;
 }) {
   const finalText = params.finalText ?? "";
   if (finalText.trim()) {
@@ -150,6 +151,10 @@ export function resolveFinalAssistantText(params: {
   const streamedText = params.streamedText ?? "";
   if (streamedText.trim()) {
     return streamedText;
+  }
+  const errorMessage = params.errorMessage ?? "";
+  if (errorMessage.trim()) {
+    return formatRawAssistantErrorForUi(errorMessage);
   }
   return "(no output)";
 }
