@@ -65,7 +65,9 @@ export async function runGatewayLoop(params: {
       const modeLabel =
         respawn.mode === "spawned"
           ? `spawned pid ${respawn.pid ?? "unknown"}`
-          : "supervisor restart";
+          : respawn.detail
+            ? `supervisor restart; ${respawn.detail}`
+            : "supervisor restart";
       gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
       exitProcess(0);
       return;

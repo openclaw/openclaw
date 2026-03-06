@@ -38,6 +38,17 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     if (process.platform === "darwin" && process.env.OPENCLAW_LAUNCHD_LABEL?.trim()) {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
+        // When launchctl kickstart times out (ETIMEDOUT), the command was still
+        // dispatched to launchd and the restart may be in-flight. Rather than
+        // falling back to an in-process restart (which leaves the gateway in a
+        // degraded state), exit cleanly so launchd's KeepAlive can start a
+        // fresh process. (#36822)
+        if (restart.detail?.includes("ETIMEDOUT")) {
+          return {
+            mode: "supervised",
+            detail: `launchctl kickstart timed out; trusting launchd KeepAlive to restart (${restart.detail})`,
+          };
+        }
         return {
           mode: "failed",
           detail: restart.detail ?? "launchctl kickstart failed",
