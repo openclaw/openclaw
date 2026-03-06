@@ -1,6 +1,61 @@
 import { describe, expect, it } from "vitest";
 import { createManagerHarness, FakeProvider } from "./manager.test-harness.js";
 
+describe("CallManager streaming initial message", () => {
+  it("skips initial message on answered when streaming is enabled", async () => {
+    const provider = new FakeProvider("twilio");
+    const { manager } = await createManagerHarness(
+      { streaming: { enabled: true } },
+      provider,
+    );
+
+    const { callId, success } = await manager.initiateCall("+15550000002", undefined, {
+      message: "Hello streamed",
+      mode: "conversation",
+    });
+    expect(success).toBe(true);
+
+    manager.processEvent({
+      id: "evt-stream-1",
+      type: "call.answered",
+      callId,
+      providerCallId: "call-uuid",
+      timestamp: Date.now(),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(provider.playTtsCalls).toHaveLength(0);
+  });
+
+  it("speaks initial message on answered when streaming is disabled", async () => {
+    const provider = new FakeProvider("twilio");
+    const { manager } = await createManagerHarness(
+      { streaming: { enabled: false } },
+      provider,
+    );
+
+    const { callId, success } = await manager.initiateCall("+15550000002", undefined, {
+      message: "Hello non-streamed",
+      mode: "notify",
+    });
+    expect(success).toBe(true);
+
+    manager.processEvent({
+      id: "evt-nostream-1",
+      type: "call.answered",
+      callId,
+      providerCallId: "call-uuid",
+      timestamp: Date.now(),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(provider.playTtsCalls).toHaveLength(1);
+    expect(provider.playTtsCalls[0]?.text).toBe("Hello non-streamed");
+  });
+});
+
 describe("CallManager notify and mapping", () => {
   it("upgrades providerCallId mapping when provider ID changes", async () => {
     const { manager } = await createManagerHarness();

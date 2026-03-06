@@ -270,6 +270,10 @@ export class CallManager {
   }
 
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
+    if (this.config.streaming?.enabled) {
+      return;
+    }
+
     const initialMessage =
       typeof call.metadata?.initialMessage === "string" ? call.metadata.initialMessage.trim() : "";
 
