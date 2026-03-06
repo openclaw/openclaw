@@ -73,7 +73,7 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
  * uncaught exception, crashing the gateway. It is transient — undici will re-establish
  * the connection on the next request without session resumption.
  */
-function isUndiciTlsSessionResumeError(err: unknown): boolean {
+export function isUndiciTlsSessionResumeError(err: unknown): boolean {
   if (!(err instanceof TypeError)) {
     return false;
   }

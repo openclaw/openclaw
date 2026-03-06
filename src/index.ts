@@ -30,7 +30,7 @@ import {
 import { assertSupportedRuntime } from "./infra/runtime-guard.js";
 import {
   installUnhandledRejectionHandler,
-  isTransientNetworkError,
+  isUndiciTlsSessionResumeError,
 } from "./infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "./logging.js";
 import { runCommandWithTimeout, runExec } from "./process/exec.js";
@@ -85,9 +85,13 @@ if (isMain) {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
-    if (isTransientNetworkError(error)) {
+    // Suppress only the specific undici TLS session resumption crash — a transient
+    // Node.js/undici race when a cached TLS session becomes invalid on reconnect.
+    // Using the narrow guard (not isTransientNetworkError) so we don't accidentally
+    // suppress real uncaught exceptions that happen to carry network-error markers.
+    if (isUndiciTlsSessionResumeError(error)) {
       console.warn(
-        "[openclaw] Non-fatal uncaught exception (continuing):",
+        "[openclaw] Non-fatal uncaught exception (TLS session resume, continuing):",
         formatUncaughtError(error),
       );
       return;

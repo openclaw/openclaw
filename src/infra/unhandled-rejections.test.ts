@@ -190,7 +190,7 @@ describe("isTransientNetworkError — undici TLS session resumption", () => {
 
   it("returns false for TypeError with setSession message but no TLS stack at all", () => {
     const error = new TypeError("Cannot read properties of null (reading 'setSession')");
-    // No stack set — stack won't contain TLS/undici markers
+    // Stack is set but contains only the error header — no TLS or undici frames present
     error.stack = "TypeError: Cannot read properties of null (reading 'setSession')";
     expect(isTransientNetworkError(error)).toBe(false);
   });
