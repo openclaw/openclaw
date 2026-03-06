@@ -10,46 +10,6 @@ import {
 
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 const OPENAI_RESPONSES_WRITE_SCOPE = "api.responses.write";
-const OPENAI_REQUIRED_OAUTH_SCOPES = [
-  OPENAI_RESPONSES_WRITE_SCOPE,
-  "model.request",
-  "api.model.read",
-] as const;
-
-function augmentOpenAIOAuthScopes(authUrl: string): string {
-  try {
-    const parsed = new URL(authUrl);
-    const scopeParam = parsed.searchParams.get("scope");
-    if (!scopeParam) {
-      return authUrl;
-    }
-    const scopes = scopeParam
-      .split(/\s+/)
-      .map((scope) => scope.trim())
-      .filter(Boolean);
-    if (scopes.length === 0) {
-      return authUrl;
-    }
-    const seen = new Set(scopes.map((scope) => scope.toLowerCase()));
-    let changed = false;
-    for (const requiredScope of OPENAI_REQUIRED_OAUTH_SCOPES) {
-      const normalized = requiredScope.toLowerCase();
-      if (seen.has(normalized)) {
-        continue;
-      }
-      scopes.push(requiredScope);
-      seen.add(normalized);
-      changed = true;
-    }
-    if (!changed) {
-      return authUrl;
-    }
-    parsed.searchParams.set("scope", scopes.join(" "));
-    return parsed.toString();
-  } catch {
-    return authUrl;
-  }
-}
 
 function extractResponsesScopeErrorMessage(status: number, bodyText: string): string | null {
   if (status !== 401) {
@@ -124,15 +84,9 @@ export async function loginOpenAICodexOAuth(params: {
       openUrl,
       localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser…",
     });
-    const onAuth = async (event: { url: string }) => {
-      await baseOnAuth({
-        ...event,
-        url: augmentOpenAIOAuthScopes(event.url),
-      });
-    };
 
     const creds = await loginOpenAICodex({
-      onAuth,
+      onAuth: baseOnAuth,
       onPrompt,
       onProgress: (msg) => spin.update(msg),
     });
