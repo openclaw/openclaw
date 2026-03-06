@@ -9,7 +9,7 @@ import {
   shouldLogSubsystemToConsole,
 } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
-import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
+import { getChildLogger, getLogger, isFileLogLevelEnabled } from "./logger.js";
 import { loggingState } from "./state.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -275,9 +275,16 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
+  let fileLoggerKey: string | null = null;
   const getFileLogger = () => {
-    if (!fileLogger) {
+    // getLogger() rebuilds when logging settings change (including daily rolling file).
+    // Ensure our per-subsystem child logger is re-created when the root logger changes,
+    // otherwise long-running processes keep writing to the previous day's file.
+    const root = getLogger();
+    const nextKey = String((root as unknown as { settings?: unknown }).settings ?? root);
+    if (!fileLogger || fileLoggerKey !== nextKey) {
       fileLogger = getChildLogger({ subsystem });
+      fileLoggerKey = nextKey;
     }
     return fileLogger;
   };
