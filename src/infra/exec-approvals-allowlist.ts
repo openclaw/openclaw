@@ -382,8 +382,13 @@ function collectAllowAlwaysPatterns(params: {
   }
   const inlineCommand = extractShellWrapperInlineCommand(params.segment.argv);
   if (!inlineCommand) {
-    // Shell invoked without -c: treat as direct executable (e.g., bash script.sh)
-    params.out.add(candidatePath);
+    // Shell invoked without -c. Check if argv[1] is a script file (not a flag/interactive).
+    const argv1 = params.segment.argv[1]?.trim();
+    if (argv1 && !argv1.startsWith("-") && (argv1.includes("/") || argv1.includes("\\"))) {
+      // argv[1] is a script path → resolve it as a standalone executable
+      recurseWithArgv([argv1]);
+    }
+    // Otherwise: stdin/interactive mode (e.g., "bash -s" / "bash") → fail-closed (no allowlist)
     return;
   }
   const nested = analyzeShellCommand({
