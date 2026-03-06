@@ -69,13 +69,13 @@ describe("failover-error", () => {
     // Keep the status-only path behavior-preserving and conservative.
     expect(resolveFailoverReasonFromError({ status: 500 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ status: 503 })).toBe("overloaded");
     expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 521 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 522 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
-    expect(resolveFailoverReasonFromError({ status: 529 })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
   });
 
   it("classifies documented provider error shapes at the error boundary", () => {
@@ -90,7 +90,7 @@ describe("failover-error", () => {
         status: 529,
         message: ANTHROPIC_OVERLOADED_PAYLOAD,
       }),
-    ).toBe("rate_limit");
+    ).toBe("overloaded");
     expect(
       resolveFailoverReasonFromError({
         status: 429,
@@ -114,7 +114,7 @@ describe("failover-error", () => {
         status: 503,
         message: BEDROCK_SERVICE_UNAVAILABLE_MESSAGE,
       }),
-    ).toBe("timeout");
+    ).toBe("overloaded");
     expect(
       resolveFailoverReasonFromError({
         status: 429,
@@ -126,7 +126,7 @@ describe("failover-error", () => {
         status: 503,
         message: GROQ_SERVICE_UNAVAILABLE_MESSAGE,
       }),
-    ).toBe("timeout");
+    ).toBe("overloaded");
   });
 
   it("treats 400 insufficient_quota payloads as billing instead of format", () => {
@@ -149,6 +149,14 @@ describe("failover-error", () => {
         message: "LLM error: monthly limit reached",
       }),
     ).toBe("rate_limit");
+  });
+
+  it("treats overloaded provider payloads as overloaded", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: ANTHROPIC_OVERLOADED_PAYLOAD,
+      }),
+    ).toBe("overloaded");
   });
 
   it("keeps raw-text 402 weekly/monthly limit errors in billing", () => {
@@ -219,6 +227,10 @@ describe("failover-error", () => {
     expect(err?.status).toBe(402);
     expect(err?.provider).toBe("anthropic");
     expect(err?.model).toBe("claude-opus-4-5");
+  });
+
+  it("maps overloaded to a 503 fallback status", () => {
+    expect(resolveFailoverStatus("overloaded")).toBe(503);
   });
 
   it("coerces format errors with a 400 status", () => {
