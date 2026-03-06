@@ -343,6 +343,8 @@ describe("config paths", () => {
     ]);
     expect(parseConfigPath("foo[bar].baz").path).toEqual(["foo", "bar", "baz"]);
     expect(parseConfigPath('foo[" bar "]').path).toEqual(["foo", " bar "]);
+    expect(parseConfigPath("agents.list[0].id").path).toEqual(["agents", "list", 0, "id"]);
+    expect(parseConfigPath("agents.list[10].name").path).toEqual(["agents", "list", 10, "name"]);
   });
 
   it("rejects invalid path formats", () => {
@@ -362,6 +364,19 @@ describe("config paths", () => {
     }
     setConfigValueAtPath(root, parsed.path, 123);
     expect(getConfigValueAtPath(root, parsed.path)).toBe(123);
+    expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
+    expect(getConfigValueAtPath(root, parsed.path)).toBeUndefined();
+  });
+
+  it("supports numeric path segments for array traversal", () => {
+    const root: Record<string, unknown> = {};
+    const parsed = parseConfigPath("agents.list[0].id");
+    if (!parsed.ok || !parsed.path) {
+      throw new Error("path parse failed");
+    }
+
+    setConfigValueAtPath(root, parsed.path, "agent-1");
+    expect(getConfigValueAtPath(root, parsed.path)).toBe("agent-1");
     expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
     expect(getConfigValueAtPath(root, parsed.path)).toBeUndefined();
   });

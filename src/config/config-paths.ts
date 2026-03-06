@@ -2,10 +2,57 @@ import { isPlainObject } from "../utils.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 
 type PathNode = Record<string, unknown>;
+type PathSegment = string | number;
+type Path = PathSegment[];
+type PathContainer = PathNode | unknown[];
+
+function isPathContainer(value: unknown): value is PathContainer {
+  return isPlainObject(value) || Array.isArray(value);
+}
+
+function getAt(container: PathContainer, key: PathSegment): unknown {
+  if (Array.isArray(container) && typeof key === "number") {
+    return container[key];
+  }
+  return (container as PathNode)[String(key)];
+}
+
+function setAt(container: PathContainer, key: PathSegment, value: unknown): void {
+  if (Array.isArray(container) && typeof key === "number") {
+    container[key] = value;
+    return;
+  }
+  (container as PathNode)[String(key)] = value;
+}
+
+function hasAt(container: PathContainer, key: PathSegment): boolean {
+  if (Array.isArray(container) && typeof key === "number") {
+    return key in container;
+  }
+  return String(key) in (container as PathNode);
+}
+
+function deleteAt(container: PathContainer, key: PathSegment): void {
+  if (Array.isArray(container) && typeof key === "number") {
+    container.splice(key, 1);
+    return;
+  }
+  delete (container as PathNode)[String(key)];
+}
+
+function isEmptyContainer(value: unknown): boolean {
+  if (isPlainObject(value)) {
+    return Object.keys(value).length === 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length === 0;
+  }
+  return false;
+}
 
 export function parseConfigPath(raw: string): {
   ok: boolean;
-  path?: string[];
+  path?: Path;
   error?: string;
 } {
   const trimmed = raw.trim();
@@ -16,7 +63,7 @@ export function parseConfigPath(raw: string): {
     };
   }
 
-  const parts: string[] = [];
+  const parts: Path = [];
   let currentSegment = "";
   let state: "bare" | "bracket_unquoted" | "bracket_single" | "bracket_double" = "bare";
 
@@ -72,7 +119,12 @@ export function parseConfigPath(raw: string): {
       }
     } else if (state === "bracket_unquoted") {
       if (char === "]") {
-        parts.push(currentSegment.trim());
+        const bracketSegment = currentSegment.trim();
+        if (/^\d+$/.test(bracketSegment)) {
+          parts.push(Number.parseInt(bracketSegment, 10));
+        } else {
+          parts.push(bracketSegment);
+        }
         currentSegment = "";
         state = "bare";
       } else {
@@ -98,68 +150,92 @@ export function parseConfigPath(raw: string): {
     };
   }
 
-  if (parts.some((part) => !part)) {
+  if (parts.some((part) => part === "")) {
     return {
       ok: false,
       error: "Invalid path. Use dot notation (e.g. foo.bar).",
     };
   }
 
-  if (parts.some((part) => isBlockedObjectKey(part))) {
+  if (parts.some((part) => typeof part === "string" && isBlockedObjectKey(part))) {
     return { ok: false, error: "Invalid path segment." };
   }
+
   return { ok: true, path: parts };
 }
 
-export function setConfigValueAtPath(root: PathNode, path: string[], value: unknown): void {
-  let cursor: PathNode = root;
+export function setConfigValueAtPath(root: PathNode, path: Path, value: unknown): void {
+  if (path.length === 0) {
+    return;
+  }
+
+  let cursor: PathContainer = root;
   for (let idx = 0; idx < path.length - 1; idx += 1) {
     const key = path[idx];
-    const next = cursor[key];
-    if (!isPlainObject(next)) {
-      cursor[key] = {};
+    const next = getAt(cursor, key);
+
+    if (!isPathContainer(next)) {
+      const replacement: PathContainer = typeof path[idx + 1] === "number" ? [] : {};
+      setAt(cursor, key, replacement);
+      cursor = replacement;
+      continue;
     }
-    cursor = cursor[key] as PathNode;
+
+    cursor = next;
   }
-  cursor[path[path.length - 1]] = value;
+
+  setAt(cursor, path[path.length - 1], value);
 }
 
-export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean {
-  const stack: Array<{ node: PathNode; key: string }> = [];
-  let cursor: PathNode = root;
+export function unsetConfigValueAtPath(root: PathNode, path: Path): boolean {
+  if (path.length === 0) {
+    return false;
+  }
+
+  const stack: Array<{ node: PathContainer; key: PathSegment }> = [];
+  let cursor: PathContainer = root;
+
   for (let idx = 0; idx < path.length - 1; idx += 1) {
     const key = path[idx];
-    const next = cursor[key];
-    if (!isPlainObject(next)) {
+    const next = getAt(cursor, key);
+    if (!isPathContainer(next)) {
       return false;
     }
+
     stack.push({ node: cursor, key });
     cursor = next;
   }
+
   const leafKey = path[path.length - 1];
-  if (!(leafKey in cursor)) {
+  if (!hasAt(cursor, leafKey)) {
     return false;
   }
-  delete cursor[leafKey];
+
+  deleteAt(cursor, leafKey);
+
   for (let idx = stack.length - 1; idx >= 0; idx -= 1) {
     const { node, key } = stack[idx];
-    const child = node[key];
-    if (isPlainObject(child) && Object.keys(child).length === 0) {
-      delete node[key];
+    const child = getAt(node, key);
+
+    if (isEmptyContainer(child)) {
+      deleteAt(node, key);
     } else {
       break;
     }
   }
+
   return true;
 }
 
-export function getConfigValueAtPath(root: PathNode, path: string[]): unknown {
+export function getConfigValueAtPath(root: PathNode, path: Path): unknown {
   let cursor: unknown = root;
+
   for (const key of path) {
-    if (!isPlainObject(cursor)) {
+    if (!isPathContainer(cursor)) {
       return undefined;
     }
-    cursor = cursor[key];
+    cursor = getAt(cursor, key);
   }
+
   return cursor;
 }
