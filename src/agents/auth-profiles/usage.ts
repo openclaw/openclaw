@@ -9,6 +9,7 @@ const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "billing",
   "format",
   "model_not_found",
+  "overloaded",
   "timeout",
   "rate_limit",
   "unknown",

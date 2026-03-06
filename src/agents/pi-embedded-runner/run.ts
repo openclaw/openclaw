@@ -660,21 +660,21 @@ export async function runEmbeddedPiAgent(
               profileIds: autoProfileCandidates,
             }) ?? "rate_limit")
           : null;
-        const allowRateLimitCooldownProbe =
-          params.allowRateLimitCooldownProbe === true &&
+        const allowTransientCooldownProbe =
+          params.allowTransientCooldownProbe === true &&
           allAutoProfilesInCooldown &&
-          unavailableReason === "rate_limit";
-        let didRateLimitCooldownProbe = false;
+          (unavailableReason === "rate_limit" || unavailableReason === "overloaded");
+        let didTransientCooldownProbe = false;
 
         while (profileIndex < profileCandidates.length) {
           const candidate = profileCandidates[profileIndex];
           const inCooldown =
             candidate && candidate !== lockedProfileId && isProfileInCooldown(authStore, candidate);
           if (inCooldown) {
-            if (allowRateLimitCooldownProbe && !didRateLimitCooldownProbe) {
-              didRateLimitCooldownProbe = true;
+            if (allowTransientCooldownProbe && !didTransientCooldownProbe) {
+              didTransientCooldownProbe = true;
               log.warn(
-                `probing cooldowned auth profile for ${provider}/${modelId} due to rate_limit unavailability`,
+                `probing cooldowned auth profile for ${provider}/${modelId} due to ${unavailableReason ?? "transient"} unavailability`,
               );
             } else {
               profileIndex += 1;
@@ -1423,7 +1423,6 @@ export async function runEmbeddedPiAgent(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
           if (lastProfileId) {
-            overloadFailoverAttempts = 0;
             await markAuthProfileGood({
               store: authStore,
               provider,
