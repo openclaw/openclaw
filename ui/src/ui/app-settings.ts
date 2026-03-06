@@ -227,7 +227,7 @@ export async function refreshActiveTab(host: SettingsHost) {
   }
   if (host.tab === "debug") {
     await loadDebug(host as unknown as OpenClawApp);
-    host.eventLog = host.eventLogBuffer;
+    host.eventLog = [...host.eventLogBuffer];
   }
   if (host.tab === "logs") {
     host.logsAtBottom = true;
