@@ -283,6 +283,7 @@ describe("resolveModel", () => {
           openai: {
             baseUrl: "https://proxy.example.com/v1",
             api: "openai-responses",
+            models: [],
           },
         },
       },
