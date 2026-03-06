@@ -39,8 +39,13 @@ import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
-import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { parseTelegramTarget } from "../telegram/targets.js";
 import { escapeRegExp } from "../utils.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
@@ -478,18 +483,49 @@ type HeartbeatReasonFlags = {
 
 function shouldCarryEventSessionThreadId(heartbeat?: HeartbeatConfig): boolean {
   const target = typeof heartbeat?.target === "string" ? heartbeat.target.trim().toLowerCase() : "";
-  // Keep topic/thread routing for event-driven Telegram delivery when target
-  // remains session-derived (`last`) or explicitly Telegram without an explicit
-  // destination override. Explicit cross-channel or explicit destination routes
-  // should not inherit source thread IDs.
   if (target.length === 0 || target === "last") {
     return true;
   }
-  if (target === "telegram") {
-    const explicitTo = typeof heartbeat?.to === "string" ? heartbeat.to.trim() : "";
-    return explicitTo.length === 0;
-  }
   return false;
+}
+
+function resolveTelegramGroupChatIdFromSessionKey(sessionKey: string): string | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return undefined;
+  }
+  const parts = parsed.rest.split(":");
+  if (parts[0] !== "telegram" || parts[1] !== "group") {
+    return undefined;
+  }
+  const chatId = parts[2]?.trim();
+  return chatId || undefined;
+}
+
+function shouldCarryEventThreadForTelegramTarget(params: {
+  heartbeat?: HeartbeatConfig;
+  sessionKey: string;
+}): boolean {
+  const target =
+    typeof params.heartbeat?.target === "string"
+      ? params.heartbeat.target.trim().toLowerCase()
+      : "";
+  if (target !== "telegram") {
+    return false;
+  }
+  const explicitTo = typeof params.heartbeat?.to === "string" ? params.heartbeat.to.trim() : "";
+  if (!explicitTo) {
+    return true;
+  }
+  const parsedExplicit = parseTelegramTarget(explicitTo);
+  if (parsedExplicit.messageThreadId != null) {
+    return false;
+  }
+  const sourceChatId = resolveTelegramGroupChatIdFromSessionKey(params.sessionKey);
+  if (!sourceChatId) {
+    return false;
+  }
+  return parsedExplicit.chatId.trim() === sourceChatId;
 }
 
 type HeartbeatSkipReason = "empty-heartbeat-file";
@@ -677,7 +713,9 @@ export async function runHeartbeatOnce(opts: {
   const { entry, sessionKey, storePath } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
   const explicitThreadId =
-    isEventDrivenReason && shouldCarryEventSessionThreadId(heartbeat)
+    isEventDrivenReason &&
+    (shouldCarryEventSessionThreadId(heartbeat) ||
+      shouldCarryEventThreadForTelegramTarget({ heartbeat, sessionKey }))
       ? parseSessionThreadInfo(sessionKey).threadId
       : undefined;
   const delivery = resolveHeartbeatDeliveryTarget({

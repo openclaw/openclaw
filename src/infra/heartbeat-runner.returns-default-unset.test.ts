@@ -674,6 +674,72 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("preserves topic thread context when explicit telegram target matches source chat", async () => {
+    const tmpDir = await createCaseDir("hb-exec-event-topic-thread-target-telegram-explicit");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-1003841603622:topic:99";
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { target: "telegram", to: "-1003841603622" },
+        },
+      },
+      channels: {
+        telegram: {
+          allowFrom: ["-1003841603622"],
+        },
+      },
+      session: { store: storePath },
+    };
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-1003841603622",
+        },
+      }),
+    );
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Processed exec follow-up" });
+    const sendWhatsApp = vi
+      .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+      .mockResolvedValue({ messageId: "m-wa", toJid: "jid" });
+    const sendTelegram = vi
+      .fn<NonNullable<HeartbeatDeps["sendTelegram"]>>()
+      .mockResolvedValue({ messageId: "m-tg", chatId: "-1003841603622" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        sessionKey,
+        deps: {
+          ...createHeartbeatDeps(sendWhatsApp),
+          sendTelegram,
+        },
+      });
+      expect(res.status).toBe("ran");
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as {
+        Provider?: string;
+        MessageThreadId?: string | number;
+      };
+      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.MessageThreadId).toBe("99");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
   it("does not carry source thread context to explicit cross-channel heartbeat targets", async () => {
     const tmpDir = await createCaseDir("hb-exec-event-cross-channel-thread");
     const storePath = path.join(tmpDir, "sessions.json");
