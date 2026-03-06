@@ -133,6 +133,7 @@ export type AppViewState = {
   agentAddSubmitting: boolean;
   agentAddError: string | null;
   agentAddName: string;
+  agentAddWorkspace: string;
   agentAddCopyAuth: boolean;
   agentAddProvider: string;
   agentAddAuthMethod: string;
@@ -157,6 +158,10 @@ export type AppViewState = {
   agentSkillsError: string | null;
   agentSkillsReport: SkillStatusReport | null;
   agentSkillsAgentId: string | null;
+  agentDeleteBusy: boolean;
+  agentDeleteError: string | null;
+  agentDeleteConfirmOpen: boolean;
+  agentDeleteConfirmInput: string;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;

@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -49,6 +50,7 @@ export type AgentAddState = {
   submitting: boolean;
   error: string | null;
   name: string;
+  workspace: string;
   copyAuth: boolean;
   provider: string;
   authMethod: string;
@@ -59,6 +61,7 @@ export type AgentAddState = {
 
 export type AgentAddModalProps = {
   agentAdd: AgentAddState;
+  stateDir: string | null;
   onAddAgentClose: () => void;
   onAddAgentFieldChange: (field: keyof AgentAddState, value: unknown) => void;
   onAddAgentSubmit: () => void;
@@ -126,6 +129,14 @@ export type AgentsProps = {
   onAgentSkillToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   onAgentSkillsClear: (agentId: string) => void;
   onAgentSkillsDisableAll: (agentId: string) => void;
+  agentDeleteConfirmOpen: boolean;
+  agentDeleteConfirmInput: string;
+  agentDeleteBusy: boolean;
+  agentDeleteError: string | null;
+  onDeleteConfirmOpen: (agentId: string) => void;
+  onDeleteConfirmClose: () => void;
+  onDeleteConfirmInputChange: (value: string) => void;
+  onDeleteConfirm: (agentId: string) => void;
 };
 
 export type AgentContext = {
@@ -225,6 +236,14 @@ export function renderAgents(props: AgentsProps) {
                         onConfigSave: props.onConfigSave,
                         onModelChange: props.onModelChange,
                         onModelFallbacksChange: props.onModelFallbacksChange,
+                        agentDeleteConfirmOpen: props.agentDeleteConfirmOpen,
+                        agentDeleteConfirmInput: props.agentDeleteConfirmInput,
+                        agentDeleteBusy: props.agentDeleteBusy,
+                        agentDeleteError: props.agentDeleteError,
+                        onDeleteConfirmOpen: props.onDeleteConfirmOpen,
+                        onDeleteConfirmClose: props.onDeleteConfirmClose,
+                        onDeleteConfirmInputChange: props.onDeleteConfirmInputChange,
+                        onDeleteConfirm: props.onDeleteConfirm,
                       })
                     : nothing
                 }
@@ -339,6 +358,16 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
   const selectedMethod = selectedProvider?.methods.find((m) => m.id === s.authMethod) ?? null;
   const needsApiKey = Boolean(s.authMethod) && !s.useEnvVar;
   const hasEnvVar = Boolean(selectedMethod?.envVarMasked);
+  const normalizedName = s.name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  const base = props.stateDir ?? "~/.openclaw";
+  const workspacePlaceholder = normalizedName
+    ? `${base}/workspace-${normalizedName}`
+    : `${base}/workspace-<name>`;
 
   return html`
     <div
@@ -353,7 +382,7 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
     >
       <div class="agent-add-card">
         <div class="agent-add-header">
-          <div class="agent-add-title">Add Agent</div>
+          <div class="agent-add-title">${t("agents.add.title")}</div>
           <button class="agent-add-close" type="button" @click=${props.onAddAgentClose}>✕</button>
         </div>
 
@@ -362,14 +391,27 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
         <div class="agent-add-body">
           <!-- Name -->
           <label class="field">
-            <span>Agent name <span style="color: var(--danger);">*</span></span>
+            <span>${t("agents.add.nameLabel")} <span style="color: var(--danger);">*</span></span>
             <input
               .value=${s.name}
-              placeholder="e.g. research"
+              placeholder=${t("agents.add.namePlaceholder")}
               ?disabled=${s.submitting}
               @input=${(e: Event) =>
                 props.onAddAgentFieldChange("name", (e.target as HTMLInputElement).value)}
             />
+          </label>
+
+          <!-- Workspace path -->
+          <label class="field">
+            <span>${t("agents.add.workspaceLabel")}</span>
+            <input
+              .value=${s.workspace}
+              placeholder=${workspacePlaceholder}
+              ?disabled=${s.submitting}
+              @input=${(e: Event) =>
+                props.onAddAgentFieldChange("workspace", (e.target as HTMLInputElement).value)}
+            />
+            <span class="muted" style="font-size: 12px; margin-top: 2px;">${t("agents.add.workspaceHint")}</span>
           </label>
 
           <!-- Copy auth from main -->
@@ -381,19 +423,19 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
               @change=${(e: Event) =>
                 props.onAddAgentFieldChange("copyAuth", (e.target as HTMLInputElement).checked)}
             />
-            <span>Copy auth profiles from "main"</span>
+            <span>${t("agents.add.copyAuth")}</span>
           </label>
 
           <!-- Optional: Model / Auth provider -->
-          <div class="agent-add-section-label">Model / Auth provider <span class="muted">(optional)</span></div>
+          <div class="agent-add-section-label">${t("agents.add.authSection")} <span class="muted">${t("agents.add.authSectionOptional")}</span></div>
           ${
             !s.providers
               ? html`
-                  <div class="muted" style="font-size: 13px">Loading providers…</div>
+                  <div class="muted" style="font-size: 13px">${t("agents.add.loadingProviders")}</div>
                 `
               : html`
                   <label class="field">
-                    <span>Provider</span>
+                    <span>${t("agents.add.providerLabel")}</span>
                     <select
                       .value=${s.provider}
                       ?disabled=${s.submitting}
@@ -402,7 +444,7 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
                         props.onAddAgentFieldChange("provider", val);
                       }}
                     >
-                      <option value="">— Skip —</option>
+                      <option value="">${t("agents.add.providerSkip")}</option>
                       ${s.providers.map(
                         (p) =>
                           html`<option value=${p.id}>${p.label}${p.hint ? ` — ${p.hint}` : ""}</option>`,
@@ -413,7 +455,7 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
                     selectedProvider && selectedProvider.methods.length > 1
                       ? html`
                           <label class="field">
-                            <span>${selectedProvider.label} auth method</span>
+                            <span>${t("agents.add.authMethodLabel").replace("{provider}", selectedProvider.label)}</span>
                             <select
                               .value=${s.authMethod}
                               ?disabled=${s.submitting}
@@ -424,7 +466,7 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
                                 props.onAddAgentFieldChange("useEnvVar", false);
                               }}
                             >
-                              <option value="">— Select —</option>
+                              <option value="">${t("agents.add.authMethodSelect")}</option>
                               ${selectedProvider.methods.map(
                                 (m) => html`<option value=${m.id}>${m.label}</option>`,
                               )}
@@ -436,7 +478,7 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
                   ${
                     s.authMethod
                       ? html`
-                          <div class="agent-add-section-label">How do you want to provide the API key?</div>
+                          <div class="agent-add-section-label">${t("agents.add.apiKeySection")}</div>
                           ${
                             hasEnvVar
                               ? html`
@@ -456,7 +498,7 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
                                       }}
                                     />
                                     <span>
-                                      Use existing env var
+                                      ${t("agents.add.useEnvVar")}
                                       (<span class="mono">${selectedMethod?.envVar}</span>:
                                       <span class="mono">${selectedMethod?.envVarMasked}</span>)
                                     </span>
@@ -468,7 +510,7 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
                             needsApiKey
                               ? html`
                                   <label class="field">
-                                    <span>Paste API key now</span>
+                                    <span>${t("agents.add.pasteApiKey")}</span>
                                     <input
                                       type="password"
                                       .value=${s.apiKey}
@@ -493,7 +535,7 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
 
         <div class="agent-add-footer">
           <button class="btn btn--sm" type="button" ?disabled=${s.submitting} @click=${props.onAddAgentClose}>
-            Cancel
+            ${t("agents.add.cancel")}
           </button>
           <button
             class="btn btn--sm primary"
@@ -501,7 +543,7 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
             ?disabled=${s.submitting || !s.name.trim()}
             @click=${props.onAddAgentSubmit}
           >
-            ${s.submitting ? "Creating…" : "Create Agent"}
+            ${s.submitting ? t("agents.add.creating") : t("agents.add.submit")}
           </button>
         </div>
       </div>
@@ -576,6 +618,14 @@ function renderAgentOverview(params: {
   onConfigSave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
+  agentDeleteConfirmOpen: boolean;
+  agentDeleteConfirmInput: string;
+  agentDeleteBusy: boolean;
+  agentDeleteError: string | null;
+  onDeleteConfirmOpen: (agentId: string) => void;
+  onDeleteConfirmClose: () => void;
+  onDeleteConfirmInputChange: (value: string) => void;
+  onDeleteConfirm: (agentId: string) => void;
 }) {
   const {
     agent,
@@ -591,6 +641,14 @@ function renderAgentOverview(params: {
     onConfigSave,
     onModelChange,
     onModelFallbacksChange,
+    agentDeleteConfirmOpen,
+    agentDeleteConfirmInput,
+    agentDeleteBusy,
+    agentDeleteError,
+    onDeleteConfirmOpen,
+    onDeleteConfirmClose,
+    onDeleteConfirmInputChange,
+    onDeleteConfirm,
   } = params;
   const config = resolveAgentConfig(configForm, agent.id);
   const workspaceFromFiles =
@@ -628,11 +686,29 @@ function renderAgentOverview(params: {
       ? "Unavailable"
       : "";
   const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
+  const displayName = normalizeAgentLabel(agent);
+  const deleteInputMatches = agentDeleteConfirmInput.trim() === displayName;
 
   return html`
     <section class="card">
-      <div class="card-title">Overview</div>
-      <div class="card-sub">Workspace paths and identity metadata.</div>
+      <div class="row" style="justify-content: space-between; align-items: flex-start;">
+        <div>
+          <div class="card-title">Overview</div>
+          <div class="card-sub">Workspace paths and identity metadata.</div>
+        </div>
+        ${
+          !isDefault
+            ? html`
+                <button
+                  class="btn btn--sm danger"
+                  @click=${() => onDeleteConfirmOpen(agent.id)}
+                >
+                  ${t("agents.delete.button")}
+                </button>
+              `
+            : nothing
+        }
+      </div>
       <div class="agents-overview-grid" style="margin-top: 16px;">
         <div class="agent-kv">
           <div class="label">Workspace</div>
@@ -711,6 +787,51 @@ function renderAgentOverview(params: {
           </button>
         </div>
       </div>
+
+      ${
+        agentDeleteConfirmOpen
+          ? html`
+              <div class="agent-delete-overlay" role="dialog" aria-live="polite">
+                <div class="agent-delete-card">
+                  <div class="agent-delete-title">${t("agents.delete.title")}</div>
+                  <div class="agent-delete-warning">${t("agents.delete.warning")}</div>
+                  ${
+                    agentDeleteError
+                      ? html`<div class="callout danger" style="margin-top: 12px;">${agentDeleteError}</div>`
+                      : nothing
+                  }
+                  <label class="field" style="margin-top: 16px;">
+                    <span>${t("agents.delete.confirmLabel").replace("{name}", displayName)}</span>
+                    <input
+                      type="text"
+                      .value=${agentDeleteConfirmInput}
+                      placeholder=${displayName}
+                      ?disabled=${agentDeleteBusy}
+                      @input=${(e: Event) =>
+                        onDeleteConfirmInputChange((e.target as HTMLInputElement).value)}
+                    />
+                  </label>
+                  <div class="agent-delete-actions">
+                    <button
+                      class="btn"
+                      ?disabled=${agentDeleteBusy}
+                      @click=${onDeleteConfirmClose}
+                    >
+                      ${t("agents.delete.cancel")}
+                    </button>
+                    <button
+                      class="btn danger"
+                      ?disabled=${!deleteInputMatches || agentDeleteBusy}
+                      @click=${() => onDeleteConfirm(agent.id)}
+                    >
+                      ${agentDeleteBusy ? t("agents.delete.deleting") : t("agents.delete.confirm")}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            `
+          : nothing
+      }
     </section>
   `;
 }

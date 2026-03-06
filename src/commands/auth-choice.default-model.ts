@@ -20,9 +20,8 @@ export async function applyDefaultModelChoice(params: {
     return { config: next };
   }
 
-  const next = params.applyProviderConfig(params.config);
   const nextWithModel = ensureModelAllowlistEntry({
-    cfg: next,
+    cfg: params.config,
     modelRef: params.defaultModel,
   });
   await params.noteAgentModel(params.defaultModel);

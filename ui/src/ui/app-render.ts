@@ -8,7 +8,7 @@ import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
+import { deleteAgent, loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -222,12 +222,15 @@ export function renderApp(state: AppViewState) {
 
   // Agent add modal props — extracted here so the modal can be rendered at
   // the shell level (outside .content) to avoid overflow-x: hidden clipping.
+  const helloSnapshot = state.hello?.snapshot as { stateDir?: string } | undefined;
   const agentAddModalProps = {
+    stateDir: helloSnapshot?.stateDir ?? null,
     agentAdd: {
       open: state.agentAddOpen,
       submitting: state.agentAddSubmitting,
       error: state.agentAddError,
       name: state.agentAddName,
+      workspace: state.agentAddWorkspace,
       copyAuth: state.agentAddCopyAuth,
       provider: state.agentAddProvider,
       authMethod: state.agentAddAuthMethod,
@@ -266,6 +269,7 @@ export function renderApp(state: AppViewState) {
           agentId: string;
         }>("agents.create", {
           name,
+          ...(state.agentAddWorkspace.trim() ? { workspace: state.agentAddWorkspace.trim() } : {}),
           ...(state.agentAddCopyAuth ? { copyAuthFromDefault: true } : {}),
         });
         if (!createResult?.ok) {
@@ -300,6 +304,8 @@ export function renderApp(state: AppViewState) {
             break;
           }
         }
+        // Refresh config so the new agent's workspace/model entries are available.
+        await loadConfig(state);
         state.agentsSelectedId = newId;
       } catch (err) {
         state.agentAddError = err instanceof Error ? err.message : "Failed to create agent.";
@@ -663,6 +669,44 @@ export function renderApp(state: AppViewState) {
                 toolsCatalogError: state.toolsCatalogError,
                 toolsCatalogResult: state.toolsCatalogResult,
                 skillsFilter: state.skillsFilter,
+                agentDeleteConfirmOpen: state.agentDeleteConfirmOpen,
+                agentDeleteConfirmInput: state.agentDeleteConfirmInput,
+                agentDeleteBusy: state.agentDeleteBusy,
+                agentDeleteError: state.agentDeleteError,
+                onDeleteConfirmOpen: () => {
+                  state.agentDeleteConfirmOpen = true;
+                  state.agentDeleteConfirmInput = "";
+                  state.agentDeleteError = null;
+                },
+                onDeleteConfirmClose: () => {
+                  state.agentDeleteConfirmOpen = false;
+                  state.agentDeleteConfirmInput = "";
+                  state.agentDeleteError = null;
+                },
+                onDeleteConfirmInputChange: (value) => {
+                  state.agentDeleteConfirmInput = value;
+                },
+                onDeleteConfirm: async (agentId) => {
+                  await deleteAgent(state, agentId);
+                  if (!state.agentDeleteError) {
+                    state.agentDeleteConfirmOpen = false;
+                    state.agentDeleteConfirmInput = "";
+                    state.agentFilesList = null;
+                    state.agentFilesError = null;
+                    state.agentFilesLoading = false;
+                    state.agentFileActive = null;
+                    state.agentFileContents = {};
+                    state.agentFileDrafts = {};
+                    state.agentSkillsReport = null;
+                    state.agentSkillsError = null;
+                    state.agentSkillsAgentId = null;
+                    const nextId = state.agentsSelectedId;
+                    if (nextId) {
+                      void loadAgentIdentity(state, nextId);
+                      void loadToolsCatalog(state, nextId);
+                    }
+                  }
+                },
                 onRefresh: async () => {
                   await loadAgents(state);
                   const nextSelected =
@@ -681,6 +725,9 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   state.agentsSelectedId = agentId;
+                  state.agentDeleteConfirmOpen = false;
+                  state.agentDeleteConfirmInput = "";
+                  state.agentDeleteError = null;
                   state.agentFilesList = null;
                   state.agentFilesError = null;
                   state.agentFilesLoading = false;
@@ -986,6 +1033,7 @@ export function renderApp(state: AppViewState) {
                 onAddAgentOpen: async () => {
                   state.agentAddOpen = true;
                   state.agentAddName = "";
+                  state.agentAddWorkspace = "";
                   state.agentAddCopyAuth = false;
                   state.agentAddProvider = "";
                   state.agentAddAuthMethod = "";
