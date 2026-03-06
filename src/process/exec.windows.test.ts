@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -108,6 +109,31 @@ describe("windows command wrapper behavior", () => {
       const captured = execFileMock.mock.calls[0] as ExecCall | undefined;
       expectCmdWrappedInvocation({ captured, expectedComSpec });
     } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("quotes spaced node executable path when spawning npm-cli on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const execPathSpy = vi
+      .spyOn(process, "execPath", "get")
+      .mockReturnValue("C:/Program Files/nodejs/node.exe");
+    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      expect(captured).toBeDefined();
+      expect(captured?.[0]).toBe('"C:/Program Files/nodejs/node.exe"');
+      expect(captured?.[1][0]).toBe("C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js");
+    } finally {
+      existsSpy.mockRestore();
+      execPathSpy.mockRestore();
       platformSpy.mockRestore();
     }
   });

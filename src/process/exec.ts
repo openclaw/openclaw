@@ -38,6 +38,19 @@ function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string
   return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
 }
 
+function quoteWindowsExecutablePath(command: string): string {
+  if (process.platform !== "win32") {
+    return command;
+  }
+  if (!command.includes(" ")) {
+    return command;
+  }
+  if (command.startsWith('"') && command.endsWith('"')) {
+    return command;
+  }
+  return `"${command}"`;
+}
+
 /**
  * On Windows, Node 18.20.2+ (CVE-2024-27980) rejects spawning .cmd/.bat directly
  * without shell, causing EINVAL. Resolve npm/npx to node + cli script so we
@@ -224,9 +237,13 @@ export async function runCommandWithTimeout(
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
   const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
+  const spawnCommand =
+    process.platform === "win32" && finalArgv !== argv
+      ? quoteWindowsExecutablePath(resolvedCommand)
+      : resolvedCommand;
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
   const child = spawn(
-    useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
+    useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : spawnCommand,
     useCmdWrapper
       ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
       : finalArgv.slice(1),
