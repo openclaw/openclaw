@@ -42,6 +42,8 @@ import {
   applyTogetherProviderConfig,
   applyVeniceConfig,
   applyVeniceProviderConfig,
+  applyZenmuxConfig,
+  applyZenmuxProviderConfig,
   applyVercelAiGatewayConfig,
   applyVercelAiGatewayProviderConfig,
   applyXiaomiConfig,
@@ -58,6 +60,7 @@ import {
   SYNTHETIC_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
+  ZENMUX_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   setCloudflareAiGatewayConfig,
@@ -72,6 +75,7 @@ import {
   setSyntheticApiKey,
   setTogetherApiKey,
   setVeniceApiKey,
+  setZenmuxApiKey,
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
   setZaiApiKey,
@@ -100,6 +104,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   opencode: "opencode-zen",
   kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
+  zenmux: "zenmux-api-key",
 };
 
 const ZAI_AUTH_CHOICE_ENDPOINT: Partial<
@@ -307,6 +312,23 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
     applyProviderConfig: applySyntheticProviderConfig,
     normalize: (value) => String(value ?? "").trim(),
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+  },
+  "zenmux-api-key": {
+    provider: "zenmux",
+    profileId: "zenmux:default",
+    expectedProviders: ["zenmux"],
+    envLabel: "ZENMUX_API_KEY",
+    promptMessage: "Enter ZenMux API key",
+    setCredential: setZenmuxApiKey,
+    defaultModel: ZENMUX_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyZenmuxConfig,
+    applyProviderConfig: applyZenmuxProviderConfig,
+    noteDefault: ZENMUX_DEFAULT_MODEL_REF,
+    noteMessage: [
+      "Ant Ling provides access to flagship models Ant Ling-2.5-1T and Ant Ring-2.5-1T.",
+      "Get your API key at: https://zenmux.ai",
+    ].join("\n"),
+    noteTitle: "Ant Ling",
   },
 };
 

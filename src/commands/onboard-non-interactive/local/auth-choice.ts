@@ -32,6 +32,7 @@ import {
   applyMistralConfig,
   applyXaiConfig,
   applyXiaomiConfig,
+  applyZenmuxConfig,
   applyZaiConfig,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
@@ -55,6 +56,7 @@ import {
   setHuggingfaceApiKey,
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
+  setZenmuxApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
 import {
@@ -920,6 +922,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyHuggingfaceConfig(nextConfig);
+  }
+
+  if (authChoice === "zenmux-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "zenmux",
+      cfg: baseConfig,
+      flagValue: opts.zenmuxApiKey,
+      flagName: "--zenmux-api-key",
+      envVar: "ZENMUX_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setZenmuxApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "zenmux:default",
+      provider: "zenmux",
+      mode: "api_key",
+    });
+    return applyZenmuxConfig(nextConfig);
   }
 
   if (authChoice === "custom-api-key") {

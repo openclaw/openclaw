@@ -198,6 +198,16 @@ const NVIDIA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const ZENMUX_BASE_URL = "https://zenmux.ai/api/v1";
+const ZENMUX_DEFAULT_CONTEXT_WINDOW = 1048576;
+const ZENMUX_DEFAULT_MAX_TOKENS = 131072;
+const ZENMUX_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const log = createSubsystemLogger("agents/model-providers");
 
 interface OllamaModel {
@@ -920,6 +930,33 @@ export function buildKilocodeProvider(): ProviderConfig {
   };
 }
 
+export function buildZenmuxProvider(): ProviderConfig {
+  return {
+    baseUrl: ZENMUX_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "inclusionai/ling-2.5-1t",
+        name: "Ant Ling-2.5-1T",
+        reasoning: false,
+        input: ["text"],
+        cost: ZENMUX_DEFAULT_COST,
+        contextWindow: ZENMUX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZENMUX_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "inclusionai/ring-2.5-1t",
+        name: "Ant Ring-2.5-1T",
+        reasoning: true,
+        input: ["text"],
+        cost: ZENMUX_DEFAULT_COST,
+        contextWindow: ZENMUX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZENMUX_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -1134,6 +1171,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "kilocode", store: authStore });
   if (kilocodeKey) {
     providers.kilocode = { ...buildKilocodeProvider(), apiKey: kilocodeKey };
+  }
+
+  const zenmuxKey =
+    resolveEnvApiKeyVarName("zenmux") ??
+    resolveApiKeyFromProfiles({ provider: "zenmux", store: authStore });
+  if (zenmuxKey) {
+    providers.zenmux = { ...buildZenmuxProvider(), apiKey: zenmuxKey };
   }
 
   return providers;

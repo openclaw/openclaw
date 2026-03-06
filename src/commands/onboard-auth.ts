@@ -39,6 +39,9 @@ export {
   applyXiaomiProviderConfig,
   applyZaiConfig,
   applyZaiProviderConfig,
+  applyZenmuxConfig,
+  applyZenmuxProviderConfig,
+  ZENMUX_DEFAULT_MODEL_REF,
   KILOCODE_BASE_URL,
 } from "./onboard-auth.config-core.js";
 export {
@@ -81,6 +84,7 @@ export {
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
+  setZenmuxApiKey,
   setVolcengineApiKey,
   setZaiApiKey,
   setXaiApiKey,

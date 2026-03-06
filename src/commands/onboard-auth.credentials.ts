@@ -502,3 +502,15 @@ export async function setKilocodeApiKey(
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
+
+export async function setZenmuxApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "zenmux:default",
+    credential: buildApiKeyCredential("zenmux", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}

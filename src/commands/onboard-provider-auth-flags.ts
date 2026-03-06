@@ -25,6 +25,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "qianfanApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
+  | "zenmuxApiKey"
 >;
 
 export type OnboardProviderAuthFlag = {
@@ -197,5 +198,12 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--byteplus-api-key",
     cliOption: "--byteplus-api-key <key>",
     description: "BytePlus API key",
+  },
+  {
+    optionKey: "zenmuxApiKey",
+    authChoice: "zenmux-api-key",
+    cliFlag: "--zenmux-api-key",
+    cliOption: "--zenmux-api-key <key>",
+    description: "ZenMux API key",
   },
 ];

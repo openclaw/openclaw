@@ -180,6 +180,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["cloudflare-ai-gateway-api-key"],
   },
   {
+    value: "zenmux",
+    label: "Ant Ling",
+    hint: "API key from zenmux.ai",
+    choices: ["zenmux-api-key"],
+  },
+  {
     value: "custom",
     label: "Custom Provider",
     hint: "Any OpenAI or Anthropic compatible endpoint",
@@ -296,6 +302,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "minimax-api-lightning",
     label: "MiniMax M2.5 Highspeed",
     hint: "Official fast tier (legacy: Lightning)",
+  },
+  {
+    value: "zenmux-api-key",
+    label: "ZenMux API key",
+    hint: "https://zenmux.ai",
   },
   { value: "custom-api-key", label: "Custom Provider" },
 ];

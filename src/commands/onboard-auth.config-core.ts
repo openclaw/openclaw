@@ -8,8 +8,10 @@ import {
   buildKimiCodingProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
+  buildZenmuxProvider,
   QIANFAN_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
+  ZENMUX_BASE_URL,
 } from "../agents/models-config.providers.js";
 import {
   buildSyntheticModelDefinition,
@@ -572,4 +574,31 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+}
+
+export const ZENMUX_DEFAULT_MODEL_ID = "inclusionai/ling-2.5-1t";
+export const ZENMUX_DEFAULT_MODEL_REF = `zenmux/${ZENMUX_DEFAULT_MODEL_ID}`;
+
+export function applyZenmuxProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[ZENMUX_DEFAULT_MODEL_REF] = {
+    ...models[ZENMUX_DEFAULT_MODEL_REF],
+    alias: models[ZENMUX_DEFAULT_MODEL_REF]?.alias ?? "Ant Ling",
+  };
+
+  const defaultModels = buildZenmuxProvider().models ?? [];
+
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "zenmux",
+    api: "openai-completions",
+    baseUrl: ZENMUX_BASE_URL,
+    defaultModels,
+    defaultModelId: ZENMUX_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyZenmuxConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyZenmuxProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, ZENMUX_DEFAULT_MODEL_REF);
 }
