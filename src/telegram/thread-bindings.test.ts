@@ -163,4 +163,54 @@ describe("telegram thread bindings", () => {
     );
     expect(fs.existsSync(statePath)).toBe(false);
   });
+
+  it("getByConversationId returns undefined for an unbound conversation", async () => {
+    const manager = createTelegramThreadBindingManager({
+      accountId: "lookup-test",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    expect(manager.getByConversationId("never-bound")).toBeUndefined();
+    expect(manager.getByConversationId("")).toBeUndefined();
+    expect(manager.getByConversationId("  ")).toBeUndefined();
+  });
+
+  it("listBySessionKey returns empty array for unknown session key", async () => {
+    const manager = createTelegramThreadBindingManager({
+      accountId: "list-test",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    expect(manager.listBySessionKey("agent:main:subagent:unknown")).toEqual([]);
+    expect(manager.listBySessionKey("")).toEqual([]);
+  });
+
+  it("unbindConversation removes a binding and returns null on second call", async () => {
+    const manager = createTelegramThreadBindingManager({
+      accountId: "unbind-test",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:subagent:child-3",
+      targetKind: "subagent",
+      conversation: {
+        channel: "telegram",
+        accountId: "unbind-test",
+        conversationId: "-100999:topic:1",
+      },
+    });
+
+    expect(manager.getByConversationId("-100999:topic:1")).toBeDefined();
+
+    const removed = manager.unbindConversation({ conversationId: "-100999:topic:1" });
+    expect(removed?.conversationId).toBe("-100999:topic:1");
+    expect(manager.getByConversationId("-100999:topic:1")).toBeUndefined();
+
+    const removedAgain = manager.unbindConversation({ conversationId: "-100999:topic:1" });
+    expect(removedAgain).toBeNull();
+  });
 });

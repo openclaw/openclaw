@@ -57,4 +57,17 @@ describe("poll params", () => {
       /mutually exclusive/i,
     );
   });
+
+  it("treats non-empty pollQuestion string as poll creation intent", () => {
+    expect(hasPollCreationParams({ pollQuestion: "What's for lunch?" })).toBe(true);
+    expect(hasPollCreationParams({ pollQuestion: "  " })).toBe(false);
+    expect(hasPollCreationParams({ pollQuestion: "" })).toBe(false);
+  });
+
+  it("treats non-empty pollOption array as poll creation intent", () => {
+    expect(hasPollCreationParams({ pollOption: ["Pizza", "Sushi"] })).toBe(true);
+    expect(hasPollCreationParams({ pollOption: [] })).toBe(false);
+    expect(hasPollCreationParams({ pollOption: [" ", "  "] })).toBe(false);
+    expect(hasPollCreationParams({ pollOption: ["", ""] })).toBe(false);
+  });
 });

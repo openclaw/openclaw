@@ -135,4 +135,29 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       autoSelectFamilyAttemptTimeout: 300,
     });
   });
+
+  it("does not set dispatcher when timeoutMs is NaN", () => {
+    ensureGlobalUndiciStreamTimeouts({ timeoutMs: NaN });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("clamps negative timeoutMs to 1ms", () => {
+    ensureGlobalUndiciStreamTimeouts({ timeoutMs: -500 });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next.options?.bodyTimeout).toBe(1);
+    expect(next.options?.headersTimeout).toBe(1);
+  });
+
+  it("applies custom timeoutMs to bodyTimeout and headersTimeout", () => {
+    const customMs = 5 * 60 * 1000;
+    ensureGlobalUndiciStreamTimeouts({ timeoutMs: customMs });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next.options?.bodyTimeout).toBe(customMs);
+    expect(next.options?.headersTimeout).toBe(customMs);
+  });
 });
