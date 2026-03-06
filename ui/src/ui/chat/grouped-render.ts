@@ -12,7 +12,12 @@ import {
   formatReasoningMarkdown,
 } from "./message-extract.ts";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
-import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
+import {
+  enrichToolCardsWithLookup,
+  extractToolCards,
+  renderToolCardSidebar,
+  type ToolCardOutputLookup,
+} from "./tool-cards.ts";
 
 type ImageBlock = {
   url: string;
@@ -112,6 +117,7 @@ export function renderMessageGroup(
     showReasoning: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
+    toolOutputLookup?: ToolCardOutputLookup;
   },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
@@ -136,16 +142,19 @@ export function renderMessageGroup(
         avatar: opts.assistantAvatar ?? null,
       })}
       <div class="chat-group-messages">
-        ${group.messages.map((item, index) =>
-          renderGroupedMessage(
+        ${group.messages.map((item, index) => {
+          const readFallbackText = resolveReadFallbackTextInGroup(group.messages, index);
+          return renderGroupedMessage(
             item.message,
             {
               isStreaming: group.isStreaming && index === group.messages.length - 1,
               showReasoning: opts.showReasoning,
+              readFallbackText,
+              toolOutputLookup: opts.toolOutputLookup,
             },
             opts.onOpenSidebar,
-          ),
-        )}
+          );
+        })}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${who}</span>
           <span class="chat-group-timestamp">${timestamp}</span>
@@ -223,7 +232,12 @@ function renderMessageImages(images: ImageBlock[]) {
 
 function renderGroupedMessage(
   message: unknown,
-  opts: { isStreaming: boolean; showReasoning: boolean },
+  opts: {
+    isStreaming: boolean;
+    showReasoning: boolean;
+    readFallbackText?: string;
+    toolOutputLookup?: ToolCardOutputLookup;
+  },
   onOpenSidebar?: (content: string) => void,
 ) {
   const m = message as Record<string, unknown>;
@@ -235,7 +249,10 @@ function renderGroupedMessage(
     typeof m.toolCallId === "string" ||
     typeof m.tool_call_id === "string";
 
-  const toolCards = extractToolCards(message);
+  const toolCards = enrichToolCardsWithLookup(
+    extractToolCards(message, { readFallbackText: opts.readFallbackText }),
+    opts.toolOutputLookup,
+  );
   const hasToolCards = toolCards.length > 0;
   const images = extractImages(message);
   const hasImages = images.length > 0;
@@ -284,4 +301,46 @@ function renderGroupedMessage(
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
     </div>
   `;
+}
+
+function hasEmptyReadToolCard(message: unknown): boolean {
+  return extractToolCards(message).some(
+    (card) =>
+      isReadToolName(card.name) && (typeof card.text !== "string" || card.text.trim().length === 0),
+  );
+}
+
+function isReadToolName(toolName: string): boolean {
+  const normalized = toolName.trim().toLowerCase();
+  return normalized === "read" || /(^|[.:/_-])read$/.test(normalized);
+}
+
+export function resolveReadFallbackTextInGroup(
+  groupMessages: Array<{ message: unknown; key: string }>,
+  messageIndex: number,
+): string | undefined {
+  if (messageIndex < 0 || messageIndex >= groupMessages.length) {
+    return undefined;
+  }
+  if (!hasEmptyReadToolCard(groupMessages[messageIndex].message)) {
+    return undefined;
+  }
+
+  const neighboringIndexes = [messageIndex + 1, messageIndex - 1];
+  for (const index of neighboringIndexes) {
+    if (index < 0 || index >= groupMessages.length) {
+      continue;
+    }
+    const candidate = groupMessages[index].message;
+    // Only borrow from adjacent plain assistant text bubbles to avoid
+    // accidentally attributing output across unrelated tool cards.
+    if (extractToolCards(candidate).length > 0) {
+      continue;
+    }
+    const text = extractTextCached(candidate);
+    if (typeof text === "string" && text.trim()) {
+      return text;
+    }
+  }
+  return undefined;
 }

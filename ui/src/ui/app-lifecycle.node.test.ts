@@ -17,6 +17,8 @@ function createHost() {
     chatMessages: [],
     chatToolMessages: [],
     chatStream: null,
+    chatRunId: null,
+    chatRunPollInterval: null,
     logsAutoFollow: false,
     logsAtBottom: true,
     logsEntries: [],

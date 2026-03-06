@@ -30,6 +30,19 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("console.log(1)");
   });
 
+  it("adds per-line classes for diff code blocks", () => {
+    const html = toSanitizedMarkdownHtml(
+      ["```diff", "--- a.txt", "+++ b.txt", "@@ -1 +1 @@", "-old", "+new", " same", "```"].join(
+        "\n",
+      ),
+    );
+    expect(html).toContain("code-block--diff");
+    expect(html).toContain("diff-line diff-line--meta");
+    expect(html).toContain("diff-line diff-line--hunk");
+    expect(html).toContain("diff-line diff-line--del");
+    expect(html).toContain("diff-line diff-line--add");
+  });
+
   it("preserves img tags with src and alt from markdown images (#15437)", () => {
     const html = toSanitizedMarkdownHtml("![Alt text](https://example.com/image.png)");
     expect(html).toContain("<img");

@@ -1,3 +1,4 @@
+import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { truncateText } from "./format.ts";
 
 const TOOL_STREAM_LIMIT = 50;
@@ -33,6 +34,40 @@ type ToolStreamHost = {
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
 };
+
+function buildToolStreamEntryKey(runId: string, toolCallId: string): string {
+  return `${runId}::${toolCallId}`;
+}
+
+function normalizeSessionKey(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function sessionKeysEquivalent(left: string | undefined, right: string | undefined): boolean {
+  const normalizedLeft = normalizeSessionKey(left);
+  const normalizedRight = normalizeSessionKey(right);
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+  if (normalizedLeft === normalizedRight) {
+    return true;
+  }
+
+  const parsedLeft = parseAgentSessionKey(normalizedLeft);
+  const parsedRight = parseAgentSessionKey(normalizedRight);
+  if (parsedLeft && parsedRight) {
+    return parsedLeft.agentId === parsedRight.agentId && parsedLeft.rest === parsedRight.rest;
+  }
+
+  if (parsedLeft && parsedLeft.agentId === "main" && parsedLeft.rest === normalizedRight) {
+    return true;
+  }
+  if (parsedRight && parsedRight.agentId === "main" && parsedRight.rest === normalizedLeft) {
+    return true;
+  }
+
+  return false;
+}
 
 function toTrimmedString(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -237,6 +272,110 @@ export function resetToolStream(host: ToolStreamHost) {
   flushToolStreamSync(host);
 }
 
+function isReadToolName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return normalized === "read" || /(^|[.:/_-])read$/.test(normalized);
+}
+
+function extractCodeFenceBodies(text: string): string[] {
+  const matches = text.matchAll(/```[^\n]*\n([\s\S]*?)```/g);
+  const blocks: string[] = [];
+  for (const match of matches) {
+    const body = match[1];
+    if (typeof body !== "string") {
+      continue;
+    }
+    const trimmed = body.trim();
+    if (trimmed) {
+      blocks.push(trimmed);
+    }
+  }
+  return blocks;
+}
+
+function normalizeFallbackToolOutput(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const truncated = truncateText(trimmed, TOOL_OUTPUT_CHAR_LIMIT);
+  if (!truncated.truncated) {
+    return truncated.text;
+  }
+  return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
+}
+
+export function hydrateReadToolOutputFromFinalMessage(
+  host: ToolStreamHost,
+  params: { runId?: string; sessionKey?: string; text?: string },
+): boolean {
+  const runId = toTrimmedString(params.runId);
+  const sessionKey = toTrimmedString(params.sessionKey);
+  const text = toTrimmedString(params.text);
+  if (!text) {
+    return false;
+  }
+
+  const codeBlocks = extractCodeFenceBodies(text);
+  const preferred = codeBlocks.length > 0 ? codeBlocks.join("\n\n") : text;
+  const normalizedOutput = normalizeFallbackToolOutput(preferred);
+  if (!normalizedOutput) {
+    return false;
+  }
+
+  const now = Date.now();
+  const staleWindowMs = 5 * 60 * 1000;
+
+  const tryHydrateEntry = (entry: ToolStreamEntry): boolean => {
+    if (!isReadToolName(entry.name)) {
+      return false;
+    }
+    if (typeof entry.output === "string" && entry.output.trim()) {
+      return false;
+    }
+    entry.output = normalizedOutput;
+    entry.updatedAt = Date.now();
+    entry.message = buildToolStreamMessage(entry);
+    scheduleToolStreamSync(host, true);
+    return true;
+  };
+
+  // Prefer exact run match when available.
+  if (runId) {
+    for (let index = host.toolStreamOrder.length - 1; index >= 0; index -= 1) {
+      const entryKey = host.toolStreamOrder[index];
+      const entry = host.toolStreamById.get(entryKey);
+      if (!entry || entry.runId !== runId) {
+        continue;
+      }
+      if (tryHydrateEntry(entry)) {
+        return true;
+      }
+      // Keep scanning older entries from the same run.
+    }
+  }
+
+  // Fallback: use the latest empty read card in the same session.
+  for (let index = host.toolStreamOrder.length - 1; index >= 0; index -= 1) {
+    const entryKey = host.toolStreamOrder[index];
+    const entry = host.toolStreamById.get(entryKey);
+    if (!entry) {
+      continue;
+    }
+    if (sessionKey && entry.sessionKey && !sessionKeysEquivalent(entry.sessionKey, sessionKey)) {
+      continue;
+    }
+    if (entry.updatedAt < now - staleWindowMs) {
+      continue;
+    }
+    if (tryHydrateEntry(entry)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export type CompactionStatus = {
   active: boolean;
   startedAt: number | null;
@@ -301,23 +440,34 @@ function resolveAcceptedSession(
   },
 ): { accepted: boolean; sessionKey?: string } {
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
-  if (sessionKey && sessionKey !== host.sessionKey) {
-    return { accepted: false };
+  const runMatchesActive =
+    Boolean(host.chatRunId) &&
+    typeof payload.runId === "string" &&
+    payload.runId === host.chatRunId;
+  const sessionMatchesHost = sessionKeysEquivalent(sessionKey, host.sessionKey);
+  if (sessionKey) {
+    if (!sessionMatchesHost && !runMatchesActive) {
+      return { accepted: false };
+    }
+    if (!host.chatRunId) {
+      if (options?.allowSessionScopedWhenIdle) {
+        return { accepted: true, sessionKey: host.sessionKey };
+      }
+      return { accepted: false };
+    }
+    // When session key matches, accept tool events even if runId differs.
+    // Some gateway paths can emit a server-side run id distinct from the client idempotency key.
+    return { accepted: true, sessionKey: host.sessionKey };
   }
-  if (!host.chatRunId && options?.allowSessionScopedWhenIdle && sessionKey) {
-    return { accepted: true, sessionKey };
-  }
-  // Fallback: only accept session-less events for the active run.
-  if (!sessionKey && host.chatRunId && payload.runId !== host.chatRunId) {
-    return { accepted: false };
-  }
-  if (host.chatRunId && payload.runId !== host.chatRunId) {
-    return { accepted: false };
-  }
+
+  // Session-less events must still match the active run.
   if (!host.chatRunId) {
     return { accepted: false };
   }
-  return { accepted: true, sessionKey };
+  if (payload.runId !== host.chatRunId) {
+    return { accepted: false };
+  }
+  return { accepted: true };
 }
 
 function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventPayload) {
@@ -423,7 +573,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
         : undefined;
 
   const now = Date.now();
-  let entry = host.toolStreamById.get(toolCallId);
+  const entryKey = buildToolStreamEntryKey(payload.runId, toolCallId);
+  let entry = host.toolStreamById.get(entryKey);
   if (!entry) {
     entry = {
       toolCallId,
@@ -436,8 +587,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       updatedAt: now,
       message: {},
     };
-    host.toolStreamById.set(toolCallId, entry);
-    host.toolStreamOrder.push(toolCallId);
+    host.toolStreamById.set(entryKey, entry);
+    host.toolStreamOrder.push(entryKey);
   } else {
     entry.name = name;
     if (args !== undefined) {

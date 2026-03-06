@@ -12,6 +12,7 @@ export type UiSettings = {
   theme: ThemeMode;
   chatFocusMode: boolean;
   chatShowThinking: boolean;
+  chatShowInlineToolFlow: boolean;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
@@ -39,6 +40,7 @@ export function loadSettings(): UiSettings {
     theme: "system",
     chatFocusMode: false,
     chatShowThinking: true,
+    chatShowInlineToolFlow: false,
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},
@@ -50,6 +52,18 @@ export function loadSettings(): UiSettings {
       return defaults;
     }
     const parsed = JSON.parse(raw) as Partial<UiSettings>;
+    const parsedShowThinking =
+      typeof parsed.chatShowThinking === "boolean"
+        ? parsed.chatShowThinking
+        : defaults.chatShowThinking;
+    const parsedShowInlineToolFlow =
+      typeof parsed.chatShowInlineToolFlow === "boolean"
+        ? parsed.chatShowInlineToolFlow
+        : defaults.chatShowInlineToolFlow;
+    // Keep toggle modes mutually exclusive; prefer inline flow when both were previously enabled.
+    const chatShowInlineToolFlow = parsedShowInlineToolFlow;
+    const chatShowThinking =
+      parsedShowInlineToolFlow && parsedShowThinking ? false : parsedShowThinking;
     return {
       gatewayUrl:
         typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
@@ -71,10 +85,8 @@ export function loadSettings(): UiSettings {
           : defaults.theme,
       chatFocusMode:
         typeof parsed.chatFocusMode === "boolean" ? parsed.chatFocusMode : defaults.chatFocusMode,
-      chatShowThinking:
-        typeof parsed.chatShowThinking === "boolean"
-          ? parsed.chatShowThinking
-          : defaults.chatShowThinking,
+      chatShowThinking,
+      chatShowInlineToolFlow,
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&

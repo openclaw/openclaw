@@ -21,6 +21,7 @@ export async function loadSessions(
     limit?: number;
     includeGlobal?: boolean;
     includeUnknown?: boolean;
+    agentId?: string;
   },
 ) {
   if (!state.client || !state.connected) {
@@ -40,6 +41,10 @@ export async function loadSessions(
       includeGlobal,
       includeUnknown,
     };
+    const agentId = overrides?.agentId?.trim();
+    if (agentId) {
+      params.agentId = agentId;
+    }
     if (activeMinutes > 0) {
       params.activeMinutes = activeMinutes;
     }

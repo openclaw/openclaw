@@ -10,9 +10,15 @@ import {
   refreshActiveTab,
   setLastActiveSessionKey,
 } from "./app-settings.ts";
-import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
+import {
+  handleAgentEvent,
+  hydrateReadToolOutputFromFinalMessage,
+  resetToolStream,
+  type AgentEventPayload,
+} from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
-import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import { extractText } from "./chat/message-extract.ts";
+import { loadAgentIdentities } from "./controllers/agent-identity.ts";
 import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
@@ -201,7 +207,13 @@ export function connectGateway(host: GatewayHost) {
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void loadAssistantIdentity(host as unknown as OpenClawApp);
-      void loadAgents(host as unknown as OpenClawApp);
+      void (async () => {
+        await loadAgents(host as unknown as OpenClawApp);
+        const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
+        if (agentIds.length > 0) {
+          void loadAgentIdentities(host as unknown as OpenClawApp, agentIds);
+        }
+      })();
       void loadToolsCatalog(host as unknown as OpenClawApp);
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
@@ -262,8 +274,15 @@ function handleTerminalChatEvent(
   if (state !== "final" && state !== "error" && state !== "aborted") {
     return;
   }
-  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+  // Keep the latest tool stream visible after terminal events so users can inspect
+  // tool calls/results without requiring a manual refresh.
   void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
+  // Always refresh transcript state after final chat events, even when the run
+  // was not explicitly queued for session-list refresh (for example sub-agent
+  // final events that append transcript content without /new or /reset).
+  if (state === "final") {
+    void loadChatHistory(host as unknown as OpenClawApp);
+  }
   const runId = payload?.runId;
   if (!runId || !host.refreshSessionsAfterChat.has(runId)) {
     return;
@@ -284,10 +303,42 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     );
   }
   const state = handleChatEvent(host as unknown as OpenClawApp, payload);
-  handleTerminalChatEvent(host, payload, state);
-  if (state === "final" && shouldReloadHistoryForFinalEvent(payload)) {
-    void loadChatHistory(host as unknown as OpenClawApp);
+  if (state === "final") {
+    const payloadText =
+      payload && Object.prototype.hasOwnProperty.call(payload, "message") && payload.message
+        ? extractText(payload.message)
+        : null;
+    const fallbackText = (() => {
+      const messages = (host as unknown as { chatMessages?: unknown[] }).chatMessages;
+      if (!Array.isArray(messages) || messages.length === 0) {
+        return null;
+      }
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const candidate = messages[index] as Record<string, unknown> | undefined;
+        if (!candidate || typeof candidate !== "object") {
+          continue;
+        }
+        const role = typeof candidate.role === "string" ? candidate.role.toLowerCase() : "";
+        if (role !== "assistant") {
+          continue;
+        }
+        const text = extractText(candidate);
+        if (typeof text === "string" && text.trim()) {
+          return text;
+        }
+      }
+      return null;
+    })();
+    hydrateReadToolOutputFromFinalMessage(
+      host as unknown as Parameters<typeof hydrateReadToolOutputFromFinalMessage>[0],
+      {
+        runId: payload?.runId,
+        sessionKey: payload?.sessionKey ?? host.sessionKey,
+        text: payloadText ?? fallbackText ?? undefined,
+      },
+    );
   }
+  handleTerminalChatEvent(host, payload, state);
 }
 
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {

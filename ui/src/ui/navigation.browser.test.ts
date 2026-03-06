@@ -74,9 +74,34 @@ describe("control UI routing", () => {
 
     await app.updateComplete;
     expect(app.tab).toBe("chat");
-    expect(app.sessionKey).toBe("main");
+    expect(app.sessionKey).toBe("agent:main:main");
     expect(window.location.pathname).toBe("/chat");
-    expect(window.location.search).toBe("?session=main");
+    expect(window.location.search).toBe("?session=agent%3Amain%3Amain");
+  });
+
+  it("renders the chat agent picker in nav when agent list is available", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    app.agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [
+        { id: "main", name: "Main Agent" },
+        { id: "coder", identity: { name: "Coder Agent" } },
+      ],
+    };
+    app.agentsSelectedId = "main";
+    await app.updateComplete;
+
+    const picker = app.querySelector(".nav-chat-agent-picker");
+    expect(picker).not.toBeNull();
+    const options = app.querySelectorAll(".nav-item--agent");
+    expect(options.length).toBe(2);
+    const text = picker?.textContent ?? "";
+    expect(text).toContain("Main Agent");
+    expect(text).toContain("Coder Agent");
   });
 
   it("keeps chat and nav usable on narrow viewports", async () => {
