@@ -17,6 +17,32 @@ import {
   parseImageSizeError,
 } from "./pi-embedded-helpers.js";
 
+// OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
+const OPENAI_RATE_LIMIT_MESSAGE =
+  "Rate limit reached for gpt-4.1-mini in organization org_test on requests per min. Limit: 3.000000 / min. Current: 3.000000 / min.";
+// Gemini RESOURCE_EXHAUSTED troubleshooting example: https://ai.google.dev/gemini-api/docs/troubleshooting
+const GEMINI_RESOURCE_EXHAUSTED_MESSAGE =
+  "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).";
+// Anthropic overloaded_error example shape: https://docs.anthropic.com/en/api/errors
+const ANTHROPIC_OVERLOADED_PAYLOAD =
+  '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_test"}';
+// OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
+const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
+// Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
+// https://github.com/openclaw/openclaw/issues/23440
+const INSUFFICIENT_QUOTA_PAYLOAD =
+  '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
+// Together AI error code examples: https://docs.together.ai/docs/error-codes
+const TOGETHER_PAYMENT_REQUIRED_MESSAGE =
+  "402 Payment Required: The account associated with this API key has reached its maximum allowed monthly spending limit.";
+const TOGETHER_ENGINE_OVERLOADED_MESSAGE =
+  "503 Engine Overloaded: The server is experiencing a high volume of requests and is temporarily overloaded.";
+// Groq error code examples: https://console.groq.com/docs/errors
+const GROQ_TOO_MANY_REQUESTS_MESSAGE =
+  "429 Too Many Requests: Too many requests were sent in a given timeframe.";
+const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
+  "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.";
+
 describe("isAuthPermanentErrorMessage", () => {
   it("matches permanent auth failure patterns", () => {
     const samples = [
@@ -269,6 +295,21 @@ describe("isContextOverflowError", () => {
     }
   });
 
+  it("matches model_context_window_exceeded stop reason surfaced by pi-ai", () => {
+    // Anthropic API (and some OpenAI-compatible providers like ZhipuAI/GLM) return
+    // stop_reason: "model_context_window_exceeded" when the context window is hit.
+    // The pi-ai library surfaces this as "Unhandled stop reason: model_context_window_exceeded".
+    const samples = [
+      "Unhandled stop reason: model_context_window_exceeded",
+      "model_context_window_exceeded",
+      "context_window_exceeded",
+      "Unhandled stop reason: context_window_exceeded",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
   it("matches Chinese context overflow error messages from proxy providers", () => {
     const samples = [
       "上下文过长",
@@ -415,6 +456,7 @@ describe("isFailoverErrorMessage", () => {
       "429 rate limit exceeded",
       "Your credit balance is too low",
       "request timed out",
+      "Connection error.",
       "invalid request format",
     ];
     for (const sample of samples) {
@@ -423,7 +465,14 @@ describe("isFailoverErrorMessage", () => {
   });
 
   it("matches abort stop-reason timeout variants", () => {
-    const samples = ["Unhandled stop reason: abort", "stop reason: abort", "reason: abort"];
+    const samples = [
+      "Unhandled stop reason: abort",
+      "Unhandled stop reason: error",
+      "stop reason: abort",
+      "stop reason: error",
+      "reason: abort",
+      "reason: error",
+    ];
     for (const sample of samples) {
       expect(isTimeoutErrorMessage(sample)).toBe(true);
       expect(classifyFailoverReason(sample)).toBe("timeout");
@@ -457,7 +506,18 @@ describe("image dimension errors", () => {
 });
 
 describe("classifyFailoverReason", () => {
-  it("returns a stable reason", () => {
+  it("classifies documented provider error messages", () => {
+    expect(classifyFailoverReason(OPENAI_RATE_LIMIT_MESSAGE)).toBe("rate_limit");
+    expect(classifyFailoverReason(GEMINI_RESOURCE_EXHAUSTED_MESSAGE)).toBe("rate_limit");
+    expect(classifyFailoverReason(ANTHROPIC_OVERLOADED_PAYLOAD)).toBe("rate_limit");
+    expect(classifyFailoverReason(OPENROUTER_CREDITS_MESSAGE)).toBe("billing");
+    expect(classifyFailoverReason(TOGETHER_PAYMENT_REQUIRED_MESSAGE)).toBe("billing");
+    expect(classifyFailoverReason(TOGETHER_ENGINE_OVERLOADED_MESSAGE)).toBe("timeout");
+    expect(classifyFailoverReason(GROQ_TOO_MANY_REQUESTS_MESSAGE)).toBe("rate_limit");
+    expect(classifyFailoverReason(GROQ_SERVICE_UNAVAILABLE_MESSAGE)).toBe("timeout");
+  });
+
+  it("classifies internal and compatibility error messages", () => {
     expect(classifyFailoverReason("invalid api key")).toBe("auth");
     expect(classifyFailoverReason("no credentials found")).toBe("auth");
     expect(classifyFailoverReason("no api key found")).toBe("auth");
@@ -470,23 +530,21 @@ describe("classifyFailoverReason", () => {
       "auth",
     );
     expect(classifyFailoverReason("Missing scopes: model.request")).toBe("auth");
-    expect(classifyFailoverReason("429 too many requests")).toBe("rate_limit");
-    expect(classifyFailoverReason("resource has been exhausted")).toBe("rate_limit");
     expect(
       classifyFailoverReason("model_cooldown: All credentials for model gpt-5 are cooling down"),
     ).toBe("rate_limit");
-    expect(classifyFailoverReason("all credentials for model x are cooling down")).toBe(
-      "rate_limit",
-    );
-    expect(
-      classifyFailoverReason(
-        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
-      ),
-    ).toBe("rate_limit");
+    expect(classifyFailoverReason("all credentials for model x are cooling down")).toBeNull();
     expect(classifyFailoverReason("invalid request format")).toBe("format");
-    expect(classifyFailoverReason("credit balance too low")).toBe("billing");
+    expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
+    expect(classifyFailoverReason("Connection error.")).toBe("timeout");
+    expect(classifyFailoverReason("fetch failed")).toBe("timeout");
+    expect(classifyFailoverReason("network error: ECONNREFUSED")).toBe("timeout");
+    expect(
+      classifyFailoverReason("dial tcp: lookup api.example.com: no such host (ENOTFOUND)"),
+    ).toBe("timeout");
+    expect(classifyFailoverReason("temporary dns failure EAI_AGAIN")).toBe("timeout");
     expect(
       classifyFailoverReason(
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
@@ -512,12 +570,19 @@ describe("classifyFailoverReason", () => {
         "This model is currently experiencing high demand. Please try again later.",
       ),
     ).toBe("rate_limit");
-    expect(classifyFailoverReason("LLM error: service unavailable")).toBe("rate_limit");
+    // "service unavailable" combined with overload/capacity indicator → rate_limit
+    // (exercises the new regex — none of the standalone patterns match here)
+    expect(classifyFailoverReason("service unavailable due to capacity limits")).toBe("rate_limit");
     expect(
       classifyFailoverReason(
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
       ),
     ).toBe("rate_limit");
+  });
+  it("classifies bare 'service unavailable' as timeout instead of rate_limit (#32828)", () => {
+    // A generic "service unavailable" from a proxy/CDN should stay retryable,
+    // but it should not be treated as provider overload / rate limit.
+    expect(classifyFailoverReason("LLM error: service unavailable")).toBe("timeout");
   });
   it("classifies permanent auth errors as auth_permanent", () => {
     expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");

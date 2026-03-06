@@ -25,6 +25,16 @@ type BuildServicePathOptions = MinimalServicePathOptions & {
   env?: Record<string, string | undefined>;
 };
 
+type SharedServiceEnvironmentFields = {
+  stateDir: string | undefined;
+  configPath: string | undefined;
+  tmpDir: string;
+  minimalPath: string;
+  proxyEnv: Record<string, string | undefined>;
+  nodeCaCerts: string | undefined;
+  nodeUseSystemCa: string | undefined;
+};
+
 const SERVICE_PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -246,14 +256,8 @@ export function buildServiceEnvironment(params: {
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   return {
-    HOME: env.HOME,
-    TMPDIR: sharedEnv.tmpDir,
-    PATH: sharedEnv.minimalPath,
-    ...sharedEnv.proxyEnv,
-    NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
+    ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_PROFILE: profile,
-    OPENCLAW_STATE_DIR: sharedEnv.stateDir,
-    OPENCLAW_CONFIG_PATH: sharedEnv.configPath,
     OPENCLAW_GATEWAY_PORT: String(port),
     OPENCLAW_GATEWAY_TOKEN: token,
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
@@ -274,13 +278,7 @@ export function buildNodeServiceEnvironment(params: {
   const gatewayToken =
     env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
   return {
-    HOME: env.HOME,
-    TMPDIR: sharedEnv.tmpDir,
-    PATH: sharedEnv.minimalPath,
-    ...sharedEnv.proxyEnv,
-    NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
-    OPENCLAW_STATE_DIR: sharedEnv.stateDir,
-    OPENCLAW_CONFIG_PATH: sharedEnv.configPath,
+    ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
@@ -293,17 +291,26 @@ export function buildNodeServiceEnvironment(params: {
   };
 }
 
+function buildCommonServiceEnvironment(
+  env: Record<string, string | undefined>,
+  sharedEnv: SharedServiceEnvironmentFields,
+): Record<string, string | undefined> {
+  return {
+    HOME: env.HOME,
+    TMPDIR: sharedEnv.tmpDir,
+    PATH: sharedEnv.minimalPath,
+    ...sharedEnv.proxyEnv,
+    NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
+    NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
+    OPENCLAW_STATE_DIR: sharedEnv.stateDir,
+    OPENCLAW_CONFIG_PATH: sharedEnv.configPath,
+  };
+}
+
 function resolveSharedServiceEnvironmentFields(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
-): {
-  stateDir: string | undefined;
-  configPath: string | undefined;
-  tmpDir: string;
-  minimalPath: string;
-  proxyEnv: Record<string, string | undefined>;
-  nodeCaCerts: string | undefined;
-} {
+): SharedServiceEnvironmentFields {
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
   // Keep a usable temp directory for supervised services even when the host env omits TMPDIR.
@@ -314,6 +321,7 @@ function resolveSharedServiceEnvironmentFields(
   // works correctly when running as a LaunchAgent without extra user configuration.
   const nodeCaCerts =
     env.NODE_EXTRA_CA_CERTS ?? (platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
+  const nodeUseSystemCa = env.NODE_USE_SYSTEM_CA ?? (platform === "darwin" ? "1" : undefined);
   return {
     stateDir,
     configPath,
@@ -321,5 +329,6 @@ function resolveSharedServiceEnvironmentFields(
     minimalPath: buildMinimalServicePath({ env }),
     proxyEnv,
     nodeCaCerts,
+    nodeUseSystemCa,
   };
 }

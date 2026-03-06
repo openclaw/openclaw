@@ -24,6 +24,14 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.accounts?.main?.requireMention).toBeUndefined();
   });
 
+  it("normalizes legacy groupPolicy allowall to open", () => {
+    const result = FeishuConfigSchema.parse({
+      groupPolicy: "allowall",
+    });
+
+    expect(result.groupPolicy).toBe("open");
+  });
+
   it("rejects top-level webhook mode without verificationToken", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
@@ -80,6 +88,25 @@ describe("FeishuConfigSchema webhook validation", () => {
           appId: "cli_main",
           appSecret: "secret_main",
         },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts SecretRef verificationToken in webhook mode", () => {
+    const result = FeishuConfigSchema.safeParse({
+      connectionMode: "webhook",
+      verificationToken: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_VERIFICATION_TOKEN",
+      },
+      appId: "cli_top",
+      appSecret: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_APP_SECRET",
       },
     });
 

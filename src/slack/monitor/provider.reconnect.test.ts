@@ -42,4 +42,18 @@ describe("slack socket reconnect helpers", () => {
 
     await expect(waiter).resolves.toEqual({ event: "error", error: err });
   });
+
+  it("preserves error payload from unable_to_socket_mode_start event", async () => {
+    const client = new FakeEmitter();
+    const app = { receiver: { client } };
+    const err = new Error("invalid_auth");
+
+    const waiter = __testing.waitForSlackSocketDisconnect(app as never);
+    client.emit("unable_to_socket_mode_start", err);
+
+    await expect(waiter).resolves.toEqual({
+      event: "unable_to_socket_mode_start",
+      error: err,
+    });
+  });
 });

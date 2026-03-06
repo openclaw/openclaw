@@ -95,6 +95,73 @@ function patchTelegramAdapter(overrides: Parameters<typeof patchChannelOnboardin
   });
 }
 
+function createUnexpectedConfigureCall(message: string) {
+  return vi.fn(async () => {
+    throw new Error(message);
+  });
+}
+
+async function runConfiguredTelegramSetup(params: {
+  strictUnexpected?: boolean;
+  configureWhenConfigured: NonNullable<
+    Parameters<typeof patchTelegramAdapter>[0]["configureWhenConfigured"]
+  >;
+  configureErrorMessage: string;
+}) {
+  const select = createQuickstartTelegramSelect({ strictUnexpected: params.strictUnexpected });
+  const selection = vi.fn();
+  const onAccountId = vi.fn();
+  const configure = createUnexpectedConfigureCall(params.configureErrorMessage);
+  const restore = patchTelegramAdapter({
+    configureInteractive: undefined,
+    configureWhenConfigured: params.configureWhenConfigured,
+    configure,
+  });
+  const { prompter } = createUnexpectedQuickstartPrompter(
+    select as unknown as WizardPrompter["select"],
+  );
+
+  try {
+    const cfg = await runSetupChannels(createTelegramCfg("old-token"), prompter, {
+      quickstartDefaults: true,
+      onSelection: selection,
+      onAccountId,
+    });
+    return { cfg, selection, onAccountId, configure };
+  } finally {
+    restore();
+  }
+}
+
+async function runQuickstartTelegramSetupWithInteractive(params: {
+  configureInteractive: NonNullable<
+    Parameters<typeof patchTelegramAdapter>[0]["configureInteractive"]
+  >;
+  configure?: NonNullable<Parameters<typeof patchTelegramAdapter>[0]["configure"]>;
+}) {
+  const select = createQuickstartTelegramSelect();
+  const selection = vi.fn();
+  const onAccountId = vi.fn();
+  const restore = patchTelegramAdapter({
+    configureInteractive: params.configureInteractive,
+    ...(params.configure ? { configure: params.configure } : {}),
+  });
+  const { prompter } = createUnexpectedQuickstartPrompter(
+    select as unknown as WizardPrompter["select"],
+  );
+
+  try {
+    const cfg = await runSetupChannels({} as OpenClawConfig, prompter, {
+      quickstartDefaults: true,
+      onSelection: selection,
+      onAccountId,
+    });
+    return { cfg, selection, onAccountId };
+  } finally {
+    restore();
+  }
+}
+
 vi.mock("node:fs/promises", () => ({
   default: {
     access: vi.fn(async () => {
@@ -269,39 +336,20 @@ describe("setupChannels", () => {
   });
 
   it("uses configureInteractive skip without mutating selection/account state", async () => {
-    const select = createQuickstartTelegramSelect();
-    const selection = vi.fn();
-    const onAccountId = vi.fn();
     const configureInteractive = vi.fn(async () => "skip" as const);
-    const restore = patchTelegramAdapter({
+    const { cfg, selection, onAccountId } = await runQuickstartTelegramSetupWithInteractive({
       configureInteractive,
     });
-    const { prompter } = createUnexpectedQuickstartPrompter(
-      select as unknown as WizardPrompter["select"],
+
+    expect(configureInteractive).toHaveBeenCalledWith(
+      expect.objectContaining({ configured: false, label: expect.any(String) }),
     );
-
-    try {
-      const cfg = await runSetupChannels({} as OpenClawConfig, prompter, {
-        quickstartDefaults: true,
-        onSelection: selection,
-        onAccountId,
-      });
-
-      expect(configureInteractive).toHaveBeenCalledWith(
-        expect.objectContaining({ configured: false, label: expect.any(String) }),
-      );
-      expect(selection).toHaveBeenCalledWith([]);
-      expect(onAccountId).not.toHaveBeenCalled();
-      expect(cfg.channels?.telegram?.botToken).toBeUndefined();
-    } finally {
-      restore();
-    }
+    expect(selection).toHaveBeenCalledWith([]);
+    expect(onAccountId).not.toHaveBeenCalled();
+    expect(cfg.channels?.telegram?.botToken).toBeUndefined();
   });
 
   it("applies configureInteractive result cfg/account updates", async () => {
-    const select = createQuickstartTelegramSelect();
-    const selection = vi.fn();
-    const onAccountId = vi.fn();
     const configureInteractive = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
       cfg: {
         ...cfg,
@@ -312,38 +360,22 @@ describe("setupChannels", () => {
       } as OpenClawConfig,
       accountId: "acct-1",
     }));
-    const configure = vi.fn(async () => {
-      throw new Error("configure should not be called when configureInteractive is present");
-    });
-    const restore = patchTelegramAdapter({
+    const configure = createUnexpectedConfigureCall(
+      "configure should not be called when configureInteractive is present",
+    );
+    const { cfg, selection, onAccountId } = await runQuickstartTelegramSetupWithInteractive({
       configureInteractive,
       configure,
     });
-    const { prompter } = createUnexpectedQuickstartPrompter(
-      select as unknown as WizardPrompter["select"],
-    );
 
-    try {
-      const cfg = await runSetupChannels({} as OpenClawConfig, prompter, {
-        quickstartDefaults: true,
-        onSelection: selection,
-        onAccountId,
-      });
-
-      expect(configureInteractive).toHaveBeenCalledTimes(1);
-      expect(configure).not.toHaveBeenCalled();
-      expect(selection).toHaveBeenCalledWith(["telegram"]);
-      expect(onAccountId).toHaveBeenCalledWith("telegram", "acct-1");
-      expect(cfg.channels?.telegram?.botToken).toBe("new-token");
-    } finally {
-      restore();
-    }
+    expect(configureInteractive).toHaveBeenCalledTimes(1);
+    expect(configure).not.toHaveBeenCalled();
+    expect(selection).toHaveBeenCalledWith(["telegram"]);
+    expect(onAccountId).toHaveBeenCalledWith("telegram", "acct-1");
+    expect(cfg.channels?.telegram?.botToken).toBe("new-token");
   });
 
   it("uses configureWhenConfigured when channel is already configured", async () => {
-    const select = createQuickstartTelegramSelect();
-    const selection = vi.fn();
-    const onAccountId = vi.fn();
     const configureWhenConfigured = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
       cfg: {
         ...cfg,
@@ -354,74 +386,37 @@ describe("setupChannels", () => {
       } as OpenClawConfig,
       accountId: "acct-2",
     }));
-    const configure = vi.fn(async () => {
-      throw new Error(
-        "configure should not be called when configureWhenConfigured handles updates",
-      );
-    });
-    const restore = patchTelegramAdapter({
-      configureInteractive: undefined,
+    const { cfg, selection, onAccountId, configure } = await runConfiguredTelegramSetup({
       configureWhenConfigured,
-      configure,
+      configureErrorMessage:
+        "configure should not be called when configureWhenConfigured handles updates",
     });
-    const { prompter } = createUnexpectedQuickstartPrompter(
-      select as unknown as WizardPrompter["select"],
+
+    expect(configureWhenConfigured).toHaveBeenCalledTimes(1);
+    expect(configureWhenConfigured).toHaveBeenCalledWith(
+      expect.objectContaining({ configured: true, label: expect.any(String) }),
     );
-
-    try {
-      const cfg = await runSetupChannels(createTelegramCfg("old-token"), prompter, {
-        quickstartDefaults: true,
-        onSelection: selection,
-        onAccountId,
-      });
-
-      expect(configureWhenConfigured).toHaveBeenCalledTimes(1);
-      expect(configureWhenConfigured).toHaveBeenCalledWith(
-        expect.objectContaining({ configured: true, label: expect.any(String) }),
-      );
-      expect(configure).not.toHaveBeenCalled();
-      expect(selection).toHaveBeenCalledWith(["telegram"]);
-      expect(onAccountId).toHaveBeenCalledWith("telegram", "acct-2");
-      expect(cfg.channels?.telegram?.botToken).toBe("updated-token");
-    } finally {
-      restore();
-    }
+    expect(configure).not.toHaveBeenCalled();
+    expect(selection).toHaveBeenCalledWith(["telegram"]);
+    expect(onAccountId).toHaveBeenCalledWith("telegram", "acct-2");
+    expect(cfg.channels?.telegram?.botToken).toBe("updated-token");
   });
 
   it("respects configureWhenConfigured skip without mutating selection or account state", async () => {
-    const select = createQuickstartTelegramSelect({ strictUnexpected: true });
-    const selection = vi.fn();
-    const onAccountId = vi.fn();
     const configureWhenConfigured = vi.fn(async () => "skip" as const);
-    const configure = vi.fn(async () => {
-      throw new Error("configure should not run when configureWhenConfigured handles skip");
-    });
-    const restore = patchTelegramAdapter({
-      configureInteractive: undefined,
+    const { cfg, selection, onAccountId, configure } = await runConfiguredTelegramSetup({
+      strictUnexpected: true,
       configureWhenConfigured,
-      configure,
+      configureErrorMessage: "configure should not run when configureWhenConfigured handles skip",
     });
-    const { prompter } = createUnexpectedQuickstartPrompter(
-      select as unknown as WizardPrompter["select"],
+
+    expect(configureWhenConfigured).toHaveBeenCalledWith(
+      expect.objectContaining({ configured: true, label: expect.any(String) }),
     );
-
-    try {
-      const cfg = await runSetupChannels(createTelegramCfg("old-token"), prompter, {
-        quickstartDefaults: true,
-        onSelection: selection,
-        onAccountId,
-      });
-
-      expect(configureWhenConfigured).toHaveBeenCalledWith(
-        expect.objectContaining({ configured: true, label: expect.any(String) }),
-      );
-      expect(configure).not.toHaveBeenCalled();
-      expect(selection).toHaveBeenCalledWith([]);
-      expect(onAccountId).not.toHaveBeenCalled();
-      expect(cfg.channels?.telegram?.botToken).toBe("old-token");
-    } finally {
-      restore();
-    }
+    expect(configure).not.toHaveBeenCalled();
+    expect(selection).toHaveBeenCalledWith([]);
+    expect(onAccountId).not.toHaveBeenCalled();
+    expect(cfg.channels?.telegram?.botToken).toBe("old-token");
   });
 
   it("prefers configureInteractive over configureWhenConfigured when both hooks exist", async () => {

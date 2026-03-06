@@ -1,18 +1,21 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/zalo";
 import {
   createDedupeCache,
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
   readJsonWebhookBodyOrReject,
   applyBasicWebhookRequestGuards,
+  registerWebhookTargetWithPluginRoute,
+  type RegisterWebhookTargetOptions,
+  type RegisterWebhookPluginRouteOptions,
   registerWebhookTarget,
   resolveSingleWebhookTarget,
   resolveWebhookTargets,
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/zalo";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.js";
@@ -106,8 +109,24 @@ function recordWebhookStatus(
   });
 }
 
-export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void {
-  return registerWebhookTarget(webhookTargets, target).unregister;
+export function registerZaloWebhookTarget(
+  target: ZaloWebhookTarget,
+  opts?: {
+    route?: RegisterWebhookPluginRouteOptions;
+  } & Pick<
+    RegisterWebhookTargetOptions<ZaloWebhookTarget>,
+    "onFirstPathTarget" | "onLastPathTargetRemoved"
+  >,
+): () => void {
+  if (opts?.route) {
+    return registerWebhookTargetWithPluginRoute({
+      targetsByPath: webhookTargets,
+      target,
+      route: opts.route,
+      onLastPathTargetRemoved: opts.onLastPathTargetRemoved,
+    }).unregister;
+  }
+  return registerWebhookTarget(webhookTargets, target, opts).unregister;
 }
 
 export async function handleZaloWebhookRequest(
