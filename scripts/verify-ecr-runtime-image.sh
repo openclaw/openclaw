@@ -6,10 +6,12 @@ IMAGE_URI="${1:?usage: verify-ecr-runtime-image.sh <image-uri>}"
 REQUIRED_BINS=(
   aws
   jq
+  rg
   gh
   git
   kubectl
   helm
+  terraform
   vault
   boundary
   argocd
@@ -28,10 +30,12 @@ done
 
 aws --version >/dev/null 2>&1
 jq --version >/dev/null
+rg --version >/dev/null
 git --version >/dev/null
 gh --version >/dev/null
 kubectl version --client=true --output=yaml >/dev/null
 helm version --short >/dev/null
+terraform version -json >/dev/null
 vault --version >/dev/null
 boundary version >/dev/null
 argocd version --client >/dev/null

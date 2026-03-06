@@ -4,6 +4,7 @@ USER root
 
 ARG KUBECTL_VERSION=v1.33.5
 ARG HELM_VERSION=v3.17.1
+ARG TERRAFORM_VERSION=1.14.5
 ARG OPENCLAW_VERSION=latest
 ARG OPENCLAW_LOCAL_TARBALL=openclaw-local.tgz
 ARG VAULT_VERSION=v1.21.2
@@ -21,6 +22,7 @@ RUN apt-get update \
     git \
     gzip \
     jq \
+    ripgrep \
     tar \
     unzip \
   && apt-get clean \
@@ -47,6 +49,9 @@ RUN set -eux; \
   tar -C /tmp -xzf /tmp/helm.tar.gz; \
   mv "/tmp/linux-${helm_arch}/helm" /usr/local/bin/helm; \
   chmod +x /usr/local/bin/helm; \
+  curl -fsSL -o /tmp/terraform.zip "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${hashicorp_arch}.zip"; \
+  unzip -p /tmp/terraform.zip terraform >/usr/local/bin/terraform; \
+  chmod +x /usr/local/bin/terraform; \
   vault_version="${VAULT_VERSION#v}"; \
   curl -fsSL -o /tmp/vault.zip "https://releases.hashicorp.com/vault/${vault_version}/vault_${vault_version}_linux_${hashicorp_arch}.zip"; \
   unzip -p /tmp/vault.zip vault >/usr/local/bin/vault; \
@@ -59,16 +64,19 @@ RUN set -eux; \
   chmod +x /usr/local/bin/argocd; \
   aws --version >/dev/null 2>&1; \
   jq --version >/dev/null; \
+  rg --version >/dev/null; \
   git --version >/dev/null; \
   gh --version >/dev/null; \
   kubectl version --client=true --output=yaml >/dev/null; \
   helm version --short >/dev/null; \
+  terraform version -json >/dev/null; \
   vault --version >/dev/null; \
   boundary version >/dev/null; \
   argocd version --client >/dev/null; \
   rm -rf \
     /tmp/helm.tar.gz \
     "/tmp/linux-${helm_arch}" \
+    /tmp/terraform.zip \
     /tmp/vault.zip \
     /tmp/boundary.zip
 
