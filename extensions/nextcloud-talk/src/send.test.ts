@@ -95,8 +95,7 @@ describe("nextcloud-talk send cfg threading", () => {
     hoisted.loadConfig.mockReturnValueOnce(runtimeCfg);
     hoisted.fetchWithSsrFGuard.mockResolvedValueOnce({
       response: new Response("{}", { status: 200 }),
-      finalUrl:
-        "https://nextcloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/ops/reaction/m-1",
+      finalUrl: "https://nextcloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/ops/reaction/m-1",
       release: vi.fn(),
     });
 
