@@ -60,9 +60,10 @@ describe("lookupContextTokens", () => {
     }));
 
     const { lookupContextTokens } = await import("./context.js");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(lookupContextTokens("gpt-5.4")).toBe(1_050_000);
-    expect(lookupContextTokens("gpt-5.4-pro")).toBe(1_050_000);
+    await vi.waitFor(() => {
+      expect(lookupContextTokens("gpt-5.4")).toBe(1_050_000);
+      expect(lookupContextTokens("gpt-5.4-pro")).toBe(1_050_000);
+    });
   });
 
   it("does not skip eager warmup when --profile is followed by -- terminator", async () => {
