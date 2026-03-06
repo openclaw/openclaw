@@ -37,8 +37,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "chutes",
     label: "Chutes",
-    hint: "OAuth",
-    choices: ["chutes"],
+    hint: "OAuth + API key",
+    choices: ["chutes", "chutes-api-key"],
   },
   {
     value: "vllm",
@@ -191,6 +191,7 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     label: "OpenAI Codex (ChatGPT OAuth)",
   },
   { value: "chutes", label: "Chutes (OAuth)" },
+  { value: "chutes-api-key", label: "Chutes API key" },
   {
     value: "vllm",
     label: "vLLM (custom URL + model)",

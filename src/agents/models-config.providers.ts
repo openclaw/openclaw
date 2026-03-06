@@ -14,6 +14,7 @@ import {
   BYTEPLUS_CODING_BASE_URL,
   BYTEPLUS_CODING_MODEL_CATALOG,
 } from "./byteplus-models.js";
+import { discoverChutesModels, CHUTES_BASE_URL } from "./chutes-models.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
@@ -132,6 +133,8 @@ const QWEN_PORTAL_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+
+const CHUTES_OAUTH_PLACEHOLDER = "chutes-oauth";
 
 const OLLAMA_BASE_URL = OLLAMA_NATIVE_BASE_URL;
 const OLLAMA_API_BASE_URL = OLLAMA_BASE_URL;
@@ -634,6 +637,16 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
+async function buildChutesProvider(accessToken?: string): Promise<ProviderConfig> {
+  const models = await discoverChutesModels(accessToken);
+  return {
+    baseUrl: CHUTES_BASE_URL,
+    api: "openai-completions",
+    auth: "api-key",
+    models,
+  };
+}
+
 async function buildOllamaProvider(configuredBaseUrl?: string): Promise<ProviderConfig> {
   const models = await discoverOllamaModels(configuredBaseUrl);
   return {
@@ -814,6 +827,33 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "venice", store: authStore });
   if (veniceKey) {
     providers.venice = { ...(await buildVeniceProvider()), apiKey: veniceKey };
+  }
+
+  const chutesKey =
+    resolveEnvApiKeyVarName("chutes") ??
+    resolveApiKeyFromProfiles({ provider: "chutes", store: authStore });
+  const chutesProfiles = listProfilesForProvider(authStore, "chutes");
+  if (chutesKey || chutesProfiles.length > 0) {
+    let discoveryToken = "";
+    if (chutesKey) {
+      discoveryToken = /^[A-Z][A-Z0-9_]*$/.test(chutesKey)
+        ? (process.env[chutesKey] ?? "").trim()
+        : chutesKey;
+    } else if (chutesProfiles.length > 0) {
+      const profileId = chutesProfiles[0];
+      const cred = profileId ? authStore.profiles[profileId] : undefined;
+      if (cred?.type === "oauth") {
+        discoveryToken = cred.access ?? "";
+      } else if (cred?.type === "token") {
+        discoveryToken = cred.token ?? "";
+      } else if (cred?.type === "api_key") {
+        discoveryToken = cred.key ?? "";
+      }
+    }
+    providers.chutes = {
+      ...(await buildChutesProvider(discoveryToken)),
+      apiKey: chutesKey ?? CHUTES_OAUTH_PLACEHOLDER,
+    };
   }
 
   const qwenProfiles = listProfilesForProvider(authStore, "qwen-portal");

@@ -5,6 +5,7 @@ import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveStateDir } from "../config/paths.js";
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
+export { CHUTES_DEFAULT_MODEL_REF } from "../agents/chutes-models.js";
 export { MISTRAL_DEFAULT_MODEL_REF, XAI_DEFAULT_MODEL_REF } from "./onboard-auth.models.js";
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
@@ -200,6 +201,19 @@ export async function setVeniceApiKey(key: string, agentDir?: string) {
     credential: {
       type: "api_key",
       provider: "venice",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setChutesApiKey(key: string, agentDir?: string) {
+  // Write to resolved agent dir so gateway finds credentials on startup.
+  upsertAuthProfile({
+    profileId: "chutes:default",
+    credential: {
+      type: "api_key",
+      provider: "chutes",
       key,
     },
     agentDir: resolveAuthAgentDir(agentDir),
