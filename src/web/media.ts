@@ -381,6 +381,10 @@ async function loadWebMediaInternal(
     const roots = localRoots ?? getDefaultLocalRoots();
     for (const root of roots) {
       const candidate = path.resolve(root, mediaUrl);
+      // Only accept candidates that actually stay inside this root.
+      if (candidate !== root && !candidate.startsWith(root + path.sep)) {
+        continue;
+      }
       try {
         await fs.access(candidate);
         mediaUrl = candidate;
