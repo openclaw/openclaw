@@ -43,12 +43,14 @@ describe("telegram bot message processor", () => {
 
   async function processSampleMessage(
     processMessage: ReturnType<typeof createTelegramMessageProcessor>,
+    opts: { messageId?: number; text?: string } = {},
   ) {
     await processMessage(
       {
         message: {
           chat: { id: 123, type: "private", title: "chat" },
-          message_id: 456,
+          message_id: opts.messageId ?? 456,
+          text: opts.text,
         },
       } as unknown as Parameters<typeof processMessage>[0],
       [],
@@ -72,14 +74,55 @@ describe("telegram bot message processor", () => {
     buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processSampleMessage(processMessage);
-    await processSampleMessage(processMessage);
+    await processSampleMessage(processMessage, { text: "hi" });
+    await processSampleMessage(processMessage, { messageId: 457, text: "again" });
 
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(2);
     const first = dispatchTelegramMessage.mock.calls[0]?.[0] as { replyToMode?: string };
     const second = dispatchTelegramMessage.mock.calls[1]?.[0] as { replyToMode?: string };
     expect(first.replyToMode).toBe("off");
     expect(second.replyToMode).toBe("first");
+  });
+
+  it("disables reply threading when message gap exceeds base 10s window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T00:00:00.000Z"));
+    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await processSampleMessage(processMessage, {
+      text: "this is a longer first message that should not count as dense short input",
+    });
+    vi.setSystemTime(new Date("2026-03-06T00:00:11.000Z"));
+    await processSampleMessage(processMessage, {
+      messageId: 458,
+      text: "this is another long message past 10s so it should reset",
+    });
+
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(2);
+    const first = dispatchTelegramMessage.mock.calls[0]?.[0] as { replyToMode?: string };
+    const second = dispatchTelegramMessage.mock.calls[1]?.[0] as { replyToMode?: string };
+    expect(first.replyToMode).toBe("off");
+    expect(second.replyToMode).toBe("off");
+    vi.useRealTimers();
+  });
+
+  it("expands burst window for dense short messages", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T00:00:00.000Z"));
+    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await processSampleMessage(processMessage, { text: "1" }); // off
+    vi.setSystemTime(new Date("2026-03-06T00:00:08.000Z"));
+    await processSampleMessage(processMessage, { messageId: 459, text: "2" }); // first
+    vi.setSystemTime(new Date("2026-03-06T00:00:16.000Z"));
+    await processSampleMessage(processMessage, { messageId: 460, text: "3" }); // first (20s window)
+
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(3);
+    const third = dispatchTelegramMessage.mock.calls[2]?.[0] as { replyToMode?: string };
+    expect(third.replyToMode).toBe("first");
+    vi.useRealTimers();
   });
 
   it("skips dispatch when no context is produced", async () => {

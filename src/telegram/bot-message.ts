@@ -23,11 +23,17 @@ type TelegramMessageProcessorDeps = Omit<
   opts: Pick<TelegramBotOptions, "token">;
 };
 
-const TELEGRAM_REPLY_BURST_WINDOW_MS = 60_000;
+const TELEGRAM_REPLY_BURST_BASE_WINDOW_MS = 10_000;
+const TELEGRAM_REPLY_BURST_DENSE_WINDOW_MS = 20_000;
+const TELEGRAM_REPLY_BURST_VERY_DENSE_WINDOW_MS = 25_000;
+const TELEGRAM_REPLY_BURST_DENSE_MIN_SHORT_COUNT = 2;
+const TELEGRAM_REPLY_BURST_VERY_DENSE_MIN_SHORT_COUNT = 4;
+const TELEGRAM_SHORT_MESSAGE_MAX_CHARS = 48;
 
 type ReplyBurstState = {
   lastInboundAt: number;
   streak: number;
+  recentShortMessageAt: number[];
 };
 
 function buildReplyBurstKey(ctx: TelegramContext): string {
@@ -39,6 +45,12 @@ function buildReplyBurstKey(ctx: TelegramContext): string {
       ? String((msg as { message_thread_id?: number }).message_thread_id)
       : "none";
   return `${chatId}:${senderId}:${threadId}`;
+}
+
+function resolveMessageTextLength(ctx: TelegramContext): number {
+  const msg = ctx.message as { text?: string; caption?: string };
+  const text = (msg.text ?? msg.caption ?? "").trim();
+  return text.length;
 }
 
 function resolveAdaptiveReplyToMode(params: {
@@ -53,10 +65,28 @@ function resolveAdaptiveReplyToMode(params: {
   const now = params.now ?? Date.now();
   const key = buildReplyBurstKey(params.ctx);
   const previous = params.burstState.get(key);
-  const withinBurst =
-    previous != null && now - previous.lastInboundAt <= TELEGRAM_REPLY_BURST_WINDOW_MS;
+
+  const messageTextLength = resolveMessageTextLength(params.ctx);
+  const shortMessage =
+    messageTextLength > 0 && messageTextLength <= TELEGRAM_SHORT_MESSAGE_MAX_CHARS;
+  const recentShortMessageAt = (previous?.recentShortMessageAt ?? []).filter(
+    (ts) => now - ts <= TELEGRAM_REPLY_BURST_VERY_DENSE_WINDOW_MS,
+  );
+  if (shortMessage) {
+    recentShortMessageAt.push(now);
+  }
+
+  const shortCount = recentShortMessageAt.length;
+  const burstWindowMs =
+    shortCount >= TELEGRAM_REPLY_BURST_VERY_DENSE_MIN_SHORT_COUNT
+      ? TELEGRAM_REPLY_BURST_VERY_DENSE_WINDOW_MS
+      : shortCount >= TELEGRAM_REPLY_BURST_DENSE_MIN_SHORT_COUNT
+        ? TELEGRAM_REPLY_BURST_DENSE_WINDOW_MS
+        : TELEGRAM_REPLY_BURST_BASE_WINDOW_MS;
+
+  const withinBurst = previous != null && now - previous.lastInboundAt <= burstWindowMs;
   const streak = withinBurst ? previous.streak + 1 : 1;
-  params.burstState.set(key, { lastInboundAt: now, streak });
+  params.burstState.set(key, { lastInboundAt: now, streak, recentShortMessageAt });
   return streak >= 2 ? params.configuredMode : "off";
 }
 
