@@ -10,6 +10,7 @@ import {
   Text,
 } from "@mariozechner/pi-tui";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
+import { parseFenceSpans } from "../../markdown/fences.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { MEDIA_IMAGE_LINE_RE, MEDIA_TOKEN_RE, normalizeMediaSource } from "../../media/parse.js";
 import { markdownTheme, theme } from "../theme/theme.js";
@@ -88,9 +89,17 @@ function getMediaPaths(result?: ToolResult): string[] {
     if (entry.type !== "text" || typeof entry.text !== "string") {
       continue;
     }
+    const text = entry.text;
+    // Skip MEDIA: tokens inside fenced code blocks (mirrors gateway extractMediaImagePaths).
+    const hasFences = /^[`~]{3,}/m.test(text);
+    const fenceSpans = hasFences ? parseFenceSpans(text) : [];
     // matchAll() internally clones the regex, avoiding lastIndex statefulness.
     // MEDIA_TOKEN_RE handles backticks, whitespace after colon, case-insensitive.
-    for (const match of entry.text.matchAll(MEDIA_TOKEN_RE)) {
+    for (const match of text.matchAll(MEDIA_TOKEN_RE)) {
+      const matchOffset = match.index ?? 0;
+      if (hasFences && fenceSpans.some((s) => matchOffset >= s.start && matchOffset < s.end)) {
+        continue;
+      }
       // Strip trailing punctuation the same way parse.ts cleanCandidate() does.
       const raw = match[1]
         .replace(/^[`"'\\{([,]+/, "")
