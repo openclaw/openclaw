@@ -39,6 +39,39 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts top-level apiKey as SecretRef object", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "brave",
+            apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY" },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts nested provider apiKey as SecretRef object", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "perplexity",
+        providerConfig: {
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "PERPLEXITY_API_KEY",
+          },
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts gemini provider with no extra config", () => {
     const res = validateConfigObject(
       buildWebSearchProviderConfig({
