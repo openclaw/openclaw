@@ -212,13 +212,13 @@ export function chunkMarkdownBySection(content: string): MemoryChunk[] {
     }
   }
 
-  // No ## headings — return the whole content as one chunk
+  // No ## headings — fall back to token-based splitting for proper granularity
+  // But first check if content is effectively empty
   if (headingIndices.length === 0) {
-    const text = content.trim();
-    if (!text) {
+    if (!content.trim()) {
       return [];
     }
-    return [{ startLine: 1, endLine: lines.length, text, hash: hashText(text) }];
+    return chunkMarkdown(content, { tokens: 512, overlap: 64, strategy: "token" });
   }
 
   // Build raw sections
