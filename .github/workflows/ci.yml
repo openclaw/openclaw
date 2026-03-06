@@ -29,15 +29,17 @@ jobs:
         uses: ./.github/actions/detect-docs-changes
 
   # Detect which heavy areas are touched so PRs can skip unrelated expensive jobs.
-  # Push to main keeps broad coverage.
+  # Push to main keeps broad coverage, but this job still needs to run so
+  # downstream jobs that list it in `needs` are not skipped.
   changed-scope:
     needs: [docs-scope]
-    if: github.event_name == 'pull_request' && needs.docs-scope.outputs.docs_only != 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       run_node: ${{ steps.scope.outputs.run_node }}
       run_macos: ${{ steps.scope.outputs.run_macos }}
       run_android: ${{ steps.scope.outputs.run_android }}
+      run_skills_python: ${{ steps.scope.outputs.run_skills_python }}
       run_windows: ${{ steps.scope.outputs.run_windows }}
     steps:
       - name: Checkout
@@ -124,6 +126,9 @@ jobs:
           - runtime: node
             task: test
             command: pnpm canvas:a2ui:bundle && pnpm test
+          - runtime: node
+            task: extensions
+            command: pnpm test:extensions
           - runtime: node
             task: protocol
             command: pnpm protocol:check
@@ -249,7 +254,7 @@ jobs:
 
   skills-python:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true' || needs.changed-scope.outputs.run_skills_python == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
