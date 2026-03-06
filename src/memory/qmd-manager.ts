@@ -315,12 +315,16 @@ export class QmdMemoryManager implements MemorySearchManager {
         });
       }
     }
-    if (this.qmd.update.intervalMs > 0) {
+    if (this.qmd.update.intervalMs > 0 || this.qmd.update.embedIntervalMs > 0) {
+      const intervalMs =
+        this.qmd.update.intervalMs > 0 && this.qmd.update.embedIntervalMs > 0
+          ? Math.min(this.qmd.update.intervalMs, this.qmd.update.embedIntervalMs)
+          : Math.max(this.qmd.update.intervalMs, this.qmd.update.embedIntervalMs);
       this.updateTimer = setInterval(() => {
         void this.runUpdate("interval").catch((err) => {
           log.warn(`qmd update failed (${String(err)})`);
         });
-      }, this.qmd.update.intervalMs);
+      }, intervalMs);
     }
   }
 
