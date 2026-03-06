@@ -89,6 +89,8 @@ export {
 } from "../security/dm-policy-shared.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
+export type { KeyedAsyncQueueHooks } from "../plugin-sdk/keyed-async-queue.js";
+export { enqueueKeyedTask, KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { runPluginCommandWithTimeout } from "./run-command.js";
