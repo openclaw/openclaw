@@ -87,4 +87,33 @@ describe("doctor command", () => {
     );
     expect(warned).toBe(false);
   });
+
+  it("warns when token and password are both configured and gateway.auth.mode is unset", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            token: "token-value",
+            password: "password-value",
+          },
+        },
+      },
+    });
+
+    note.mockClear();
+
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    const gatewayAuthNote = note.mock.calls.find((call) => call[1] === "Gateway auth");
+    expect(gatewayAuthNote).toBeTruthy();
+    expect(String(gatewayAuthNote?.[0])).toContain("gateway.auth.mode is unset");
+    expect(String(gatewayAuthNote?.[0])).toContain("openclaw config set gateway.auth.mode token");
+    expect(String(gatewayAuthNote?.[0])).toContain(
+      "openclaw config set gateway.auth.mode password",
+    );
+  });
 });

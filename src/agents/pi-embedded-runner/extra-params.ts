@@ -661,6 +661,117 @@ function createMoonshotThinkingWrapper(
   };
 }
 
+function isKimiCodingAnthropicEndpoint(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  if (model.api !== "anthropic-messages") {
+    return false;
+  }
+
+  if (typeof model.provider === "string" && model.provider.trim().toLowerCase() === "kimi-coding") {
+    return true;
+  }
+
+  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(model.baseUrl);
+    const host = parsed.hostname.toLowerCase();
+    const pathname = parsed.pathname.toLowerCase();
+    return host.endsWith("kimi.com") && pathname.startsWith("/coding");
+  } catch {
+    const normalized = model.baseUrl.toLowerCase();
+    return normalized.includes("kimi.com/coding");
+  }
+}
+
+function normalizeKimiCodingToolDefinition(tool: unknown): Record<string, unknown> | undefined {
+  if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
+    return undefined;
+  }
+
+  const toolObj = tool as Record<string, unknown>;
+  if (toolObj.function && typeof toolObj.function === "object") {
+    return toolObj;
+  }
+
+  const rawName = typeof toolObj.name === "string" ? toolObj.name.trim() : "";
+  if (!rawName) {
+    return toolObj;
+  }
+
+  const functionSpec: Record<string, unknown> = {
+    name: rawName,
+    parameters:
+      toolObj.input_schema && typeof toolObj.input_schema === "object"
+        ? toolObj.input_schema
+        : toolObj.parameters && typeof toolObj.parameters === "object"
+          ? toolObj.parameters
+          : { type: "object", properties: {} },
+  };
+
+  if (typeof toolObj.description === "string" && toolObj.description.trim()) {
+    functionSpec.description = toolObj.description;
+  }
+  if (typeof toolObj.strict === "boolean") {
+    functionSpec.strict = toolObj.strict;
+  }
+
+  return {
+    type: "function",
+    function: functionSpec,
+  };
+}
+
+function normalizeKimiCodingToolChoice(toolChoice: unknown): unknown {
+  if (!toolChoice || typeof toolChoice !== "object" || Array.isArray(toolChoice)) {
+    return toolChoice;
+  }
+
+  const choice = toolChoice as Record<string, unknown>;
+  if (choice.type === "any") {
+    return "required";
+  }
+  if (choice.type === "tool" && typeof choice.name === "string" && choice.name.trim()) {
+    return {
+      type: "function",
+      function: { name: choice.name.trim() },
+    };
+  }
+
+  return toolChoice;
+}
+
+/**
+ * Kimi Coding's anthropic-messages endpoint expects OpenAI-style tool payloads
+ * (`tools[].function`) even when messages use Anthropic request framing.
+ */
+function createKimiCodingAnthropicToolSchemaWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object" && isKimiCodingAnthropicEndpoint(model)) {
+          const payloadObj = payload as Record<string, unknown>;
+          if (Array.isArray(payloadObj.tools)) {
+            payloadObj.tools = payloadObj.tools
+              .map((tool) => normalizeKimiCodingToolDefinition(tool))
+              .filter((tool): tool is Record<string, unknown> => !!tool);
+          }
+          payloadObj.tool_choice = normalizeKimiCodingToolChoice(payloadObj.tool_choice);
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Create a streamFn wrapper that adds OpenRouter app attribution headers
  * and injects reasoning.effort based on the configured thinking level.
@@ -921,6 +1032,8 @@ export function applyExtraParamsToAgent(
     }
     agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, moonshotThinkingType);
   }
+
+  agent.streamFn = createKimiCodingAnthropicToolSchemaWrapper(agent.streamFn);
 
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);

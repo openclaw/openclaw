@@ -16,6 +16,13 @@ export type StreamingCardHeader = {
   template?: string;
 };
 
+type StreamingStartOptions = {
+  replyToMessageId?: string;
+  replyInThread?: boolean;
+  rootId?: string;
+  header?: StreamingCardHeader;
+};
+
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
@@ -60,6 +67,10 @@ async function getToken(creds: Credentials): Promise<string> {
     policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
     auditContext: "feishu.streaming-card.token",
   });
+  if (!response.ok) {
+    await release();
+    throw new Error(`Token request failed with HTTP ${response.status}`);
+  }
   const data = (await response.json()) as {
     code: number;
     msg: string;
@@ -103,6 +114,12 @@ export function mergeStreamingText(
   if (previous.startsWith(next)) {
     return previous;
   }
+  if (next.includes(previous)) {
+    return next;
+  }
+  if (previous.includes(next)) {
+    return previous;
+  }
 
   // Merge partial overlaps, e.g. "这" + "这是" => "这是".
   const maxOverlap = Math.min(previous.length, next.length);
@@ -111,15 +128,18 @@ export function mergeStreamingText(
       return `${previous}${next.slice(overlap)}`;
     }
   }
-
-  if (next.includes(previous)) {
-    return next;
-  }
-  if (previous.includes(next)) {
-    return previous;
-  }
   // Fallback for fragmented partial chunks: append as-is to avoid losing tokens.
   return `${previous}${next}`;
+}
+
+export function resolveStreamingCardSendMode(options?: StreamingStartOptions) {
+  if (options?.replyToMessageId) {
+    return "reply";
+  }
+  if (options?.rootId) {
+    return "root_create";
+  }
+  return "create";
 }
 
 /** Streaming card session manager */
@@ -143,12 +163,7 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
-    options?: {
-      replyToMessageId?: string;
-      replyInThread?: boolean;
-      rootId?: string;
-      header?: StreamingCardHeader;
-    },
+    options?: StreamingStartOptions,
   ): Promise<void> {
     if (this.state) {
       return;
@@ -187,6 +202,10 @@ export class FeishuStreamingSession {
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.create",
     });
+    if (!createRes.ok) {
+      await releaseCreate();
+      throw new Error(`Create card request failed with HTTP ${createRes.status}`);
+    }
     const createData = (await createRes.json()) as {
       code: number;
       msg: string;
@@ -204,22 +223,24 @@ export class FeishuStreamingSession {
     // message.create with root_id may silently ignore root_id for card
     // references (card_id format).
     let sendRes;
-    if (options?.replyToMessageId) {
+    const sendOptions = options ?? {};
+    const sendMode = resolveStreamingCardSendMode(sendOptions);
+    if (sendMode === "reply") {
       sendRes = await this.client.im.message.reply({
-        path: { message_id: options.replyToMessageId },
+        path: { message_id: sendOptions.replyToMessageId! },
         data: {
           msg_type: "interactive",
           content: cardContent,
-          ...(options.replyInThread ? { reply_in_thread: true } : {}),
+          ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
         },
       });
-    } else if (options?.rootId) {
+    } else if (sendMode === "root_create") {
       // root_id is undeclared in the SDK types but accepted at runtime
       sendRes = await this.client.im.message.create({
         params: { receive_id_type: receiveIdType },
         data: Object.assign(
           { receive_id: receiveId, msg_type: "interactive", content: cardContent },
-          { root_id: options.rootId },
+          { root_id: sendOptions.rootId },
         ),
       });
     } else {

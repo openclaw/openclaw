@@ -568,8 +568,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   private shouldRebindCollection(collection: ManagedCollection, listed: ListedCollection): boolean {
     if (!listed.path) {
       // Older qmd versions may only return names from `collection list --json`.
-      // Rebind managed collections so stale path bindings cannot survive upgrades.
-      return true;
+      // Do not perform destructive rebinds when metadata is incomplete: remove+add
+      // can permanently drop collections if add fails (for example on timeout).
+      return false;
     }
     if (!this.pathsMatch(listed.path, collection.path)) {
       return true;

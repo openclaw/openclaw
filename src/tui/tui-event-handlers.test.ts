@@ -403,6 +403,26 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBe("run-active");
   });
 
+  it("renders final error text when chat final has no content but includes event errorMessage", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-error-envelope",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [] },
+      errorMessage: '401 {"error":{"message":"Missing scopes: model.request"}}',
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+    const [rendered] = chatLog.finalizeAssistant.mock.calls[0] ?? [];
+    expect(String(rendered)).toContain("HTTP 401");
+    expect(String(rendered)).toContain("Missing scopes: model.request");
+    expect(chatLog.dropAssistant).not.toHaveBeenCalledWith("run-error-envelope");
+  });
+
   it("drops streaming assistant when chat final has no message", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
