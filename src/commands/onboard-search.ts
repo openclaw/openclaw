@@ -254,6 +254,23 @@ export async function setupSearch(
     return preserveDisabledState(config, result);
   }
 
+  if (opts?.secretInputMode === "ref") {
+    if (keyConfigured) {
+      return preserveDisabledState(config, applyProviderOnly(config, choice));
+    }
+    const ref = buildSearchEnvRef(choice);
+    await prompter.note(
+      [
+        "Secret references enabled — OpenClaw will store a reference instead of the API key.",
+        `Env var: ${ref.id}${envAvailable ? " (detected)" : ""}.`,
+        ...(envAvailable ? [] : [`Set ${ref.id} in the Gateway environment.`]),
+        "Docs: https://docs.openclaw.ai/tools/web",
+      ].join("\n"),
+      "Web search",
+    );
+    return applySearchKey(config, choice, ref);
+  }
+
   const keyInput = await prompter.text({
     message: keyConfigured
       ? `${entry.label} API key (leave blank to keep current)`
