@@ -47,7 +47,9 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
   });
 }
 
-function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
+function createProviderSearchTool(
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "searxng",
+) {
   const searchConfig =
     provider === "perplexity"
       ? { provider, perplexity: { apiKey: "pplx-config-test" } }
@@ -57,7 +59,9 @@ function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "g
           ? { provider, gemini: { apiKey: "gemini-config-test" } }
           : provider === "kimi"
             ? { provider, kimi: { apiKey: "moonshot-config-test" } }
-            : { provider, apiKey: "brave-config-test" };
+            : provider === "searxng"
+              ? { provider, searxng: { baseUrl: "http://localhost:8888" } }
+              : { provider, apiKey: "brave-config-test" };
   return createWebSearchTool({
     config: {
       tools: {
@@ -93,7 +97,7 @@ function installPerplexitySearchApiFetch(results?: Array<Record<string, unknown>
 }
 
 function createProviderSuccessPayload(
-  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi",
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "searxng",
 ) {
   if (provider === "brave") {
     return { web: { results: [] } };
@@ -113,6 +117,9 @@ function createProviderSuccessPayload(
         },
       ],
     };
+  }
+  if (provider === "searxng") {
+    return { results: [{ title: "ok", url: "https://example.com", content: "ok" }] };
   }
   return {
     choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
