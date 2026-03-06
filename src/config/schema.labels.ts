@@ -249,6 +249,23 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.allowInsecureAuth": "Insecure Control UI Auth Toggle",
   "gateway.controlUi.dangerouslyDisableDeviceAuth": "Dangerously Disable Control UI Device Auth",
   "gateway.http.endpoints.chatCompletions.enabled": "OpenAI Chat Completions Endpoint",
+  "gateway.http.endpoints.chatCompletions.maxBodyBytes": "OpenAI Chat Completions Max Body Bytes",
+  "gateway.http.endpoints.chatCompletions.maxImageParts": "OpenAI Chat Completions Max Image Parts",
+  "gateway.http.endpoints.chatCompletions.maxTotalImageBytes":
+    "OpenAI Chat Completions Max Total Image Bytes",
+  "gateway.http.endpoints.chatCompletions.images": "OpenAI Chat Completions Image Limits",
+  "gateway.http.endpoints.chatCompletions.images.allowUrl":
+    "OpenAI Chat Completions Allow Image URLs",
+  "gateway.http.endpoints.chatCompletions.images.urlAllowlist":
+    "OpenAI Chat Completions Image URL Allowlist",
+  "gateway.http.endpoints.chatCompletions.images.allowedMimes":
+    "OpenAI Chat Completions Image MIME Allowlist",
+  "gateway.http.endpoints.chatCompletions.images.maxBytes":
+    "OpenAI Chat Completions Image Max Bytes",
+  "gateway.http.endpoints.chatCompletions.images.maxRedirects":
+    "OpenAI Chat Completions Image Max Redirects",
+  "gateway.http.endpoints.chatCompletions.images.timeoutMs":
+    "OpenAI Chat Completions Image Timeout (ms)",
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "gateway.nodes.browser.mode": "Gateway Node Browser Mode",
@@ -434,6 +451,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.maxHistoryShare": "Compaction Max History Share",
   "agents.defaults.compaction.identifierPolicy": "Compaction Identifier Policy",
   "agents.defaults.compaction.identifierInstructions": "Compaction Identifier Instructions",
+  "agents.defaults.compaction.qualityGuard": "Compaction Quality Guard",
+  "agents.defaults.compaction.qualityGuard.enabled": "Compaction Quality Guard Enabled",
+  "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Max Retries",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
@@ -692,6 +712,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.telegram.network.autoSelectFamily": "Telegram autoSelectFamily",
   "channels.telegram.timeoutSeconds": "Telegram API Timeout (seconds)",
   "channels.telegram.capabilities.inlineButtons": "Telegram Inline Buttons",
+  "channels.telegram.threadBindings.enabled": "Telegram Thread Binding Enabled",
+  "channels.telegram.threadBindings.idleHours": "Telegram Thread Binding Idle Timeout (hours)",
+  "channels.telegram.threadBindings.maxAgeHours": "Telegram Thread Binding Max Age (hours)",
+  "channels.telegram.threadBindings.spawnSubagentSessions": "Telegram Thread-Bound Subagent Spawn",
+  "channels.telegram.threadBindings.spawnAcpSessions": "Telegram Thread-Bound ACP Spawn",
   "channels.whatsapp.dmPolicy": "WhatsApp DM Policy",
   "channels.whatsapp.selfChatMode": "WhatsApp Self-Phone Mode",
   "channels.whatsapp.debounceMs": "WhatsApp Message Debounce (ms)",
@@ -719,6 +744,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.retry.maxDelayMs": "Discord Retry Max Delay (ms)",
   "channels.discord.retry.jitter": "Discord Retry Jitter",
   "channels.discord.maxLinesPerMessage": "Discord Max Lines Per Message",
+  "channels.discord.inboundWorker.runTimeoutMs": "Discord Inbound Worker Timeout (ms)",
   "channels.discord.eventQueue.listenerTimeout": "Discord EventQueue Listener Timeout (ms)",
   "channels.discord.eventQueue.maxQueueSize": "Discord EventQueue Max Queue Size",
   "channels.discord.eventQueue.maxConcurrency": "Discord EventQueue Max Concurrency",
@@ -793,6 +819,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.slots.memory": "Memory Plugin",
   "plugins.entries": "Plugin Entries",
   "plugins.entries.*.enabled": "Plugin Enabled",
+  "plugins.entries.*.hooks": "Plugin Hook Policy",
+  "plugins.entries.*.hooks.allowPromptInjection": "Allow Prompt Injection Hooks",
   "plugins.entries.*.apiKey": "Plugin API Key",
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",

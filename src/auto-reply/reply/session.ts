@@ -328,7 +328,6 @@ export async function initSessionState(params: {
     sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
   }
   const entry = sessionStore[sessionKey];
-  const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -354,6 +353,11 @@ export async function initSessionState(params: {
   const freshEntry = entry
     ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
+  // Capture the current session entry before any reset so its transcript can be
+  // archived afterward.  We need to do this for both explicit resets (/new, /reset)
+  // and for scheduled/daily resets where the session has become stale (!freshEntry).
+  // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
+  const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
 
   if (!isNewSession && freshEntry) {
     sessionId = entry.sessionId;
