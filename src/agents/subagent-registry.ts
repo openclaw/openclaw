@@ -338,6 +338,19 @@ async function completeSubagentRun(params: {
   }
 
   let mutated = false;
+  // If a late lifecycle completion arrives after an earlier kill marker, allow
+  // completion cleanup/announce to run instead of staying permanently suppressed.
+  if (
+    params.reason === SUBAGENT_ENDED_REASON_COMPLETE &&
+    entry.suppressAnnounceReason === "killed" &&
+    (entry.cleanupHandled || typeof entry.cleanupCompletedAt === "number")
+  ) {
+    entry.suppressAnnounceReason = undefined;
+    entry.cleanupHandled = false;
+    entry.cleanupCompletedAt = undefined;
+    mutated = true;
+  }
+
   const endedAt = typeof params.endedAt === "number" ? params.endedAt : Date.now();
   if (entry.endedAt !== endedAt) {
     entry.endedAt = endedAt;
