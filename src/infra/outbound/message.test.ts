@@ -16,6 +16,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
+  resolveSessionAgentId: () => "main",
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -67,6 +68,44 @@ describe("sendMessage", () => {
         session: expect.objectContaining({ agentId: "work" }),
         channel: "telegram",
         to: "123456",
+      }),
+    );
+  });
+
+  it("passes standalone sessionKey to outbound session context for hook dispatch", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "hi",
+      agentId: "work",
+      sessionKey: "agent:work:main",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ key: "agent:work:main", agentId: "work" }),
+      }),
+    );
+  });
+
+  it("prefers standalone sessionKey over mirror sessionKey for outbound session context", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "hi",
+      agentId: "work",
+      sessionKey: "agent:work:main",
+      mirror: {
+        sessionKey: "agent:work:mirror",
+        agentId: "work",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ key: "agent:work:main" }),
       }),
     );
   });
