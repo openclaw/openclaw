@@ -287,10 +287,10 @@ describe("web_search perplexity config resolution", () => {
     });
   });
 
-  it("normalizes Bearer-prefixed OPENROUTER_API_KEY from env", () => {
+  it("ignores OPENROUTER_API_KEY when no baseUrl targets non-Perplexity host", () => {
     withEnv({ OPENROUTER_API_KEY: "Bearer sk-or-env-key" }, () => {
       const result = resolvePerplexityApiKey({});
-      expect(result).toEqual({ apiKey: "sk-or-env-key", source: "openrouter_env" });
+      expect(result).toEqual({ apiKey: undefined, source: "none" });
     });
   });
 

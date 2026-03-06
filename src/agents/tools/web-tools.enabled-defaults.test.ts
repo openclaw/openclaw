@@ -383,8 +383,8 @@ describe("web_search perplexity Search API", () => {
     expect(result?.details).toMatchObject({
       error: "incompatible_perplexity_config",
     });
-    expect(result?.details?.message).toContain("sk-or-");
-    expect(result?.details?.message).toContain("api.perplexity.ai");
+    expect((result?.details as Record<string, unknown>)?.message).toContain("sk-or-");
+    expect((result?.details as Record<string, unknown>)?.message).toContain("api.perplexity.ai");
   });
 
   it("rejects non-Perplexity baseUrl with clear error", async () => {
@@ -399,7 +399,7 @@ describe("web_search perplexity Search API", () => {
     expect(result?.details).toMatchObject({
       error: "incompatible_perplexity_config",
     });
-    expect(result?.details?.message).toContain("openrouter.ai");
+    expect((result?.details as Record<string, unknown>)?.message).toContain("openrouter.ai");
   });
 
   it("rejects OPENROUTER_API_KEY env with clear error when no PERPLEXITY_API_KEY", async () => {

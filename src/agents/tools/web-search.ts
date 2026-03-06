@@ -530,12 +530,14 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
     // Do NOT fall back to PERPLEXITY_API_KEY here — return "none" so the
     // caller surfaces a clear missing-key error instead of a cryptic 401.
   } else {
-    // Default priority: Perplexity key first
+    // Default priority: native Perplexity key only.  Do NOT fall back to
+    // OPENROUTER_API_KEY here — it would cause resolveSearchProvider to
+    // auto-select Perplexity, only for detectIncompatiblePerplexityConfig
+    // to reject it immediately.  In environments that set OPENROUTER_API_KEY
+    // globally alongside other provider keys (e.g. XAI_API_KEY), this would
+    // prevent the working provider from being selected.
     if (fromEnvPerplexity) {
       return { apiKey: fromEnvPerplexity, source: "perplexity_env" };
-    }
-    if (fromEnvOpenRouter) {
-      return { apiKey: fromEnvOpenRouter, source: "openrouter_env" };
     }
   }
 
