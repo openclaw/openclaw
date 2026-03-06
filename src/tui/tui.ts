@@ -693,9 +693,18 @@ export async function runTui(opts: TuiOptions) {
     lastActivityStatus = activityStatus;
   };
 
+  let tuiStarted = false;
+  const requestRenderIfStarted = () => {
+    if (!tuiStarted) {
+      return;
+    }
+    tui.requestRender();
+  };
+
   const setConnectionStatus = (text: string, ttlMs?: number) => {
     connectionStatus = text;
     renderStatus();
+    requestRenderIfStarted();
     if (statusTimeout) {
       clearTimeout(statusTimeout);
     }
@@ -703,6 +712,7 @@ export async function runTui(opts: TuiOptions) {
       statusTimeout = setTimeout(() => {
         connectionStatus = isConnected ? "connected" : "disconnected";
         renderStatus();
+        requestRenderIfStarted();
       }, ttlMs);
     }
   };
@@ -710,6 +720,7 @@ export async function runTui(opts: TuiOptions) {
   const setActivityStatus = (text: string) => {
     activityStatus = text;
     renderStatus();
+    requestRenderIfStarted();
   };
 
   const updateFooter = () => {
@@ -951,6 +962,8 @@ export async function runTui(opts: TuiOptions) {
   process.on("SIGINT", sigintHandler);
   process.on("SIGTERM", sigtermHandler);
   tui.start();
+  tuiStarted = true;
+  tui.requestRender();
   client.start();
   await new Promise<void>((resolve) => {
     const finish = () => {
