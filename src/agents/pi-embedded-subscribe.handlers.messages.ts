@@ -73,11 +73,11 @@ export function handleMessageStart(
 
   // Add cross-turn separator after resetting if this is not the first assistant message
   // This prevents text concatenation when blockStreaming is enabled (fixes #35308)
-  const needsSeparator = ctx.state.deltaBuffer.trim();
+  const hadPreviousContent = ctx.state.deltaBuffer.trim();
 
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
 
-  if (needsSeparator) {
+  if (hadPreviousContent) {
     ctx.state.deltaBuffer = “\n\n”;
     if (ctx.blockChunker) {
       ctx.blockChunker.append(“\n\n”);

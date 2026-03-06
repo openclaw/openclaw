@@ -189,16 +189,34 @@ export class EmbeddedBlockChunker {
         return;
       }
 
+      // When the buffer starts with a paragraph break (index === 0), it's likely
+      // an intentional cross-turn separator. Keep it in the buffer so it gets
+      // prepended to the next paragraph, but continue scanning for subsequent
+      // paragraphs (fixes #35344 review feedback).
+      if (paragraphBreak.index === 0) {
+        const nextBreak = findNextParagraphBreak(
+          this.#buffer,
+          fenceSpans,
+          paragraphBreak.length,
+        );
+        if (!nextBreak || nextBreak.index > maxChars) {
+          // No subsequent paragraph yet; keep the leading separator and wait
+          return;
+        }
+        // Found a subsequent paragraph; emit it and continue
+        const chunk = this.#buffer.slice(0, nextBreak.index);
+        if (chunk.trim().length > 0) {
+          emit(chunk);
+        }
+        this.#buffer = stripLeadingNewlines(
+          this.#buffer.slice(nextBreak.index + nextBreak.length),
+        );
+        continue;
+      }
+
       const chunk = this.#buffer.slice(0, paragraphBreak.index);
       if (chunk.trim().length > 0) {
         emit(chunk);
-      }
-      // When the buffer starts with a paragraph break (index === 0), it's likely
-      // an intentional cross-turn separator. Keep it in the buffer so it gets
-      // prepended to the next paragraph (fixes #35344).
-      if (paragraphBreak.index === 0) {
-        // Buffer starts with separator; keep it and wait for more content
-        return;
       }
       this.#buffer = stripLeadingNewlines(
         this.#buffer.slice(paragraphBreak.index + paragraphBreak.length),
