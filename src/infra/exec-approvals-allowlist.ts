@@ -238,7 +238,8 @@ function evaluateSegments(
         : segment.argv;
 
     let unwrappedArgv = segment.argv;
-    for (let depth = 0; depth < 3; depth += 1) {
+    // Keep depth aligned with dispatch unwrapping in command resolution (currently 4).
+    for (let depth = 0; depth < 4; depth += 1) {
       const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(unwrappedArgv);
       if (dispatchUnwrap.kind !== "unwrapped" || dispatchUnwrap.argv.length === 0) {
         break;

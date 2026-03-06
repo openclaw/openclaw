@@ -485,6 +485,29 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(second.allowlistSatisfied).toBe(true);
   });
 
+  it("matches script allowlist for four-level dispatch wrapper chains", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const scriptsDir = path.join(dir, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const scriptPath = path.join(scriptsDir, "save_crystal.sh");
+    fs.writeFileSync(scriptPath, "#!/usr/bin/env bash\necho ok\n");
+    fs.chmodSync(scriptPath, 0o755);
+    const env = makePathEnv(dir);
+
+    const second = evaluateShellAllowlist({
+      command: "/usr/bin/env /usr/bin/env /usr/bin/env /usr/bin/env bash scripts/save_crystal.sh",
+      allowlist: [{ pattern: scriptPath }],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(true);
+  });
+
   it("matches script allowlist for trusted absolute shell wrappers", () => {
     if (process.platform === "win32") {
       return;
