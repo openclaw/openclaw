@@ -536,14 +536,20 @@ async function maybeRestartService(params: {
           }
         }
       }
-      // Proactively kill any stale gateway processes (e.g. bare-process nohup gateways)
-      // holding the port before we attempt the restart. Without this, the new process
-      // fails to bind the port and openclaw update leaves two conflicting gateway PIDs.
-      cleanStaleGatewayProcessesSync();
       if (params.restartScriptPath) {
+        // A managed service restart script is available: kill stale bare-process
+        // gateway PIDs first so the service can bind the port on the way up.
+        // We only do this when we have a guaranteed restart path — killing the
+        // live gateway without a viable replacement would leave it down.
+        cleanStaleGatewayProcessesSync();
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
       } else {
+        // No restart script — fall back to daemon restart.  Skip the proactive
+        // PID cleanup here: if the daemon is not loaded runDaemonRestart returns
+        // false and we would kill the live gateway with no replacement.  The
+        // post-restart health check (waitForGatewayHealthyRestart) already
+        // handles stale PID cleanup once the new gateway is confirmed healthy.
         restarted = await runDaemonRestart();
       }
 
