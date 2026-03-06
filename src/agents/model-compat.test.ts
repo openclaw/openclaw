@@ -363,7 +363,28 @@ describe("resolveForwardCompatModel", () => {
     expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4" });
     expect(model?.api).toBe("openai-codex-responses");
     expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
-    expect(model?.contextWindow).toBe(272_000);
+    expect(model?.contextWindow).toBe(1_050_000);
+    expect(model?.maxTokens).toBe(128_000);
+  });
+
+  it("resolves openai-codex gpt-5.4-pro via codex template fallback", () => {
+    const registry = createRegistry({
+      "openai-codex/gpt-5.2-codex": createOpenAICodexTemplateModel("gpt-5.2-codex"),
+    });
+    const model = resolveForwardCompatModel("openai-codex", "gpt-5.4-pro", registry);
+    expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4-pro" });
+    expect(model?.api).toBe("openai-codex-responses");
+    expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
+    expect(model?.contextWindow).toBe(1_050_000);
+    expect(model?.maxTokens).toBe(128_000);
+  });
+
+  it("resolves openai-codex gpt-5.4-pro without templates using gpt-5.4 context window", () => {
+    const registry = createRegistry({});
+    const model = resolveForwardCompatModel("openai-codex", "gpt-5.4-pro", registry);
+    expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4-pro" });
+    expect(model?.api).toBe("openai-codex-responses");
+    expect(model?.contextWindow).toBe(1_050_000);
     expect(model?.maxTokens).toBe(128_000);
   });
 

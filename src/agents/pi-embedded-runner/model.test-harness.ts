@@ -36,13 +36,14 @@ export function mockOpenAICodexTemplateModel(): void {
 export function buildOpenAICodexForwardCompatExpectation(
   id: string = "gpt-5.3-codex",
 ): Partial<typeof OPENAI_CODEX_TEMPLATE_MODEL> & { provider: string; id: string } {
+  const isGpt54Family = id.toLowerCase() === "gpt-5.4" || id.toLowerCase() === "gpt-5.4-pro";
   return {
     provider: "openai-codex",
     id,
     api: "openai-codex-responses",
     baseUrl: "https://chatgpt.com/backend-api",
     reasoning: true,
-    contextWindow: 272000,
+    contextWindow: isGpt54Family ? 1_050_000 : 272000,
     maxTokens: 128000,
   };
 }

@@ -12,6 +12,7 @@ const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
+const OPENAI_CODEX_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
@@ -123,7 +124,8 @@ function resolveOpenAICodexForwardCompatModel(
 
   let templateIds: readonly string[];
   let eligibleProviders: Set<string>;
-  if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
+  const isGpt54Family = lower === OPENAI_CODEX_GPT_54_MODEL_ID || lower === OPENAI_CODEX_GPT_54_PRO_MODEL_ID;
+  if (isGpt54Family) {
     templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
     eligibleProviders = CODEX_GPT54_ELIGIBLE_PROVIDERS;
   } else if (lower === OPENAI_CODEX_GPT_53_MODEL_ID) {
@@ -146,6 +148,9 @@ function resolveOpenAICodexForwardCompatModel(
       ...template,
       id: trimmedModelId,
       name: trimmedModelId,
+      ...(isGpt54Family
+        ? { contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS, maxTokens: OPENAI_GPT_54_MAX_TOKENS }
+        : {}),
     } as Model<Api>);
   }
 
@@ -158,8 +163,8 @@ function resolveOpenAICodexForwardCompatModel(
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
+    contextWindow: isGpt54Family ? OPENAI_GPT_54_CONTEXT_TOKENS : DEFAULT_CONTEXT_TOKENS,
+    maxTokens: isGpt54Family ? OPENAI_GPT_54_MAX_TOKENS : DEFAULT_CONTEXT_TOKENS,
   } as Model<Api>);
 }
 
