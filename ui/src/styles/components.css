@@ -2228,6 +2228,7 @@
 .agents-main {
   display: grid;
   gap: 16px;
+  min-width: 0; /* prevent grid blowout when detail content overflows */
 }
 
 .agent-list {
