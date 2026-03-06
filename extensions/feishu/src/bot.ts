@@ -228,6 +228,33 @@ async function resolveFeishuGroupName(params: {
   return undefined;
 }
 
+function buildFeishuGroupDisplayName(params: { chatId: string; groupName?: string }): string {
+  const normalizedChatId = params.chatId.trim();
+  const name = params.groupName?.trim();
+
+  if (!name) return normalizedChatId;
+  if (!normalizedChatId) return name;
+
+  // Keep display human-readable but globally unique across same-name groups.
+  if (name.includes(normalizedChatId)) return name;
+  return `${name} (${normalizedChatId})`;
+}
+
+function buildFeishuDirectDisplayName(params: {
+  senderOpenId: string;
+  senderName?: string;
+}): string {
+  const senderId = params.senderOpenId.trim();
+  const senderName = params.senderName?.trim();
+
+  if (!senderName) return senderId;
+  if (!senderId) return senderName;
+
+  // Keep display human-readable and traceable for auditing/review.
+  if (senderName.includes(senderId)) return senderName;
+  return `${senderName} (${senderId})`;
+}
+
 export type FeishuMessageEvent = {
   sender: {
     sender_id: {
@@ -987,10 +1014,17 @@ export async function handleFeishuMessage(params: {
     }
   }
 
-  const groupDisplayName = isGroup ? ctx.groupName?.trim() || ctx.chatId : undefined;
+  const groupDisplayName = isGroup
+    ? buildFeishuGroupDisplayName({ chatId: ctx.chatId, groupName: ctx.groupName })
+    : undefined;
+  const directDisplayName = !isGroup
+    ? (feishuCfg?.resolveDmDisplayNames ?? true)
+      ? buildFeishuDirectDisplayName({ senderOpenId: ctx.senderOpenId, senderName: ctx.senderName })
+      : ctx.senderOpenId
+    : undefined;
 
   log(
-    `feishu[${account.accountId}]: received message from ${ctx.senderOpenId} in ${groupDisplayName ?? ctx.chatId} (${ctx.chatType})`,
+    `feishu[${account.accountId}]: received message from ${ctx.senderOpenId} in ${isGroup ? groupDisplayName : (directDisplayName ?? ctx.chatId)} (${ctx.chatType})`,
   );
 
   // Log mention targets if detected
@@ -1245,7 +1279,7 @@ export async function handleFeishuMessage(params: {
     const preview = ctx.content.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isGroup
       ? `Feishu[${account.accountId}] message in group ${groupDisplayName ?? ctx.chatId}`
-      : `Feishu[${account.accountId}] DM from ${ctx.senderOpenId}`;
+      : `Feishu[${account.accountId}] DM from ${directDisplayName ?? ctx.senderOpenId}`;
 
     // Do not enqueue inbound user previews as system events.
     // System events are prepended to future prompts and can be misread as
@@ -1355,7 +1389,9 @@ export async function handleFeishuMessage(params: {
         AccountId: agentAccountId,
         ChatType: isGroup ? "group" : "direct",
         GroupSubject: isGroup ? groupDisplayName : undefined,
-        SenderName: ctx.senderName ?? ctx.senderOpenId,
+        SenderName: isGroup
+          ? (ctx.senderName ?? ctx.senderOpenId)
+          : (directDisplayName ?? ctx.senderName ?? ctx.senderOpenId),
         SenderId: ctx.senderOpenId,
         Provider: "feishu" as const,
         Surface: "feishu" as const,

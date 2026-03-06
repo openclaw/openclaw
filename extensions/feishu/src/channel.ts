@@ -131,6 +131,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         mediaMaxMb: { type: "number", minimum: 0 },
         renderMode: { type: "string", enum: ["auto", "raw", "card"] },
         resolveGroupNames: { type: "boolean" },
+        resolveDmDisplayNames: { type: "boolean" },
         accounts: {
           type: "object",
           additionalProperties: {
@@ -148,6 +149,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               webhookPath: { type: "string" },
               webhookPort: { type: "integer", minimum: 1 },
               resolveGroupNames: { type: "boolean" },
+              resolveDmDisplayNames: { type: "boolean" },
             },
           },
         },

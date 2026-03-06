@@ -171,6 +171,7 @@ const FeishuSharedConfigShape = {
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
   resolveGroupNames: z.boolean().optional(),
+  resolveDmDisplayNames: z.boolean().optional(),
 };
 
 /**
@@ -215,10 +216,11 @@ export const FeishuConfigSchema = z
     topicSessionMode: TopicSessionModeSchema,
     // Dynamic agent creation for DM users
     dynamicAgentCreation: DynamicAgentCreationSchema,
-    // Optimization flags
+    // Optimization / display flags
     typingIndicator: z.boolean().optional().default(true),
     resolveSenderNames: z.boolean().optional().default(true),
     resolveGroupNames: z.boolean().optional().default(true),
+    resolveDmDisplayNames: z.boolean().optional().default(true),
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })

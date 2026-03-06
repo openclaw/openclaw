@@ -138,11 +138,12 @@ describe("FeishuConfigSchema replyInThread", () => {
 });
 
 describe("FeishuConfigSchema optimization flags", () => {
-  it("defaults top-level typingIndicator, resolveSenderNames and resolveGroupNames to true", () => {
+  it("defaults top-level typingIndicator, resolveSenderNames, resolveGroupNames and resolveDmDisplayNames to true", () => {
     const result = FeishuConfigSchema.parse({});
     expect(result.typingIndicator).toBe(true);
     expect(result.resolveSenderNames).toBe(true);
     expect(result.resolveGroupNames).toBe(true);
+    expect(result.resolveDmDisplayNames).toBe(true);
   });
 
   it("accepts account-level optimization flags", () => {
@@ -152,12 +153,14 @@ describe("FeishuConfigSchema optimization flags", () => {
           typingIndicator: false,
           resolveSenderNames: false,
           resolveGroupNames: false,
+          resolveDmDisplayNames: false,
         },
       },
     });
     expect(result.accounts?.main?.typingIndicator).toBe(false);
     expect(result.accounts?.main?.resolveSenderNames).toBe(false);
     expect(result.accounts?.main?.resolveGroupNames).toBe(false);
+    expect(result.accounts?.main?.resolveDmDisplayNames).toBe(false);
   });
 });
 
