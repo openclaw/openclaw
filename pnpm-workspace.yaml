@@ -1,6 +1,7 @@
 packages:
   - .
   - ui
+  - apps/opengen-console
   - packages/*
   - extensions/*
 
