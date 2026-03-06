@@ -56,15 +56,25 @@ export async function deleteAgent(state: AgentsState & AgentDeleteState, agentId
       agentId,
       deleteFiles: true,
     });
-    // Refresh agent list, retrying with back-off if the deleted agent still appears
+    // Refresh agent list, retrying with back-off if the deleted agent still appears.
+    // Fetch directly instead of going through loadAgents to avoid clearing the
+    // single-flight agentsLoading guard, which could let a concurrent request
+    // overwrite the post-delete list.
     const maxRetries = 3;
     let removed = false;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (attempt > 0) {
         await new Promise((r) => setTimeout(r, attempt * 500));
       }
-      state.agentsLoading = false; // clear guard so loadAgents can proceed
-      await loadAgents(state);
+      const res = await state.client.request<AgentsListResult>("agents.list", {});
+      if (res) {
+        state.agentsList = res;
+        const selected = state.agentsSelectedId;
+        const known = res.agents.some((entry) => entry.id === selected);
+        if (!selected || !known) {
+          state.agentsSelectedId = res.defaultId ?? res.agents[0]?.id ?? null;
+        }
+      }
       if (!state.agentsList?.agents.some((a) => a.id === agentId)) {
         removed = true;
         break;
