@@ -210,28 +210,42 @@ instructions = "Implement fixes. Commit after each change."
 
 ### CSV Batch Processing
 
-The `spawn_agents_on_csv` tool lets you run one sub-agent per row in a CSV. Useful for mass audits, migrations, or component reviews.
+The `spawn_agents_on_csv` tool spawns one worker sub-agent per row. Each worker must call `report_agent_job_result` exactly once. If a worker exits without reporting, that row is marked failed in the output CSV.
+
+Tool parameters:
+- `csv_path`: source CSV file
+- `instruction`: worker prompt template with `{column_name}` placeholders
+- `id_column`: column to use as stable item ID
+- `output_schema`: JSON shape each worker must return
+- `output_csv_path`: where to write combined results
+- `max_concurrency`, `max_runtime_seconds`: job control
 
 ```bash
 # Create a CSV with targets
-cat > audit-targets.csv << 'EOF'
-path,owner,type
-src/api/auth.ts,backend-team,security
-src/api/payments.ts,backend-team,security
-src/components/UserForm.tsx,frontend-team,validation
-src/lib/db.ts,backend-team,security
+cat > /tmp/components.csv << 'EOF'
+path,owner
+src/api/auth.ts,backend-team
+src/api/payments.ts,backend-team
+src/components/UserForm.tsx,frontend-team
+src/lib/db.ts,backend-team
 EOF
 
 # Run Codex with a batch audit prompt
 bash pty:true workdir:~/project background:true command:"codex exec --full-auto '
-Read audit-targets.csv and use spawn_agents_on_csv to review each file.
-Prompt per row: Review {path} owned by {owner} for {type} issues.
-Return JSON with keys: path, risk_level, findings, remediation.
-Export results to audit-results.csv.
+Call spawn_agents_on_csv with:
+- csv_path: /tmp/components.csv
+- id_column: path
+- instruction: \"Review {path} owned by {owner}. Return JSON with keys path, risk, summary, and follow_up via report_agent_job_result.\"
+- output_csv_path: /tmp/components-review.csv
+- output_schema: object with required string fields path, risk, summary, follow_up
 '"
 ```
 
-Each row spawns a worker sub-agent. Failed rows get marked in the output CSV without crashing the batch. Concurrency is controlled by `agents.max_threads` in config.
+The exported CSV includes original row data plus metadata: `job_id`, `item_id`, `status`, `last_error`, `result_json`.
+
+Related config settings:
+- `agents.max_threads`: max concurrent agent threads
+- `agents.job_max_runtime_seconds`: default per-worker timeout for CSV fan-out jobs (per-call `max_runtime_seconds` overrides this)
 
 ### Mapping to OpenClaw Fleet
 
@@ -256,17 +270,18 @@ Enable multi-agent. Spawn 3 parallel reviewers:
 
 ### Monitoring Sub-Agents
 
-Sub-agent activity shows up in the Codex CLI output. Use `process action:log` to watch:
+Sub-agent activity shows up in the Codex CLI output. Use `process action:log` to watch from OpenClaw, or use `/agent` in the CLI to switch between active threads:
 
 ```bash
-# See sub-agent spawn/complete events
+# From OpenClaw: watch sub-agent progress
 process action:log sessionId:XXX
 
-# Look for lines like:
-# [sub-agent:explorer] Started - scanning src/
-# [sub-agent:reviewer] Completed - found 3 issues
-# [sub-agent:worker] Completed - fixed 2 files, committed
+# From interactive Codex CLI:
+# /agent         - list active agent threads, switch between them
+# Ask Codex to steer, stop, or close a running sub-agent directly
 ```
+
+For long-running or polling workflows, Codex has a built-in `monitor` role tuned for waiting and repeated status checks. The `wait` tool supports long polling windows (up to 1 hour per call).
 
 Currently visible only in CLI. IDE/app visibility is planned.
 
