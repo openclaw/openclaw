@@ -9,6 +9,7 @@ import {
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
   parseCommandArgs,
+  resolveActiveModelForRoute,
   resolveCommandArgMenu,
 } from "../auto-reply/commands-registry.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
@@ -611,13 +612,32 @@ export const registerTelegramNativeCommands = ({
             : rawText
               ? `/${command.name} ${rawText}`
               : `/${command.name}`;
-          const menu = commandDefinition
-            ? resolveCommandArgMenu({
-                command: commandDefinition,
-                args: commandArgs,
-                cfg,
-              })
-            : null;
+          // Only resolve the active session model when the command might
+          // show an interactive arg menu — avoids a blocking session-store
+          // read for commands that never need one.
+          let menu: ReturnType<typeof resolveCommandArgMenu> = null;
+          if (
+            commandDefinition?.argsMenu &&
+            commandDefinition.argsParsing !== "none" &&
+            !(commandArgs?.raw && !commandArgs.values)
+          ) {
+            const menuThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+            const commandSessionKey =
+              menuThreadId != null
+                ? `${route.sessionKey}:thread:${chatId}:${menuThreadId}`.toLowerCase()
+                : route.sessionKey;
+            const activeModel = resolveActiveModelForRoute({
+              cfg,
+              route: { ...route, sessionKey: commandSessionKey },
+            });
+            menu = resolveCommandArgMenu({
+              command: commandDefinition,
+              args: commandArgs,
+              cfg,
+              provider: activeModel.provider,
+              model: activeModel.model,
+            });
+          }
           if (menu && commandDefinition) {
             const title =
               menu.title ??
