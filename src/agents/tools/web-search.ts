@@ -60,7 +60,8 @@ const WebSearchSchema = Type.Object({
   ),
   search_lang: Type.Optional(
     Type.String({
-      description: "ISO language code for search results (e.g., 'de', 'en', 'fr').",
+      description:
+        "Language code for search results (e.g., 'en', 'de', 'fr', 'zh-hans', 'zh-hant'). Supports both 2-letter ISO codes and localized variants.",
     }),
   ),
   ui_lang: Type.Optional(
