@@ -22,6 +22,7 @@ class ScreenCaptureRequester(private val activity: ComponentActivity) {
 
   private val mutex = Mutex()
   private var pending: CompletableDeferred<CaptureResult?>? = null
+  @Volatile private var cachedResult: CaptureResult? = null
 
   private val launcher: ActivityResultLauncher<Intent> =
     activity.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -29,7 +30,9 @@ class ScreenCaptureRequester(private val activity: ComponentActivity) {
       pending = null
       val data = result.data
       if (result.resultCode == Activity.RESULT_OK && data != null) {
-        p?.complete(CaptureResult(result.resultCode, data))
+        val capture = CaptureResult(result.resultCode, data)
+        cachedResult = capture
+        p?.complete(capture)
       } else {
         p?.complete(null)
       }
@@ -37,8 +40,8 @@ class ScreenCaptureRequester(private val activity: ComponentActivity) {
 
   suspend fun requestCapture(timeoutMs: Long = 20_000): CaptureResult? =
     mutex.withLock {
-      val proceed = showRationaleDialog()
-      if (!proceed) return null
+      // Return cached projection token if available (skip re-prompting)
+      cachedResult?.let { return it }
 
       val mgr = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
       val intent = mgr.createScreenCaptureIntent()
@@ -50,16 +53,7 @@ class ScreenCaptureRequester(private val activity: ComponentActivity) {
       withContext(Dispatchers.Default) { withTimeout(timeoutMs) { deferred.await() } }
     }
 
-  private suspend fun showRationaleDialog(): Boolean =
-    withContext(Dispatchers.Main) {
-      suspendCancellableCoroutine { cont ->
-        AlertDialog.Builder(activity)
-          .setTitle("Screen recording required")
-          .setMessage("OpenClaw needs to record the screen for this command.")
-          .setPositiveButton("Continue") { _, _ -> cont.resume(true) }
-          .setNegativeButton("Not now") { _, _ -> cont.resume(false) }
-          .setOnCancelListener { cont.resume(false) }
-          .show()
-      }
-    }
+  fun clearCachedCapture() {
+    cachedResult = null
+  }
 }

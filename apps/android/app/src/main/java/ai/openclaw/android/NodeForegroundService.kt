@@ -144,9 +144,9 @@ class NodeForegroundService : Service() {
     lastRequiresMic = requiresMic
     val types =
       if (requiresMic) {
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
       } else {
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
       }
     startForeground(NOTIFICATION_ID, notification, types)
     didStartForeground = true
