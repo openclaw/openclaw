@@ -49,113 +49,64 @@ Details: [Plugins](/tools/plugin)
 
 Setting up Pumble requires two stages:
 
-1. **Create a Pumble app** and complete the OAuth install flow using the `pumble-cli` scaffolding tool to obtain your credentials and bot token.
+1. **Create a Pumble app** using the `pumble-cli` tool to register it with your workspace and obtain credentials.
 2. **Configure OpenClaw** with the credentials from step 1.
 
 ## Stage 1 - Create the Pumble app and get credentials
 
-Pumble apps are created and authorized using the `pumble-sdk` and `pumble-cli` npm packages. You need a small scaffolding project to run the OAuth flow once and capture the resulting tokens.
+Pumble apps are registered using the `pumble-cli` npm package. It handles app creation, authorization, and token generation in one step.
 
 <Steps>
-  <Step title="Create a scaffolding project">
-    Create a new directory and initialize it:
+  <Step title="Scaffold the project">
+    Run `pumble-cli create` to generate a new app project. It will ask for a name and description, then scaffold all required files (`manifest.json`, `src/main.ts`, `package.json`, `tsconfig.json`) and install dependencies:
 
 ```bash
-mkdir pumble-app && cd pumble-app
-npm init -y
-npm install pumble-sdk@1.0.2
-npm install --save-dev pumble-cli@1.0.2 typescript
+npx pumble-cli@1.0.2 create
 ```
 
   </Step>
 
-  <Step title="Create a manifest">
-    Create `manifest.json` in the project root. This defines the app name, scopes, and capabilities:
-
-```json
-{
-  "name": "openclaw",
-  "displayName": "OpenClaw",
-  "botTitle": "Chat with your OpenClaw agents using Pumble",
-  "bot": true,
-  "socketMode": false,
-  "scopes": {
-    "botScopes": [
-      "messages:read",
-      "messages:write",
-      "channels:read",
-      "channels:list",
-      "user:read",
-      "reaction:read",
-      "reaction:write",
-      "files:read",
-      "files:write"
-    ],
-    "userScopes": ["messages:read"]
-  }
-}
-```
-
-  </Step>
-
-  <Step title="Create a minimal app entry point">
-    Create `src/main.ts`:
-
-```typescript
-import { App, JsonFileTokenStore, start } from "pumble-sdk";
-
-const addon: App = {
-  events: [
-    {
-      name: "NEW_MESSAGE",
-      handler: (ctx) => {
-        console.log("Received new message!", ctx.payload.body);
-      },
-    },
-  ],
-  eventsPath: "/hook",
-  redirect: { enable: true, path: "/redirect" },
-  tokenStore: new JsonFileTokenStore("tokens.json"),
-};
-
-start(addon);
-```
-
-  </Step>
-
-  <Step title="Run pumble-cli to register the app">
-    Run the CLI dev command to register the app with Pumble and start the OAuth flow:
+  <Step title="Run the dev command">
+    Change into the generated directory and start the dev server:
 
 ```bash
-npx pumble-cli
+cd <app-name>
+npm run dev
 ```
 
-This will: - Register your app with the Pumble API - Generate a `.pumbleapprc` file containing your **App ID**, **App Key**, **Client Secret**, and **Signing Secret** - Open a browser window for the OAuth authorization flow - After you authorize, write `tokens.json` with the **Bot Token** and **Bot ID**
+    This runs `pumble-cli` under the hood, which will:
+    - Open a browser to log in to your Pumble account (first time only)
+    - Register the app with the Pumble API
+    - Auto-authorize (install) the app into your workspace
+    - Write `.pumbleapprc` with the four app credentials
+    - Write `tokens.json` with the bot token and bot ID
 
-<Warning>
-Keep the `.pumbleapprc` and `tokens.json` files safe — they contain your app secrets and access tokens. Do not commit them to version control.
-</Warning>
+    You can stop the dev server once the credentials are generated.
 
   </Step>
 
   <Step title="Collect your credentials">
-    After the OAuth flow completes, you will have two files with the credentials you need:
+    After the dev command completes, you will have two files with the credentials you need:
 
     **`.pumbleapprc`** contains:
-    - `PUMBLE_APP_ID` — your app's unique ID
-    - `PUMBLE_APP_KEY` — starts with `xpat-`
-    - `PUMBLE_APP_CLIENT_SECRET` — starts with `xpcls-`
-    - `PUMBLE_APP_SIGNING_SECRET` — starts with `xpss-`
+    - `PUMBLE_APP_ID` - your app's unique ID
+    - `PUMBLE_APP_KEY` - starts with `xpat-`
+    - `PUMBLE_APP_CLIENT_SECRET` - starts with `xpcls-`
+    - `PUMBLE_APP_SIGNING_SECRET` - starts with `xpss-`
 
     **`tokens.json`** contains (nested under a workspace ID key):
-    - `botToken` — a JWT used as the bot's access token
-    - `botId` — the bot's user ID (useful for `botUserId` config)
+    - `botToken` - a JWT used as the bot's access token
+    - `botId` - the bot's user ID (useful for `botUserId` config)
+
+<Warning>
+Keep `.pumbleapprc` and `tokens.json` safe - they contain your app secrets and access tokens. Do not commit them to version control.
+</Warning>
 
   </Step>
 </Steps>
 
 <Note>
-You only need to run `pumble-cli` once to create the app and complete the OAuth flow. After that, the credentials are static and can be copied into your OpenClaw config. You do not need to keep the scaffolding project running.
+You only need to run `pumble-cli` once to create the app and obtain credentials. After that, the credentials are static and can be copied into your OpenClaw config. You do not need to keep the scaffolding project running.
 </Note>
 
 ## Stage 2 - Configure OpenClaw
