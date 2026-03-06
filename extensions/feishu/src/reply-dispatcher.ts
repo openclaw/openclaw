@@ -11,6 +11,7 @@ import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
+import { ackPendingFeishuFinalReply, enqueuePendingFeishuFinalReply } from "./restart-recovery.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
@@ -50,6 +51,8 @@ export type CreateFeishuReplyDispatcherParams = {
   rootId?: string;
   mentionTargets?: MentionTarget[];
   accountId?: string;
+  /** Inbound source message id used as stable recovery key for final replies. */
+  sourceMessageId?: string;
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
@@ -68,11 +71,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     rootId,
     mentionTargets,
     accountId,
+    sourceMessageId,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const account = resolveFeishuAccount({ cfg, accountId });
+  const runMessageId = sourceMessageId?.trim() || replyToMessageId?.trim() || undefined;
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
   let typingState: TypingIndicatorState | null = null;
@@ -254,6 +259,20 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           return;
         }
 
+        const pendingId =
+          info?.kind === "final"
+            ? await enqueuePendingFeishuFinalReply({
+                accountId: account.accountId,
+                runMessageId: runMessageId ?? "",
+                chatId,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                text: shouldDeliverText ? text : undefined,
+                mediaUrls: hasMedia ? mediaList : undefined,
+                runtime: params.runtime,
+              })
+            : undefined;
+
         if (shouldDeliverText) {
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
@@ -299,6 +318,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   accountId,
                 });
               }
+            }
+            if (pendingId) {
+              await ackPendingFeishuFinalReply({
+                accountId: account.accountId,
+                runMessageId: runMessageId ?? "",
+                pendingId,
+                runtime: params.runtime,
+              });
             }
             return;
           }
@@ -359,6 +386,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               accountId,
             });
           }
+        }
+
+        if (pendingId) {
+          await ackPendingFeishuFinalReply({
+            accountId: account.accountId,
+            runMessageId: runMessageId ?? "",
+            pendingId,
+            runtime: params.runtime,
+          });
         }
       },
       onError: async (error, info) => {

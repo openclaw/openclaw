@@ -2,6 +2,7 @@ import * as http from "http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import {
   applyBasicWebhookRequestGuards,
+  type ClawdbotConfig,
   type RuntimeEnv,
   installRequestBodyLimitGuard,
 } from "openclaw/plugin-sdk/feishu";
@@ -15,6 +16,7 @@ import {
   recordWebhookStatus,
   wsClients,
 } from "./monitor.state.js";
+import { sendFeishuShutdownInterruptionNotices } from "./restart-recovery.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 type FeishuGatewayStatusPatch = {
@@ -25,6 +27,7 @@ type FeishuGatewayStatusPatch = {
 type FeishuGatewayStatusSink = (patch: FeishuGatewayStatusPatch) => void;
 
 export type MonitorTransportParams = {
+  cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
   accountId: string;
   runtime?: RuntimeEnv;
@@ -34,6 +37,7 @@ export type MonitorTransportParams = {
 };
 
 export async function monitorWebSocket({
+  cfg,
   account,
   accountId,
   runtime,
@@ -48,21 +52,46 @@ export async function monitorWebSocket({
   wsClients.set(accountId, wsClient);
 
   return new Promise((resolve, reject) => {
+    let settled = false;
     const cleanup = () => {
       wsClients.delete(accountId);
       botOpenIds.delete(accountId);
       statusSink?.({ connected: false });
     };
 
-    const handleAbort = () => {
-      log(`feishu[${accountId}]: abort signal received, stopping`);
+    const settle = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       cleanup();
       resolve();
     };
 
+    const handleAbort = () => {
+      void (async () => {
+        log(`feishu[${accountId}]: abort signal received, stopping`);
+        try {
+          const sent = await sendFeishuShutdownInterruptionNotices({
+            cfg,
+            accountId,
+            runtime,
+          });
+          if (sent > 0) {
+            log(`feishu[${accountId}]: sent ${sent} shutdown interruption notice(s)`);
+          }
+        } catch (error) {
+          runtime?.error?.(
+            `feishu[${accountId}]: shutdown interruption notice failed: ${String(error)}`,
+          );
+        } finally {
+          settle();
+        }
+      })();
+    };
+
     if (abortSignal?.aborted) {
-      cleanup();
-      resolve();
+      handleAbort();
       return;
     }
 
@@ -73,6 +102,7 @@ export async function monitorWebSocket({
       statusSink?.({ connected: true, lastEventAt: Date.now() });
       log(`feishu[${accountId}]: WebSocket client started`);
     } catch (err) {
+      settled = true;
       cleanup();
       abortSignal?.removeEventListener("abort", handleAbort);
       reject(err);
@@ -81,6 +111,7 @@ export async function monitorWebSocket({
 }
 
 export async function monitorWebhook({
+  cfg,
   account,
   accountId,
   runtime,
@@ -142,6 +173,7 @@ export async function monitorWebhook({
   httpServers.set(accountId, server);
 
   return new Promise((resolve, reject) => {
+    let settled = false;
     const cleanup = () => {
       server.close();
       httpServers.delete(accountId);
@@ -149,15 +181,39 @@ export async function monitorWebhook({
       statusSink?.({ connected: false });
     };
 
-    const handleAbort = () => {
-      log(`feishu[${accountId}]: abort signal received, stopping Webhook server`);
+    const settle = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       cleanup();
       resolve();
     };
 
+    const handleAbort = () => {
+      void (async () => {
+        log(`feishu[${accountId}]: abort signal received, stopping Webhook server`);
+        try {
+          const sent = await sendFeishuShutdownInterruptionNotices({
+            cfg,
+            accountId,
+            runtime,
+          });
+          if (sent > 0) {
+            log(`feishu[${accountId}]: sent ${sent} shutdown interruption notice(s)`);
+          }
+        } catch (error) {
+          runtime?.error?.(
+            `feishu[${accountId}]: shutdown interruption notice failed: ${String(error)}`,
+          );
+        } finally {
+          settle();
+        }
+      })();
+    };
+
     if (abortSignal?.aborted) {
-      cleanup();
-      resolve();
+      handleAbort();
       return;
     }
 
@@ -172,6 +228,11 @@ export async function monitorWebhook({
       error(`feishu[${accountId}]: Webhook server error: ${err}`);
       statusSink?.({ connected: false });
       abortSignal?.removeEventListener("abort", handleAbort);
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
       reject(err);
     });
   });

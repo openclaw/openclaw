@@ -10,6 +10,8 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
+const enqueuePendingFeishuFinalReplyMock = vi.hoisted(() => vi.fn(async () => undefined));
+const ackPendingFeishuFinalReplyMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted(() => [] as any[]);
 
 vi.mock("./accounts.js", () => ({ resolveFeishuAccount: resolveFeishuAccountMock }));
@@ -24,6 +26,10 @@ vi.mock("./targets.js", () => ({ resolveReceiveIdType: resolveReceiveIdTypeMock 
 vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
+}));
+vi.mock("./restart-recovery.js", () => ({
+  enqueuePendingFeishuFinalReply: enqueuePendingFeishuFinalReplyMock,
+  ackPendingFeishuFinalReply: ackPendingFeishuFinalReplyMock,
 }));
 vi.mock("./streaming-card.js", () => ({
   mergeStreamingText: (previousText: string | undefined, nextText: string | undefined) => {
@@ -67,6 +73,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     vi.clearAllMocks();
     streamingInstances.length = 0;
     sendMediaFeishuMock.mockResolvedValue(undefined);
+    enqueuePendingFeishuFinalReplyMock.mockResolvedValue(undefined);
 
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",

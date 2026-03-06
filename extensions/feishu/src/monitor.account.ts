@@ -23,6 +23,11 @@ import { isMentionForwardRequest } from "./mention.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
+import {
+  beginFeishuActiveRun,
+  endFeishuActiveRun,
+  replayPendingFeishuFinalReplies,
+} from "./restart-recovery.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -265,29 +270,65 @@ function registerEventHandlers(
     recordChannelActivity({ channel: "feishu", accountId, direction: "inbound", at: ts });
   };
 
-  const runWithState = async (task: () => Promise<void>) => {
+  const runWithState = async (
+    runContext:
+      | {
+          chatId: string;
+          messageId: string;
+          replyToMessageId?: string;
+          replyInThread?: boolean;
+        }
+      | undefined,
+    task: () => Promise<void>,
+  ) => {
     runStateMachine?.onRunStart();
+    if (runContext) {
+      beginFeishuActiveRun({
+        accountId,
+        chatId: runContext.chatId,
+        messageId: runContext.messageId,
+        replyToMessageId: runContext.replyToMessageId,
+        replyInThread: runContext.replyInThread,
+      });
+    }
     try {
       await task();
     } finally {
+      if (runContext) {
+        endFeishuActiveRun({
+          accountId,
+          messageId: runContext.messageId,
+        });
+      }
       runStateMachine?.onRunEnd();
     }
   };
 
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
     const chatId = event.message.chat_id?.trim() || "unknown";
+    const replyToMessageId = event.message.message_id?.trim() || undefined;
+    const runMessageId = replyToMessageId || crypto.randomUUID();
+    const replyInThread = Boolean(event.message.root_id?.trim() || event.message.thread_id?.trim());
     await enqueue(chatId, () =>
-      runWithState(async () => {
-        await handleFeishuMessage({
-          cfg,
-          event,
-          botOpenId: botOpenIds.get(accountId),
-          botName: botNames.get(accountId),
-          runtime,
-          chatHistories,
-          accountId,
-        });
-      }),
+      runWithState(
+        {
+          chatId,
+          messageId: runMessageId,
+          replyToMessageId,
+          replyInThread,
+        },
+        async () => {
+          await handleFeishuMessage({
+            cfg,
+            event,
+            botOpenId: botOpenIds.get(accountId),
+            botName: botNames.get(accountId),
+            runtime,
+            chatHistories,
+            accountId,
+          });
+        },
+      ),
     );
   };
   const resolveSenderDebounceId = (event: FeishuMessageEvent): string | undefined => {
@@ -465,17 +506,31 @@ function registerEventHandlers(
         if (!syntheticEvent) {
           return;
         }
-        const promise = runWithState(async () => {
-          await handleFeishuMessage({
-            cfg,
-            event: syntheticEvent,
-            botOpenId: myBotId,
-            botName: botNames.get(accountId),
-            runtime,
-            chatHistories,
-            accountId,
-          });
-        });
+        const syntheticChatId = syntheticEvent.message.chat_id?.trim() || "unknown";
+        const syntheticReplyToMessageId = syntheticEvent.message.message_id?.trim() || undefined;
+        const syntheticRunMessageId = syntheticReplyToMessageId || crypto.randomUUID();
+        const syntheticReplyInThread = Boolean(
+          syntheticEvent.message.root_id?.trim() || syntheticEvent.message.thread_id?.trim(),
+        );
+        const promise = runWithState(
+          {
+            chatId: syntheticChatId,
+            messageId: syntheticRunMessageId,
+            replyToMessageId: syntheticReplyToMessageId,
+            replyInThread: syntheticReplyInThread,
+          },
+          async () => {
+            await handleFeishuMessage({
+              cfg,
+              event: syntheticEvent,
+              botOpenId: myBotId,
+              botName: botNames.get(accountId),
+              runtime,
+              chatHistories,
+              accountId,
+            });
+          },
+        );
         if (fireAndForget) {
           promise.catch((err) => {
             error(`feishu[${accountId}]: error handling reaction: ${String(err)}`);
@@ -505,15 +560,23 @@ function registerEventHandlers(
       try {
         const event = data as unknown as FeishuCardActionEvent;
         recordInboundActivity();
-        const promise = runWithState(async () => {
-          await handleFeishuCardAction({
-            cfg,
-            event,
-            botOpenId: botOpenIds.get(accountId),
-            runtime,
-            accountId,
-          });
-        });
+        const chatId = event.context.chat_id?.trim() || event.operator.open_id?.trim() || "unknown";
+        const messageId = `card-action-${event.token}`;
+        const promise = runWithState(
+          {
+            chatId,
+            messageId,
+          },
+          async () => {
+            await handleFeishuCardAction({
+              cfg,
+              event,
+              botOpenId: botOpenIds.get(accountId),
+              runtime,
+              accountId,
+            });
+          },
+        );
         if (fireAndForget) {
           promise.catch((err) => {
             error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
@@ -571,6 +634,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   if (warmupCount > 0) {
     log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from disk`);
   }
+  await replayPendingFeishuFinalReplies({ cfg, accountId, runtime });
 
   const eventDispatcher = createEventDispatcher(account);
   const chatHistories = new Map<string, HistoryEntry[]>();
@@ -587,6 +651,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
 
   if (connectionMode === "webhook") {
     return monitorWebhook({
+      cfg,
       account,
       accountId,
       runtime,
@@ -596,6 +661,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     });
   }
   return monitorWebSocket({
+    cfg,
     account,
     accountId,
     runtime,

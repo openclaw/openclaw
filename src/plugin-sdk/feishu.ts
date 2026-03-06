@@ -55,7 +55,7 @@ export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
-export { readJsonFileWithFallback } from "./json-store.js";
+export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
 export { createPersistentDedupe } from "./persistent-dedupe.js";
 export {
