@@ -151,6 +151,14 @@ export function buildToolActionFingerprint(
   if (action) {
     parts.push(`action=${action}`);
   }
+  // For messaging tools, path/filePath represent media attachments, not the
+  // action target.  Exclude them so that retrying a message with a corrected
+  // media path is recognized as the same action and clears the prior error.
+  const isMessagingLike =
+    normalizedTool === "message" ||
+    normalizedTool === "sessions_send" ||
+    normalizedTool.startsWith("message_") ||
+    normalizedTool.includes("send");
   let hasStableTarget = false;
   for (const key of [
     "path",
@@ -165,6 +173,9 @@ export function buildToolActionFingerprint(
     "id",
     "model",
   ]) {
+    if (isMessagingLike && (key === "path" || key === "filePath")) {
+      continue;
+    }
     const value = normalizeFingerprintValue(record?.[key]);
     if (value) {
       parts.push(`${key.toLowerCase()}=${value}`);

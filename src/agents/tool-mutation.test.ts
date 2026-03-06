@@ -65,6 +65,46 @@ describe("tool mutation helpers", () => {
     ).toBe(false);
   });
 
+  it("excludes media path from message tool fingerprint so retries match", () => {
+    const fp1 = buildToolActionFingerprint("message", {
+      action: "send",
+      target: "telegram:123",
+      path: "/tmp/image.jpg",
+    });
+    const fp2 = buildToolActionFingerprint("message", {
+      action: "send",
+      target: "telegram:123",
+      path: "/workspace/image.jpg",
+    });
+    expect(fp1).toBe(fp2);
+    expect(fp1).toContain("target=telegram:123");
+    expect(fp1).not.toContain("path=");
+  });
+
+  it("recognizes message retry with different media path as same action", () => {
+    const fp1 = buildToolActionFingerprint("message", {
+      action: "reply",
+      target: "telegram:456",
+      filePath: "/tmp/audio.ogg",
+    });
+    const fp2 = buildToolActionFingerprint("message", {
+      action: "reply",
+      target: "telegram:456",
+      filePath: "/data/workspace/audio.ogg",
+    });
+    expect(
+      isSameToolMutationAction(
+        { toolName: "message", actionFingerprint: fp1 },
+        { toolName: "message", actionFingerprint: fp2 },
+      ),
+    ).toBe(true);
+  });
+
+  it("still includes path in non-messaging tool fingerprints", () => {
+    const fp = buildToolActionFingerprint("write", { path: "/tmp/demo.txt" });
+    expect(fp).toContain("path=/tmp/demo.txt");
+  });
+
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
     expect(isLikelyMutatingToolName("sessions_send")).toBe(true);
     expect(isLikelyMutatingToolName("browser_actions")).toBe(true);
