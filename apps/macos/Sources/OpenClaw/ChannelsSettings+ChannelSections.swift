@@ -112,7 +112,7 @@ extension ChannelsSettings {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(self.store.isSavingConfig || !self.store.configDirty)
+            .disabled(self.store.isSavingConfig)
 
             Button("Reload") {
                 Task { await self.store.reloadConfigDraft() }

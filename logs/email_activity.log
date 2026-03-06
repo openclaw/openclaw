@@ -1,0 +1,21 @@
+{"timestamp":"2026-03-06T00:00:00Z","action":"gateway_initialized","message":"AgentMail gateway service initialized"}
+{"timestamp":"2026-03-06T10:23:57.491Z","action":"send_email_blocked","reason":"recipient_not_allowlisted","recipient":"unknown@example.com","allowlist":["fjventura20@gmail.com"]}
+{"timestamp":"2026-03-06T10:23:57.491Z","action":"send_email_error","recipient":"unknown@example.com","subject":"Test","error":"Recipient not in allowlist: unknown@example.com"}
+{"timestamp":"2026-03-06T10:23:57.492Z","action":"send_email_attempt","recipient":"fjventura20@gmail.com","subject":"Test Email 1","message_hash":"04f8716bfb1ca34d7ef083bd0a67676b98a26d5c0ad90c218350cdcbe24a007f"}
+{"timestamp":"2026-03-06T10:23:57.494Z","action":"send_email_success","recipient":"fjventura20@gmail.com","subject":"Test Email 1","message_hash":"04f8716bfb1ca34d7ef083bd0a67676b98a26d5c0ad90c218350cdcbe24a007f"}
+{"timestamp":"2026-03-06T10:23:57.495Z","action":"read_inbox_attempt","email":"timsmail@agentmail.to"}
+{"timestamp":"2026-03-06T10:23:57.495Z","action":"read_inbox_success","email":"timsmail@agentmail.to","message_count":0}
+{"timestamp":"2026-03-06T10:23:57.495Z","action":"get_verification_links_attempt","email":"timsmail@agentmail.to"}
+{"timestamp":"2026-03-06T10:23:57.496Z","action":"read_inbox_attempt","email":"timsmail@agentmail.to"}
+{"timestamp":"2026-03-06T10:23:57.496Z","action":"read_inbox_success","email":"timsmail@agentmail.to","message_count":0}
+{"timestamp":"2026-03-06T10:23:57.496Z","action":"get_verification_links_success","email":"timsmail@agentmail.to","link_count":0}
+{"timestamp":"2026-03-06T10:23:57.496Z","action":"test_action","testKey":"testValue"}
+{"timestamp":"2026-03-06T10:23:57.497Z","action":"send_email_attempt","recipient":"fjventura20@gmail.com","subject":"Test Email 2","message_hash":"a110b1cee1c5c7a82d37c5d71c21ff0ce5f15990e51931f7a630d5203aa32d6e"}
+{"timestamp":"2026-03-06T10:23:57.497Z","action":"send_email_success","recipient":"fjventura20@gmail.com","subject":"Test Email 2","message_hash":"a110b1cee1c5c7a82d37c5d71c21ff0ce5f15990e51931f7a630d5203aa32d6e"}
+{"timestamp":"2026-03-06T10:23:57.497Z","action":"send_email_attempt","recipient":"fjventura20@gmail.com","subject":"Test Email 3","message_hash":"fab2ce84617b4af098d80d4ff3d37b3bb0e60e41c7efba280b490612d44de1d5"}
+{"timestamp":"2026-03-06T10:23:57.498Z","action":"send_email_success","recipient":"fjventura20@gmail.com","subject":"Test Email 3","message_hash":"fab2ce84617b4af098d80d4ff3d37b3bb0e60e41c7efba280b490612d44de1d5"}
+{"timestamp":"2026-03-06T10:23:57.498Z","action":"send_email_attempt","recipient":"fjventura20@gmail.com","subject":"Test Email 4","message_hash":"1e0c4e9b4d9eb0443ffe2702aac471e4fa2252f30280bc80b29b46a0bf8c09b3"}
+{"timestamp":"2026-03-06T10:23:57.498Z","action":"send_email_success","recipient":"fjventura20@gmail.com","subject":"Test Email 4","message_hash":"1e0c4e9b4d9eb0443ffe2702aac471e4fa2252f30280bc80b29b46a0bf8c09b3"}
+{"timestamp":"2026-03-06T10:23:57.498Z","action":"send_email_attempt","recipient":"fjventura20@gmail.com","subject":"Test Email 5","message_hash":"b5e017b70ecd23fdb6e2e31d98acff684347b698251f747d132529825c2cc0d9"}
+{"timestamp":"2026-03-06T10:23:57.498Z","action":"send_email_success","recipient":"fjventura20@gmail.com","subject":"Test Email 5","message_hash":"b5e017b70ecd23fdb6e2e31d98acff684347b698251f747d132529825c2cc0d9"}
+{"timestamp":"2026-03-06T10:23:57.499Z","action":"send_email_error","recipient":"fjventura20@gmail.com","subject":"Test Email 6","error":"Hourly rate limit exceeded (5 emails/hour)"}

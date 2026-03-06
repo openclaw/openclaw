@@ -1,0 +1,23 @@
+{
+  "email": "timsmail@agentmail.to",
+  "provider": "agentmail",
+  "base_url": "https://api.agentmail.to",
+  "features": {
+    "send_email": true,
+    "read_inbox": true,
+    "extract_verification_links": true
+  },
+  "security": {
+    "rate_limits": {
+      "emails_per_hour": 5,
+      "emails_per_day": 20
+    },
+    "recipient_allowlist": [
+      "fjventura20@gmail.com"
+    ],
+    "log_email_metadata": true,
+    "log_email_bodies": false
+  },
+  "status": "configured",
+  "created_at": "2026-03-06T00:00:00Z"
+}

@@ -122,6 +122,58 @@ function uniquePreserveOrder(values: string[]): string[] {
   return output;
 }
 
+type AgentsConfigShape = {
+  agents?: {
+    defaults?: { model?: unknown };
+    list?: unknown[];
+  };
+};
+
+type AgentModelTarget = {
+  basePath: Array<string | number>;
+  existingModel: unknown;
+};
+
+export function resolveAgentModelTarget(
+  state: AppViewState,
+  configValue: Record<string, unknown>,
+  agentId: string,
+): AgentModelTarget | null {
+  const cfg = configValue as AgentsConfigShape;
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId) {
+    return null;
+  }
+
+  const defaultAgentId = (state.agentsList?.defaultId ?? "").trim();
+  if (defaultAgentId && normalizedAgentId === defaultAgentId) {
+    return {
+      basePath: ["agents", "defaults", "model"],
+      existingModel: cfg.agents?.defaults?.model,
+    };
+  }
+
+  const currentList = Array.isArray(cfg.agents?.list) ? [...cfg.agents.list] : [];
+  let index = currentList.findIndex(
+    (entry) =>
+      entry &&
+      typeof entry === "object" &&
+      "id" in entry &&
+      (entry as { id?: string }).id === normalizedAgentId,
+  );
+  if (index < 0) {
+    currentList.push({ id: normalizedAgentId });
+    updateConfigFormValue(state, ["agents", "list"], currentList);
+    index = currentList.length - 1;
+  }
+
+  const entry = currentList[index] as { model?: unknown } | undefined;
+  return {
+    basePath: ["agents", "list", index, "model"],
+    existingModel: entry?.model,
+  };
+}
+
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const list = state.agentsList?.agents ?? [];
   const parsed = parseAgentSessionKey(state.sessionKey);
@@ -812,27 +864,16 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
+                  const target = resolveAgentModelTarget(state, configValue, agentId);
+                  if (!target) {
                     return;
                   }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
-                  const basePath = ["agents", "list", index, "model"];
+                  const basePath = target.basePath;
                   if (!modelId) {
                     removeConfigFormValue(state, basePath);
                     return;
                   }
-                  const entry = list[index] as { model?: unknown };
-                  const existing = entry?.model;
+                  const existing = target.existingModel;
                   if (existing && typeof existing === "object" && !Array.isArray(existing)) {
                     const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
                     const next = {
@@ -848,24 +889,13 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
+                  const target = resolveAgentModelTarget(state, configValue, agentId);
+                  if (!target) {
                     return;
                   }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
-                  const basePath = ["agents", "list", index, "model"];
-                  const entry = list[index] as { model?: unknown };
+                  const basePath = target.basePath;
                   const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
-                  const existing = entry.model;
+                  const existing = target.existingModel;
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
                       return existing.trim() || null;
