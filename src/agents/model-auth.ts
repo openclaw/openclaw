@@ -16,6 +16,7 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
+import { OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
@@ -90,7 +91,7 @@ function resolveSyntheticLocalProviderAuth(params: {
   }
 
   return {
-    apiKey: "ollama-local", // pragma: allowlist secret
+    apiKey: OLLAMA_LOCAL_AUTH_MARKER,
     source: "models.providers.ollama (synthetic local key)",
     mode: "api-key",
   };

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import { OLLAMA_LOCAL_AUTH_MARKER } from "../../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 let mockStore: AuthProfileStore;
@@ -137,5 +138,54 @@ describe("buildProbeTargets reason codes", () => {
     expect(plan.results).toHaveLength(1);
     expectLegacyMissingCredentialsError(plan.results[0], "unresolved_ref");
     expect(plan.results[0]?.error).toContain("env:default:MISSING_ANTHROPIC_TOKEN");
+  });
+
+  it("skips marker-only models.json credentials when building probe targets", async () => {
+    const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+    const previousAnthropicOauth = process.env.ANTHROPIC_OAUTH_TOKEN;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_OAUTH_TOKEN;
+    mockStore = {
+      version: 1,
+      profiles: {},
+      order: {},
+    };
+    try {
+      const plan = await buildProbeTargets({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.com/v1",
+                api: "anthropic-messages",
+                apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        providers: ["anthropic"],
+        modelCandidates: ["anthropic/claude-sonnet-4-6"],
+        options: {
+          timeoutMs: 5_000,
+          concurrency: 1,
+          maxTokens: 16,
+        },
+      });
+
+      expect(plan.targets).toEqual([]);
+      expect(plan.results).toEqual([]);
+    } finally {
+      if (previousAnthropic === undefined) {
+        delete process.env.ANTHROPIC_API_KEY;
+      } else {
+        process.env.ANTHROPIC_API_KEY = previousAnthropic;
+      }
+      if (previousAnthropicOauth === undefined) {
+        delete process.env.ANTHROPIC_OAUTH_TOKEN;
+      } else {
+        process.env.ANTHROPIC_OAUTH_TOKEN = previousAnthropicOauth;
+      }
+    }
   });
 });

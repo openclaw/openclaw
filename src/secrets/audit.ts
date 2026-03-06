@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
@@ -23,6 +25,7 @@ import {
 import { isNonEmptyString, isRecord } from "./shared.js";
 import { describeUnknownError } from "./shared.js";
 import {
+  listAgentModelsJsonPaths,
   listAuthProfileStorePaths,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
@@ -315,6 +318,62 @@ function collectAuthJsonResidue(params: { stateDir: string; collector: AuditColl
   }
 }
 
+function collectModelsJsonSecrets(params: {
+  modelsJsonPath: string;
+  collector: AuditCollector;
+}): void {
+  if (!fs.existsSync(params.modelsJsonPath)) {
+    return;
+  }
+  params.collector.filesScanned.add(params.modelsJsonPath);
+  const parsedResult = readJsonObjectIfExists(params.modelsJsonPath);
+  if (parsedResult.error) {
+    addFinding(params.collector, {
+      code: "REF_UNRESOLVED",
+      severity: "error",
+      file: params.modelsJsonPath,
+      jsonPath: "<root>",
+      message: `Invalid JSON in models.json: ${parsedResult.error}`,
+    });
+    return;
+  }
+  const parsed = parsedResult.value;
+  if (!parsed || !isRecord(parsed.providers)) {
+    return;
+  }
+  for (const [providerId, providerValue] of Object.entries(parsed.providers)) {
+    if (!isRecord(providerValue)) {
+      continue;
+    }
+    const apiKey = providerValue.apiKey;
+    if (coerceSecretRef(apiKey)) {
+      addFinding(params.collector, {
+        code: "REF_UNRESOLVED",
+        severity: "error",
+        file: params.modelsJsonPath,
+        jsonPath: `providers.${providerId}.apiKey`,
+        message: "models.json contains an unresolved SecretRef object; regenerate models.json.",
+        provider: providerId,
+      });
+      continue;
+    }
+    if (!isNonEmptyString(apiKey)) {
+      continue;
+    }
+    if (isNonSecretApiKeyMarker(apiKey)) {
+      continue;
+    }
+    addFinding(params.collector, {
+      code: "PLAINTEXT_FOUND",
+      severity: "warn",
+      file: params.modelsJsonPath,
+      jsonPath: `providers.${providerId}.apiKey`,
+      message: "models.json provider apiKey is stored as plaintext.",
+      provider: providerId,
+    });
+  }
+}
+
 async function collectUnresolvedRefFindings(params: {
   collector: AuditCollector;
   config: OpenClawConfig;
@@ -495,6 +554,12 @@ export async function runSecretsAudit(
         authStorePath,
         collector,
         defaults,
+      });
+    }
+    for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir)) {
+      collectModelsJsonSecrets({
+        modelsJsonPath,
+        collector,
       });
     }
     await collectUnresolvedRefFindings({

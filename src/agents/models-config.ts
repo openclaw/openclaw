@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  type OpenClawConfig,
+  loadConfig,
+} from "../config/config.js";
 import { applyConfigEnvVars } from "../config/env-vars.js";
 import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
@@ -141,8 +146,9 @@ async function resolveProvidersForModelsJson(params: {
 function mergeWithExistingProviderSecrets(params: {
   nextProviders: Record<string, ProviderConfig>;
   existingProviders: Record<string, NonNullable<ModelsConfig["providers"]>[string]>;
+  secretRefManagedProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
-  const { nextProviders, existingProviders } = params;
+  const { nextProviders, existingProviders, secretRefManagedProviders } = params;
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(existingProviders)) {
     mergedProviders[key] = entry;
@@ -159,7 +165,11 @@ function mergeWithExistingProviderSecrets(params: {
       continue;
     }
     const preserved: Record<string, unknown> = {};
-    if (typeof existing.apiKey === "string" && existing.apiKey) {
+    if (
+      !secretRefManagedProviders.has(key) &&
+      typeof existing.apiKey === "string" &&
+      existing.apiKey
+    ) {
       preserved.apiKey = existing.apiKey;
     }
     if (typeof existing.baseUrl === "string" && existing.baseUrl) {
@@ -174,6 +184,7 @@ async function resolveProvidersForMode(params: {
   mode: NonNullable<ModelsConfig["mode"]>;
   targetPath: string;
   providers: Record<string, ProviderConfig>;
+  secretRefManagedProviders: ReadonlySet<string>;
 }): Promise<Record<string, ProviderConfig>> {
   if (params.mode !== "merge") {
     return params.providers;
@@ -189,6 +200,7 @@ async function resolveProvidersForMode(params: {
   return mergeWithExistingProviderSecrets({
     nextProviders: params.providers,
     existingProviders,
+    secretRefManagedProviders: params.secretRefManagedProviders,
   });
 }
 
@@ -200,11 +212,32 @@ async function readRawFile(pathname: string): Promise<string> {
   }
 }
 
+async function ensureModelsFileMode(pathname: string): Promise<void> {
+  await fs.chmod(pathname, 0o600).catch(() => {
+    // best-effort
+  });
+}
+
+function resolveModelsConfigInput(config?: OpenClawConfig): OpenClawConfig {
+  const runtimeSource = getRuntimeConfigSourceSnapshot();
+  if (!runtimeSource) {
+    return config ?? loadConfig();
+  }
+  if (!config) {
+    return runtimeSource;
+  }
+  const runtimeResolved = getRuntimeConfigSnapshot();
+  if (runtimeResolved && config === runtimeResolved) {
+    return runtimeSource;
+  }
+  return config;
+}
+
 export async function ensureOpenClawModelsJson(
   config?: OpenClawConfig,
   agentDirOverride?: string,
 ): Promise<{ agentDir: string; wrote: boolean }> {
-  const cfg = config ?? loadConfig();
+  const cfg = resolveModelsConfigInput(config);
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
 
   // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
@@ -221,24 +254,31 @@ export async function ensureOpenClawModelsJson(
 
   const mode = cfg.models?.mode ?? DEFAULT_MODE;
   const targetPath = path.join(agentDir, "models.json");
+  const secretRefManagedProviders = new Set<string>();
+
+  const normalizedProviders =
+    normalizeProviders({
+      providers,
+      agentDir,
+      secretDefaults: cfg.secrets?.defaults,
+      secretRefManagedProviders,
+    }) ?? providers;
   const mergedProviders = await resolveProvidersForMode({
     mode,
     targetPath,
-    providers,
+    providers: normalizedProviders,
+    secretRefManagedProviders,
   });
-
-  const normalizedProviders = normalizeProviders({
-    providers: mergedProviders,
-    agentDir,
-  });
-  const next = `${JSON.stringify({ providers: normalizedProviders }, null, 2)}\n`;
+  const next = `${JSON.stringify({ providers: mergedProviders }, null, 2)}\n`;
   const existingRaw = await readRawFile(targetPath);
 
   if (existingRaw === next) {
+    await ensureModelsFileMode(targetPath);
     return { agentDir, wrote: false };
   }
 
   await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
   await fs.writeFile(targetPath, next, { mode: 0o600 });
+  await ensureModelsFileMode(targetPath);
   return { agentDir, wrote: true };
 }

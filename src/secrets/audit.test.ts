@@ -10,6 +10,7 @@ type AuditFixture = {
   configPath: string;
   authStorePath: string;
   authJsonPath: string;
+  modelsPath: string;
   envPath: string;
   env: NodeJS.ProcessEnv;
 };
@@ -27,9 +28,11 @@ function resolveRuntimePathEnv(): string {
 
 function hasFinding(
   report: Awaited<ReturnType<typeof runSecretsAudit>>,
-  predicate: (entry: { code: string; file: string }) => boolean,
+  predicate: (entry: { code: string; file: string; jsonPath?: string }) => boolean,
 ): boolean {
-  return report.findings.some((entry) => predicate(entry as { code: string; file: string }));
+  return report.findings.some((entry) =>
+    predicate(entry as { code: string; file: string; jsonPath?: string }),
+  );
 }
 
 async function createAuditFixture(): Promise<AuditFixture> {
@@ -38,6 +41,7 @@ async function createAuditFixture(): Promise<AuditFixture> {
   const configPath = path.join(stateDir, "openclaw.json");
   const authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
   const authJsonPath = path.join(stateDir, "agents", "main", "agent", "auth.json");
+  const modelsPath = path.join(stateDir, "agents", "main", "agent", "models.json");
   const envPath = path.join(stateDir, ".env");
 
   await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -49,6 +53,7 @@ async function createAuditFixture(): Promise<AuditFixture> {
     configPath,
     authStorePath,
     authJsonPath,
+    modelsPath,
     envPath,
     env: {
       OPENCLAW_STATE_DIR: stateDir,
@@ -84,6 +89,16 @@ async function seedAuditFixture(fixture: AuditFixture): Promise<void> {
   await writeJsonFile(fixture.authStorePath, {
     version: 1,
     profiles: Object.fromEntries(seededProfiles),
+  });
+  await writeJsonFile(fixture.modelsPath, {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-completions",
+        apiKey: "OPENAI_API_KEY",
+        models: [{ id: "gpt-5", name: "gpt-5" }],
+      },
+    },
   });
   await fs.writeFile(fixture.envPath, "OPENAI_API_KEY=sk-openai-plaintext\n", "utf8");
 }
@@ -253,5 +268,65 @@ describe("secrets audit", () => {
     const callLog = await fs.readFile(execLogPath, "utf8");
     const callCount = callLog.split("\n").filter((line) => line.trim().length > 0).length;
     expect(callCount).toBe(1);
+  });
+
+  it("scans agent models.json files for plaintext provider apiKey values", async () => {
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "sk-models-plaintext",
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.modelsPath &&
+          entry.jsonPath === "providers.openai.apiKey",
+      ),
+    ).toBe(true);
+    expect(report.filesScanned).toContain(fixture.modelsPath);
+  });
+
+  it("does not flag models.json marker values as plaintext", async () => {
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "OPENAI_API_KEY",
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.modelsPath &&
+          entry.jsonPath === "providers.openai.apiKey",
+      ),
+    ).toBe(false);
+  });
+
+  it("reports malformed models.json as unresolved findings", async () => {
+    await fs.writeFile(fixture.modelsPath, "{bad-json", "utf8");
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) => entry.code === "REF_UNRESOLVED" && entry.file === fixture.modelsPath,
+      ),
+    ).toBe(true);
   });
 });

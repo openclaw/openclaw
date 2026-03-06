@@ -220,6 +220,85 @@ describe("models-config", () => {
     });
   });
 
+  it("replaces stale merged apiKey when provider is SecretRef-managed in current config", async () => {
+    await withTempHome(async () => {
+      await writeAgentModelsJson({
+        providers: {
+          custom: {
+            baseUrl: "https://agent.example/v1",
+            apiKey: "STALE_AGENT_KEY",
+            api: "openai-responses",
+            models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
+          },
+        },
+      });
+      await ensureOpenClawModelsJson({
+        models: {
+          mode: "merge",
+          providers: {
+            custom: {
+              ...createMergeConfigProvider(),
+              apiKey: { source: "env", provider: "default", id: "CUSTOM_PROVIDER_API_KEY" },
+            },
+          },
+        },
+      });
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string; baseUrl?: string }>;
+      }>();
+      expect(parsed.providers.custom?.apiKey).toBe("CUSTOM_PROVIDER_API_KEY");
+      expect(parsed.providers.custom?.baseUrl).toBe("https://agent.example/v1");
+    });
+  });
+
+  it("replaces stale merged apiKey when provider is SecretRef-managed via auth-profiles", async () => {
+    await withTempHome(async () => {
+      const agentDir = resolveOpenClawAgentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "minimax:default": {
+                type: "api_key",
+                provider: "minimax",
+                keyRef: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await writeAgentModelsJson({
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            apiKey: "STALE_AGENT_KEY",
+            api: "anthropic-messages",
+            models: [{ id: "MiniMax-M2.5", name: "MiniMax M2.5", input: ["text"] }],
+          },
+        },
+      });
+
+      await ensureOpenClawModelsJson({
+        models: {
+          mode: "merge",
+          providers: {},
+        },
+      });
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string }>;
+      }>();
+      expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
+    });
+  });
+
   it("uses config apiKey/baseUrl when existing agent values are empty", async () => {
     await withTempHome(async () => {
       const parsed = await runCustomProviderMergeTest({

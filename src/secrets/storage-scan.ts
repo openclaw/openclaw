@@ -31,6 +31,32 @@ export function listLegacyAuthJsonPaths(stateDir: string): string[] {
   return out;
 }
 
+export function listAgentModelsJsonPaths(config: OpenClawConfig, stateDir: string): string[] {
+  const paths = new Set<string>();
+  paths.add(path.join(resolveUserPath(stateDir), "agents", "main", "agent", "models.json"));
+
+  const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
+  if (fs.existsSync(agentsRoot)) {
+    for (const entry of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      paths.add(path.join(agentsRoot, entry.name, "agent", "models.json"));
+    }
+  }
+
+  for (const agentId of listAgentIds(config)) {
+    if (agentId === "main") {
+      paths.add(path.join(resolveUserPath(stateDir), "agents", "main", "agent", "models.json"));
+      continue;
+    }
+    const agentDir = resolveAgentDir(config, agentId);
+    paths.add(path.join(resolveUserPath(agentDir), "models.json"));
+  }
+
+  return [...paths];
+}
+
 export function readJsonObjectIfExists(filePath: string): {
   value: Record<string, unknown> | null;
   error?: string;
