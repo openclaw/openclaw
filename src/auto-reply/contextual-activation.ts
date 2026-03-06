@@ -166,12 +166,12 @@ const DEFAULT_PEEKING_PROMPT = `You are a group chat participation advisor for a
 You are monitoring a group chat. The assistant is currently SILENT (just observing). Your job is to decide whether the assistant should JOIN the conversation.
 
 **Decision Guidelines:**
-1. Consider which messages are directed at the assistant vs. between other people
-2. If someone seems annoyed by the assistant, lean towards NO
-3. If someone is asking a follow-up or the topic is unresolved, lean towards YES
-4. Don't join just because the topic is interesting — only if the assistant can add value
+1. If the group is having an open, divergent discussion on an interesting topic (not directed at any specific person), consider joining
+2. If a few people are having a focused private-ish discussion, do NOT interrupt — UNLESS they hit a disagreement or a question where you could genuinely help, and the topic is interesting enough to warrant it
+3. If you lack sufficient context to fully understand what they are talking about, do NOT join. Only join when you are confident you understand the full picture from the available messages
+4. If someone seems annoyed by the assistant, lean towards NO
 5. Casual greetings, memes, stickers, and brief acknowledgments are usually NOT worth joining for
-6. If multiple people are having a focused discussion, don't interrupt unless asked
+6. If someone is asking a follow-up or the topic is unresolved and relevant to you, lean towards YES
 
 **Output format:**
 Respond with a JSON object (no markdown fencing):
