@@ -15,6 +15,93 @@ import {
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
+const NON_SECRET_API_KEY_PLACEHOLDERS = new Set(["ollama-local", "minimax-oauth", "qwen-oauth"]);
+const SAFE_API_KEY_ENV_REFS = new Set([
+  "AI_GATEWAY_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_OAUTH_TOKEN",
+  "BYTEPLUS_API_KEY",
+  "CEREBRAS_API_KEY",
+  "CHUTES_API_KEY",
+  "CHUTES_OAUTH_TOKEN",
+  "CLOUDFLARE_AI_GATEWAY_API_KEY",
+  "COPILOT_GITHUB_TOKEN",
+  "DEEPGRAM_API_KEY",
+  "GEMINI_API_KEY",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GROQ_API_KEY",
+  "HF_TOKEN",
+  "HUGGINGFACE_HUB_TOKEN",
+  "KILOCODE_API_KEY",
+  "KIMICODE_API_KEY",
+  "KIMI_API_KEY",
+  "LITELLM_API_KEY",
+  "MINIMAX_API_KEY",
+  "MINIMAX_OAUTH_TOKEN",
+  "MISTRAL_API_KEY",
+  "MOONSHOT_API_KEY",
+  "NVIDIA_API_KEY",
+  "OLLAMA_API_KEY",
+  "OPENCODE_API_KEY",
+  "OPENCODE_ZEN_API_KEY",
+  "OPENAI_API_KEY",
+  "OPENCLAW_PROVIDER_API_KEY",
+  "OPENROUTER_API_KEY",
+  "QIANFAN_API_KEY",
+  "QWEN_OAUTH_TOKEN",
+  "QWEN_PORTAL_API_KEY",
+  "SYNTHETIC_API_KEY",
+  "TOGETHER_API_KEY",
+  "VENICE_API_KEY",
+  "VLLM_API_KEY",
+  "VOYAGE_API_KEY",
+  "VOLCANO_ENGINE_API_KEY",
+  "XAI_API_KEY",
+  "XIAOMI_API_KEY",
+  "ZAI_API_KEY",
+  "Z_AI_API_KEY",
+]);
+
+function toSanitizedApiKeyRef(providerId: string): string {
+  const normalized = providerId
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return `OPENCLAW_${normalized || "PROVIDER"}_API_KEY`;
+}
+
+function sanitizeProviderApiKeyForModelsJson(providerId: string, provider: ProviderConfig): ProviderConfig {
+  const rawApiKey = provider.apiKey;
+  if (typeof rawApiKey !== "string") {
+    return provider;
+  }
+  const trimmed = rawApiKey.trim();
+  if (!trimmed) {
+    return provider;
+  }
+  if (
+    SAFE_API_KEY_ENV_REFS.has(trimmed) ||
+    trimmed.startsWith("OPENCLAW_") ||
+    NON_SECRET_API_KEY_PLACEHOLDERS.has(trimmed)
+  ) {
+    if (trimmed === rawApiKey) {
+      return provider;
+    }
+    return { ...provider, apiKey: trimmed };
+  }
+  return { ...provider, apiKey: toSanitizedApiKeyRef(providerId) };
+}
+
+function sanitizeProvidersForModelsJson(
+  providers: Record<string, ProviderConfig>,
+): Record<string, ProviderConfig> {
+  const sanitized: Record<string, ProviderConfig> = {};
+  for (const [providerId, provider] of Object.entries(providers)) {
+    sanitized[providerId] = sanitizeProviderApiKeyForModelsJson(providerId, provider);
+  }
+  return sanitized;
+}
 
 function resolvePreferredTokenLimit(explicitValue: number, implicitValue: number): number {
   // Keep catalog refresh behavior for stale low values while preserving
@@ -231,7 +318,8 @@ export async function ensureOpenClawModelsJson(
     providers: mergedProviders,
     agentDir,
   });
-  const next = `${JSON.stringify({ providers: normalizedProviders }, null, 2)}\n`;
+  const sanitizedProviders = sanitizeProvidersForModelsJson(normalizedProviders);
+  const next = `${JSON.stringify({ providers: sanitizedProviders }, null, 2)}\n`;
   const existingRaw = await readRawFile(targetPath);
 
   if (existingRaw === next) {

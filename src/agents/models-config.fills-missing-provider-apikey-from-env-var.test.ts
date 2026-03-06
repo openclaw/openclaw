@@ -7,6 +7,9 @@ import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
+  MODELS_CONFIG_IMPLICIT_ENV_VARS,
+  unsetEnv,
+  withTempEnv,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -215,7 +218,7 @@ describe("models-config", () => {
         api: "openai-responses",
         models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
       });
-      expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
+      expect(parsed.providers.custom?.apiKey).toBe("OPENCLAW_CUSTOM_API_KEY");
       expect(parsed.providers.custom?.baseUrl).toBe("https://agent.example/v1");
     });
   });
@@ -228,8 +231,45 @@ describe("models-config", () => {
         api: "openai-responses",
         models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
       });
-      expect(parsed.providers.custom?.apiKey).toBe("CONFIG_KEY");
+      expect(parsed.providers.custom?.apiKey).toBe("OPENCLAW_CUSTOM_API_KEY");
       expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    });
+  });
+
+  it("does not write raw auth-profile API keys into models.json", async () => {
+    await withTempHome(async (home) => {
+      await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
+        unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);
+        const agentDir = path.join(home, "agent-profile-keys");
+        await fs.mkdir(agentDir, { recursive: true });
+        await fs.writeFile(
+          path.join(agentDir, "auth-profiles.json"),
+          JSON.stringify(
+            {
+              version: 1,
+              profiles: {
+                "nvidia:default": {
+                  type: "api_key",
+                  provider: "nvidia",
+                  key: "nvapi-very-secret-token",
+                },
+              },
+            },
+            null,
+            2,
+          ),
+          "utf8",
+        );
+
+        await ensureOpenClawModelsJson({ models: { providers: {} } }, agentDir);
+        const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
+        expect(raw).not.toContain("nvapi-very-secret-token");
+
+        const parsed = JSON.parse(raw) as {
+          providers: Record<string, { apiKey?: string }>;
+        };
+        expect(parsed.providers.nvidia?.apiKey).toBe("OPENCLAW_NVIDIA_API_KEY");
+      });
     });
   });
 
