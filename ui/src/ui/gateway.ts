@@ -63,7 +63,7 @@ export function resolveGatewayErrorDetailCode(
  * would break that fallback. The rate limiter still catches persistent wrong
  * tokens after N failures → AUTH_RATE_LIMITED stops the loop.
  */
-function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean {
+export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean {
   if (!error) {
     return false;
   }
