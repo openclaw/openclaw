@@ -280,8 +280,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     // Re-create the child logger when the root logger has been rebuilt
     // (e.g. after midnight date-based log rotation). Without this,
     // subsystem loggers keep writing to the previous day's file (#37388).
-    const currentGen = loggingState.loggerGeneration;
-    if (!fileLogger || fileLoggerGeneration !== currentGen) {
+    if (!fileLogger || fileLoggerGeneration !== loggingState.loggerGeneration) {
       fileLogger = getChildLogger({ subsystem });
       // Read generation after getChildLogger — the getLogger() call inside
       // may itself increment the counter, so capture the final value.
