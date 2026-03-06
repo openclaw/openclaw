@@ -1,10 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  resolveLineAccount,
-  resolveDefaultLineAccountId,
-  normalizeAccountId,
   DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  resolveDefaultLineAccountId,
+  resolveLineAccount,
 } from "./accounts.js";
 
 describe("LINE accounts", () => {
@@ -169,6 +172,95 @@ describe("LINE accounts", () => {
   describe("normalizeAccountId", () => {
     it("trims and lowercases account ids", () => {
       expect(normalizeAccountId("  Business  ")).toBe("business");
+    });
+  });
+
+  describe("resolveLineAccount – tokenFile/secretFile relative path resolution", () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-line-tokenfile-"));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("resolves tokenFile with a relative path when configFile is provided", () => {
+      fs.writeFileSync(path.join(tmpDir, "token.txt"), "rel-line-token\n", "utf-8");
+      fs.writeFileSync(path.join(tmpDir, "secret.txt"), "rel-line-secret\n", "utf-8");
+
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            tokenFile: "./token.txt",
+            secretFile: "./secret.txt",
+          },
+        },
+      };
+
+      const account = resolveLineAccount({
+        cfg,
+        configFile: path.join(tmpDir, "openclaw.json"),
+      });
+
+      expect(account.channelAccessToken).toBe("rel-line-token");
+      expect(account.channelSecret).toBe("rel-line-secret");
+      expect(account.tokenSource).toBe("file");
+    });
+
+    it("resolves per-account tokenFile with a relative path when configFile is provided", () => {
+      fs.writeFileSync(path.join(tmpDir, "biz-token.txt"), "biz-line-token\n", "utf-8");
+      fs.writeFileSync(path.join(tmpDir, "biz-secret.txt"), "biz-line-secret\n", "utf-8");
+
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            accounts: {
+              business: {
+                enabled: true,
+                tokenFile: "biz-token.txt",
+                secretFile: "biz-secret.txt",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({
+        cfg,
+        accountId: "business",
+        configFile: path.join(tmpDir, "openclaw.json"),
+      });
+
+      expect(account.channelAccessToken).toBe("biz-line-token");
+      expect(account.channelSecret).toBe("biz-line-secret");
+      expect(account.tokenSource).toBe("file");
+    });
+
+    it("still resolves absolute tokenFile paths without configFile", () => {
+      const tokenFile = path.join(tmpDir, "abs-token.txt");
+      const secretFile = path.join(tmpDir, "abs-secret.txt");
+      fs.writeFileSync(tokenFile, "abs-line-token\n", "utf-8");
+      fs.writeFileSync(secretFile, "abs-line-secret\n", "utf-8");
+
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            tokenFile,
+            secretFile,
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.channelAccessToken).toBe("abs-line-token");
+      expect(account.channelSecret).toBe("abs-line-secret");
+      expect(account.tokenSource).toBe("file");
     });
   });
 });
