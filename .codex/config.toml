@@ -1,0 +1,5 @@
+[sandbox_workspace_write]
+network_access = true
+
+[shell_environment_policy]
+inherit = "all"
