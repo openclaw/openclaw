@@ -254,6 +254,71 @@ async function resolveFeishuGroupName(params: {
   return undefined;
 }
 
+async function resolveFeishuDirectNameFromChatMember(params: {
+  account: ResolvedFeishuAccount;
+  chatId: string;
+  senderOpenId: string;
+  log: (...args: any[]) => void;
+}): Promise<string | undefined> {
+  const { account, chatId, senderOpenId, log } = params;
+  if (!account.configured) return undefined;
+
+  const normalizedSenderOpenId = senderOpenId.trim();
+  const normalizedChatId = chatId.trim();
+  if (!normalizedSenderOpenId || !normalizedChatId) return undefined;
+
+  const cached = senderNameCache.get(normalizedSenderOpenId);
+  const now = Date.now();
+  if (cached && cached.expireAt > now) return cached.name;
+
+  try {
+    const client = createFeishuClient(account) as any;
+    const getChatMembers = client?.im?.chat?.members?.get;
+    if (typeof getChatMembers !== "function") {
+      return undefined;
+    }
+
+    const res: any = await getChatMembers({
+      path: { chat_id: normalizedChatId },
+      params: {
+        member_id_type: "open_id",
+        page_size: 50,
+      },
+    });
+
+    if (res?.code !== 0) {
+      log(
+        `feishu: failed to resolve direct member name for ${normalizedSenderOpenId} in ${normalizedChatId}: code=${String(
+          res?.code,
+        )} msg=${String(res?.msg ?? "")}`,
+      );
+      return undefined;
+    }
+
+    const item = Array.isArray(res?.data?.items)
+      ? res.data.items.find(
+          (entry: any) =>
+            typeof entry?.member_id === "string" && entry.member_id === normalizedSenderOpenId,
+        )
+      : undefined;
+
+    const name = typeof item?.name === "string" ? item.name.trim() : "";
+    if (name) {
+      senderNameCache.set(normalizedSenderOpenId, {
+        name,
+        expireAt: now + SENDER_NAME_TTL_MS,
+      });
+      return name;
+    }
+  } catch (err) {
+    log(
+      `feishu: failed to resolve direct member name for ${normalizedSenderOpenId} in ${normalizedChatId}: ${String(err)}`,
+    );
+  }
+
+  return undefined;
+}
+
 function buildFeishuGroupDisplayName(params: { chatId: string; groupName?: string }): string {
   const normalizedChatId = params.chatId.trim();
   const name = params.groupName?.trim();
@@ -1027,6 +1092,18 @@ export async function handleFeishuMessage(params: {
         permissionErrorNotifiedAt.set(appKey, now);
         permissionErrorForAgent = senderResult.permissionError;
       }
+    }
+  }
+
+  if (isDirect && (feishuCfg?.resolveDmDisplayNames ?? true) && !ctx.senderName) {
+    const directName = await resolveFeishuDirectNameFromChatMember({
+      account,
+      chatId: ctx.chatId,
+      senderOpenId: ctx.senderOpenId,
+      log,
+    });
+    if (directName) {
+      ctx = { ...ctx, senderName: directName };
     }
   }
 

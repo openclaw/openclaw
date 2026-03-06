@@ -379,6 +379,66 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("falls back to chat members API for direct display name when contact API has no name", async () => {
+    const getUser = vi
+      .fn()
+      .mockResolvedValue({ code: 0, data: { user: { open_id: "ou-direct-member-fallback" } } });
+    const getMembers = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        items: [
+          {
+            member_id: "ou-direct-member-fallback",
+            name: "SenderFromMemberList",
+          },
+        ],
+      },
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: { user: { get: getUser } },
+      im: { chat: { members: { get: getMembers } } },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret_test",
+          dmPolicy: "open",
+          resolveSenderNames: true,
+          resolveDmDisplayNames: true,
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-direct-member-fallback",
+        },
+      },
+      message: {
+        message_id: "msg-direct-member-fallback",
+        chat_id: "oc-dm-direct-member-fallback",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello dm member fallback" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(getMembers).toHaveBeenCalledWith({
+      path: { chat_id: "oc-dm-direct-member-fallback" },
+      params: { member_id_type: "open_id", page_size: 50 },
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SenderName: "SenderFromMemberList (ou-direct-member-fallback)",
+      }),
+    );
+  });
+
   it("prefers sender user_id lookup for direct display name resolution when available", async () => {
     const getUser = vi
       .fn()
