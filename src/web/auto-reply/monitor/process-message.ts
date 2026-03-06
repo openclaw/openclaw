@@ -1,6 +1,7 @@
 import { resolveIdentityNamePrefix } from "../../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
 import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-detection.js";
+import { touchEngagement } from "../../../auto-reply/contextual-activation.js";
 import { formatInboundEnvelope } from "../../../auto-reply/envelope.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
 import {
@@ -460,6 +461,10 @@ export async function processMessage(params: {
 
   if (shouldClearGroupHistory) {
     params.groupHistories.set(params.groupHistoryKey, []);
+  }
+
+  if (didSendReply) {
+    touchEngagement(params.groupHistoryKey);
   }
 
   return didSendReply;

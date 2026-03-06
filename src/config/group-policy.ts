@@ -11,8 +11,27 @@ import {
 
 export type GroupPolicyChannel = ChannelId;
 
+export type ContextualActivationConfig = {
+  /** Model reference in "provider/model" format (e.g. "openrouter/meta-llama/llama-3.1-8b-instruct:free"). */
+  model: string;
+  /** Fallback models tried in order if the primary model fails. */
+  fallbacks?: string[];
+  /** Custom system prompt for the peeking (join) decision. If omitted, a default prompt is used. */
+  prompt?: string;
+  /** Custom system prompt for the disengage decision. If omitted, a default prompt is used. */
+  disengagePrompt?: string;
+  /** Maximum recent messages to include in the decision context. Default: 15. */
+  contextMessages?: number;
+  /** Base probability (0-1) of even calling the decision model when peeking. Default: 1. */
+  baseRate?: number;
+  /** Fallback timeout (seconds) after which engaged mode auto-expires if no new messages arrive. Default: 300. */
+  engagedTimeout?: number;
+};
+
 export type ChannelGroupConfig = {
   requireMention?: boolean;
+  /** Contextual activation config — used when requireMention is not set or activation is "contextual". */
+  contextualActivation?: ContextualActivationConfig;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
@@ -386,6 +405,17 @@ export function resolveChannelGroupRequireMention(params: {
     return requireMentionOverride;
   }
   return true;
+}
+
+export function resolveChannelGroupContextualActivation(params: {
+  cfg: OpenClawConfig;
+  channel: GroupPolicyChannel;
+  groupId?: string | null;
+  accountId?: string | null;
+  groupIdCaseInsensitive?: boolean;
+}): ContextualActivationConfig | undefined {
+  const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
+  return groupConfig?.contextualActivation ?? defaultConfig?.contextualActivation;
 }
 
 export function resolveChannelGroupToolsPolicy(

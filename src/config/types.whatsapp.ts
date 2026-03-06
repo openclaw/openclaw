@@ -16,6 +16,8 @@ export type WhatsAppActionConfig = {
 
 export type WhatsAppGroupConfig = {
   requireMention?: boolean;
+  /** Contextual activation config for AI-driven group participation decisions. */
+  contextualActivation?: import("./group-policy.js").ContextualActivationConfig;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };

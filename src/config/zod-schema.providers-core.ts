@@ -59,6 +59,18 @@ const TelegramCapabilitiesSchema = z.union([
     .strict(),
 ]);
 
+export const ContextualActivationSchema = z
+  .object({
+    model: z.string(),
+    fallbacks: z.array(z.string()).optional(),
+    prompt: z.string().optional(),
+    disengagePrompt: z.string().optional(),
+    contextMessages: z.number().int().min(1).max(50).optional(),
+    baseRate: z.number().min(0).max(1).optional(),
+    engagedTimeout: z.number().int().min(10).max(3600).optional(),
+  })
+  .strict();
+
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -75,6 +87,7 @@ export const TelegramTopicSchema = z
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    contextualActivation: ContextualActivationSchema.optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     tools: ToolPolicySchema,
