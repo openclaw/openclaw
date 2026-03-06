@@ -58,8 +58,12 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
   if (profile !== "chrome") {
     return false;
   }
-  const msg = String(err);
-  return msg.includes("404:") && msg.includes("tab not found");
+  const msg = String(err).toLowerCase();
+  return (
+    msg.includes("tab not found") ||
+    msg.includes("target not found") ||
+    msg.includes("no such target")
+  );
 }
 
 function stripTargetIdFromActRequest(

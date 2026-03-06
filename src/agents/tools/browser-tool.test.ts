@@ -602,4 +602,34 @@ describe("browser tool act stale target recovery", () => {
     );
     expect(result?.details).toMatchObject({ ok: true });
   });
+
+  it("retries proxied chrome act when node proxy returns tab not found", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool
+      .mockRejectedValueOnce(new Error("tab not found"))
+      .mockResolvedValueOnce({ ok: true, payload: { result: { ok: true } } });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "act",
+      target: "node",
+      profile: "chrome",
+      request: {
+        action: "click",
+        targetId: "stale-tab",
+        ref: "btn-1",
+      },
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(2);
+    const firstInvoke = gatewayMocks.callGatewayTool.mock.calls[0]?.[2] as
+      | { params?: { body?: { targetId?: string } } }
+      | undefined;
+    const secondInvoke = gatewayMocks.callGatewayTool.mock.calls[1]?.[2] as
+      | { params?: { body?: { targetId?: string } } }
+      | undefined;
+    expect(firstInvoke?.params?.body?.targetId).toBe("stale-tab");
+    expect(secondInvoke?.params?.body?.targetId).toBeUndefined();
+    expect(result?.details).toMatchObject({ ok: true });
+  });
 });
