@@ -216,6 +216,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly maxQmdOutputChars = MAX_QMD_OUTPUT_CHARS;
   private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
+  private embedTimer: NodeJS.Timeout | null = null;
   private pendingUpdate: Promise<void> | null = null;
   private queuedForcedUpdate: Promise<void> | null = null;
   private queuedForcedRuns = 0;
@@ -315,16 +316,19 @@ export class QmdMemoryManager implements MemorySearchManager {
         });
       }
     }
-    if (this.qmd.update.intervalMs > 0 || this.qmd.update.embedIntervalMs > 0) {
-      const intervalMs =
-        this.qmd.update.intervalMs > 0 && this.qmd.update.embedIntervalMs > 0
-          ? Math.min(this.qmd.update.intervalMs, this.qmd.update.embedIntervalMs)
-          : Math.max(this.qmd.update.intervalMs, this.qmd.update.embedIntervalMs);
+    if (this.qmd.update.intervalMs > 0) {
       this.updateTimer = setInterval(() => {
         void this.runUpdate("interval").catch((err) => {
           log.warn(`qmd update failed (${String(err)})`);
         });
-      }, intervalMs);
+      }, this.qmd.update.intervalMs);
+    }
+    if (this.qmd.update.embedIntervalMs > 0) {
+      this.embedTimer = setInterval(() => {
+        void this.runUpdate("embed-interval").catch((err) => {
+          log.warn(`qmd embed failed (${String(err)})`);
+        });
+      }, this.qmd.update.embedIntervalMs);
     }
   }
 
@@ -1017,6 +1021,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       clearInterval(this.updateTimer);
       this.updateTimer = null;
     }
+    if (this.embedTimer) {
+      clearInterval(this.embedTimer);
+      this.embedTimer = null;
+    }
     this.queuedForcedRuns = 0;
     await this.pendingUpdate?.catch(() => undefined);
     await this.queuedForcedUpdate?.catch(() => undefined);
@@ -1050,11 +1058,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       return;
     }
     const run = async () => {
-      if (this.sessionExporter) {
-        await this.exportSessions();
+      const embedOnly = reason === "embed-interval";
+      if (!embedOnly) {
+        if (this.sessionExporter) {
+          await this.exportSessions();
+        }
+        await this.runQmdUpdateWithRetry(reason);
       }
-      await this.runQmdUpdateWithRetry(reason);
-      if (this.shouldRunEmbed(force)) {
+      if (embedOnly || this.shouldRunEmbed(force)) {
         try {
           await runWithQmdEmbedLock(async () => {
             await this.runQmd(["embed"], {
