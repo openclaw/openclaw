@@ -26,7 +26,7 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
 
   // Bundled install (built)
   // NOTE: there is no src/ tree in a packaged install. Prefer a stable internal entrypoint.
-  const mod = await import("../../../dist/extensionAPI.js");
+  const mod = await import(new URL("../../../dist/extensionAPI.js", import.meta.url).href);
   // oxlint-disable-next-line typescript/no-explicit-any
   const fn = (mod as any).runEmbeddedPiAgent;
   if (typeof fn !== "function") {

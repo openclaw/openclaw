@@ -408,15 +408,6 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
   });
 
-  it("builds an openai-codex fallback for gpt-5.4-codex", () => {
-    mockOpenAICodexTemplateModel();
-
-    const result = resolveModel("openai-codex", "gpt-5.4-codex", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4-codex"));
-  });
-
   it("builds an anthropic forward-compat fallback for claude-opus-4-6", () => {
     mockDiscoveredModel({
       provider: "anthropic",

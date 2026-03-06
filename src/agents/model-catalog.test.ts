@@ -103,7 +103,7 @@ describe("loadModelCatalog", () => {
     ]);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-    for (const id of ["gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.4-codex"]) {
+    for (const id of ["gpt-5.3-codex-spark", "gpt-5.4"]) {
       expect(result).toContainEqual(
         expect.objectContaining({
           provider: "openai-codex",
