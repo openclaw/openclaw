@@ -31,8 +31,8 @@ if (!isDevMode()) {
 
 ## Files to modify
 
-| File | Change |
-|------|--------|
+| File                          | Change                                               |
+| ----------------------------- | ---------------------------------------------------- |
 | `src/gateway/startup-auth.ts` | Skip uniqueness check when dev-mode (~lines 318-343) |
 
 ## Dependencies

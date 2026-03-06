@@ -94,20 +94,20 @@ Because the beauty of any opensource project is that it's MINE and I am allowed 
 
 ## What dev-mode changes
 
-| ID | What it does |
-|----|-------------|
-| SEC-15a | Lighter safety section in system prompt |
-| SEC-27 | Channel metadata treated as trusted (no "UNTRUSTED" wrapper) |
-| SEC-59 | Skip messaging profile default in onboarding |
-| SEC-67 | Default compaction mode (no safeguard) |
-| SEC-70 | Skip browser navigation URL checks |
-| SEC-71 | 50MB web fetch cap (instead of 2MB) |
-| SEC-72 | Unredacted config in CLI (API keys visible) |
-| SEC-78 | No control plane rate limiting |
-| SEC-79 | 50MB prompt cap (instead of 2MB) |
-| SEC-80 | Skip hooks token uniqueness check |
-| SEC-96 | All env vars passed through to child processes |
-| FIX-01 | Auto-bootstrap MEMORY.md in new workspaces |
+| ID      | What it does                                                 |
+| ------- | ------------------------------------------------------------ |
+| SEC-15a | Lighter safety section in system prompt                      |
+| SEC-27  | Channel metadata treated as trusted (no "UNTRUSTED" wrapper) |
+| SEC-59  | Skip messaging profile default in onboarding                 |
+| SEC-67  | Default compaction mode (no safeguard)                       |
+| SEC-70  | Skip browser navigation URL checks                           |
+| SEC-71  | 50MB web fetch cap (instead of 2MB)                          |
+| SEC-72  | Unredacted config in CLI (API keys visible)                  |
+| SEC-78  | No control plane rate limiting                               |
+| SEC-79  | 50MB prompt cap (instead of 2MB)                             |
+| SEC-80  | Skip hooks token uniqueness check                            |
+| SEC-96  | All env vars passed through to child processes               |
+| FIX-01  | Auto-bootstrap MEMORY.md in new workspaces                   |
 
 ## Hub notification plugin (optional)
 

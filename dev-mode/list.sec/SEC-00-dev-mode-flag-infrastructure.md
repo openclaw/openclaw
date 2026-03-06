@@ -41,7 +41,7 @@ In `src/cli/program/build-program.ts` or a new `register.dev-mode.ts`:
 
 ```typescript
 program
-  .command("--dev-mode")  // or a subcommand approach
+  .command("--dev-mode") // or a subcommand approach
   .argument("<value>", "1 to enable, 0 to disable")
   .action(async (value) => {
     const enabled = value === "1";
@@ -115,13 +115,13 @@ This goes in the same startup location as Step 4 (after config load, before plug
 
 ## Files to modify
 
-| File | Change |
-|------|--------|
-| `src/globals.ts` | Add `setDevMode()` / `isDevMode()` |
-| `src/config/types.cli.ts` | Add `devMode?: boolean` to `CliConfig` |
-| `src/cli/profile.ts` or `src/entry.ts` | Parse `--dev-mode 0/1` from argv, persist to config |
+| File                                                    | Change                                                                     |
+| ------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `src/globals.ts`                                        | Add `setDevMode()` / `isDevMode()`                                         |
+| `src/config/types.cli.ts`                               | Add `devMode?: boolean` to `CliConfig`                                     |
+| `src/cli/profile.ts` or `src/entry.ts`                  | Parse `--dev-mode 0/1` from argv, persist to config                        |
 | `src/cli/run-main.ts` or `src/cli/program/preaction.ts` | Load `cli.devMode` on startup, call `setDevMode()`, inject hub plugin path |
-| `src/config/runtime-overrides.ts` | Used (not modified) — `setConfigOverride` for hub plugin path |
+| `src/config/runtime-overrides.ts`                       | Used (not modified) — `setConfigOverride` for hub plugin path              |
 
 ## Dependencies
 

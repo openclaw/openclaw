@@ -3,6 +3,7 @@
 ## Current Behavior
 
 Channel metadata (Slack/Discord channel names, topics, descriptions) is excluded from the system prompt. In `src/agents/system-prompt.ts`:
+
 - Line 371: `runtimeChannel` extracted from `runtimeInfo?.channel?.trim().toLowerCase()`
 - Line 716 (in `buildRuntimeLine()`): only the channel name string is included: `channel=${runtimeChannel}`
 - The `runtimeInfo` type (lines 214-226) only has `channel?: string` and `capabilities?: string[]` — no topic/description fields exist
@@ -63,11 +64,11 @@ if (runtimeInfo?.channelDescription) {
 
 ## Files to modify
 
-| File | Change |
-|------|--------|
+| File                          | Change                                                                                |
+| ----------------------------- | ------------------------------------------------------------------------------------- |
 | `src/agents/system-prompt.ts` | Extend runtimeInfo type (~line 214), add metadata to `buildRuntimeLine()` (~line 716) |
-| Slack adapter (TBD) | Pass channelTopic/channelDescription when dev-mode |
-| Discord adapter (TBD) | Pass channelTopic/channelDescription when dev-mode |
+| Slack adapter (TBD)           | Pass channelTopic/channelDescription when dev-mode                                    |
+| Discord adapter (TBD)         | Pass channelTopic/channelDescription when dev-mode                                    |
 
 ## Dependencies
 

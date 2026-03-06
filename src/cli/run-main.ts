@@ -77,6 +77,12 @@ export async function runCli(argv: string[] = process.argv) {
   if (parsedProfile.devMode) {
     const { loadConfig, writeConfigFile } = await import("../config/config.js");
     const cfg = loadConfig();
+    // Guard: if config loaded as empty (broken/missing), don't overwrite it
+    if (!cfg.cli && !cfg.gateway && !cfg.agents && Object.keys(cfg).length === 0) {
+      console.error("[dev-mode] Config appears broken or empty. Fix it first: openclaw doctor");
+      console.error("[dev-mode] Not writing dev-mode flag to avoid overwriting your config.");
+      return;
+    }
     cfg.cli = { ...cfg.cli, devMode: parsedProfile.devMode === "1" };
     await writeConfigFile(cfg);
     const enabled = parsedProfile.devMode === "1";
@@ -85,12 +91,17 @@ export async function runCli(argv: string[] = process.argv) {
     try {
       execFileSync("openclaw", ["gateway", "restart"], { stdio: "inherit" });
     } catch {
-      console.log("Gateway restart failed (gateway may not be running). Start it with: openclaw gateway start");
+      console.log(
+        "Gateway restart failed (gateway may not be running). Start it with: openclaw gateway start",
+      );
     }
     return;
   }
 
-  // Apply persisted dev-mode for route-first commands
+  loadDotEnv({ quiet: true });
+  normalizeEnv();
+
+  // Apply persisted dev-mode for route-first commands (after dotenv, before tryRouteCli)
   try {
     const { loadConfig } = await import("../config/config.js");
     const cfg = loadConfig();
@@ -98,11 +109,11 @@ export async function runCli(argv: string[] = process.argv) {
       process.env.OPENCLAW_DEV_MODE = "1";
     }
   } catch (err) {
-    console.error(`[dev-mode] Failed to load dev-mode config: ${err instanceof Error ? err.message : err}`);
+    console.error(
+      `[dev-mode] Failed to load dev-mode config: ${err instanceof Error ? err.message : err}`,
+    );
   }
 
-  loadDotEnv({ quiet: true });
-  normalizeEnv();
   if (shouldEnsureCliPath(normalizedArgv)) {
     ensureOpenClawCliOnPath();
   }

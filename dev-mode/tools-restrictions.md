@@ -15,18 +15,22 @@ A profile is the first filter. It defines a whitelist - only tools in the profil
 There are 4 profiles:
 
 ### `minimal`
+
 **Allowed tools:** `session_status` (1 tool only)
 Everything else is blocked. This is the most locked-down profile.
 
 ### `coding`
+
 **Allowed tools:** `read`, `write`, `edit`, `apply_patch`, `exec`, `process`, `memory_search`, `memory_get`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `subagents`, `session_status`, `cron`, `image` (16 tools)
 Covers file ops, shell, memory, sessions, scheduling, and image. Does NOT include: `web_search`, `web_fetch`, `browser`, `canvas`, `message`, `gateway`, `nodes`, `agents_list`, `tts`.
 
 ### `messaging`
+
 **Allowed tools:** `sessions_list`, `sessions_history`, `sessions_send`, `session_status`, `message` (5 tools)
 Only session management and messaging. No file ops, no shell, no web.
 
 ### `full`
+
 **Allowed tools:** everything (no allow/deny list = no filtering)
 
 **How it's applied:** Set via `tools.profile` in config (global) or `agents.<id>.tools.profile` (per-agent). The agent-level profile overrides global.
@@ -40,6 +44,7 @@ Only session management and messaging. No file ops, no shell, no web.
 You can restrict tools per AI model provider. Config key: `tools.byProvider.<provider>` or `agents.<id>.tools.byProvider.<provider>`.
 
 The provider key can be:
+
 - A provider name like `openai`, `anthropic`
 - A full model ID like `openai/gpt-4`
 
@@ -113,13 +118,13 @@ A tool must survive ALL 7 steps. If any step removes it, it's gone.
 
 When tools are invoked via the Gateway HTTP API (`POST /tools/invoke`), these tools are always blocked:
 
-| Tool | Why |
-|------|-----|
+| Tool             | Why                                              |
+| ---------------- | ------------------------------------------------ |
 | `sessions_spawn` | Spawning agents remotely = remote code execution |
-| `sessions_send` | Cross-session message injection |
-| `cron` | Could create persistent scheduled tasks |
-| `gateway` | Prevents gateway reconfiguration via HTTP |
-| `whatsapp_login` | Interactive (needs QR scan), hangs on HTTP |
+| `sessions_send`  | Cross-session message injection                  |
+| `cron`           | Could create persistent scheduled tasks          |
+| `gateway`        | Prevents gateway reconfiguration via HTTP        |
+| `whatsapp_login` | Interactive (needs QR scan), hangs on HTTP       |
 
 **Hardcoded defaults:** YES - this is a hardcoded deny list in `src/security/dangerous-tools.ts` lines 9-20. These 5 tools are ALWAYS blocked via HTTP unless explicitly overridden by `gateway.tools.allow` in config (see `src/gateway/tools-invoke-http.ts` lines 293-300). There is also a separate `gateway.tools.deny` config that adds MORE tools to the deny list on top of the hardcoded ones.
 
@@ -135,18 +140,18 @@ When tools are invoked via the Gateway HTTP API (`POST /tools/invoke`), these to
 
 ACP is an automation API surface. These tools always require explicit user approval when invoked through ACP:
 
-| Tool | Category |
-|------|----------|
-| `exec` | Shell execution |
-| `spawn` | Process spawning |
-| `shell` | Shell access |
-| `sessions_spawn` | Sub-agent spawning |
-| `sessions_send` | Cross-session messaging |
-| `gateway` | Gateway control |
-| `fs_write` | File writing |
-| `fs_delete` | File deletion |
-| `fs_move` | File moving |
-| `apply_patch` | File patching |
+| Tool             | Category                |
+| ---------------- | ----------------------- |
+| `exec`           | Shell execution         |
+| `spawn`          | Process spawning        |
+| `shell`          | Shell access            |
+| `sessions_spawn` | Sub-agent spawning      |
+| `sessions_send`  | Cross-session messaging |
+| `gateway`        | Gateway control         |
+| `fs_write`       | File writing            |
+| `fs_delete`      | File deletion           |
+| `fs_move`        | File moving             |
+| `apply_patch`    | File patching           |
 
 These aren't blocked outright - they require approval before each use.
 
@@ -163,23 +168,25 @@ These aren't blocked outright - they require approval before each use.
 When the main agent spawns sub-agents, those sub-agents get restricted tools.
 
 ### Always denied for ALL sub-agents:
-| Tool | Why |
-|------|-----|
-| `gateway` | System admin, dangerous from subagent |
-| `agents_list` | System admin |
-| `whatsapp_login` | Interactive, not a task |
-| `session_status` | Main agent coordinates this |
-| `cron` | Scheduling is main agent's job |
-| `memory_search` | Pass info in spawn prompt instead |
-| `memory_get` | Pass info in spawn prompt instead |
-| `sessions_send` | Subagents use announce chain, not direct sends |
+
+| Tool             | Why                                            |
+| ---------------- | ---------------------------------------------- |
+| `gateway`        | System admin, dangerous from subagent          |
+| `agents_list`    | System admin                                   |
+| `whatsapp_login` | Interactive, not a task                        |
+| `session_status` | Main agent coordinates this                    |
+| `cron`           | Scheduling is main agent's job                 |
+| `memory_search`  | Pass info in spawn prompt instead              |
+| `memory_get`     | Pass info in spawn prompt instead              |
+| `sessions_send`  | Subagents use announce chain, not direct sends |
 
 ### Additionally denied for LEAF sub-agents (max depth reached):
-| Tool | Why |
-|------|-----|
-| `sessions_list` | No children to manage |
+
+| Tool               | Why                   |
+| ------------------ | --------------------- |
+| `sessions_list`    | No children to manage |
 | `sessions_history` | No children to manage |
-| `sessions_spawn` | Can't spawn deeper |
+| `sessions_spawn`   | Can't spawn deeper    |
 
 Orchestrator sub-agents (not at max depth) CAN use `sessions_spawn`, `sessions_list`, `sessions_history` to manage their own children.
 

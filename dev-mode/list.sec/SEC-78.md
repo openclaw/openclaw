@@ -28,7 +28,12 @@ export function consumeControlPlaneWriteBudget(params: {
   nowMs?: number;
 }): { allowed: boolean; retryAfterMs: number; remaining: number; key: string } {
   if (isDevMode()) {
-    return { allowed: true, retryAfterMs: 0, remaining: CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS, key: "" };
+    return {
+      allowed: true,
+      retryAfterMs: 0,
+      remaining: CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS,
+      key: "",
+    };
   }
   // ... existing rate limiting logic
 }
@@ -36,8 +41,8 @@ export function consumeControlPlaneWriteBudget(params: {
 
 ## Files to modify
 
-| File | Change |
-|------|--------|
+| File                                      | Change                                                      |
+| ----------------------------------------- | ----------------------------------------------------------- |
 | `src/gateway/control-plane-rate-limit.ts` | Early return in `consumeControlPlaneWriteBudget` (~line 34) |
 
 ## Dependencies

@@ -24,8 +24,8 @@ When `--dev-mode`, remove or greatly increase the ACP payload size bound to allo
 import { isDevMode } from "../globals.js";
 
 const MAX_PROMPT_BYTES = isDevMode()
-  ? 50 * 1024 * 1024   // 50MB in dev mode
-  : 2 * 1024 * 1024;   // 2MB default
+  ? 50 * 1024 * 1024 // 50MB in dev mode
+  : 2 * 1024 * 1024; // 2MB default
 ```
 
 **Note:** If `MAX_PROMPT_BYTES` is used at module load time (before `setDevMode` runs), use a function instead:
@@ -44,10 +44,10 @@ Check if there's a separate size validation at lines 59-88. If so, apply the sam
 
 ## Files to modify
 
-| File | Change |
-|------|--------|
-| `src/acp/translator.ts` | Dynamic `MAX_PROMPT_BYTES` based on dev-mode (~line 44) |
-| `src/acp/event-mapper.ts` | Same pattern if size validation exists (~lines 59-88) |
+| File                      | Change                                                  |
+| ------------------------- | ------------------------------------------------------- |
+| `src/acp/translator.ts`   | Dynamic `MAX_PROMPT_BYTES` based on dev-mode (~line 44) |
+| `src/acp/event-mapper.ts` | Same pattern if size validation exists (~lines 59-88)   |
 
 ## Dependencies
 

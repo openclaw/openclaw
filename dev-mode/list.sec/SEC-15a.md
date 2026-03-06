@@ -5,6 +5,7 @@
 Every AI agent session injects a hardcoded "Safety" section into the system prompt at `src/agents/system-prompt.ts` lines 393-399, via `buildAgentSystemPrompt()` (line 467).
 
 Current safety text:
+
 ```
 ## Safety
 You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.
@@ -48,8 +49,8 @@ const safetySection = isDevMode()
 
 ## Files to modify
 
-| File | Change |
-|------|--------|
+| File                          | Change                                       |
+| ----------------------------- | -------------------------------------------- |
 | `src/agents/system-prompt.ts` | Conditional safety section at lines ~393-399 |
 
 ## Dependencies

@@ -31,8 +31,8 @@ function resolveCompactionMode(config: OpenClawConfig): CompactionMode {
 
 ## Files to modify
 
-| File | Change |
-|------|--------|
+| File                                          | Change                                         |
+| --------------------------------------------- | ---------------------------------------------- |
 | `src/agents/pi-embedded-runner/extensions.ts` | Override in `resolveCompactionMode` (~line 60) |
 
 ## Dependencies

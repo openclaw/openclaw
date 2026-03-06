@@ -3,10 +3,9 @@
 Standalone notification hub that runs alongside OpenClaw. Any agent, cron job, or app you build can POST notifications here. The hub stores them, wakes the main agent via OpenClaw's chat API, and the agent forwards via the configured channel.
 
 **Independent** — no OpenClaw code changes needed. Two parts:
+
 1. **Hub server** (`server.py`) — Python HTTP server with SQLite storage
 2. **OpenClaw plugin** (`index.ts`) — registers `hub_notify`, `hub_pending`, `hub_done` as native agent tools
-
-Inspired by [YourJarvisHub](https://github.com/JarvisDeLaAri/YourJarvisHub)
 
 ---
 
@@ -34,14 +33,15 @@ The plugin registers these tools that agents can call natively — no curl or ex
 
 Send a notification through the hub.
 
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `message` | yes | The notification content |
-| `source` | no | Who is sending (e.g. "daily-digest", "health-check") |
-| `title` | no | Short title |
-| `priority` | no | `urgent` / `high` / `normal` / `low` |
+| Parameter  | Required | Description                                          |
+| ---------- | -------- | ---------------------------------------------------- |
+| `message`  | yes      | The notification content                             |
+| `source`   | no       | Who is sending (e.g. "daily-digest", "health-check") |
+| `title`    | no       | Short title                                          |
+| `priority` | no       | `urgent` / `high` / `normal` / `low`                 |
 
 Example agent usage:
+
 ```
 hub_notify({ message: "Research complete. 5 papers found.", source: "agent:research", priority: "high" })
 ```
@@ -54,19 +54,19 @@ List all unhandled notifications. No parameters.
 
 Mark a notification as handled.
 
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `id` | yes | Notification ID to mark done |
-| `response` | no | What you did about it |
+| Parameter  | Required | Description                  |
+| ---------- | -------- | ---------------------------- |
+| `id`       | yes      | Notification ID to mark done |
+| `response` | no       | What you did about it        |
 
 ### Plugin Config
 
 In OpenClaw config under `plugins.entries.hub.config`:
 
-| Key | Default | Description |
-|-----|---------|-------------|
+| Key    | Default     | Description     |
+| ------ | ----------- | --------------- |
 | `host` | `127.0.0.1` | Hub server host |
-| `port` | `10020` | Hub server port |
+| `port` | `10020`     | Hub server port |
 
 ---
 
@@ -109,9 +109,9 @@ Your cron / your app / your agent
 
 **Environment variables required for gateway integration:**
 
-| Variable | Description |
-|----------|-------------|
-| `OPENCLAW_PORT` | Gateway port (e.g. `18789`) — must match your `openclaw gateway` config |
+| Variable         | Description                                                             |
+| ---------------- | ----------------------------------------------------------------------- |
+| `OPENCLAW_PORT`  | Gateway port (e.g. `18789`) — must match your `openclaw gateway` config |
 | `OPENCLAW_TOKEN` | Gateway auth token — found via `openclaw config get gateway.auth.token` |
 
 Without these, the Hub stores notifications but cannot wake the agent.
@@ -139,23 +139,24 @@ curl -X POST http://localhost:10020/notify \
 
 **Fields:**
 
-| Field | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `message` | yes | - | The notification content |
-| `source` | no | `"unknown"` | Who sent it (your app name, cron name, etc.) |
-| `title` | no | `""` | Short title |
-| `priority` | no | `"normal"` | `urgent` / `high` / `normal` / `low` |
+| Field      | Required | Default     | Description                                  |
+| ---------- | -------- | ----------- | -------------------------------------------- |
+| `message`  | yes      | -           | The notification content                     |
+| `source`   | no       | `"unknown"` | Who sent it (your app name, cron name, etc.) |
+| `title`    | no       | `""`        | Short title                                  |
+| `priority` | no       | `"normal"`  | `urgent` / `high` / `normal` / `low`         |
 
 **Priority levels:**
 
-| Priority | When to use |
-|----------|-------------|
-| `urgent` | Immediate attention — server down, security alert |
-| `high` | Important but not critical — task failed, threshold exceeded |
-| `normal` | Standard notification — report ready, job completed |
-| `low` | FYI only — background info, stats update |
+| Priority | When to use                                                  |
+| -------- | ------------------------------------------------------------ |
+| `urgent` | Immediate attention — server down, security alert            |
+| `high`   | Important but not critical — task failed, threshold exceeded |
+| `normal` | Standard notification — report ready, job completed          |
+| `low`    | FYI only — background info, stats update                     |
 
 **Response:**
+
 ```json
 { "ok": true, "id": 7, "message": "Notification sent to agent" }
 ```
@@ -179,6 +180,7 @@ curl http://localhost:10020/pending
 ```
 
 **Response:**
+
 ```json
 {
   "notifications": [
@@ -238,10 +240,14 @@ def notify_hub(message, source="my-agent", title="", priority="normal"):
 
 ```javascript
 // Node.js — no dependencies
-const http = require('http');
+const http = require("http");
 const data = JSON.stringify({ source: "my-app", message: "Task completed", priority: "normal" });
-const req = http.request({ hostname: '127.0.0.1', port: 10020, path: '/notify', method: 'POST',
-  headers: { 'Content-Type': 'application/json', 'Content-Length': data.length }
+const req = http.request({
+  hostname: "127.0.0.1",
+  port: 10020,
+  path: "/notify",
+  method: "POST",
+  headers: { "Content-Type": "application/json", "Content-Length": data.length },
 });
 req.write(data);
 req.end();
@@ -276,13 +282,13 @@ system_run: curl -s -X POST http://localhost:10020/notify -H "Content-Type: appl
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OPENCLAW_HOST` | `127.0.0.1` | OpenClaw gateway host |
-| `OPENCLAW_PORT` | `18789` | OpenClaw gateway port |
-| `OPENCLAW_TOKEN` | `""` | Gateway auth token |
-| `OPENCLAW_AGENT` | `agent:main` | Agent model to wake (default value, please update in .env) |
-| `HUB_CHANNEL` | `WhatsApp` | Channel for agent to forward notifications (default value, please update in .env) |
+| Variable         | Default      | Description                                                                       |
+| ---------------- | ------------ | --------------------------------------------------------------------------------- |
+| `OPENCLAW_HOST`  | `127.0.0.1`  | OpenClaw gateway host                                                             |
+| `OPENCLAW_PORT`  | `18789`      | OpenClaw gateway port                                                             |
+| `OPENCLAW_TOKEN` | `""`         | Gateway auth token                                                                |
+| `OPENCLAW_AGENT` | `agent:main` | Agent model to wake (default value, please update in .env)                        |
+| `HUB_CHANNEL`    | `WhatsApp`   | Channel for agent to forward notifications (default value, please update in .env) |
 
 ### Run
 
@@ -352,5 +358,3 @@ notifications (
 Open `flow-comparison.html` in a browser for a side-by-side visual of how the Hub's API path compares to OpenClaw's built-in Heartbeat/Cron path. Same brain, different plumbing.
 
 ---
-
-Built by Ariel @ Bresleveloper AI

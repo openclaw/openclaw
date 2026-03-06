@@ -8,8 +8,8 @@ Blocks dangerous environment variables from being passed to child processes.
 - `src/infra/host-env-security.ts` lines 74-118: `sanitizeHostExecEnv()` — filters dangerous env vars before exec
 - `src/infra/host-env-security-policy.json`: Policy file with blocked variable names and prefixes
 
-**Blocked keys include:** NODE_OPTIONS, NODE_PATH, PYTHONHOME, PYTHONPATH, PERL5LIB, RUBYLIB, BASH_ENV, SSLKEYLOGFILE, etc.
-**Blocked prefixes:** DYLD_, LD_, BASH_FUNC_
+**Blocked keys include:** NODE*OPTIONS, NODE_PATH, PYTHONHOME, PYTHONPATH, PERL5LIB, RUBYLIB, BASH_ENV, SSLKEYLOGFILE, etc.
+**Blocked prefixes:** DYLD*, LD*, BASH_FUNC*
 **Blocked overrides:** HOME, ZDOTDIR
 
 ## Dev-Mode Behavior
@@ -27,15 +27,15 @@ When `--dev-mode`, pass all env vars through to child processes without filterin
 import { isDevMode } from "../globals.js";
 
 export function sanitizeHostExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  if (isDevMode()) return { ...env };  // Pass through all env vars in dev mode
+  if (isDevMode()) return { ...env }; // Pass through all env vars in dev mode
   // ... existing filtering logic
 }
 ```
 
 ## Files to modify
 
-| File | Change |
-|------|--------|
+| File                             | Change                                           |
+| -------------------------------- | ------------------------------------------------ |
 | `src/infra/host-env-security.ts` | Early return in `sanitizeHostExecEnv` (~line 74) |
 
 ## Dependencies

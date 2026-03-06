@@ -38,7 +38,7 @@ import { isDevMode } from "../globals.js";
 // In ensureAgentWorkspace():
 if (isDevMode()) {
   const memoryPath = path.join(workspaceDir, DEFAULT_MEMORY_FILENAME);
-  if (!await fileExists(memoryPath)) {
+  if (!(await fileExists(memoryPath))) {
     const template = await loadTemplate("MEMORY.md");
     await writeFile(memoryPath, template ?? "# Memory\n");
   }
@@ -47,10 +47,10 @@ if (isDevMode()) {
 
 ## Files to modify
 
-| File | Change |
-|------|--------|
-| `docs/reference/templates/MEMORY.md` | Create new template file |
-| `src/agents/workspace.ts` | Add MEMORY.md to bootstrap in `ensureAgentWorkspace` (~line 321) |
+| File                                 | Change                                                           |
+| ------------------------------------ | ---------------------------------------------------------------- |
+| `docs/reference/templates/MEMORY.md` | Create new template file                                         |
+| `src/agents/workspace.ts`            | Add MEMORY.md to bootstrap in `ensureAgentWorkspace` (~line 321) |
 
 ## Dependencies
 

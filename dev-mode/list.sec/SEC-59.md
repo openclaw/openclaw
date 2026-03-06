@@ -31,8 +31,8 @@ if (!isDevMode()) {
 
 ## Files to modify
 
-| File | Change |
-|------|--------|
+| File                             | Change                                        |
+| -------------------------------- | --------------------------------------------- |
 | `src/commands/onboard-config.ts` | Skip profile default when dev-mode (~line 31) |
 
 ## Dependencies

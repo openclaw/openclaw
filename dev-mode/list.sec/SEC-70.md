@@ -24,9 +24,9 @@ import { isDevMode } from "../globals.js";
 
 // In assertBrowserNavigationAllowed() (~line 34):
 export async function assertBrowserNavigationAllowed(
-  opts: { url: string; lookupFn?: LookupFn; } & BrowserNavigationPolicyOptions,
+  opts: { url: string; lookupFn?: LookupFn } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
-  if (isDevMode()) return;  // Skip all navigation checks in dev mode
+  if (isDevMode()) return; // Skip all navigation checks in dev mode
 
   // ... existing protocol validation at lines 52-59:
   // if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) { ... throw ... }
@@ -37,8 +37,8 @@ Note: There is also `assertBrowserNavigationResultAllowed()` at line 82 (post-na
 
 ## Files to modify
 
-| File | Change |
-|------|--------|
+| File                              | Change                                                                                                                       |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `src/browser/navigation-guard.ts` | Early return in `assertBrowserNavigationAllowed` (~line 34) and optionally `assertBrowserNavigationResultAllowed` (~line 82) |
 
 ## Dependencies

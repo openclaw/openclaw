@@ -86,7 +86,8 @@ export default {
           },
           source: {
             type: "string",
-            description: "Who is sending this (e.g. 'daily-digest', 'health-check', your agent name)",
+            description:
+              "Who is sending this (e.g. 'daily-digest', 'health-check', your agent name)",
           },
           title: {
             type: "string",
@@ -119,7 +120,8 @@ export default {
     api.registerTool({
       name: "hub_pending",
       label: "Hub Pending",
-      description: "List all unhandled notifications from the Hub. Use this to check if there are notifications waiting to be processed.",
+      description:
+        "List all unhandled notifications from the Hub. Use this to check if there are notifications waiting to be processed.",
       parameters: {
         type: "object" as const,
         properties: {},
@@ -138,7 +140,8 @@ export default {
     api.registerTool({
       name: "hub_done",
       label: "Hub Done",
-      description: "Mark a hub notification as handled. Call this after you've forwarded or acted on a notification.",
+      description:
+        "Mark a hub notification as handled. Call this after you've forwarded or acted on a notification.",
       parameters: {
         type: "object" as const,
         required: ["id"],
@@ -164,6 +167,8 @@ export default {
       },
     });
 
-    api.logger.info(`Hub plugin registered — tools: hub_notify, hub_pending, hub_done (${baseUrl})`);
+    api.logger.info(
+      `Hub plugin registered — tools: hub_notify, hub_pending, hub_done (${baseUrl})`,
+    );
   },
 };

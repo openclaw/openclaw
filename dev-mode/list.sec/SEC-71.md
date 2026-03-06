@@ -16,6 +16,7 @@ When `--dev-mode`, remove the 2MB body cap (or increase to a much larger value l
 ### File: `src/agents/tools/web-fetch.ts`
 
 The 2MB cap is at line 36:
+
 ```typescript
 const DEFAULT_FETCH_MAX_RESPONSE_BYTES = 2_000_000;
 ```
@@ -31,16 +32,16 @@ import { isDevMode } from "../globals.js";
 
 // Line 36:
 const DEFAULT_FETCH_MAX_RESPONSE_BYTES = isDevMode()
-  ? 50_000_000   // 50MB in dev mode
-  : 2_000_000;   // 2MB default
+  ? 50_000_000 // 50MB in dev mode
+  : 2_000_000; // 2MB default
 ```
 
 This is safe because the constant is only accessed inside `resolveFetchMaxResponseBytes()` at runtime, after `setDevMode()` has been called.
 
 ## Files to modify
 
-| File | Change |
-|------|--------|
+| File                            | Change                                                               |
+| ------------------------------- | -------------------------------------------------------------------- |
 | `src/agents/tools/web-fetch.ts` | Increase `DEFAULT_FETCH_MAX_RESPONSE_BYTES` when dev-mode (~line 36) |
 
 ## Dependencies

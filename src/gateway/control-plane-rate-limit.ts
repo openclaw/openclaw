@@ -43,7 +43,12 @@ export function consumeControlPlaneWriteBudget(params: {
 } {
   if (isDevMode()) {
     const key = resolveControlPlaneRateLimitKey(params.client);
-    return { allowed: true, retryAfterMs: 0, remaining: CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS, key };
+    return {
+      allowed: true,
+      retryAfterMs: 0,
+      remaining: CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS,
+      key,
+    };
   }
   const nowMs = params.nowMs ?? Date.now();
   const key = resolveControlPlaneRateLimitKey(params.client);

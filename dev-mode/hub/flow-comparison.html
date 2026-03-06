@@ -1,431 +1,462 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpenClaw Flow Comparison</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    background: #0a0e1a;
-    color: #e0e0e0;
-    padding: 40px 20px;
-  }
-  h1 {
-    text-align: center;
-    font-size: 28px;
-    margin-bottom: 10px;
-    color: #fff;
-  }
-  .subtitle {
-    text-align: center;
-    color: #888;
-    margin-bottom: 40px;
-    font-size: 14px;
-  }
-  .flows {
-    display: flex;
-    gap: 40px;
-    max-width: 1100px;
-    margin: 0 auto;
-    justify-content: center;
-    flex-wrap: wrap;
-  }
-  .flow {
-    flex: 1;
-    min-width: 420px;
-    max-width: 500px;
-  }
-  .flow-title {
-    text-align: center;
-    font-size: 20px;
-    font-weight: 700;
-    padding: 16px;
-    border-radius: 12px;
-    margin-bottom: 24px;
-  }
-  .flow-api .flow-title {
-    background: linear-gradient(135deg, #1a3a5c, #1a2a4c);
-    border: 1px solid #2a5a8c;
-    color: #6cb4ee;
-  }
-  .flow-hb .flow-title {
-    background: linear-gradient(135deg, #1a4a3c, #1a3a2c);
-    border: 1px solid #2a7a5c;
-    color: #6cd4a0;
-  }
-  .step {
-    position: relative;
-    display: flex;
-    align-items: flex-start;
-    margin-bottom: 8px;
-  }
-  .step-num {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 700;
-    font-size: 14px;
-    flex-shrink: 0;
-    margin-right: 16px;
-    position: relative;
-    z-index: 2;
-  }
-  .flow-api .step-num {
-    background: #1a3a5c;
-    border: 2px solid #4a9ae8;
-    color: #6cb4ee;
-  }
-  .flow-hb .step-num {
-    background: #1a4a3c;
-    border: 2px solid #4aba80;
-    color: #6cd4a0;
-  }
-  .step-content {
-    flex: 1;
-    padding: 12px 16px;
-    border-radius: 10px;
-    border: 1px solid #1a2030;
-    background: #0f1520;
-  }
-  .step-label {
-    font-weight: 600;
-    font-size: 14px;
-    margin-bottom: 4px;
-  }
-  .flow-api .step-label { color: #6cb4ee; }
-  .flow-hb .step-label { color: #6cd4a0; }
-  .step-detail {
-    font-size: 13px;
-    color: #999;
-    line-height: 1.5;
-  }
-  .step-code {
-    font-family: 'Fira Code', 'Consolas', monospace;
-    font-size: 11px;
-    color: #c8a0ff;
-    background: #12101e;
-    padding: 2px 6px;
-    border-radius: 4px;
-  }
-  .connector {
-    width: 2px;
-    height: 20px;
-    margin-left: 17px;
-    margin-bottom: 8px;
-  }
-  .flow-api .connector { background: #2a5a8c; }
-  .flow-hb .connector { background: #2a7a5c; }
-  .arrow {
-    width: 0;
-    height: 0;
-    border-left: 6px solid transparent;
-    border-right: 6px solid transparent;
-    margin-left: 11px;
-    margin-bottom: 8px;
-  }
-  .flow-api .arrow { border-top: 8px solid #4a9ae8; }
-  .flow-hb .arrow { border-top: 8px solid #4aba80; }
-  .shared-box {
-    border: 2px dashed #f0a040;
-    border-radius: 10px;
-    padding: 12px 16px;
-    margin: 4px 0;
-    position: relative;
-  }
-  .shared-box .step-content {
-    border-color: #3a2a10;
-    background: #15120a;
-  }
-  .shared-tag {
-    position: absolute;
-    top: -10px;
-    right: 16px;
-    background: #0a0e1a;
-    padding: 0 8px;
-    font-size: 10px;
-    font-weight: 700;
-    color: #f0a040;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-  }
-  .result-box {
-    margin-top: 8px;
-    padding: 14px 16px;
-    border-radius: 10px;
-    text-align: center;
-    font-weight: 600;
-    font-size: 14px;
-  }
-  .flow-api .result-box {
-    background: linear-gradient(135deg, #1a2040, #1a1530);
-    border: 1px solid #4040a0;
-    color: #a0a0ff;
-  }
-  .flow-hb .result-box {
-    background: linear-gradient(135deg, #102a20, #0a2018);
-    border: 1px solid #30a060;
-    color: #80e0a0;
-  }
-  .result-detail {
-    font-size: 12px;
-    font-weight: 400;
-    color: #888;
-    margin-top: 4px;
-  }
-  .vs-badge {
-    text-align: center;
-    margin: 40px auto;
-    max-width: 600px;
-    padding: 20px;
-    border-radius: 12px;
-    background: linear-gradient(135deg, #1a1020, #100a18);
-    border: 1px solid #3a2a5a;
-  }
-  .vs-badge h3 {
-    color: #d0a0ff;
-    margin-bottom: 12px;
-    font-size: 16px;
-  }
-  .vs-row {
-    display: flex;
-    justify-content: space-between;
-    padding: 8px 0;
-    border-bottom: 1px solid #1a1530;
-    font-size: 13px;
-  }
-  .vs-row:last-child { border-bottom: none; }
-  .vs-label { color: #888; }
-  .vs-api { color: #6cb4ee; font-weight: 600; }
-  .vs-hb { color: #6cd4a0; font-weight: 600; }
-  .emoji { font-size: 18px; margin-right: 4px; }
-</style>
-</head>
-<body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenClaw Flow Comparison</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family:
+          "Segoe UI",
+          system-ui,
+          -apple-system,
+          sans-serif;
+        background: #0a0e1a;
+        color: #e0e0e0;
+        padding: 40px 20px;
+      }
+      h1 {
+        text-align: center;
+        font-size: 28px;
+        margin-bottom: 10px;
+        color: #fff;
+      }
+      .subtitle {
+        text-align: center;
+        color: #888;
+        margin-bottom: 40px;
+        font-size: 14px;
+      }
+      .flows {
+        display: flex;
+        gap: 40px;
+        max-width: 1100px;
+        margin: 0 auto;
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+      .flow {
+        flex: 1;
+        min-width: 420px;
+        max-width: 500px;
+      }
+      .flow-title {
+        text-align: center;
+        font-size: 20px;
+        font-weight: 700;
+        padding: 16px;
+        border-radius: 12px;
+        margin-bottom: 24px;
+      }
+      .flow-api .flow-title {
+        background: linear-gradient(135deg, #1a3a5c, #1a2a4c);
+        border: 1px solid #2a5a8c;
+        color: #6cb4ee;
+      }
+      .flow-hb .flow-title {
+        background: linear-gradient(135deg, #1a4a3c, #1a3a2c);
+        border: 1px solid #2a7a5c;
+        color: #6cd4a0;
+      }
+      .step {
+        position: relative;
+        display: flex;
+        align-items: flex-start;
+        margin-bottom: 8px;
+      }
+      .step-num {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 14px;
+        flex-shrink: 0;
+        margin-right: 16px;
+        position: relative;
+        z-index: 2;
+      }
+      .flow-api .step-num {
+        background: #1a3a5c;
+        border: 2px solid #4a9ae8;
+        color: #6cb4ee;
+      }
+      .flow-hb .step-num {
+        background: #1a4a3c;
+        border: 2px solid #4aba80;
+        color: #6cd4a0;
+      }
+      .step-content {
+        flex: 1;
+        padding: 12px 16px;
+        border-radius: 10px;
+        border: 1px solid #1a2030;
+        background: #0f1520;
+      }
+      .step-label {
+        font-weight: 600;
+        font-size: 14px;
+        margin-bottom: 4px;
+      }
+      .flow-api .step-label {
+        color: #6cb4ee;
+      }
+      .flow-hb .step-label {
+        color: #6cd4a0;
+      }
+      .step-detail {
+        font-size: 13px;
+        color: #999;
+        line-height: 1.5;
+      }
+      .step-code {
+        font-family: "Fira Code", "Consolas", monospace;
+        font-size: 11px;
+        color: #c8a0ff;
+        background: #12101e;
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+      .connector {
+        width: 2px;
+        height: 20px;
+        margin-left: 17px;
+        margin-bottom: 8px;
+      }
+      .flow-api .connector {
+        background: #2a5a8c;
+      }
+      .flow-hb .connector {
+        background: #2a7a5c;
+      }
+      .arrow {
+        width: 0;
+        height: 0;
+        border-left: 6px solid transparent;
+        border-right: 6px solid transparent;
+        margin-left: 11px;
+        margin-bottom: 8px;
+      }
+      .flow-api .arrow {
+        border-top: 8px solid #4a9ae8;
+      }
+      .flow-hb .arrow {
+        border-top: 8px solid #4aba80;
+      }
+      .shared-box {
+        border: 2px dashed #f0a040;
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin: 4px 0;
+        position: relative;
+      }
+      .shared-box .step-content {
+        border-color: #3a2a10;
+        background: #15120a;
+      }
+      .shared-tag {
+        position: absolute;
+        top: -10px;
+        right: 16px;
+        background: #0a0e1a;
+        padding: 0 8px;
+        font-size: 10px;
+        font-weight: 700;
+        color: #f0a040;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+      }
+      .result-box {
+        margin-top: 8px;
+        padding: 14px 16px;
+        border-radius: 10px;
+        text-align: center;
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .flow-api .result-box {
+        background: linear-gradient(135deg, #1a2040, #1a1530);
+        border: 1px solid #4040a0;
+        color: #a0a0ff;
+      }
+      .flow-hb .result-box {
+        background: linear-gradient(135deg, #102a20, #0a2018);
+        border: 1px solid #30a060;
+        color: #80e0a0;
+      }
+      .result-detail {
+        font-size: 12px;
+        font-weight: 400;
+        color: #888;
+        margin-top: 4px;
+      }
+      .vs-badge {
+        text-align: center;
+        margin: 40px auto;
+        max-width: 600px;
+        padding: 20px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #1a1020, #100a18);
+        border: 1px solid #3a2a5a;
+      }
+      .vs-badge h3 {
+        color: #d0a0ff;
+        margin-bottom: 12px;
+        font-size: 16px;
+      }
+      .vs-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid #1a1530;
+        font-size: 13px;
+      }
+      .vs-row:last-child {
+        border-bottom: none;
+      }
+      .vs-label {
+        color: #888;
+      }
+      .vs-api {
+        color: #6cb4ee;
+        font-weight: 600;
+      }
+      .vs-hb {
+        color: #6cd4a0;
+        font-weight: 600;
+      }
+      .emoji {
+        font-size: 18px;
+        margin-right: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>OpenClaw: How Messages Reach You</h1>
+    <p class="subtitle">Chat Completions API vs Heartbeat/Cron -- two paths, same brain</p>
 
-<h1>OpenClaw: How Messages Reach You</h1>
-<p class="subtitle">Chat Completions API vs Heartbeat/Cron -- two paths, same brain</p>
+    <div class="flows">
+      <!-- API FLOW -->
+      <div class="flow flow-api">
+        <div class="flow-title"><span class="emoji">+</span> Chat Completions API</div>
 
-<div class="flows">
-  <!-- API FLOW -->
-  <div class="flow flow-api">
-    <div class="flow-title"><span class="emoji">+</span> Chat Completions API</div>
-
-    <div class="step">
-      <div class="step-num">1</div>
-      <div class="step-content">
-        <div class="step-label">External App Calls API</div>
-        <div class="step-detail">
-          Hub, Voice Chat, or any app sends<br>
-          <span class="step-code">POST /v1/chat/completions</span><br>
-          with <span class="step-code">model: "agent:main"</span>
-        </div>
-      </div>
-    </div>
-    <div class="connector"></div>
-    <div class="arrow"></div>
-
-    <div class="step">
-      <div class="step-num">2</div>
-      <div class="step-content">
-        <div class="step-label">Auth Check</div>
-        <div class="step-detail">Bearer token validated against gateway config</div>
-      </div>
-    </div>
-    <div class="connector"></div>
-    <div class="arrow"></div>
-
-    <div class="step">
-      <div class="step-num">3</div>
-      <div class="step-content">
-        <div class="step-label">Session Resolved</div>
-        <div class="step-detail">
-          Stateless by default (new session per call)<br>
-          Pass <span class="step-code">user</span> string for persistent session
-        </div>
-      </div>
-    </div>
-    <div class="connector"></div>
-    <div class="arrow"></div>
-
-    <div class="shared-box">
-      <div class="shared-tag">SAME ENGINE</div>
-      <div class="step">
-        <div class="step-num">4</div>
-        <div class="step-content">
-          <div class="step-label" style="color: #f0a040">Agent Run (Claude API)</div>
-          <div class="step-detail">
-            <span class="step-code">getReplyFromConfig()</span><br>
-            Full Jarvis: system prompt + tools + memory + context
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <div class="step-label">External App Calls API</div>
+            <div class="step-detail">
+              Hub, Voice Chat, or any app sends<br />
+              <span class="step-code">POST /v1/chat/completions</span><br />
+              with <span class="step-code">model: "agent:main"</span>
+            </div>
           </div>
         </div>
-      </div>
-    </div>
-    <div class="connector"></div>
-    <div class="arrow"></div>
+        <div class="connector"></div>
+        <div class="arrow"></div>
 
-    <div class="step">
-      <div class="step-num">5</div>
-      <div class="step-content">
-        <div class="step-label">Response -> HTTP Caller</div>
-        <div class="step-detail">
-          JSON response returned to the app that called.<br>
-          <strong>Stays with the caller. Does NOT reach WhatsApp.</strong>
-        </div>
-      </div>
-    </div>
-    <div class="connector"></div>
-    <div class="arrow"></div>
-
-    <div class="step">
-      <div class="step-num">6</div>
-      <div class="step-content">
-        <div class="step-label">Jarvis Must Forward Manually</div>
-        <div class="step-detail">
-          If the prompt says "send to WhatsApp",<br>
-          Jarvis uses <span class="step-code">message tool</span> during the run.<br>
-          <strong>If not instructed -> user never sees it.</strong>
-        </div>
-      </div>
-    </div>
-
-    <div class="result-box">
-      Response goes to API caller
-      <div class="result-detail">WhatsApp delivery requires explicit instruction in prompt</div>
-    </div>
-  </div>
-
-  <!-- HEARTBEAT/CRON FLOW -->
-  <div class="flow flow-hb">
-    <div class="flow-title">Heartbeat / Cron</div>
-
-    <div class="step">
-      <div class="step-num">1</div>
-      <div class="step-content">
-        <div class="step-label">Cron Timer Fires</div>
-        <div class="step-detail">
-          Scheduled job becomes due.<br>
-          Daemon's internal timer checks every 60s.
-        </div>
-      </div>
-    </div>
-    <div class="connector"></div>
-    <div class="arrow"></div>
-
-    <div class="step">
-      <div class="step-num">2</div>
-      <div class="step-content">
-        <div class="step-label">System Event Queued</div>
-        <div class="step-detail">
-          <span class="step-code">enqueueSystemEvent(text)</span><br>
-          Text pushed to in-memory queue (max 20, deduped)
-        </div>
-      </div>
-    </div>
-    <div class="connector"></div>
-    <div class="arrow"></div>
-
-    <div class="step">
-      <div class="step-num">3</div>
-      <div class="step-content">
-        <div class="step-label">Heartbeat Triggered</div>
-        <div class="step-detail">
-          <span class="step-code">runHeartbeatOnce()</span><br>
-          wakeMode "now" = immediate<br>
-          wakeMode "next-heartbeat" = wait for timer
-        </div>
-      </div>
-    </div>
-    <div class="connector"></div>
-    <div class="arrow"></div>
-
-    <div class="shared-box">
-      <div class="shared-tag">SAME ENGINE</div>
-      <div class="step">
-        <div class="step-num">4</div>
-        <div class="step-content">
-          <div class="step-label" style="color: #f0a040">Agent Run (Claude API)</div>
-          <div class="step-detail">
-            <span class="step-code">getReplyFromConfig()</span><br>
-            System events prefixed to prompt automatically.<br>
-            Full Jarvis: system prompt + tools + memory + context
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <div class="step-label">Auth Check</div>
+            <div class="step-detail">Bearer token validated against gateway config</div>
           </div>
         </div>
-      </div>
-    </div>
-    <div class="connector"></div>
-    <div class="arrow"></div>
+        <div class="connector"></div>
+        <div class="arrow"></div>
 
-    <div class="step">
-      <div class="step-num">5</div>
-      <div class="step-content">
-        <div class="step-label">Response Analyzed</div>
-        <div class="step-detail">
-          HEARTBEAT_OK? -> stripped, discarded<br>
-          Duplicate within 24h? -> skipped<br>
-          Actual content? -> deliver!
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <div class="step-label">Session Resolved</div>
+            <div class="step-detail">
+              Stateless by default (new session per call)<br />
+              Pass <span class="step-code">user</span> string for persistent session
+            </div>
+          </div>
+        </div>
+        <div class="connector"></div>
+        <div class="arrow"></div>
+
+        <div class="shared-box">
+          <div class="shared-tag">SAME ENGINE</div>
+          <div class="step">
+            <div class="step-num">4</div>
+            <div class="step-content">
+              <div class="step-label" style="color: #f0a040">Agent Run (Claude API)</div>
+              <div class="step-detail">
+                <span class="step-code">getReplyFromConfig()</span><br />
+                Full Jarvis: system prompt + tools + memory + context
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="connector"></div>
+        <div class="arrow"></div>
+
+        <div class="step">
+          <div class="step-num">5</div>
+          <div class="step-content">
+            <div class="step-label">Response -> HTTP Caller</div>
+            <div class="step-detail">
+              JSON response returned to the app that called.<br />
+              <strong>Stays with the caller. Does NOT reach WhatsApp.</strong>
+            </div>
+          </div>
+        </div>
+        <div class="connector"></div>
+        <div class="arrow"></div>
+
+        <div class="step">
+          <div class="step-num">6</div>
+          <div class="step-content">
+            <div class="step-label">Jarvis Must Forward Manually</div>
+            <div class="step-detail">
+              If the prompt says "send to WhatsApp",<br />
+              Jarvis uses <span class="step-code">message tool</span> during the run.<br />
+              <strong>If not instructed -> user never sees it.</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="result-box">
+          Response goes to API caller
+          <div class="result-detail">WhatsApp delivery requires explicit instruction in prompt</div>
+        </div>
+      </div>
+
+      <!-- HEARTBEAT/CRON FLOW -->
+      <div class="flow flow-hb">
+        <div class="flow-title">Heartbeat / Cron</div>
+
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <div class="step-label">Cron Timer Fires</div>
+            <div class="step-detail">
+              Scheduled job becomes due.<br />
+              Daemon's internal timer checks every 60s.
+            </div>
+          </div>
+        </div>
+        <div class="connector"></div>
+        <div class="arrow"></div>
+
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <div class="step-label">System Event Queued</div>
+            <div class="step-detail">
+              <span class="step-code">enqueueSystemEvent(text)</span><br />
+              Text pushed to in-memory queue (max 20, deduped)
+            </div>
+          </div>
+        </div>
+        <div class="connector"></div>
+        <div class="arrow"></div>
+
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <div class="step-label">Heartbeat Triggered</div>
+            <div class="step-detail">
+              <span class="step-code">runHeartbeatOnce()</span><br />
+              wakeMode "now" = immediate<br />
+              wakeMode "next-heartbeat" = wait for timer
+            </div>
+          </div>
+        </div>
+        <div class="connector"></div>
+        <div class="arrow"></div>
+
+        <div class="shared-box">
+          <div class="shared-tag">SAME ENGINE</div>
+          <div class="step">
+            <div class="step-num">4</div>
+            <div class="step-content">
+              <div class="step-label" style="color: #f0a040">Agent Run (Claude API)</div>
+              <div class="step-detail">
+                <span class="step-code">getReplyFromConfig()</span><br />
+                System events prefixed to prompt automatically.<br />
+                Full Jarvis: system prompt + tools + memory + context
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="connector"></div>
+        <div class="arrow"></div>
+
+        <div class="step">
+          <div class="step-num">5</div>
+          <div class="step-content">
+            <div class="step-label">Response Analyzed</div>
+            <div class="step-detail">
+              HEARTBEAT_OK? -> stripped, discarded<br />
+              Duplicate within 24h? -> skipped<br />
+              Actual content? -> deliver!
+            </div>
+          </div>
+        </div>
+        <div class="connector"></div>
+        <div class="arrow"></div>
+
+        <div class="step">
+          <div class="step-num">6</div>
+          <div class="step-content">
+            <div class="step-label">Auto-Delivered to WhatsApp</div>
+            <div class="step-detail">
+              <span class="step-code">deliverOutboundPayloads()</span><br />
+              Sent to last active channel automatically.<br />
+              <strong>No manual forwarding needed.</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="result-box">
+          Response goes straight to WhatsApp
+          <div class="result-detail">Built-in delivery with dedup + HEARTBEAT_OK filtering</div>
         </div>
       </div>
     </div>
-    <div class="connector"></div>
-    <div class="arrow"></div>
 
-    <div class="step">
-      <div class="step-num">6</div>
-      <div class="step-content">
-        <div class="step-label">Auto-Delivered to WhatsApp</div>
-        <div class="step-detail">
-          <span class="step-code">deliverOutboundPayloads()</span><br>
-          Sent to last active channel automatically.<br>
-          <strong>No manual forwarding needed.</strong>
-        </div>
+    <div class="vs-badge">
+      <h3>Side-by-Side Comparison</h3>
+      <div class="vs-row">
+        <span class="vs-label">Trigger</span>
+        <span class="vs-api">External HTTP call</span>
+        <span class="vs-hb">Internal timer/cron</span>
+      </div>
+      <div class="vs-row">
+        <span class="vs-label">Session</span>
+        <span class="vs-api">Stateless (default)</span>
+        <span class="vs-hb">Always main session</span>
+      </div>
+      <div class="vs-row">
+        <span class="vs-label">Response goes to</span>
+        <span class="vs-api">HTTP caller (app)</span>
+        <span class="vs-hb">WhatsApp (auto)</span>
+      </div>
+      <div class="vs-row">
+        <span class="vs-label">WhatsApp delivery</span>
+        <span class="vs-api">Must be in prompt</span>
+        <span class="vs-hb">Built-in</span>
+      </div>
+      <div class="vs-row">
+        <span class="vs-label">Dedup / filtering</span>
+        <span class="vs-api">None</span>
+        <span class="vs-hb">HEARTBEAT_OK + 24h dedup</span>
+      </div>
+      <div class="vs-row">
+        <span class="vs-label">Retry on busy</span>
+        <span class="vs-api">Caller must retry</span>
+        <span class="vs-hb">Auto-retry 250ms x 2min</span>
       </div>
     </div>
-
-    <div class="result-box">
-      Response goes straight to WhatsApp
-      <div class="result-detail">Built-in delivery with dedup + HEARTBEAT_OK filtering</div>
-    </div>
-  </div>
-</div>
-
-<div class="vs-badge">
-  <h3>Side-by-Side Comparison</h3>
-  <div class="vs-row">
-    <span class="vs-label">Trigger</span>
-    <span class="vs-api">External HTTP call</span>
-    <span class="vs-hb">Internal timer/cron</span>
-  </div>
-  <div class="vs-row">
-    <span class="vs-label">Session</span>
-    <span class="vs-api">Stateless (default)</span>
-    <span class="vs-hb">Always main session</span>
-  </div>
-  <div class="vs-row">
-    <span class="vs-label">Response goes to</span>
-    <span class="vs-api">HTTP caller (app)</span>
-    <span class="vs-hb">WhatsApp (auto)</span>
-  </div>
-  <div class="vs-row">
-    <span class="vs-label">WhatsApp delivery</span>
-    <span class="vs-api">Must be in prompt</span>
-    <span class="vs-hb">Built-in</span>
-  </div>
-  <div class="vs-row">
-    <span class="vs-label">Dedup / filtering</span>
-    <span class="vs-api">None</span>
-    <span class="vs-hb">HEARTBEAT_OK + 24h dedup</span>
-  </div>
-  <div class="vs-row">
-    <span class="vs-label">Retry on busy</span>
-    <span class="vs-api">Caller must retry</span>
-    <span class="vs-hb">Auto-retry 250ms x 2min</span>
-  </div>
-</div>
-
-</body>
+  </body>
 </html>

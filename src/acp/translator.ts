@@ -23,6 +23,7 @@ import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
+import { isDevMode } from "../globals.js";
 import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
@@ -37,7 +38,6 @@ import {
 } from "./event-mapper.js";
 import { readBool, readNumber, readString } from "./meta.js";
 import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./session-mapper.js";
-import { isDevMode } from "../globals.js";
 import { defaultAcpSessionStore, type AcpSessionStore } from "./session.js";
 import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 

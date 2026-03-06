@@ -38,6 +38,7 @@ if (isDevMode()) {
 ```
 
 This approach:
+
 - Keeps the gateway RPC completely untouched (Control UI always gets redacted config)
 - CLI reads config file directly when dev-mode (it already has filesystem access)
 - No new parameters, no RPC changes, no risk to Control UI
@@ -52,8 +53,8 @@ When `isDevMode()`, use `loadConfig()` from `src/config/io.ts` instead of the ga
 
 ## Files to modify
 
-| File | Change |
-|------|--------|
+| File                                                               | Change                           |
+| ------------------------------------------------------------------ | -------------------------------- |
 | CLI config/status command (TBD — in `src/cli/` or `src/commands/`) | Direct config read when dev-mode |
 
 ## Dependencies

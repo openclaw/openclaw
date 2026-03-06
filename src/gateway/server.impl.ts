@@ -1,5 +1,4 @@
 import path from "node:path";
-import { isDevMode } from "../globals.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -22,6 +21,7 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { isDevMode } from "../globals.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -924,7 +924,10 @@ export async function startGatewayServer(
             () => resolve(true),
           );
           req.on("error", () => resolve(false));
-          req.on("timeout", () => { req.destroy(); resolve(false); });
+          req.on("timeout", () => {
+            req.destroy();
+            resolve(false);
+          });
           req.end();
         });
         if (!isRunning) {
@@ -935,7 +938,9 @@ export async function startGatewayServer(
           });
           child.on("error", (err) => {
             if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-              console.error("[dev-mode] Hub server requires python3 — please install it to use the Hub notification plugin.");
+              console.error(
+                "[dev-mode] Hub server requires python3 — please install it to use the Hub notification plugin.",
+              );
             } else {
               console.error(`[dev-mode] Failed to start Hub server: ${err.message}`);
             }
@@ -944,7 +949,9 @@ export async function startGatewayServer(
         }
       }
     } catch (err) {
-      console.error(`[dev-mode] Hub server auto-start failed: ${err instanceof Error ? err.message : err}`);
+      console.error(
+        `[dev-mode] Hub server auto-start failed: ${err instanceof Error ? err.message : err}`,
+      );
     }
   }
 

@@ -1,5 +1,6 @@
 node_modules
 **/node_modules/
+dev-mode/rejects/
 .env
 docker-compose.extra.yml
 pnpm-lock.yaml

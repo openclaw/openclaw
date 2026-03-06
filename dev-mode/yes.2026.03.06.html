@@ -1,677 +1,879 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dev Mode - Approved Items (2026-03-06)</title>
-<style>
-  :root {
-    --bg: #0d1117;
-    --surface: #161b22;
-    --surface-hover: #1c2333;
-    --border: #30363d;
-    --text: #e6edf3;
-    --text-dim: #8b949e;
-    --accent: #f0883e;
-    --accent-glow: rgba(240, 136, 62, 0.15);
-    --green: #3fb950;
-    --green-dim: rgba(63, 185, 80, 0.15);
-    --red: #f85149;
-    --blue: #58a6ff;
-    --purple: #bc8cff;
-  }
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dev Mode - Approved Items (2026-03-06)</title>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --surface: #161b22;
+        --surface-hover: #1c2333;
+        --border: #30363d;
+        --text: #e6edf3;
+        --text-dim: #8b949e;
+        --accent: #f0883e;
+        --accent-glow: rgba(240, 136, 62, 0.15);
+        --green: #3fb950;
+        --green-dim: rgba(63, 185, 80, 0.15);
+        --red: #f85149;
+        --blue: #58a6ff;
+        --purple: #bc8cff;
+      }
 
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-    line-height: 1.6;
-    padding: 2rem;
-  }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        line-height: 1.6;
+        padding: 2rem;
+      }
 
-  .container {
-    max-width: 960px;
-    margin: 0 auto;
-  }
+      .container {
+        max-width: 960px;
+        margin: 0 auto;
+      }
 
-  header {
-    text-align: center;
-    margin-bottom: 3rem;
-    padding: 2.5rem 2rem;
-    background: linear-gradient(135deg, rgba(240, 136, 62, 0.08), rgba(188, 140, 255, 0.06));
-    border: 1px solid var(--border);
-    border-radius: 12px;
-  }
+      header {
+        text-align: center;
+        margin-bottom: 3rem;
+        padding: 2.5rem 2rem;
+        background: linear-gradient(135deg, rgba(240, 136, 62, 0.08), rgba(188, 140, 255, 0.06));
+        border: 1px solid var(--border);
+        border-radius: 12px;
+      }
 
-  header h1 {
-    font-size: 2.2rem;
-    font-weight: 700;
-    background: linear-gradient(90deg, var(--accent), var(--purple));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    margin-bottom: 0.5rem;
-  }
+      header h1 {
+        font-size: 2.2rem;
+        font-weight: 700;
+        background: linear-gradient(90deg, var(--accent), var(--purple));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-bottom: 0.5rem;
+      }
 
-  header .subtitle {
-    color: var(--text-dim);
-    font-size: 1rem;
-  }
+      header .subtitle {
+        color: var(--text-dim);
+        font-size: 1rem;
+      }
 
-  header .date {
-    display: inline-block;
-    margin-top: 1rem;
-    padding: 0.25rem 0.75rem;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    font-size: 0.8rem;
-    color: var(--text-dim);
-    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-  }
+      header .date {
+        display: inline-block;
+        margin-top: 1rem;
+        padding: 0.25rem 0.75rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        font-size: 0.8rem;
+        color: var(--text-dim);
+        font-family: "SF Mono", "Cascadia Code", "Fira Code", monospace;
+      }
 
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 1rem;
-    margin-bottom: 2.5rem;
-  }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1rem;
+        margin-bottom: 2.5rem;
+      }
 
-  .stat-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.25rem;
-    text-align: center;
-  }
+      .stat-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 1.25rem;
+        text-align: center;
+      }
 
-  .stat-card .number {
-    font-size: 2rem;
-    font-weight: 700;
-    color: var(--accent);
-  }
+      .stat-card .number {
+        font-size: 2rem;
+        font-weight: 700;
+        color: var(--accent);
+      }
 
-  .stat-card .label {
-    font-size: 0.8rem;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-top: 0.25rem;
-  }
+      .stat-card .label {
+        font-size: 0.8rem;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-top: 0.25rem;
+      }
 
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    margin-bottom: 1.25rem;
-    overflow: hidden;
-    transition: border-color 0.2s;
-  }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        margin-bottom: 1.25rem;
+        overflow: hidden;
+        transition: border-color 0.2s;
+      }
 
-  .card:hover {
-    border-color: var(--accent);
-  }
+      .card:hover {
+        border-color: var(--accent);
+      }
 
-  .card-header {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 1.25rem 1.5rem;
-    cursor: pointer;
-    user-select: none;
-  }
+      .card-header {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        padding: 1.25rem 1.5rem;
+        cursor: pointer;
+        user-select: none;
+      }
 
-  .card-header:hover {
-    background: var(--surface-hover);
-  }
+      .card-header:hover {
+        background: var(--surface-hover);
+      }
 
-  .badge {
-    flex-shrink: 0;
-    padding: 0.2rem 0.6rem;
-    border-radius: 6px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-    white-space: nowrap;
-  }
+      .badge {
+        flex-shrink: 0;
+        padding: 0.2rem 0.6rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        font-family: "SF Mono", "Cascadia Code", "Fira Code", monospace;
+        white-space: nowrap;
+      }
 
-  .badge-sec {
-    background: var(--accent-glow);
-    color: var(--accent);
-    border: 1px solid rgba(240, 136, 62, 0.3);
-  }
+      .badge-sec {
+        background: var(--accent-glow);
+        color: var(--accent);
+        border: 1px solid rgba(240, 136, 62, 0.3);
+      }
 
-  .badge-fix {
-    background: var(--green-dim);
-    color: var(--green);
-    border: 1px solid rgba(63, 185, 80, 0.3);
-  }
+      .badge-fix {
+        background: var(--green-dim);
+        color: var(--green);
+        border: 1px solid rgba(63, 185, 80, 0.3);
+      }
 
-  .badge-version {
-    background: rgba(88, 166, 255, 0.1);
-    color: var(--blue);
-    border: 1px solid rgba(88, 166, 255, 0.2);
-    font-size: 0.7rem;
-  }
+      .badge-version {
+        background: rgba(88, 166, 255, 0.1);
+        color: var(--blue);
+        border: 1px solid rgba(88, 166, 255, 0.2);
+        font-size: 0.7rem;
+      }
 
-  .badge-note {
-    background: rgba(188, 140, 255, 0.1);
-    color: var(--purple);
-    border: 1px solid rgba(188, 140, 255, 0.25);
-    font-size: 0.65rem;
-  }
+      .badge-note {
+        background: rgba(188, 140, 255, 0.1);
+        color: var(--purple);
+        border: 1px solid rgba(188, 140, 255, 0.25);
+        font-size: 0.65rem;
+      }
 
-  .card-title {
-    font-size: 1.05rem;
-    font-weight: 600;
-    flex-grow: 1;
-  }
+      .card-title {
+        font-size: 1.05rem;
+        font-weight: 600;
+        flex-grow: 1;
+      }
 
-  .chevron {
-    flex-shrink: 0;
-    width: 20px;
-    height: 20px;
-    color: var(--text-dim);
-    transition: transform 0.2s;
-  }
+      .chevron {
+        flex-shrink: 0;
+        width: 20px;
+        height: 20px;
+        color: var(--text-dim);
+        transition: transform 0.2s;
+      }
 
-  .card.open .chevron {
-    transform: rotate(90deg);
-  }
+      .card.open .chevron {
+        transform: rotate(90deg);
+      }
 
-  .card-body {
-    display: none;
-    padding: 0 1.5rem 1.5rem;
-    border-top: 1px solid var(--border);
-  }
+      .card-body {
+        display: none;
+        padding: 0 1.5rem 1.5rem;
+        border-top: 1px solid var(--border);
+      }
 
-  .card.open .card-body {
-    display: block;
-    padding-top: 1.25rem;
-  }
+      .card.open .card-body {
+        display: block;
+        padding-top: 1.25rem;
+      }
 
-  .field {
-    margin-bottom: 1rem;
-  }
+      .field {
+        margin-bottom: 1rem;
+      }
 
-  .field:last-child {
-    margin-bottom: 0;
-  }
+      .field:last-child {
+        margin-bottom: 0;
+      }
 
-  .field-label {
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    margin-bottom: 0.35rem;
-  }
+      .field-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 0.35rem;
+      }
 
-  .field-value {
-    font-size: 0.92rem;
-    color: var(--text);
-    line-height: 1.65;
-  }
+      .field-value {
+        font-size: 0.92rem;
+        color: var(--text);
+        line-height: 1.65;
+      }
 
-  .source-list {
-    list-style: none;
-    padding: 0;
-  }
+      .source-list {
+        list-style: none;
+        padding: 0;
+      }
 
-  .source-list li {
-    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-    font-size: 0.82rem;
-    color: var(--blue);
-    padding: 0.2rem 0;
-  }
+      .source-list li {
+        font-family: "SF Mono", "Cascadia Code", "Fira Code", monospace;
+        font-size: 0.82rem;
+        color: var(--blue);
+        padding: 0.2rem 0;
+      }
 
-  .source-list li::before {
-    content: '';
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    background: var(--blue);
-    border-radius: 50%;
-    margin-right: 0.6rem;
-    vertical-align: middle;
-    opacity: 0.6;
-  }
+      .source-list li::before {
+        content: "";
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        background: var(--blue);
+        border-radius: 50%;
+        margin-right: 0.6rem;
+        vertical-align: middle;
+        opacity: 0.6;
+      }
 
-  .plan-box {
-    background: rgba(240, 136, 62, 0.06);
-    border: 1px solid rgba(240, 136, 62, 0.2);
-    border-radius: 6px;
-    padding: 0.85rem 1rem;
-    font-size: 0.88rem;
-    color: var(--accent);
-    line-height: 1.6;
-  }
+      .plan-box {
+        background: rgba(240, 136, 62, 0.06);
+        border: 1px solid rgba(240, 136, 62, 0.2);
+        border-radius: 6px;
+        padding: 0.85rem 1rem;
+        font-size: 0.88rem;
+        color: var(--accent);
+        line-height: 1.6;
+      }
 
-  code {
-    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-    background: rgba(110, 118, 129, 0.15);
-    padding: 0.15rem 0.4rem;
-    border-radius: 4px;
-    font-size: 0.85em;
-  }
+      code {
+        font-family: "SF Mono", "Cascadia Code", "Fira Code", monospace;
+        background: rgba(110, 118, 129, 0.15);
+        padding: 0.15rem 0.4rem;
+        border-radius: 4px;
+        font-size: 0.85em;
+      }
 
-  pre {
-    background: #0d1117;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 1rem;
-    overflow-x: auto;
-    font-size: 0.82rem;
-    line-height: 1.55;
-    margin-top: 0.5rem;
-  }
+      pre {
+        background: #0d1117;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 1rem;
+        overflow-x: auto;
+        font-size: 0.82rem;
+        line-height: 1.55;
+        margin-top: 0.5rem;
+      }
 
-  pre code {
-    background: none;
-    padding: 0;
-  }
+      pre code {
+        background: none;
+        padding: 0;
+      }
 
-  footer {
-    text-align: center;
-    margin-top: 3rem;
-    padding-top: 1.5rem;
-    border-top: 1px solid var(--border);
-    color: var(--text-dim);
-    font-size: 0.82rem;
-  }
+      footer {
+        text-align: center;
+        margin-top: 3rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--border);
+        color: var(--text-dim);
+        font-size: 0.82rem;
+      }
 
-  @media (max-width: 640px) {
-    body { padding: 1rem; }
-    header h1 { font-size: 1.6rem; }
-    .stats { grid-template-columns: 1fr; }
-    .card-header { padding: 1rem; }
-  }
-</style>
-</head>
-<body>
+      @media (max-width: 640px) {
+        body {
+          padding: 1rem;
+        }
+        header h1 {
+          font-size: 1.6rem;
+        }
+        .stats {
+          grid-template-columns: 1fr;
+        }
+        .card-header {
+          padding: 1rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>--dev-mode</h1>
+        <div class="subtitle">Approved items for implementation</div>
+        <div class="date">reviewed 2026-03-06</div>
+      </header>
 
-<div class="container">
+      <div class="stats">
+        <div class="stat-card">
+          <div class="number">13</div>
+          <div class="label">Approved Items</div>
+        </div>
+        <div class="stat-card">
+          <div class="number">11</div>
+          <div class="label">Security Tweaks</div>
+        </div>
+        <div class="stat-card">
+          <div class="number">2</div>
+          <div class="label">Fixes / Features</div>
+        </div>
+      </div>
 
-  <header>
-    <h1>--dev-mode</h1>
-    <div class="subtitle">Approved items for implementation</div>
-    <div class="date">reviewed 2026-03-06</div>
-  </header>
+      <!-- SEC-15a -->
+      <div class="card">
+        <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+          <span class="badge badge-sec">SEC-15a</span>
+          <span class="card-title">Hardcoded "Safety" Section in System Prompt</span>
+          <span class="badge badge-version">2026.2.1</span>
+          <svg
+            class="chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">What it does</div>
+            <div class="field-value">
+              Every AI agent session begins with a hardcoded "Safety" section injected into the
+              system prompt. This is the "Anthropic constitution" inspired block that constrains the
+              AI's behavior.
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">Source files</div>
+            <ul class="source-list">
+              <li>src/agents/system-prompt.ts (lines 393-399)</li>
+            </ul>
+          </div>
+          <div class="field">
+            <div class="field-label">Dev-mode plan</div>
+            <div class="plan-box">
+              Remove the middle paragraph ("Prioritize safety and human oversight...")
+            </div>
+          </div>
+        </div>
+      </div>
 
-  <div class="stats">
-    <div class="stat-card">
-      <div class="number">13</div>
-      <div class="label">Approved Items</div>
+      <!-- SEC-27 -->
+      <div class="card">
+        <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+          <span class="badge badge-sec">SEC-27</span>
+          <span class="card-title">Untrusted Channel Metadata Blocked from System Prompts</span>
+          <span class="badge badge-version">2026.2.3</span>
+          <svg
+            class="chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">What it does</div>
+            <div class="field-value">
+              Channel metadata from Slack and Discord (channel name, topic, description) is stripped
+              from the AI's system prompt. The agent can't "see" what channel it's operating in,
+              losing useful context about conversation purpose and scope.
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">Source files</div>
+            <ul class="source-list">
+              <li>System prompt construction modules (released in 2026.2.3)</li>
+            </ul>
+          </div>
+          <div class="field">
+            <div class="field-label">Dev-mode plan</div>
+            <div class="plan-box">
+              Re-include channel metadata (name, topic, description) in the system prompt so the
+              agent knows where it's talking and can adapt its behavior to the channel's purpose.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SEC-59 -->
+      <div class="card">
+        <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+          <span class="badge badge-sec">SEC-59</span>
+          <span class="card-title">Default Tool Profile Restricted to "messaging"</span>
+          <span class="badge badge-version">2026.3.2</span>
+          <svg
+            class="chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">What it does</div>
+            <div class="field-value">
+              New installs default to the <code>messaging</code> tool profile, which only allows 5
+              tools: <code>sessions_list</code>, <code>sessions_history</code>,
+              <code>sessions_send</code>, <code>session_status</code>, <code>message</code>. All
+              powerful tools (file ops, shell, web, memory, scheduling, subagents) are hidden unless
+              you manually switch to <code>coding</code> or <code>full</code>.
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">Source files</div>
+            <ul class="source-list">
+              <li>src/commands/onboard-config.ts line 6</li>
+              <li>src/agents/tool-catalog.ts lines 248-259</li>
+              <li>src/agents/tool-policy-shared.ts lines 45-47</li>
+            </ul>
+          </div>
+          <div class="field">
+            <div class="field-label">Dev-mode plan</div>
+            <div class="plan-box">
+              Skip setting <code>tools.profile</code> during onboarding. When unset,
+              <code>resolveCoreToolProfilePolicy()</code> returns <code>undefined</code>, the
+              pipeline step is skipped, and all tools are available. Nothing breaks &mdash; the
+              field is optional everywhere.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SEC-67 -->
+      <div class="card">
+        <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+          <span class="badge badge-sec">SEC-67</span>
+          <span class="card-title">Compaction Safeguard Mode (Default)</span>
+          <span class="badge badge-version">2026.2.1</span>
+          <svg
+            class="chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">What it does</div>
+            <div class="field-value">
+              Compaction mode defaults to <code>"safeguard"</code> which applies stricter guardrails
+              during session history compression. Requires structured summary headings, cancels
+              compaction if no real conversation exists or if the content ratio is too aggressive.
+              Slower and more conservative than <code>"default"</code> mode.
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">Source files</div>
+            <ul class="source-list">
+              <li>src/agents/pi-extensions/compaction-safeguard.ts (lines 1-690)</li>
+              <li>src/agents/pi-extensions/compaction-safeguard-runtime.ts</li>
+              <li>src/agents/pi-embedded-runner/extensions.ts (lines 60-88)</li>
+              <li>src/config/defaults.ts (line 526)</li>
+            </ul>
+          </div>
+          <div class="field">
+            <div class="field-label">Dev-mode plan</div>
+            <div class="plan-box">
+              Set default compaction mode to <code>"default"</code> instead of
+              <code>"safeguard"</code>. Faster compression with less overhead, at the cost of
+              potentially losing more context during long sessions.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SEC-70 -->
+      <div class="card">
+        <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+          <span class="badge badge-sec">SEC-70</span>
+          <span class="card-title"
+            >Browser Navigation Protocol Blocking (file:/data:/javascript:)</span
+          >
+          <span class="badge badge-version">2026.2.21</span>
+          <svg
+            class="chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">What it does</div>
+            <div class="field-value">
+              Browser tool blocks navigation to <code>file:</code>, <code>data:</code>, and
+              <code>javascript:</code> protocol URLs. Prevents the AI from reading local files or
+              executing JS through browser navigation. In dev, this blocks legitimate local file
+              viewing through the browser.
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">Source files</div>
+            <ul class="source-list">
+              <li>Browser navigation modules (released in openclaw 2026.2.21)</li>
+            </ul>
+          </div>
+          <div class="field">
+            <div class="field-label">Dev-mode plan</div>
+            <div class="plan-box">Allow all protocol schemes in browser navigation.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SEC-71 -->
+      <div class="card">
+        <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+          <span class="badge badge-sec">SEC-71</span>
+          <span class="card-title">Web Fetch Response Body Size Cap (2MB)</span>
+          <span class="badge badge-version">2026.2.21</span>
+          <svg
+            class="chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">What it does</div>
+            <div class="field-value">
+              <code>web_fetch</code> tool caps response body at 2MB. Larger responses are truncated.
+              In dev, this means large API responses or documentation pages may be incomplete.
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">Source files</div>
+            <ul class="source-list">
+              <li>Web fetch tool modules (released in openclaw 2026.2.21)</li>
+            </ul>
+          </div>
+          <div class="field">
+            <div class="field-label">Dev-mode plan</div>
+            <div class="plan-box">Remove the 2MB body cap.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SEC-72 -->
+      <div class="card">
+        <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+          <span class="badge badge-sec">SEC-72</span>
+          <span class="card-title">Gateway Config Response Redaction</span>
+          <span class="badge badge-version">2026.2.24</span>
+          <span class="badge badge-note">CLI only</span>
+          <svg
+            class="chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">What it does</div>
+            <div class="field-value">
+              The <code>config.get</code> gateway RPC redacts sensitive fields (API keys, tokens,
+              internal paths) for all callers &mdash; both CLI and Control UI. You can't see your
+              own API keys through either interface.
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">Source files</div>
+            <ul class="source-list">
+              <li>src/config/redact-snapshot.ts (redactConfigObject, redactConfigSnapshot)</li>
+              <li>src/gateway/server-methods/config.ts line 253</li>
+            </ul>
+          </div>
+          <div class="field">
+            <div class="field-label">Dev-mode plan</div>
+            <div class="plan-box">
+              Skip redaction for CLI callers only. Control UI keeps redaction as-is.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SEC-78 -->
+      <div class="card">
+        <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+          <span class="badge badge-sec">SEC-78</span>
+          <span class="card-title">Gateway Rate-Limiting for Control-Plane Write RPCs (3/min)</span>
+          <span class="badge badge-version">2026.3.1</span>
+          <svg
+            class="chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">What it does</div>
+            <div class="field-value">
+              Write operations on the gateway control plane (config changes, agent creation, etc.)
+              are rate-limited to 3 per minute per client. In dev, this blocks rapid iteration when
+              testing config changes or running setup scripts.
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">Source files</div>
+            <ul class="source-list">
+              <li>Gateway rate-limiting modules (released in openclaw 2026.3.1)</li>
+            </ul>
+          </div>
+          <div class="field">
+            <div class="field-label">Dev-mode plan</div>
+            <div class="plan-box">Disable or greatly increase the write RPC rate limit.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SEC-79 -->
+      <div class="card">
+        <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+          <span class="badge badge-sec">SEC-79</span>
+          <span class="card-title">ACP Prompt Text Payload Size Bound (2 MiB)</span>
+          <span class="badge badge-version">2026.3.1</span>
+          <svg
+            class="chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">What it does</div>
+            <div class="field-value">
+              ACP (Automation Control Plane) prompt payloads are capped at 2 MiB. Larger prompts are
+              rejected before reaching the AI model. In dev, this could block sending very large
+              context payloads.
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">Source files</div>
+            <ul class="source-list">
+              <li>ACP dispatch modules (released in openclaw 2026.3.1)</li>
+            </ul>
+          </div>
+          <div class="field">
+            <div class="field-label">Dev-mode plan</div>
+            <div class="plan-box">Remove or increase the ACP payload size bound.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SEC-80 -->
+      <div class="card">
+        <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+          <span class="badge badge-sec">SEC-80</span>
+          <span class="card-title">Gateway Hooks Token Cannot Match Gateway Auth Token</span>
+          <span class="badge badge-version">2026.3.2</span>
+          <svg
+            class="chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">What it does</div>
+            <div class="field-value">
+              The webhook callback token (<code>gateway.hooks.token</code>) is validated to be
+              different from the main gateway auth token. In dev with simple setups, this means you
+              need two different tokens instead of reusing one.
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">Source files</div>
+            <ul class="source-list">
+              <li>Gateway hooks configuration modules (released in openclaw 2026.3.2)</li>
+            </ul>
+          </div>
+          <div class="field">
+            <div class="field-label">Dev-mode plan</div>
+            <div class="plan-box">Skip the token uniqueness check.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SEC-96 -->
+      <div class="card">
+        <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+          <span class="badge badge-sec">SEC-96</span>
+          <span class="card-title">Host Environment Variable Sanitization for Child Processes</span>
+          <span class="badge badge-version">2026.2.19</span>
+          <svg
+            class="chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">What it does</div>
+            <div class="field-value">
+              Blocks dangerous environment variables (AWS secrets, API keys, tokens, passwords,
+              private keys) from being passed to child processes when the AI runs commands. Broader
+              than SEC-11 (which only blocks LD/DYLD vars). In dev, your scripts can't access env
+              vars that OpenClaw considers sensitive.
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">Source files</div>
+            <ul class="source-list">
+              <li>src/infra/host-env-security.ts (lines 1-100+)</li>
+              <li>src/infra/host-env-security-policy.json (blocked variable list)</li>
+            </ul>
+          </div>
+          <div class="field">
+            <div class="field-label">Dev-mode plan</div>
+            <div class="plan-box">
+              Pass all env vars through to child processes without filtering.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- FIX-01 -->
+      <div class="card">
+        <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+          <span class="badge badge-fix">FIX-01</span>
+          <span class="card-title">New Agents Missing MEMORY.md on Creation</span>
+          <span class="badge badge-version">bug</span>
+          <svg
+            class="chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">What it does</div>
+            <div class="field-value">
+              When a new agent is created, the workspace bootstrap creates <code>AGENTS.md</code>,
+              <code>SOUL.md</code>, <code>TOOLS.md</code>, <code>IDENTITY.md</code>,
+              <code>USER.md</code>, <code>HEARTBEAT.md</code>, and <code>BOOTSTRAP.md</code> &mdash;
+              but never creates <code>MEMORY.md</code>. New agents end up with no memory or
+              accidentally read the main agent's memory file.
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">Source files</div>
+            <ul class="source-list">
+              <li>src/agents/workspace.ts lines 321-383 (ensureAgentWorkspace)</li>
+              <li>src/agents/workspace.ts lines 32-33 (constants exist but unused)</li>
+              <li>src/gateway/server-methods/agents.ts lines 476-546</li>
+              <li>src/commands/agents.commands.add.ts lines 51-368</li>
+            </ul>
+          </div>
+          <div class="field">
+            <div class="field-label">Fix plan</div>
+            <div class="plan-box">
+              Add an empty <code>MEMORY.md</code> template to the templates directory and include it
+              in the bootstrap file list in <code>ensureAgentWorkspace</code> so each new agent gets
+              its own isolated memory file on creation.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- FIX-02 -->
+      <div class="card">
+        <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+          <span class="badge badge-fix">FIX-02</span>
+          <span class="card-title">Integrate YourJarvisHub as Built-in Notification Hub</span>
+          <span class="badge badge-version">feature</span>
+          <svg
+            class="chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">What it does</div>
+            <div class="field-value">
+              External apps, cron jobs, and scripts have no first-class way to send focused
+              notifications to the agent. Messages either get lost in the heartbeat stew
+              (<code>enqueueSystemEvent</code>) or require a separate hub server. This integrates
+              the
+              <a href="https://github.com/JarvisDeLaAri/YourJarvisHub" style="color: var(--blue)"
+                >YourJarvisHub</a
+              >
+              concept directly into OpenClaw.
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">Planned endpoints</div>
+            <ul class="source-list">
+              <li>POST /notify &mdash; submit notification with priority</li>
+              <li>POST /done/{id} &mdash; confirmation callback</li>
+              <li>GET /pending &mdash; list unhandled notifications</li>
+              <li>GET /history &mdash; notification audit trail</li>
+            </ul>
+          </div>
+          <div class="field">
+            <div class="field-label">Integration plan</div>
+            <div class="plan-box">
+              Add a built-in notification hub at <code>src/dev-mode/notification-hub/</code>. Each
+              notification triggers a dedicated agent turn via the chat completions path (not
+              heartbeat). Cron isolated jobs get a new <code>delivery.mode: "notify"</code>. Config:
+              <code>gateway.http.endpoints.notificationHub.enabled=true</code>.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <footer>openclaw-dev-mode &middot; Phase 1 review &middot; 13 of 97 items approved</footer>
     </div>
-    <div class="stat-card">
-      <div class="number">11</div>
-      <div class="label">Security Tweaks</div>
-    </div>
-    <div class="stat-card">
-      <div class="number">2</div>
-      <div class="label">Fixes / Features</div>
-    </div>
-  </div>
-
-  <!-- SEC-15a -->
-  <div class="card">
-    <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
-      <span class="badge badge-sec">SEC-15a</span>
-      <span class="card-title">Hardcoded "Safety" Section in System Prompt</span>
-      <span class="badge badge-version">2026.2.1</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    </div>
-    <div class="card-body">
-      <div class="field">
-        <div class="field-label">What it does</div>
-        <div class="field-value">Every AI agent session begins with a hardcoded "Safety" section injected into the system prompt. This is the "Anthropic constitution" inspired block that constrains the AI's behavior.</div>
-      </div>
-      <div class="field">
-        <div class="field-label">Source files</div>
-        <ul class="source-list">
-          <li>src/agents/system-prompt.ts (lines 393-399)</li>
-        </ul>
-      </div>
-      <div class="field">
-        <div class="field-label">Dev-mode plan</div>
-        <div class="plan-box">Remove the middle paragraph ("Prioritize safety and human oversight...")</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- SEC-27 -->
-  <div class="card">
-    <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
-      <span class="badge badge-sec">SEC-27</span>
-      <span class="card-title">Untrusted Channel Metadata Blocked from System Prompts</span>
-      <span class="badge badge-version">2026.2.3</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    </div>
-    <div class="card-body">
-      <div class="field">
-        <div class="field-label">What it does</div>
-        <div class="field-value">Channel metadata from Slack and Discord (channel name, topic, description) is stripped from the AI's system prompt. The agent can't "see" what channel it's operating in, losing useful context about conversation purpose and scope.</div>
-      </div>
-      <div class="field">
-        <div class="field-label">Source files</div>
-        <ul class="source-list">
-          <li>System prompt construction modules (released in 2026.2.3)</li>
-        </ul>
-      </div>
-      <div class="field">
-        <div class="field-label">Dev-mode plan</div>
-        <div class="plan-box">Re-include channel metadata (name, topic, description) in the system prompt so the agent knows where it's talking and can adapt its behavior to the channel's purpose.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- SEC-59 -->
-  <div class="card">
-    <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
-      <span class="badge badge-sec">SEC-59</span>
-      <span class="card-title">Default Tool Profile Restricted to "messaging"</span>
-      <span class="badge badge-version">2026.3.2</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    </div>
-    <div class="card-body">
-      <div class="field">
-        <div class="field-label">What it does</div>
-        <div class="field-value">New installs default to the <code>messaging</code> tool profile, which only allows 5 tools: <code>sessions_list</code>, <code>sessions_history</code>, <code>sessions_send</code>, <code>session_status</code>, <code>message</code>. All powerful tools (file ops, shell, web, memory, scheduling, subagents) are hidden unless you manually switch to <code>coding</code> or <code>full</code>.</div>
-      </div>
-      <div class="field">
-        <div class="field-label">Source files</div>
-        <ul class="source-list">
-          <li>src/commands/onboard-config.ts line 6</li>
-          <li>src/agents/tool-catalog.ts lines 248-259</li>
-          <li>src/agents/tool-policy-shared.ts lines 45-47</li>
-        </ul>
-      </div>
-      <div class="field">
-        <div class="field-label">Dev-mode plan</div>
-        <div class="plan-box">Skip setting <code>tools.profile</code> during onboarding. When unset, <code>resolveCoreToolProfilePolicy()</code> returns <code>undefined</code>, the pipeline step is skipped, and all tools are available. Nothing breaks &mdash; the field is optional everywhere.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- SEC-67 -->
-  <div class="card">
-    <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
-      <span class="badge badge-sec">SEC-67</span>
-      <span class="card-title">Compaction Safeguard Mode (Default)</span>
-      <span class="badge badge-version">2026.2.1</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    </div>
-    <div class="card-body">
-      <div class="field">
-        <div class="field-label">What it does</div>
-        <div class="field-value">Compaction mode defaults to <code>"safeguard"</code> which applies stricter guardrails during session history compression. Requires structured summary headings, cancels compaction if no real conversation exists or if the content ratio is too aggressive. Slower and more conservative than <code>"default"</code> mode.</div>
-      </div>
-      <div class="field">
-        <div class="field-label">Source files</div>
-        <ul class="source-list">
-          <li>src/agents/pi-extensions/compaction-safeguard.ts (lines 1-690)</li>
-          <li>src/agents/pi-extensions/compaction-safeguard-runtime.ts</li>
-          <li>src/agents/pi-embedded-runner/extensions.ts (lines 60-88)</li>
-          <li>src/config/defaults.ts (line 526)</li>
-        </ul>
-      </div>
-      <div class="field">
-        <div class="field-label">Dev-mode plan</div>
-        <div class="plan-box">Set default compaction mode to <code>"default"</code> instead of <code>"safeguard"</code>. Faster compression with less overhead, at the cost of potentially losing more context during long sessions.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- SEC-70 -->
-  <div class="card">
-    <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
-      <span class="badge badge-sec">SEC-70</span>
-      <span class="card-title">Browser Navigation Protocol Blocking (file:/data:/javascript:)</span>
-      <span class="badge badge-version">2026.2.21</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    </div>
-    <div class="card-body">
-      <div class="field">
-        <div class="field-label">What it does</div>
-        <div class="field-value">Browser tool blocks navigation to <code>file:</code>, <code>data:</code>, and <code>javascript:</code> protocol URLs. Prevents the AI from reading local files or executing JS through browser navigation. In dev, this blocks legitimate local file viewing through the browser.</div>
-      </div>
-      <div class="field">
-        <div class="field-label">Source files</div>
-        <ul class="source-list">
-          <li>Browser navigation modules (released in openclaw 2026.2.21)</li>
-        </ul>
-      </div>
-      <div class="field">
-        <div class="field-label">Dev-mode plan</div>
-        <div class="plan-box">Allow all protocol schemes in browser navigation.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- SEC-71 -->
-  <div class="card">
-    <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
-      <span class="badge badge-sec">SEC-71</span>
-      <span class="card-title">Web Fetch Response Body Size Cap (2MB)</span>
-      <span class="badge badge-version">2026.2.21</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    </div>
-    <div class="card-body">
-      <div class="field">
-        <div class="field-label">What it does</div>
-        <div class="field-value"><code>web_fetch</code> tool caps response body at 2MB. Larger responses are truncated. In dev, this means large API responses or documentation pages may be incomplete.</div>
-      </div>
-      <div class="field">
-        <div class="field-label">Source files</div>
-        <ul class="source-list">
-          <li>Web fetch tool modules (released in openclaw 2026.2.21)</li>
-        </ul>
-      </div>
-      <div class="field">
-        <div class="field-label">Dev-mode plan</div>
-        <div class="plan-box">Remove the 2MB body cap.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- SEC-72 -->
-  <div class="card">
-    <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
-      <span class="badge badge-sec">SEC-72</span>
-      <span class="card-title">Gateway Config Response Redaction</span>
-      <span class="badge badge-version">2026.2.24</span>
-      <span class="badge badge-note">CLI only</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    </div>
-    <div class="card-body">
-      <div class="field">
-        <div class="field-label">What it does</div>
-        <div class="field-value">The <code>config.get</code> gateway RPC redacts sensitive fields (API keys, tokens, internal paths) for all callers &mdash; both CLI and Control UI. You can't see your own API keys through either interface.</div>
-      </div>
-      <div class="field">
-        <div class="field-label">Source files</div>
-        <ul class="source-list">
-          <li>src/config/redact-snapshot.ts (redactConfigObject, redactConfigSnapshot)</li>
-          <li>src/gateway/server-methods/config.ts line 253</li>
-        </ul>
-      </div>
-      <div class="field">
-        <div class="field-label">Dev-mode plan</div>
-        <div class="plan-box">Skip redaction for CLI callers only. Control UI keeps redaction as-is.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- SEC-78 -->
-  <div class="card">
-    <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
-      <span class="badge badge-sec">SEC-78</span>
-      <span class="card-title">Gateway Rate-Limiting for Control-Plane Write RPCs (3/min)</span>
-      <span class="badge badge-version">2026.3.1</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    </div>
-    <div class="card-body">
-      <div class="field">
-        <div class="field-label">What it does</div>
-        <div class="field-value">Write operations on the gateway control plane (config changes, agent creation, etc.) are rate-limited to 3 per minute per client. In dev, this blocks rapid iteration when testing config changes or running setup scripts.</div>
-      </div>
-      <div class="field">
-        <div class="field-label">Source files</div>
-        <ul class="source-list">
-          <li>Gateway rate-limiting modules (released in openclaw 2026.3.1)</li>
-        </ul>
-      </div>
-      <div class="field">
-        <div class="field-label">Dev-mode plan</div>
-        <div class="plan-box">Disable or greatly increase the write RPC rate limit.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- SEC-79 -->
-  <div class="card">
-    <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
-      <span class="badge badge-sec">SEC-79</span>
-      <span class="card-title">ACP Prompt Text Payload Size Bound (2 MiB)</span>
-      <span class="badge badge-version">2026.3.1</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    </div>
-    <div class="card-body">
-      <div class="field">
-        <div class="field-label">What it does</div>
-        <div class="field-value">ACP (Automation Control Plane) prompt payloads are capped at 2 MiB. Larger prompts are rejected before reaching the AI model. In dev, this could block sending very large context payloads.</div>
-      </div>
-      <div class="field">
-        <div class="field-label">Source files</div>
-        <ul class="source-list">
-          <li>ACP dispatch modules (released in openclaw 2026.3.1)</li>
-        </ul>
-      </div>
-      <div class="field">
-        <div class="field-label">Dev-mode plan</div>
-        <div class="plan-box">Remove or increase the ACP payload size bound.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- SEC-80 -->
-  <div class="card">
-    <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
-      <span class="badge badge-sec">SEC-80</span>
-      <span class="card-title">Gateway Hooks Token Cannot Match Gateway Auth Token</span>
-      <span class="badge badge-version">2026.3.2</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    </div>
-    <div class="card-body">
-      <div class="field">
-        <div class="field-label">What it does</div>
-        <div class="field-value">The webhook callback token (<code>gateway.hooks.token</code>) is validated to be different from the main gateway auth token. In dev with simple setups, this means you need two different tokens instead of reusing one.</div>
-      </div>
-      <div class="field">
-        <div class="field-label">Source files</div>
-        <ul class="source-list">
-          <li>Gateway hooks configuration modules (released in openclaw 2026.3.2)</li>
-        </ul>
-      </div>
-      <div class="field">
-        <div class="field-label">Dev-mode plan</div>
-        <div class="plan-box">Skip the token uniqueness check.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- SEC-96 -->
-  <div class="card">
-    <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
-      <span class="badge badge-sec">SEC-96</span>
-      <span class="card-title">Host Environment Variable Sanitization for Child Processes</span>
-      <span class="badge badge-version">2026.2.19</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    </div>
-    <div class="card-body">
-      <div class="field">
-        <div class="field-label">What it does</div>
-        <div class="field-value">Blocks dangerous environment variables (AWS secrets, API keys, tokens, passwords, private keys) from being passed to child processes when the AI runs commands. Broader than SEC-11 (which only blocks LD/DYLD vars). In dev, your scripts can't access env vars that OpenClaw considers sensitive.</div>
-      </div>
-      <div class="field">
-        <div class="field-label">Source files</div>
-        <ul class="source-list">
-          <li>src/infra/host-env-security.ts (lines 1-100+)</li>
-          <li>src/infra/host-env-security-policy.json (blocked variable list)</li>
-        </ul>
-      </div>
-      <div class="field">
-        <div class="field-label">Dev-mode plan</div>
-        <div class="plan-box">Pass all env vars through to child processes without filtering.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- FIX-01 -->
-  <div class="card">
-    <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
-      <span class="badge badge-fix">FIX-01</span>
-      <span class="card-title">New Agents Missing MEMORY.md on Creation</span>
-      <span class="badge badge-version">bug</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    </div>
-    <div class="card-body">
-      <div class="field">
-        <div class="field-label">What it does</div>
-        <div class="field-value">When a new agent is created, the workspace bootstrap creates <code>AGENTS.md</code>, <code>SOUL.md</code>, <code>TOOLS.md</code>, <code>IDENTITY.md</code>, <code>USER.md</code>, <code>HEARTBEAT.md</code>, and <code>BOOTSTRAP.md</code> &mdash; but never creates <code>MEMORY.md</code>. New agents end up with no memory or accidentally read the main agent's memory file.</div>
-      </div>
-      <div class="field">
-        <div class="field-label">Source files</div>
-        <ul class="source-list">
-          <li>src/agents/workspace.ts lines 321-383 (ensureAgentWorkspace)</li>
-          <li>src/agents/workspace.ts lines 32-33 (constants exist but unused)</li>
-          <li>src/gateway/server-methods/agents.ts lines 476-546</li>
-          <li>src/commands/agents.commands.add.ts lines 51-368</li>
-        </ul>
-      </div>
-      <div class="field">
-        <div class="field-label">Fix plan</div>
-        <div class="plan-box">Add an empty <code>MEMORY.md</code> template to the templates directory and include it in the bootstrap file list in <code>ensureAgentWorkspace</code> so each new agent gets its own isolated memory file on creation.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- FIX-02 -->
-  <div class="card">
-    <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
-      <span class="badge badge-fix">FIX-02</span>
-      <span class="card-title">Integrate YourJarvisHub as Built-in Notification Hub</span>
-      <span class="badge badge-version">feature</span>
-      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    </div>
-    <div class="card-body">
-      <div class="field">
-        <div class="field-label">What it does</div>
-        <div class="field-value">External apps, cron jobs, and scripts have no first-class way to send focused notifications to the agent. Messages either get lost in the heartbeat stew (<code>enqueueSystemEvent</code>) or require a separate hub server. This integrates the <a href="https://github.com/JarvisDeLaAri/YourJarvisHub" style="color: var(--blue)">YourJarvisHub</a> concept directly into OpenClaw.</div>
-      </div>
-      <div class="field">
-        <div class="field-label">Planned endpoints</div>
-        <ul class="source-list">
-          <li>POST /notify &mdash; submit notification with priority</li>
-          <li>POST /done/{id} &mdash; confirmation callback</li>
-          <li>GET /pending &mdash; list unhandled notifications</li>
-          <li>GET /history &mdash; notification audit trail</li>
-        </ul>
-      </div>
-      <div class="field">
-        <div class="field-label">Integration plan</div>
-        <div class="plan-box">Add a built-in notification hub at <code>src/dev-mode/notification-hub/</code>. Each notification triggers a dedicated agent turn via the chat completions path (not heartbeat). Cron isolated jobs get a new <code>delivery.mode: "notify"</code>. Config: <code>gateway.http.endpoints.notificationHub.enabled=true</code>.</div>
-      </div>
-    </div>
-  </div>
-
-  <footer>
-    openclaw-dev-mode &middot; Phase 1 review &middot; 13 of 97 items approved
-  </footer>
-
-</div>
-
-</body>
+  </body>
 </html>

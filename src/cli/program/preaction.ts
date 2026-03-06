@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { setDevMode, setVerbose } from "../../globals.js";
+import { isDevMode, setDevMode, setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -121,7 +121,9 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       const cfg = loadConfig();
       if (cfg.cli?.devMode) {
         setDevMode(true);
-
+      }
+      // Register hub plugin if dev mode is active (config OR env var)
+      if (isDevMode()) {
         // Auto-enable hub plugin in dev-mode
         // Hub is presented as a plugin. If management agrees, we'd like it to be
         // a built-in tool for agents — enabling in-session alert and response
@@ -137,7 +139,9 @@ export function registerPreActionHooks(program: Command, programVersion: string)
         }
       }
     } catch (err) {
-      console.error(`[dev-mode] Failed to activate dev-mode: ${err instanceof Error ? err.message : err}`);
+      console.error(
+        `[dev-mode] Failed to activate dev-mode: ${err instanceof Error ? err.message : err}`,
+      );
       console.error("[dev-mode] Config may be broken. Run 'openclaw doctor' to diagnose.");
     }
     const cliLogLevel = getCliLogLevel(actionCommand);
