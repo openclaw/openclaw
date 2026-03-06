@@ -1,5 +1,5 @@
 import { lstatSync, readFileSync } from "node:fs";
-import { extname } from "node:path";
+import { extname, isAbsolute } from "node:path";
 import {
   Box,
   Container,
@@ -52,6 +52,10 @@ function canRenderInlineImages(): boolean {
  */
 function validateMediaPath(filePath: string): boolean {
   if (filePath.includes("\0")) {
+    return false;
+  }
+  // Require absolute path — matches server-side extractMediaImagePaths.
+  if (!isAbsolute(filePath)) {
     return false;
   }
   // Reject traversal before normalization — matches server-side readImageAsBase64.
