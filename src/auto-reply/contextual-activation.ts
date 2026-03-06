@@ -3,6 +3,13 @@ import { normalizeProviderId, resolveModelRefFromString } from "../agents/model-
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 
+export type ScheduleRule = {
+  /** Time range in "HH:MM-HH:MM" format (e.g. "00:00-08:00"). Supports overnight wrap (e.g. "23:00-06:00"). */
+  time: string;
+  /** Override baseRate during this time window. */
+  baseRate: number;
+};
+
 export type ContextualActivationConfig = {
   /** Model reference in "provider/model" format (e.g. "openrouter/meta-llama/llama-3.1-8b-instruct:free"). */
   model: string;
@@ -16,6 +23,8 @@ export type ContextualActivationConfig = {
   contextMessages?: number;
   /** Base probability (0-1) of even calling the decision model when peeking. Default: 1. */
   baseRate?: number;
+  /** Time-based baseRate overrides. First matching rule wins. */
+  schedule?: ScheduleRule[];
   /** Fallback timeout (seconds) after which engaged mode auto-expires if no new messages arrive. Default: 300. */
   engagedTimeout?: number;
 };
@@ -396,6 +405,52 @@ function checkEngagedTimeout(state: EngagementState, timeoutS: number): boolean 
   return elapsed > timeoutS * 1000;
 }
 
+/** Parse "HH:MM" to minutes since midnight. */
+function parseTimeToMinutes(hhmm: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!m) {
+    return null;
+  }
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+/** Check if `nowMin` falls within a time range (supports overnight wrap). */
+function inTimeRange(nowMin: number, startMin: number, endMin: number): boolean {
+  if (startMin <= endMin) {
+    return nowMin >= startMin && nowMin <= endMin;
+  }
+  // Overnight wrap: e.g. 23:00-06:00
+  return nowMin >= startMin || nowMin <= endMin;
+}
+
+/** Resolve baseRate from schedule rules, falling back to config.baseRate. */
+function resolveScheduledBaseRate(config: ContextualActivationConfig): number {
+  const fallback = config.baseRate ?? 1;
+  const rules = config.schedule;
+  if (!rules || rules.length === 0) {
+    return fallback;
+  }
+
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+
+  for (const rule of rules) {
+    const parts = rule.time.split("-");
+    if (parts.length !== 2) {
+      continue;
+    }
+    const start = parseTimeToMinutes(parts[0]);
+    const end = parseTimeToMinutes(parts[1]);
+    if (start === null || end === null) {
+      continue;
+    }
+    if (inTimeRange(nowMin, start, end)) {
+      return rule.baseRate;
+    }
+  }
+  return fallback;
+}
+
 /** Compute effective baseRate with consecutive-skip decay. */
 function effectiveBaseRate(baseRate: number, consecutiveSkips: number): number {
   if (consecutiveSkips <= 0) {
@@ -428,7 +483,7 @@ export async function shouldParticipateInGroup(params: {
 }): Promise<ContextualActivationResult> {
   const { cfg, config, recentMessages, currentMessage, groupKey, botName } = params;
   const contextLimit = config.contextMessages ?? DEFAULT_CONTEXT_MESSAGES;
-  const baseRate = config.baseRate ?? 1;
+  const baseRate = resolveScheduledBaseRate(config);
   const engagedTimeout = config.engagedTimeout ?? DEFAULT_ENGAGED_TIMEOUT_S;
 
   const state = getEngagement(groupKey);

@@ -59,6 +59,13 @@ const TelegramCapabilitiesSchema = z.union([
     .strict(),
 ]);
 
+const ScheduleRuleSchema = z
+  .object({
+    time: z.string().regex(/^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/),
+    baseRate: z.number().min(0).max(1),
+  })
+  .strict();
+
 export const ContextualActivationSchema = z
   .object({
     model: z.string(),
@@ -67,6 +74,7 @@ export const ContextualActivationSchema = z
     disengagePrompt: z.string().optional(),
     contextMessages: z.number().int().min(1).max(50).optional(),
     baseRate: z.number().min(0).max(1).optional(),
+    schedule: z.array(ScheduleRuleSchema).optional(),
     engagedTimeout: z.number().int().min(10).max(3600).optional(),
   })
   .strict();
