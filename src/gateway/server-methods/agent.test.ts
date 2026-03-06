@@ -5,6 +5,7 @@ import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
+  loadSessionStore: vi.fn(),
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
@@ -27,8 +28,8 @@ vi.mock("../../config/sessions.js", async () => {
   );
   return {
     ...actual,
+    loadSessionStore: mocks.loadSessionStore,
     updateSessionStore: mocks.updateSessionStore,
-    resolveAgentIdFromSessionKey: () => "main",
     resolveExplicitAgentSessionKey: () => undefined,
     resolveAgentMainSessionKey: ({
       cfg,
@@ -287,6 +288,7 @@ describe("gateway agent handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadConfigReturn = {};
+    mocks.loadSessionStore.mockReturnValue({});
     mocks.resolveGatewayAgentModelState.mockReset();
     mocks.resolveGatewayAgentModelState.mockResolvedValue({
       status: "ready",
@@ -468,6 +470,33 @@ describe("gateway agent handler", () => {
       undefined,
       expect.objectContaining({
         message: expect.stringContaining("blocked"),
+      }),
+    );
+  });
+
+  it("preserves canonical agent session keys when remapping from sessionId", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:ops:main": { sessionId: "ops-session-id", updatedAt: 1 },
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "resume by sessionId",
+        sessionId: "ops-session-id",
+        idempotencyKey: "ops-session-idem-1",
+      },
+      { reqId: "ops-session-remap-1" },
+    );
+
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string } | undefined;
+    expect(call?.sessionKey).toBe("agent:ops:main");
+    expect(mocks.resolveGatewayAgentModelState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
       }),
     );
   });

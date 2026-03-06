@@ -20,11 +20,7 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import {
-  classifySessionKeyShape,
-  normalizeAgentId,
-  toAgentRequestSessionKey,
-} from "../../routing/session-key.js";
+import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -497,7 +493,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         ([, entry]) => entry?.sessionId === resolvedSessionId,
       )?.[0];
       if (foundStoreKey) {
-        resolvedSessionKey = toAgentRequestSessionKey(foundStoreKey) ?? foundStoreKey;
+        resolvedSessionKey = foundStoreKey;
       }
     }
 
