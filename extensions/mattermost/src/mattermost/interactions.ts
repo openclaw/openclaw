@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient } from "./client.js";
 
@@ -43,21 +44,72 @@ export function getInteractionCallbackUrl(accountId: string): string | undefined
   return callbackUrls.get(accountId);
 }
 
+type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels"> & {
+  interactions?: {
+    callbackBaseUrl?: string;
+  };
+};
+
+export function resolveInteractionCallbackPath(accountId: string): string {
+  return `/mattermost/interactions/${accountId}`;
+}
+
+function isWildcardBindHost(rawHost: string): boolean {
+  const trimmed = rawHost.trim();
+  if (!trimmed) return false;
+  const host = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
+  return host === "0.0.0.0" || host === "::" || host === "0:0:0:0:0:0:0:0" || host === "::0";
+}
+
+function normalizeCallbackBaseUrl(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, "");
+}
+
 /**
  * Resolve the interaction callback URL for an account.
- * Prefers the in-memory registered URL (set by the gateway monitor).
- * Falls back to computing it from the gateway port in config (for CLI callers).
+ * Falls back to computing it from interactions.callbackBaseUrl or gateway host config.
+ */
+export function computeInteractionCallbackUrl(
+  accountId: string,
+  cfg?: InteractionCallbackConfig,
+): string {
+  const path = resolveInteractionCallbackPath(accountId);
+  // Prefer merged per-account config when available, but keep the top-level path for
+  // callers/tests that still pass the root Mattermost config shape directly.
+  const callbackBaseUrl =
+    cfg?.interactions?.callbackBaseUrl?.trim() ??
+    cfg?.channels?.mattermost?.interactions?.callbackBaseUrl?.trim();
+  if (callbackBaseUrl) {
+    return `${normalizeCallbackBaseUrl(callbackBaseUrl)}${path}`;
+  }
+  const port = typeof cfg?.gateway?.port === "number" ? cfg.gateway.port : 18789;
+  let host =
+    cfg?.gateway?.customBindHost && !isWildcardBindHost(cfg.gateway.customBindHost)
+      ? cfg.gateway.customBindHost.trim()
+      : "localhost";
+
+  // Bracket IPv6 literals so the URL is valid: http://[::1]:18789/...
+  if (host.includes(":") && !(host.startsWith("[") && host.endsWith("]"))) {
+    host = `[${host}]`;
+  }
+
+  return `http://${host}:${port}${path}`;
+}
+
+/**
+ * Resolve the interaction callback URL for an account.
+ * Prefers the in-memory registered URL (set by the gateway monitor) so callers outside the
+ * monitor lifecycle can reuse the runtime-validated callback destination.
  */
 export function resolveInteractionCallbackUrl(
   accountId: string,
-  cfg?: { gateway?: { port?: number } },
+  cfg?: InteractionCallbackConfig,
 ): string {
   const cached = callbackUrls.get(accountId);
   if (cached) {
     return cached;
   }
-  const port = typeof cfg?.gateway?.port === "number" ? cfg.gateway.port : 18789;
-  return `http://localhost:${port}/mattermost/interactions/${accountId}`;
+  return computeInteractionCallbackUrl(accountId, cfg);
 }
 
 // ── HMAC token management ──────────────────────────────────────────────
@@ -198,18 +250,6 @@ export function buildButtonAttachments(params: {
   ];
 }
 
-// ── Localhost validation ───────────────────────────────────────────────
-
-const LOCALHOST_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
-
-export function isLocalhostRequest(req: IncomingMessage): boolean {
-  const addr = req.socket?.remoteAddress;
-  if (!addr) {
-    return false;
-  }
-  return LOCALHOST_ADDRESSES.has(addr);
-}
-
 // ── Request body reader ────────────────────────────────────────────────
 
 function readInteractionBody(req: IncomingMessage): Promise<string> {
@@ -251,7 +291,6 @@ export function createMattermostInteractionHandler(params: {
   client: MattermostClient;
   botUserId: string;
   accountId: string;
-  callbackUrl: string;
   resolveSessionKey?: (channelId: string, userId: string) => Promise<string>;
   dispatchButtonClick?: (opts: {
     channelId: string;
@@ -273,17 +312,6 @@ export function createMattermostInteractionHandler(params: {
       res.setHeader("Allow", "POST");
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Method Not Allowed" }));
-      return;
-    }
-
-    // Verify request is from localhost
-    if (!isLocalhostRequest(req)) {
-      log?.(
-        `mattermost interaction: rejected non-localhost request from ${req.socket?.remoteAddress}`,
-      );
-      res.statusCode = 403;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Forbidden" }));
       return;
     }
 
