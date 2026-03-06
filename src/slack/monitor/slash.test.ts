@@ -700,6 +700,7 @@ function createPolicyHarness(overrides?: {
   channelName?: string;
   allowFrom?: string[];
   useAccessGroups?: boolean;
+  shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   resolveChannelName?: () => Promise<{ name?: string; type?: string }>;
 }) {
   const commands = new Map<unknown, (args: unknown) => Promise<void>>();
@@ -738,6 +739,8 @@ function createPolicyHarness(overrides?: {
     textLimit: 4000,
     app,
     isChannelAllowed: () => true,
+    shouldDropMismatchedSlackEvent: (body: unknown) =>
+      overrides?.shouldDropMismatchedSlackEvent?.(body) ?? false,
     resolveChannelName:
       overrides?.resolveChannelName ?? (async () => ({ name: channelName, type: "channel" })),
     resolveUserName: async () => ({ name: "Ada" }),
@@ -750,6 +753,7 @@ function createPolicyHarness(overrides?: {
 
 async function runSlashHandler(params: {
   commands: Map<unknown, (args: unknown) => Promise<void>>;
+  body?: unknown;
   command: Partial<{
     user_id: string;
     user_name: string;
@@ -769,6 +773,7 @@ async function runSlashHandler(params: {
   const ack = vi.fn().mockResolvedValue(undefined);
 
   await handler({
+    body: params.body,
     command: {
       user_id: "U1",
       user_name: "Ada",
@@ -785,6 +790,7 @@ async function runSlashHandler(params: {
 
 async function registerAndRunPolicySlash(params: {
   harness: ReturnType<typeof createPolicyHarness>;
+  body?: unknown;
   command?: Partial<{
     user_id: string;
     user_name: string;
@@ -797,6 +803,7 @@ async function registerAndRunPolicySlash(params: {
   await registerCommands(params.harness.ctx, params.harness.account);
   return await runSlashHandler({
     commands: params.harness.commands,
+    body: params.body,
     command: {
       channel_id: params.command?.channel_id ?? params.harness.channelId,
       channel_name: params.command?.channel_name ?? params.harness.channelName,
@@ -822,6 +829,23 @@ function expectUnauthorizedResponse(respond: ReturnType<typeof vi.fn>) {
 }
 
 describe("slack slash commands channel policy", () => {
+  it("drops mismatched slash payloads before dispatch", async () => {
+    const harness = createPolicyHarness({
+      shouldDropMismatchedSlackEvent: () => true,
+    });
+    const { respond, ack } = await registerAndRunPolicySlash({
+      harness,
+      body: {
+        api_app_id: "A_MISMATCH",
+        team_id: "T_MISMATCH",
+      },
+    });
+
+    expect(ack).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(respond).not.toHaveBeenCalled();
+  });
+
   it("allows unlisted channels when groupPolicy is open", async () => {
     const harness = createPolicyHarness({
       groupPolicy: "open",

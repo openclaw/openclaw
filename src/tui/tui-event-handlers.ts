@@ -1,3 +1,4 @@
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
@@ -146,6 +147,29 @@ export function createEventHandlers(context: EventHandlerContext) {
     void loadHistory?.();
   };
 
+  const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
+    const normalizedLeft = (left ?? "").trim().toLowerCase();
+    const normalizedRight = (right ?? "").trim().toLowerCase();
+    if (!normalizedLeft || !normalizedRight) {
+      return false;
+    }
+    if (normalizedLeft === normalizedRight) {
+      return true;
+    }
+    const parsedLeft = parseAgentSessionKey(normalizedLeft);
+    const parsedRight = parseAgentSessionKey(normalizedRight);
+    if (parsedLeft && parsedRight) {
+      return parsedLeft.agentId === parsedRight.agentId && parsedLeft.rest === parsedRight.rest;
+    }
+    if (parsedLeft) {
+      return parsedLeft.rest === normalizedRight;
+    }
+    if (parsedRight) {
+      return normalizedLeft === parsedRight.rest;
+    }
+    return false;
+  };
+
   const handleChatEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
@@ -156,8 +180,19 @@ export function createEventHandlers(context: EventHandlerContext) {
     // the gateway resolves or updates the session key during message processing.
     // This ensures push notifications are not filtered out when the session key
     // changes between send and receive (e.g., "unknown" -> resolved session key).
+    // Only update if the session key is "unknown" or from the same agent prefix
+    // to prevent session hijacking from other agents.
     if (evt.sessionKey && evt.sessionKey !== state.currentSessionKey) {
-      state.currentSessionKey = evt.sessionKey;
+      const currentKey = state.currentSessionKey;
+      const shouldUpdate =
+        currentKey.includes("unknown") ||
+        (currentKey.startsWith("agent:") &&
+          evt.sessionKey.startsWith("agent:") &&
+          currentKey.split(":")[1] === evt.sessionKey.split(":")[1]);
+
+      if (shouldUpdate) {
+        state.currentSessionKey = evt.sessionKey;
+      }
     }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
@@ -206,7 +241,12 @@ export function createEventHandlers(context: EventHandlerContext) {
             : ""
           : "";
 
-      const finalText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
+      const finalText = streamAssembler.finalize(
+        evt.runId,
+        evt.message,
+        state.showThinking,
+        evt.errorMessage,
+      );
       const suppressEmptyExternalPlaceholder =
         finalText === "(no output)" && !isLocalRunId?.(evt.runId);
       if (suppressEmptyExternalPlaceholder) {

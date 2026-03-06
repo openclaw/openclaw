@@ -156,8 +156,8 @@ pnpm openclaw gateway --port 18789 --verbose
 3) Approve pairing (on the gateway machine):
 
 ```bash
-openclaw nodes pending
-openclaw nodes approve <requestId>
+openclaw devices list
+openclaw devices approve <requestId>
 ```
 
 More details: `docs/platforms/android.md`.

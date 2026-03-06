@@ -33,6 +33,7 @@ export const HeartbeatSchema = z
     prompt: z.string().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),
+    lightContext: z.boolean().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -102,7 +103,10 @@ export const SandboxDockerSchema = z
     user: z.string().optional(),
     capDrop: z.array(z.string()).optional(),
     env: z.record(z.string(), z.string()).optional(),
-    setupCommand: z.string().optional(),
+    setupCommand: z
+      .union([z.string(), z.array(z.string())])
+      .transform((value) => (Array.isArray(value) ? value.join("\n") : value))
+      .optional(),
     pidsLimit: z.number().int().positive().optional(),
     memory: z.union([z.string(), z.number()]).optional(),
     memorySwap: z.union([z.string(), z.number()]).optional(),
@@ -274,6 +278,8 @@ export const ToolsWebSearchSchema = z
     perplexity: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
+        // Legacy Sonar/OpenRouter fields — kept for backward compatibility
+        // so existing configs don't fail validation. Ignored at runtime.
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -554,6 +560,7 @@ export const MemorySearchSchema = z
         z.literal("gemini"),
         z.literal("voyage"),
         z.literal("mistral"),
+        z.literal("ollama"),
       ])
       .optional(),
     remote: z
@@ -581,6 +588,7 @@ export const MemorySearchSchema = z
         z.literal("local"),
         z.literal("voyage"),
         z.literal("mistral"),
+        z.literal("ollama"),
         z.literal("none"),
       ])
       .optional(),
@@ -671,6 +679,33 @@ export const MemorySearchSchema = z
   .strict()
   .optional();
 export { AgentModelSchema };
+
+const AgentRuntimeAcpSchema = z
+  .object({
+    agent: z.string().optional(),
+    backend: z.string().optional(),
+    mode: z.enum(["persistent", "oneshot"]).optional(),
+    cwd: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
+const AgentRuntimeSchema = z
+  .union([
+    z
+      .object({
+        type: z.literal("embedded"),
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("acp"),
+        acp: AgentRuntimeAcpSchema,
+      })
+      .strict(),
+  ])
+  .optional();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -705,6 +740,7 @@ export const AgentEntrySchema = z
       .optional(),
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
+    runtime: AgentRuntimeSchema,
   })
   .strict();
 
@@ -773,6 +809,21 @@ export const ToolsSchema = z
     sandbox: z
       .object({
         tools: ToolPolicySchema,
+      })
+      .strict()
+      .optional(),
+    sessions_spawn: z
+      .object({
+        attachments: z
+          .object({
+            enabled: z.boolean().optional(),
+            maxTotalBytes: z.number().optional(),
+            maxFiles: z.number().optional(),
+            maxFileBytes: z.number().optional(),
+            retainOnSessionKeep: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

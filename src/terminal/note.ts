@@ -6,6 +6,17 @@ const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
 
+function isSuppressedByEnv(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return normalized !== "0" && normalized !== "false" && normalized !== "off";
+}
+
 function splitLongWord(word: string, maxLen: number): string[] {
   if (maxLen <= 0) {
     return [word];
@@ -130,5 +141,8 @@ export function wrapNoteMessage(
 }
 
 export function note(message: string, title?: string) {
+  if (isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)) {
+    return;
+  }
   clackNote(wrapNoteMessage(message), stylePromptTitle(title));
 }

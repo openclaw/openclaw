@@ -1,4 +1,6 @@
 import {
+  formatSlackStreamingBooleanMigrationMessage,
+  formatSlackStreamModeMigrationMessage,
   resolveDiscordPreviewStreamMode,
   resolveSlackNativeStreaming,
   resolveSlackStreamingMode,
@@ -57,6 +59,10 @@ function ensureDefaultGroupEntry(section: Record<string, unknown>): {
 
 function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(target, key);
+}
+
+function escapeControlForLog(value: string): string {
+  return value.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
 }
 
 function migrateThreadBindingsTtlHoursForPath(params: {
@@ -353,13 +359,11 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
         params.entry.nativeStreaming = resolvedNativeStreaming;
         if (hasLegacyStreamMode) {
           delete params.entry.streamMode;
-          changes.push(
-            `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolvedStreaming}).`,
-          );
+          changes.push(formatSlackStreamModeMigrationMessage(params.pathPrefix, resolvedStreaming));
         }
         if (typeof legacyStreaming === "boolean") {
           changes.push(
-            `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.nativeStreaming (${resolvedNativeStreaming}).`,
+            formatSlackStreamingBooleanMigrationMessage(params.pathPrefix, resolvedNativeStreaming),
           );
         } else if (typeof legacyNativeStreaming !== "boolean" && hasLegacyStreamMode) {
           changes.push(`Set ${params.pathPrefix}.nativeStreaming → ${resolvedNativeStreaming}.`);
@@ -533,6 +537,46 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
         gatewayObj.auth = auth;
       }
       raw.gateway = gatewayObj;
+    },
+  },
+  {
+    id: "gateway.bind.host-alias->bind-mode",
+    describe: "Normalize gateway.bind host aliases to supported bind modes",
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway) {
+        return;
+      }
+      const bindRaw = gateway.bind;
+      if (typeof bindRaw !== "string") {
+        return;
+      }
+
+      const normalized = bindRaw.trim().toLowerCase();
+      let mapped: "lan" | "loopback" | undefined;
+      if (
+        normalized === "0.0.0.0" ||
+        normalized === "::" ||
+        normalized === "[::]" ||
+        normalized === "*"
+      ) {
+        mapped = "lan";
+      } else if (
+        normalized === "127.0.0.1" ||
+        normalized === "localhost" ||
+        normalized === "::1" ||
+        normalized === "[::1]"
+      ) {
+        mapped = "loopback";
+      }
+
+      if (!mapped || normalized === mapped) {
+        return;
+      }
+
+      gateway.bind = mapped;
+      raw.gateway = gateway;
+      changes.push(`Normalized gateway.bind "${escapeControlForLog(bindRaw)}" → "${mapped}".`);
     },
   },
   {
