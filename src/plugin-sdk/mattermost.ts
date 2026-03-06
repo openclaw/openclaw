@@ -85,7 +85,4 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
-export {
-  resolveChannelGroupRequireMention,
-  type ChannelGroupContext,
-} from "../config/group-policy.js";
+export { resolveChannelGroupRequireMention } from "../config/group-policy.js";
