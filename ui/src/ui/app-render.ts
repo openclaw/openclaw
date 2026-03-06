@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
-import { refreshChatAvatar } from "./app-chat.ts";
+import { buildChatSessionListParams, refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -1017,8 +1017,11 @@ export function renderApp(state: AppViewState) {
                     lastActiveSessionKey: next,
                   });
                   void state.loadAssistantIdentity();
-                  void loadChatHistory(state);
-                  void refreshChatAvatar(state);
+                  void Promise.all([
+                    loadChatHistory(state),
+                    loadSessions(state, buildChatSessionListParams(next)),
+                    refreshChatAvatar(state),
+                  ]);
                 },
                 thinkingLevel: state.chatThinkingLevel,
                 showThinking,

@@ -1,11 +1,12 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../i18n/index.ts";
-import { refreshChat } from "./app-chat.ts";
+import { buildChatSessionListParams, refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
@@ -198,7 +199,13 @@ export function renderChatControls(state: AppViewState) {
               next,
               true,
             );
-            void loadChatHistory(state as unknown as ChatState);
+            void Promise.all([
+              loadChatHistory(state as unknown as ChatState),
+              loadSessions(
+                state as unknown as Parameters<typeof loadSessions>[0],
+                buildChatSessionListParams(next),
+              ),
+            ]);
           }}
         >
           ${repeat(
