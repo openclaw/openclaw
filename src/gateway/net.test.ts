@@ -457,11 +457,25 @@ describe("isSecureWebSocketUrl", () => {
       "ws://169.254.10.20:18789",
       "ws://[fc00::1]:18789",
       "ws://[fe80::1]:18789",
-      "ws://gateway.private.example:18789",
     ];
 
     for (const input of allowedWhenOptedIn) {
       expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(true);
+    }
+  });
+
+  it("still rejects ws:// hostnames (non-IP literals) when opt-in is enabled", () => {
+    // Hostnames are rejected to avoid accepting arbitrary public hostnames
+    // over insecure ws://. This is a security measure - DNS resolution
+    // is not available in this synchronous validator, so we fail closed.
+    const hostnameWsUrls = [
+      "ws://gateway.private.example:18789",
+      "ws://localhost:18789", // localhost is handled separately before allowPrivateWs check
+      "ws://my-tailscale-host.ts.net:18789",
+    ];
+
+    for (const input of hostnameWsUrls) {
+      expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(false);
     }
   });
 

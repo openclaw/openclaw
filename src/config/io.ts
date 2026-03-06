@@ -1396,4 +1396,7 @@ export async function writeConfigFile(
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
   });
+  // Clear runtime snapshot to ensure subsequent loads get fresh config,
+  // preventing stale snapshot issues in multi-connection scenarios (issue #37175).
+  clearRuntimeConfigSnapshot();
 }
