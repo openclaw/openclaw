@@ -40,7 +40,7 @@ const DISCORD_CDN_HOSTNAMES = [
 function expectDiscordCdnSsrFPolicy(policy: unknown) {
   expect(policy).toEqual(
     expect.objectContaining({
-      allowRfc2544BenchmarkRange: true,
+      allowCidrs: ["198.18.0.0/15"],
       hostnameAllowlist: expect.arrayContaining(DISCORD_CDN_HOSTNAMES),
     }),
   );
@@ -549,7 +549,7 @@ describe("Discord media SSRF policy", () => {
     expect(policy).toEqual(
       expect.objectContaining({
         allowPrivateNetwork: true,
-        allowRfc2544BenchmarkRange: true,
+        allowCidrs: expect.arrayContaining(["198.18.0.0/15"]),
         allowedHostnames: expect.arrayContaining(["assets.example.com"]),
         hostnameAllowlist: expect.arrayContaining(["assets.example.com", ...DISCORD_CDN_HOSTNAMES]),
       }),

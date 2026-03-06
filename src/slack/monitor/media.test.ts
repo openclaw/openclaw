@@ -487,7 +487,7 @@ describe("Slack media SSRF policy", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes ssrfPolicy with Slack CDN allowedHostnames and allowRfc2544BenchmarkRange to file downloads", async () => {
+  it("passes ssrfPolicy with Slack CDN allowedHostnames and allowCidrs to file downloads", async () => {
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
       createSavedMedia("/tmp/test.jpg", "image/jpeg"),
     );
@@ -505,7 +505,7 @@ describe("Slack media SSRF policy", () => {
 
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({
-        ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+        ssrfPolicy: expect.objectContaining({ allowCidrs: ["198.18.0.0/15"] }),
       }),
     );
 
@@ -541,7 +541,7 @@ describe("Slack media SSRF policy", () => {
 
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({
-        ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+        ssrfPolicy: expect.objectContaining({ allowCidrs: ["198.18.0.0/15"] }),
       }),
     );
   });

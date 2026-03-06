@@ -40,7 +40,6 @@ describe("web-guarded-fetch", () => {
         url: "https://example.com",
         policy: expect.objectContaining({
           dangerouslyAllowPrivateNetwork: true,
-          allowRfc2544BenchmarkRange: true,
         }),
         mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       }),
