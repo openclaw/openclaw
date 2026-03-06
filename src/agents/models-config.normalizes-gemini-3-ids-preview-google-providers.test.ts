@@ -38,8 +38,8 @@ describe("models-config", () => {
                   maxTokens: 65536,
                 },
                 {
-                  id: "gemini-3-flash-lite",
-                  name: "Gemini 3 Flash Lite",
+                  id: "gemini-3.1-flash-lite",
+                  name: "Gemini 3.1 Flash Lite",
                   api: "google-generative-ai",
                   reasoning: false,
                   input: ["text", "image"],
@@ -62,7 +62,7 @@ describe("models-config", () => {
       expect(ids).toEqual([
         "gemini-3-pro-preview",
         "gemini-3-flash-preview",
-        "gemini-3-flash-lite-preview",
+        "gemini-3.1-flash-lite-preview",
       ]);
     });
   });

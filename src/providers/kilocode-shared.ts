@@ -68,8 +68,8 @@ export const KILOCODE_MODEL_CATALOG: KilocodeModelCatalogEntry[] = [
     maxTokens: 65535,
   },
   {
-    id: "google/gemini-3-flash-lite-preview",
-    name: "Gemini 3 Flash Lite Preview",
+    id: "google/gemini-3.1-flash-lite-preview",
+    name: "Gemini 3.1 Flash Lite Preview",
     reasoning: false,
     input: ["text", "image"],
     contextWindow: 1048576,

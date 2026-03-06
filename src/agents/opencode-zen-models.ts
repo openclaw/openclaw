@@ -68,8 +68,8 @@ export const OPENCODE_ZEN_MODEL_ALIASES: Record<string, string> = {
   "gemini-3": "gemini-3-pro",
   flash: "gemini-3-flash",
   "gemini-flash": "gemini-3-flash",
-  "flash-lite": "gemini-3-flash-lite",
-  "gemini-flash-lite": "gemini-3-flash-lite",
+  "flash-lite": "gemini-3.1-flash-lite",
+  "gemini-flash-lite": "gemini-3.1-flash-lite",
 
   // Legacy Gemini 2.5 aliases (map to the nearest current Gemini tier).
   "gemini-2.5": "gemini-3-pro",
@@ -140,7 +140,7 @@ const MODEL_COSTS: Record<
   "gpt-5.1": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
   "glm-4.7": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
-  "gemini-3-flash-lite": { input: 0.075, output: 0.3, cacheRead: 0.01, cacheWrite: 0 },
+  "gemini-3.1-flash-lite": { input: 0.075, output: 0.3, cacheRead: 0.01, cacheWrite: 0 },
   "gpt-5.1-codex-max": {
     input: 1.25,
     output: 10,
@@ -161,7 +161,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5.1": 400000,
   "glm-4.7": 204800,
   "gemini-3-flash": 1048576,
-  "gemini-3-flash-lite": 1048576,
+  "gemini-3.1-flash-lite": 1048576,
   "gpt-5.1-codex-max": 400000,
   "gpt-5.2": 400000,
 };
@@ -179,7 +179,7 @@ const MODEL_MAX_TOKENS: Record<string, number> = {
   "gpt-5.1": 128000,
   "glm-4.7": 131072,
   "gemini-3-flash": 65536,
-  "gemini-3-flash-lite": 65536,
+  "gemini-3.1-flash-lite": 65536,
   "gpt-5.1-codex-max": 128000,
   "gpt-5.2": 128000,
 };
@@ -217,7 +217,7 @@ const MODEL_NAMES: Record<string, string> = {
   "gpt-5.1": "GPT-5.1",
   "glm-4.7": "GLM-4.7",
   "gemini-3-flash": "Gemini 3 Flash",
-  "gemini-3-flash-lite": "Gemini 3 Flash Lite",
+  "gemini-3.1-flash-lite": "Gemini 3.1 Flash Lite",
   "gpt-5.1-codex-max": "GPT-5.1 Codex Max",
   "gpt-5.2": "GPT-5.2",
 };
@@ -246,7 +246,7 @@ export function getOpencodeZenStaticFallbackModels(): ModelDefinitionConfig[] {
     "gpt-5.1",
     "glm-4.7",
     "gemini-3-flash",
-    "gemini-3-flash-lite",
+    "gemini-3.1-flash-lite",
     "gpt-5.1-codex-max",
     "gpt-5.2",
   ];
