@@ -162,7 +162,13 @@ function mergeWithExistingProviderSecrets(params: {
     if (typeof existing.apiKey === "string" && existing.apiKey) {
       preserved.apiKey = existing.apiKey;
     }
-    if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+    // Only restore the cached baseUrl when the new config does not explicitly set one.
+    // This ensures user updates to baseUrl in openclaw.json are not silently overwritten
+    // by the stale value cached in models.json (fixes #36353 and #37309).
+    const newEntryHasBaseUrl =
+      typeof (newEntry as { baseUrl?: unknown }).baseUrl === "string" &&
+      ((newEntry as { baseUrl?: string }).baseUrl ?? "").trim() !== "";
+    if (!newEntryHasBaseUrl && typeof existing.baseUrl === "string" && existing.baseUrl) {
       preserved.baseUrl = existing.baseUrl;
     }
     mergedProviders[key] = { ...newEntry, ...preserved };
