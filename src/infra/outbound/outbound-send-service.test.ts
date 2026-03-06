@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   sendPoll: vi.fn(),
   getAgentScopedMediaLocalRoots: vi.fn(() => ["/tmp/agent-roots"]),
+  resolveTelegramMediaLocalRoots: vi.fn(() => ["/tmp/telegram-roots"]),
 }));
 
 vi.mock("../../channels/plugins/message-actions.js", () => ({
@@ -18,6 +19,7 @@ vi.mock("./message.js", () => ({
 
 vi.mock("../../media/local-roots.js", () => ({
   getAgentScopedMediaLocalRoots: mocks.getAgentScopedMediaLocalRoots,
+  resolveTelegramMediaLocalRoots: mocks.resolveTelegramMediaLocalRoots,
 }));
 
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
@@ -28,6 +30,7 @@ describe("executeSendAction", () => {
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
     mocks.getAgentScopedMediaLocalRoots.mockClear();
+    mocks.resolveTelegramMediaLocalRoots.mockClear();
   });
 
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
@@ -112,10 +115,41 @@ describe("executeSendAction", () => {
       message: "hello",
     });
 
-    expect(mocks.getAgentScopedMediaLocalRoots).toHaveBeenCalledWith({}, "agent-1");
+    expect(mocks.getAgentScopedMediaLocalRoots).toHaveBeenCalledWith({}, "agent-1", undefined);
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaLocalRoots: ["/tmp/agent-roots"],
+      }),
+    );
+  });
+
+  it("normalizes null accountId to undefined on telegram plugin path", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue({
+      ok: true,
+      value: { messageId: "msg-plugin" },
+      continuePrompt: "",
+      output: "",
+      sessionId: "s1",
+      model: "gpt-5.2",
+      usage: {},
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "telegram",
+        params: { to: "chat:1", message: "hello" },
+        accountId: null,
+        dryRun: false,
+      },
+      to: "chat:1",
+      message: "hello",
+    });
+
+    expect(mocks.resolveTelegramMediaLocalRoots).toHaveBeenCalledWith({}, undefined);
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: undefined,
       }),
     );
   });

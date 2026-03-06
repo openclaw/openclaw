@@ -58,11 +58,12 @@ async function tryHandleWithPluginAction(params: {
   if (params.ctx.dryRun) {
     return null;
   }
+  const accountId = params.ctx.accountId ?? undefined;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(
     params.ctx.cfg,
     params.ctx.agentId ?? params.ctx.mirror?.agentId,
     params.ctx.channel === "telegram"
-      ? resolveTelegramMediaLocalRoots(params.ctx.cfg, params.ctx.accountId)
+      ? resolveTelegramMediaLocalRoots(params.ctx.cfg, accountId)
       : undefined,
   );
   const handled = await dispatchChannelMessageAction({
@@ -71,7 +72,7 @@ async function tryHandleWithPluginAction(params: {
     cfg: params.ctx.cfg,
     params: params.ctx.params,
     mediaLocalRoots,
-    accountId: params.ctx.accountId ?? undefined,
+    accountId,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,
     dryRun: params.ctx.dryRun,
