@@ -120,6 +120,15 @@ export type PluginRuntimeChannel = {
   signal: {
     probeSignal: typeof import("../../signal/probe.js").probeSignal;
     sendMessageSignal: typeof import("../../signal/send.js").sendMessageSignal;
+    listSignalGroups: typeof import("../../signal/directory.js").listSignalGroups;
+    listSignalContacts: typeof import("../../signal/directory.js").listSignalContacts;
+    updateContactSignal: typeof import("../../signal/directory.js").updateContactSignal;
+    listGroupMembersSignal: typeof import("../../signal/groups.js").listGroupMembersSignal;
+    addGroupMemberSignal: typeof import("../../signal/groups.js").addGroupMemberSignal;
+    removeGroupMemberSignal: typeof import("../../signal/groups.js").removeGroupMemberSignal;
+    updateGroupSignal: typeof import("../../signal/groups.js").updateGroupSignal;
+    joinGroupSignal: typeof import("../../signal/groups.js").joinGroupSignal;
+    quitGroupSignal: typeof import("../../signal/groups.js").quitGroupSignal;
     monitorSignalProvider: typeof import("../../signal/index.js").monitorSignalProvider;
     messageActions: typeof import("../../channels/plugins/actions/signal.js").signalMessageActions;
   };

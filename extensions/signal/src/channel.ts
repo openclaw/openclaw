@@ -88,6 +88,34 @@ async function sendSignalOutbound(params: {
   });
 }
 
+function clampDirectoryLimit(limit?: number | null): number | undefined {
+  if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) {
+    return undefined;
+  }
+  return Math.trunc(limit);
+}
+
+function applyDirectoryQueryAndLimit<T extends { id: string; name?: string }>(
+  entries: T[],
+  query?: string | null,
+  limit?: number | null,
+): T[] {
+  const q = query?.trim().toLowerCase();
+  const filtered = q
+    ? entries.filter((entry) => {
+        const id = entry.id.toLowerCase();
+        const name = entry.name?.toLowerCase() ?? "";
+        return id.includes(q) || name.includes(q);
+      })
+    : entries;
+  const clamped = clampDirectoryLimit(limit);
+  return clamped ? filtered.slice(0, clamped) : filtered;
+}
+
+function normalizeDirectoryGroupId(raw: string): string {
+  return raw.replace(/^group:/i, "").trim();
+}
+
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   id: "signal",
   meta: {
@@ -188,6 +216,81 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     targetResolver: {
       looksLikeId: looksLikeSignalTargetId,
       hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
+    },
+  },
+  directory: {
+    listPeers: async ({ accountId, query, limit }) => {
+      const contacts = await getSignalRuntime().channel.signal.listSignalContacts({
+        accountId: accountId ?? undefined,
+      });
+      const entries = contacts
+        .map((contact) => {
+          const number = typeof contact.number === "string" ? normalizeE164(contact.number) : "";
+          const uuid = typeof contact.uuid === "string" ? contact.uuid.trim() : "";
+          const id = number || (uuid ? `uuid:${uuid}` : "");
+          if (!id) {
+            return null;
+          }
+          const name = typeof contact.name === "string" ? contact.name.trim() : "";
+          return {
+            kind: "user" as const,
+            id,
+            ...(name ? { name } : {}),
+            raw: contact,
+          };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+      return applyDirectoryQueryAndLimit(entries, query, limit);
+    },
+    listGroups: async ({ accountId, query, limit }) => {
+      const groups = await getSignalRuntime().channel.signal.listSignalGroups(
+        {
+          accountId: accountId ?? undefined,
+        },
+        { detailed: false },
+      );
+      const entries = groups
+        .map((group) => {
+          const groupId = typeof group.id === "string" ? group.id.trim() : "";
+          if (!groupId) {
+            return null;
+          }
+          const name = typeof group.name === "string" ? group.name.trim() : "";
+          return {
+            kind: "group" as const,
+            id: `group:${groupId}`,
+            ...(name ? { name } : {}),
+            raw: group,
+          };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+      return applyDirectoryQueryAndLimit(entries, query, limit);
+    },
+    listGroupMembers: async ({ accountId, groupId, limit }) => {
+      const members = await getSignalRuntime().channel.signal.listGroupMembersSignal(
+        normalizeDirectoryGroupId(groupId),
+        {
+          accountId: accountId ?? undefined,
+        },
+      );
+      const entries = members
+        .map((member) => {
+          const number = typeof member.number === "string" ? normalizeE164(member.number) : "";
+          const uuid = typeof member.uuid === "string" ? member.uuid.trim() : "";
+          const id = number || (uuid ? `uuid:${uuid}` : "");
+          if (!id) {
+            return null;
+          }
+          const name = typeof member.name === "string" ? member.name.trim() : "";
+          return {
+            kind: "user" as const,
+            id,
+            ...(name ? { name } : {}),
+            raw: member,
+          };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+      return applyDirectoryQueryAndLimit(entries, undefined, limit);
     },
   },
   setup: {
