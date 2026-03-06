@@ -193,9 +193,7 @@ final class ControlChannel {
            urlErr.code == .dataNotAllowed // used for WS close 1008 auth failures
         {
             let reason = urlErr.failureURLString ?? urlErr.localizedDescription
-            let tokenKey = CommandResolver.connectionModeIsRemote()
-                ? "gateway.remote.token"
-                : "gateway.auth.token"
+            let tokenKey = CommandResolver.gatewayAuthConfigKeys().token
             return
                 "Gateway rejected token; set \(tokenKey) or clear it on the gateway. Reason: \(reason)"
         }
@@ -310,20 +308,27 @@ final class ControlChannel {
     }
 
     private func refreshAuthSourceLabel() async {
-        let isRemote = CommandResolver.connectionModeIsRemote()
+        let configKeys = CommandResolver.gatewayAuthConfigKeys()
         let authSource = await GatewayConnection.shared.authSource()
-        self.authSourceLabel = Self.formatAuthSource(authSource, isRemote: isRemote)
+        self.authSourceLabel = Self.formatAuthSource(
+            authSource,
+            tokenKey: configKeys.token,
+            passwordKey: configKeys.password)
     }
 
-    private static func formatAuthSource(_ source: GatewayAuthSource?, isRemote: Bool) -> String? {
+    private static func formatAuthSource(
+        _ source: GatewayAuthSource?,
+        tokenKey: String,
+        passwordKey: String) -> String?
+    {
         guard let source else { return nil }
         switch source {
         case .deviceToken:
             return "Auth: device token (paired device)"
         case .sharedToken:
-            return "Auth: shared token (\(isRemote ? "gateway.remote.token" : "gateway.auth.token"))"
+            return "Auth: shared token (\(tokenKey))"
         case .password:
-            return "Auth: password (\(isRemote ? "gateway.remote.password" : "gateway.auth.password"))"
+            return "Auth: password (\(passwordKey))"
         case .none:
             return "Auth: none"
         }

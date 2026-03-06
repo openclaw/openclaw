@@ -61,6 +61,47 @@ import Testing
         #expect(token == nil)
     }
 
+    @Test func resolveGatewayTokenUsesAuthTokenForRemoteSSHTunnel() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "transport": "ssh",
+                ],
+                "auth": [
+                    "token": "auth-token",
+                ],
+            ],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: true,
+            root: root,
+            env: [:],
+            launchdSnapshot: nil)
+        #expect(token == "auth-token")
+    }
+
+    @Test func resolveGatewayTokenUsesRemoteTokenForDirectTransport() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "transport": "direct",
+                    "token": "remote-token",
+                ],
+                "auth": [
+                    "token": "auth-token",
+                ],
+            ],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: true,
+            root: root,
+            env: [:],
+            launchdSnapshot: nil)
+        #expect(token == "remote-token")
+    }
+
     @Test func resolveGatewayPasswordFallsBackToLaunchd() {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"],

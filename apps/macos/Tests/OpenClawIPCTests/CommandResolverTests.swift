@@ -198,4 +198,58 @@ import Testing
             #expect(cmd[1] == "daemon")
         }
     }
+
+    @Test func gatewayAuthConfigKeysUseAuthNamespaceForRemoteSSH() {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+
+        let keys = CommandResolver.gatewayAuthConfigKeys(
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "remote": [
+                        "transport": "ssh",
+                    ],
+                ],
+            ])
+
+        #expect(keys.token == "gateway.auth.token")
+        #expect(keys.password == "gateway.auth.password")
+    }
+
+    @Test func gatewayAuthConfigKeysUseRemoteNamespaceForDirectTransport() {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+
+        let keys = CommandResolver.gatewayAuthConfigKeys(
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "remote": [
+                        "transport": "direct",
+                    ],
+                ],
+            ])
+
+        #expect(keys.token == "gateway.remote.token")
+        #expect(keys.password == "gateway.remote.password")
+    }
+
+    @Test func gatewayAuthConfigKeysUseAuthNamespaceInLocalMode() {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
+
+        let keys = CommandResolver.gatewayAuthConfigKeys(
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "remote": [
+                        "transport": "direct",
+                    ],
+                ],
+            ])
+
+        #expect(keys.token == "gateway.auth.token")
+        #expect(keys.password == "gateway.auth.password")
+    }
 }

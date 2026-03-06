@@ -84,40 +84,34 @@ actor GatewayEndpointStore {
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
     {
+        let useRemoteCredentials = self.useRemoteCredentialNamespace(isRemote: isRemote, root: root)
         let raw = env["OPENCLAW_GATEWAY_PASSWORD"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let configPassword = self.resolveConfigPassword(isRemote: isRemote, root: root),
+            if let configPassword = self.resolveConfigPassword(
+                useRemoteCredentials: useRemoteCredentials,
+                root: root),
                !configPassword.isEmpty
             {
                 self.warnEnvOverrideOnce(
                     kind: .password,
                     envVar: "OPENCLAW_GATEWAY_PASSWORD",
-                    configKey: isRemote ? "gateway.remote.password" : "gateway.auth.password")
+                    configKey: useRemoteCredentials ? "gateway.remote.password" : "gateway.auth.password")
             }
             return trimmed
         }
-        if isRemote {
-            if let gateway = root["gateway"] as? [String: Any],
-               let remote = gateway["remote"] as? [String: Any],
-               let password = remote["password"] as? String
-            {
-                let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !pw.isEmpty {
-                    return pw
-                }
-            }
-            return nil
-        }
-        if let gateway = root["gateway"] as? [String: Any],
-           let auth = gateway["auth"] as? [String: Any],
-           let password = auth["password"] as? String
+        if let configPassword = self.resolveConfigPassword(
+            useRemoteCredentials: useRemoteCredentials,
+            root: root),
+           !configPassword.isEmpty
         {
-            let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !pw.isEmpty {
-                return pw
-            }
+            return configPassword
         }
+
+        // In remote mode we intentionally avoid reading local launchd auth values.
+        // They can refer to a different local gateway and would be misleading here.
+        if isRemote { return nil }
+
         if let password = launchdSnapshot?.password?.trimmingCharacters(in: .whitespacesAndNewlines),
            !password.isEmpty
         {
@@ -126,8 +120,8 @@ actor GatewayEndpointStore {
         return nil
     }
 
-    private static func resolveConfigPassword(isRemote: Bool, root: [String: Any]) -> String? {
-        if isRemote {
+    private static func resolveConfigPassword(useRemoteCredentials: Bool, root: [String: Any]) -> String? {
+        if useRemoteCredentials {
             if let gateway = root["gateway"] as? [String: Any],
                let remote = gateway["remote"] as? [String: Any],
                let password = remote["password"] as? String
@@ -152,22 +146,27 @@ actor GatewayEndpointStore {
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
     {
+        let useRemoteCredentials = self.useRemoteCredentialNamespace(isRemote: isRemote, root: root)
         let raw = env["OPENCLAW_GATEWAY_TOKEN"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
+            if let configToken = self.resolveConfigToken(
+                useRemoteCredentials: useRemoteCredentials,
+                root: root),
                !configToken.isEmpty,
                configToken != trimmed
             {
                 self.warnEnvOverrideOnce(
                     kind: .token,
                     envVar: "OPENCLAW_GATEWAY_TOKEN",
-                    configKey: isRemote ? "gateway.remote.token" : "gateway.auth.token")
+                    configKey: useRemoteCredentials ? "gateway.remote.token" : "gateway.auth.token")
             }
             return trimmed
         }
 
-        if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
+        if let configToken = self.resolveConfigToken(
+            useRemoteCredentials: useRemoteCredentials,
+            root: root),
            !configToken.isEmpty
         {
             return configToken
@@ -186,8 +185,8 @@ actor GatewayEndpointStore {
         return nil
     }
 
-    private static func resolveConfigToken(isRemote: Bool, root: [String: Any]) -> String? {
-        if isRemote {
+    private static func resolveConfigToken(useRemoteCredentials: Bool, root: [String: Any]) -> String? {
+        if useRemoteCredentials {
             if let gateway = root["gateway"] as? [String: Any],
                let remote = gateway["remote"] as? [String: Any],
                let token = remote["token"] as? String
@@ -204,6 +203,11 @@ actor GatewayEndpointStore {
             return token.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return nil
+    }
+
+    private static func useRemoteCredentialNamespace(isRemote: Bool, root: [String: Any]) -> Bool {
+        guard isRemote else { return false }
+        return GatewayRemoteConfig.resolveTransport(root: root) == .direct
     }
 
     private static func warnEnvOverrideOnce(

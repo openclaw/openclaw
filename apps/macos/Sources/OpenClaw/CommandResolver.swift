@@ -413,6 +413,11 @@ enum CommandResolver {
         let cliPath: String
     }
 
+    struct GatewayAuthConfigKeys: Sendable, Equatable {
+        let token: String
+        let password: String
+    }
+
     static func connectionSettings(
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil) -> RemoteSettings
@@ -433,6 +438,23 @@ enum CommandResolver {
 
     static func connectionModeIsRemote(defaults: UserDefaults = .standard) -> Bool {
         self.connectionSettings(defaults: defaults).mode == .remote
+    }
+
+    static func gatewayAuthConfigKeys(
+        defaults: UserDefaults = .standard,
+        configRoot: [String: Any]? = nil) -> GatewayAuthConfigKeys
+    {
+        let root = configRoot ?? OpenClawConfigFile.loadDict()
+        let settings = self.connectionSettings(defaults: defaults, configRoot: root)
+        let useRemoteKeys = settings.mode == .remote && GatewayRemoteConfig.resolveTransport(root: root) == .direct
+        if useRemoteKeys {
+            return GatewayAuthConfigKeys(
+                token: "gateway.remote.token",
+                password: "gateway.remote.password")
+        }
+        return GatewayAuthConfigKeys(
+            token: "gateway.auth.token",
+            password: "gateway.auth.password")
     }
 
     private static func sanitizedTarget(_ raw: String) -> String {
