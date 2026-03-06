@@ -1,13 +1,16 @@
 package ai.openclaw.android.node
 
 import android.Manifest
-import android.content.Context
 import android.annotation.SuppressLint
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.util.Base64
 import android.content.pm.PackageManager
+import android.hardware.camera2.CameraCharacteristics
+import android.util.Base64
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.core.CameraInfo
 import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.LifecycleOwner
 import androidx.camera.core.CameraSelector
@@ -30,10 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.Executor
@@ -44,6 +44,12 @@ import kotlin.coroutines.resumeWithException
 class CameraCaptureManager(private val context: Context) {
   data class Payload(val payloadJson: String)
   data class FilePayload(val file: File, val durationMs: Long, val hasAudio: Boolean)
+  data class CameraDeviceInfo(
+    val id: String,
+    val name: String,
+    val position: String,
+    val deviceType: String,
+  )
 
   @Volatile private var lifecycleOwner: LifecycleOwner? = null
   @Volatile private var permissionRequester: PermissionRequester? = null
@@ -55,6 +61,14 @@ class CameraCaptureManager(private val context: Context) {
   fun attachPermissionRequester(requester: PermissionRequester) {
     permissionRequester = requester
   }
+
+  suspend fun listDevices(): List<CameraDeviceInfo> =
+    withContext(Dispatchers.Main) {
+      val provider = context.cameraProvider()
+      provider.availableCameraInfos
+        .mapNotNull { info -> cameraDeviceInfoOrNull(info) }
+        .sortedBy { it.id }
+    }
 
   private suspend fun ensureCameraPermission() {
     val granted = checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
@@ -84,15 +98,15 @@ class CameraCaptureManager(private val context: Context) {
     withContext(Dispatchers.Main) {
       ensureCameraPermission()
       val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
-      val params = parseParamsObject(paramsJson)
+      val params = parseJsonParamsObject(paramsJson)
       val facing = parseFacing(params) ?: "front"
       val quality = (parseQuality(params) ?: 0.95).coerceIn(0.1, 1.0)
       val maxWidth = parseMaxWidth(params) ?: 1600
+      val deviceId = parseDeviceId(params)
 
       val provider = context.cameraProvider()
       val capture = ImageCapture.Builder().build()
-      val selector =
-        if (facing == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+      val selector = resolveCameraSelector(provider, facing, deviceId)
 
       provider.unbindAll()
       provider.bindToLifecycle(owner, selector, capture)
@@ -150,13 +164,14 @@ class CameraCaptureManager(private val context: Context) {
     withContext(Dispatchers.Main) {
       ensureCameraPermission()
       val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
-      val params = parseParamsObject(paramsJson)
+      val params = parseJsonParamsObject(paramsJson)
       val facing = parseFacing(params) ?: "front"
       val durationMs = (parseDurationMs(params) ?: 3_000).coerceIn(200, 60_000)
       val includeAudio = parseIncludeAudio(params) ?: true
+      val deviceId = parseDeviceId(params)
       if (includeAudio) ensureMicPermission()
 
-      android.util.Log.w("CameraCaptureManager", "clip: start facing=$facing duration=$durationMs audio=$includeAudio")
+      android.util.Log.w("CameraCaptureManager", "clip: start facing=$facing duration=$durationMs audio=$includeAudio deviceId=${deviceId ?: "-"}")
 
       val provider = context.cameraProvider()
       android.util.Log.w("CameraCaptureManager", "clip: got camera provider")
@@ -168,8 +183,7 @@ class CameraCaptureManager(private val context: Context) {
         )
         .build()
       val videoCapture = VideoCapture.withOutput(recorder)
-      val selector =
-        if (facing == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+      val selector = resolveCameraSelector(provider, facing, deviceId)
 
       // CameraX requires a Preview use case for the camera to start producing frames;
       // without it, the encoder may get no data (ERROR_NO_VALID_DATA).
@@ -276,20 +290,8 @@ class CameraCaptureManager(private val context: Context) {
     return rotated
   }
 
-  private fun parseParamsObject(paramsJson: String?): JsonObject? {
-    if (paramsJson.isNullOrBlank()) return null
-    return try {
-      Json.parseToJsonElement(paramsJson).asObjectOrNull()
-    } catch (_: Throwable) {
-      null
-    }
-  }
-
-  private fun readPrimitive(params: JsonObject?, key: String): JsonPrimitive? =
-    params?.get(key) as? JsonPrimitive
-
   private fun parseFacing(params: JsonObject?): String? {
-    val value = readPrimitive(params, "facing")?.contentOrNull?.trim()?.lowercase() ?: return null
+    val value = parseJsonString(params, "facing")?.trim()?.lowercase() ?: return null
     return when (value) {
       "front", "back" -> value
       else -> null
@@ -297,27 +299,75 @@ class CameraCaptureManager(private val context: Context) {
   }
 
   private fun parseQuality(params: JsonObject?): Double? =
-    readPrimitive(params, "quality")?.contentOrNull?.toDoubleOrNull()
+    parseJsonDouble(params, "quality")
 
   private fun parseMaxWidth(params: JsonObject?): Int? =
-    readPrimitive(params, "maxWidth")
-      ?.contentOrNull
-      ?.toIntOrNull()
+    parseJsonInt(params, "maxWidth")
       ?.takeIf { it > 0 }
 
   private fun parseDurationMs(params: JsonObject?): Int? =
-    readPrimitive(params, "durationMs")?.contentOrNull?.toIntOrNull()
+    parseJsonInt(params, "durationMs")
 
-  private fun parseIncludeAudio(params: JsonObject?): Boolean? {
-    val value = readPrimitive(params, "includeAudio")?.contentOrNull?.trim()?.lowercase()
-    return when (value) {
-      "true" -> true
-      "false" -> false
-      else -> null
-    }
-  }
+  private fun parseDeviceId(params: JsonObject?): String? =
+    parseJsonString(params, "deviceId")
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+
+  private fun parseIncludeAudio(params: JsonObject?): Boolean? = parseJsonBooleanFlag(params, "includeAudio")
 
   private fun Context.mainExecutor(): Executor = ContextCompat.getMainExecutor(this)
+
+  private fun resolveCameraSelector(
+    provider: ProcessCameraProvider,
+    facing: String,
+    deviceId: String?,
+  ): CameraSelector {
+    if (deviceId.isNullOrEmpty()) {
+      return if (facing == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+    }
+    val availableIds = provider.availableCameraInfos.mapNotNull { cameraIdOrNull(it) }.toSet()
+    if (!availableIds.contains(deviceId)) {
+      throw IllegalStateException("INVALID_REQUEST: unknown camera deviceId '$deviceId'")
+    }
+    return CameraSelector.Builder()
+      .addCameraFilter { infos -> infos.filter { cameraIdOrNull(it) == deviceId } }
+      .build()
+  }
+
+  @SuppressLint("UnsafeOptInUsageError")
+  private fun cameraDeviceInfoOrNull(info: CameraInfo): CameraDeviceInfo? {
+    val cameraId = cameraIdOrNull(info) ?: return null
+    val lensFacing =
+      runCatching {
+        Camera2CameraInfo.from(info).getCameraCharacteristic(CameraCharacteristics.LENS_FACING)
+      }.getOrNull()
+    val position =
+      when (lensFacing) {
+        CameraCharacteristics.LENS_FACING_FRONT -> "front"
+        CameraCharacteristics.LENS_FACING_BACK -> "back"
+        CameraCharacteristics.LENS_FACING_EXTERNAL -> "external"
+        else -> "unspecified"
+      }
+    val deviceType =
+      if (lensFacing == CameraCharacteristics.LENS_FACING_EXTERNAL) "external" else "builtIn"
+    val name =
+      when (position) {
+        "front" -> "Front Camera"
+        "back" -> "Back Camera"
+        "external" -> "External Camera"
+        else -> "Camera $cameraId"
+      }
+    return CameraDeviceInfo(
+      id = cameraId,
+      name = name,
+      position = position,
+      deviceType = deviceType,
+    )
+  }
+
+  @SuppressLint("UnsafeOptInUsageError")
+  private fun cameraIdOrNull(info: CameraInfo): String? =
+    runCatching { Camera2CameraInfo.from(info).cameraId }.getOrNull()
 }
 
 private suspend fun Context.cameraProvider(): ProcessCameraProvider =

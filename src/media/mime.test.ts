@@ -6,6 +6,7 @@ import {
   extensionForMime,
   imageMimeFromFormat,
   isAudioFileName,
+  kindFromMime,
   normalizeMimeType,
 } from "./mime.js";
 
@@ -59,6 +60,13 @@ describe("mime detection", () => {
       filePath: "/tmp/file.xlsx",
     });
     expect(mime).toBe("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  });
+
+  it("uses extension mapping for JavaScript assets", async () => {
+    const mime = await detectMime({
+      filePath: "/tmp/a2ui.bundle.js",
+    });
+    expect(mime).toBe("text/javascript");
   });
 });
 
@@ -123,5 +131,9 @@ describe("mediaKindFromMime", () => {
     { mime: "model/gltf+json", expected: "unknown" },
   ] as const)("classifies $mime", ({ mime, expected }) => {
     expect(mediaKindFromMime(mime)).toBe(expected);
+  });
+
+  it("normalizes MIME strings before kind classification", () => {
+    expect(kindFromMime(" Audio/Ogg; codecs=opus ")).toBe("audio");
   });
 });

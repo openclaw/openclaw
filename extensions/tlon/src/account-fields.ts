@@ -6,6 +6,7 @@ export type TlonAccountFieldsInput = {
   groupChannels?: string[];
   dmAllowlist?: string[];
   autoDiscoverChannels?: boolean;
+  ownerShip?: string;
 };
 
 export function buildTlonAccountFields(input: TlonAccountFieldsInput) {
@@ -21,5 +22,6 @@ export function buildTlonAccountFields(input: TlonAccountFieldsInput) {
     ...(typeof input.autoDiscoverChannels === "boolean"
       ? { autoDiscoverChannels: input.autoDiscoverChannels }
       : {}),
+    ...(input.ownerShip ? { ownerShip: input.ownerShip } : {}),
   };
 }
