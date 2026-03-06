@@ -19,6 +19,10 @@ import {
 import { resolveBrowserConfig } from "../../browser/config.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
+import {
+  trackSessionBrowserTab,
+  untrackSessionBrowserTab,
+} from "../../browser/session-tab-registry.js";
 import { loadConfig } from "../../config/config.js";
 import {
   executeActAction,
@@ -275,6 +279,7 @@ function resolveBrowserBaseUrl(params: {
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
+  agentSessionKey?: string;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -418,7 +423,14 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          return jsonResult(await browserOpenTab(baseUrl, targetUrl, { profile }));
+          const opened = await browserOpenTab(baseUrl, targetUrl, { profile });
+          trackSessionBrowserTab({
+            sessionKey: opts?.agentSessionKey,
+            targetId: opened.targetId,
+            baseUrl,
+            profile,
+          });
+          return jsonResult(opened);
         }
         case "focus": {
           const targetId = readStringParam(params, "targetId", {
@@ -455,6 +467,12 @@ export function createBrowserTool(opts?: {
           }
           if (targetId) {
             await browserCloseTab(baseUrl, targetId, { profile });
+            untrackSessionBrowserTab({
+              sessionKey: opts?.agentSessionKey,
+              targetId,
+              baseUrl,
+              profile,
+            });
           } else {
             await browserAct(baseUrl, { kind: "close" }, { profile });
           }

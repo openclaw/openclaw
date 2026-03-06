@@ -82,6 +82,12 @@ const configMocks = vi.hoisted(() => ({
 }));
 vi.mock("../../config/config.js", () => configMocks);
 
+const sessionTabRegistryMocks = vi.hoisted(() => ({
+  trackSessionBrowserTab: vi.fn(),
+  untrackSessionBrowserTab: vi.fn(),
+}));
+vi.mock("../../browser/session-tab-registry.js", () => sessionTabRegistryMocks);
+
 const toolCommonMocks = vi.hoisted(() => ({
   imageResultFromFile: vi.fn(),
 }));
@@ -292,6 +298,23 @@ describe("browser tool url alias support", () => {
     );
   });
 
+  it("tracks opened tabs when session context is available", async () => {
+    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
+      targetId: "tab-123",
+      title: "Example",
+      url: "https://example.com",
+    });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+    await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
+
+    expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      targetId: "tab-123",
+      baseUrl: undefined,
+      profile: undefined,
+    });
+  });
+
   it("accepts url alias for navigate", async () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", {
@@ -316,6 +339,26 @@ describe("browser tool url alias support", () => {
     await expect(tool.execute?.("call-1", { action: "open" })).rejects.toThrow(
       "targetUrl required",
     );
+  });
+
+  it("untracks explicit tab close for tracked sessions", async () => {
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+    await tool.execute?.("call-1", {
+      action: "close",
+      targetId: "tab-xyz",
+    });
+
+    expect(browserClientMocks.browserCloseTab).toHaveBeenCalledWith(
+      undefined,
+      "tab-xyz",
+      expect.objectContaining({ profile: undefined }),
+    );
+    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      targetId: "tab-xyz",
+      baseUrl: undefined,
+      profile: undefined,
+    });
   });
 });
 
