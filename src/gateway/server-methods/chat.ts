@@ -12,8 +12,8 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.j
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { parseFenceSpans } from "../../markdown/fences.js";
+import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { MEDIA_IMAGE_LINE_RE, normalizeMediaSource } from "../../media/parse.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -510,8 +510,7 @@ function extractMediaImagePaths(text: string): string[] {
   const fenceSpans = hasFences ? parseFenceSpans(text) : [];
   let offset = 0;
   for (const line of text.split("\n")) {
-    const insideFence =
-      hasFences && fenceSpans.some((s) => offset >= s.start && offset < s.end);
+    const insideFence = hasFences && fenceSpans.some((s) => offset >= s.start && offset < s.end);
     if (!insideFence) {
       const match = line.match(MEDIA_IMAGE_LINE_RE);
       if (match?.[1]) {
