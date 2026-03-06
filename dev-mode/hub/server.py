@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Main Hub - Central notification system for all apps/crons
-Any service can POST notifications here -> wakes Jarvis -> Jarvis responds
+Any service can POST notifications here -> wakes agent -> agent responds
 """
 
 import json
@@ -22,6 +22,8 @@ LOG_FILE = Path(__file__).parent / "hub.log"
 OPENCLAW_HOST = os.environ.get("OPENCLAW_HOST", "127.0.0.1")
 OPENCLAW_PORT = int(os.environ.get("OPENCLAW_PORT", "18789"))
 OPENCLAW_TOKEN = os.environ.get("OPENCLAW_TOKEN", "")
+OPENCLAW_AGENT = os.environ.get("OPENCLAW_AGENT", "agent:main")  # default value, please update in .env
+HUB_CHANNEL = os.environ.get("HUB_CHANNEL", "WhatsApp")  # default value, please update in .env
 
 def log(msg):
     timestamp = datetime.datetime.now().isoformat()
@@ -99,15 +101,15 @@ def db_mark_done(notif_id, response=None):
 
 # ============ OPENCLAW ============
 
-def wake_jarvis(notif_id, source, title, message, priority):
-    """Send notification to Jarvis via chat API - he will forward to WhatsApp"""
+def wake_agent(notif_id, source, title, message, priority):
+    """Send notification to agent via chat API"""
     try:
         url = f"http://{OPENCLAW_HOST}:{OPENCLAW_PORT}/v1/chat/completions"
 
         # Format the notification
         priority_emoji = {"urgent": "\U0001f6a8", "high": "\u2757", "normal": "\U0001f4ec", "low": "\U0001f4dd"}.get(priority, "\U0001f4ec")
 
-        # Build prompt that instructs Jarvis to send to WhatsApp
+        # Build prompt that instructs agent to forward notification
         prompt = f"""Hub Notification #{notif_id}
 
 {priority_emoji} **{source}**{f': {title}' if title else ''}
@@ -115,10 +117,10 @@ def wake_jarvis(notif_id, source, title, message, priority):
 {message}
 
 ---
-INSTRUCTION: Forward this to the user on WhatsApp NOW using the message tool. Add your brief reaction/commentary if appropriate. Then mark done: POST http://127.0.0.1:{PORT}/done/{notif_id}"""
+INSTRUCTION: Forward this to the user on {HUB_CHANNEL} NOW using the message tool. Add your brief reaction/commentary if appropriate. Then mark done: POST http://127.0.0.1:{PORT}/done/{notif_id}"""
 
         data = json.dumps({
-            "model": "agent:main",
+            "model": OPENCLAW_AGENT,
             "messages": [{"role": "user", "content": prompt}]
         }).encode('utf-8')
 
@@ -128,10 +130,10 @@ INSTRUCTION: Forward this to the user on WhatsApp NOW using the message tool. Ad
 
         with urllib.request.urlopen(req, timeout=120) as response:
             result = json.loads(response.read().decode())
-            log(f"Jarvis processed #{notif_id}: {result.get('choices', [{}])[0].get('message', {}).get('content', '')[:100]}...")
+            log(f"Agent processed #{notif_id}: {result.get('choices', [{}])[0].get('message', {}).get('content', '')[:100]}...")
             return True
     except Exception as e:
-        log(f"ERROR calling Jarvis API: {e}")
+        log(f"ERROR calling agent API: {e}")
         return False
 
 # ============ HTTP SERVER ============
@@ -176,7 +178,7 @@ class HubHandler(BaseHTTPRequestHandler):
 
         try:
             data = json.loads(body) if body else {}
-except (ValueError, json.JSONDecodeError):
+        except (ValueError, json.JSONDecodeError):
             data = {}
 
         if self.path == '/notify':
@@ -194,13 +196,13 @@ except (ValueError, json.JSONDecodeError):
             notif_id = db_insert(source, title, message, priority)
             log(f"New notification #{notif_id} from {source}: {title or message[:50]}")
 
-            # Wake Jarvis
-            wake_jarvis(notif_id, source, title, message, priority)
+            # Wake agent
+            wake_agent(notif_id, source, title, message, priority)
 
             self.send_json({
                 "ok": True,
                 "id": notif_id,
-                "message": "Notification sent to Jarvis"
+                "message": "Notification sent to agent"
             })
 
         elif self.path.startswith('/done/'):
@@ -211,7 +213,7 @@ except (ValueError, json.JSONDecodeError):
                 db_mark_done(notif_id, response)
                 log(f"Marked #{notif_id} as done")
                 self.send_json({"ok": True})
-except ValueError:
+            except ValueError:
                 self.send_json({"error": "Invalid ID"}, 400)
 
         else:

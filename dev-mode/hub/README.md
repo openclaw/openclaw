@@ -1,12 +1,12 @@
 # Hub - Notification Tool for Agents, Crons, and Apps
 
-Standalone notification hub that runs alongside OpenClaw. Any agent, cron job, or app you build can POST notifications here. The hub stores them, wakes the main agent via OpenClaw's chat API, and the agent forwards to WhatsApp (or any channel).
+Standalone notification hub that runs alongside OpenClaw. Any agent, cron job, or app you build can POST notifications here. The hub stores them, wakes the main agent via OpenClaw's chat API, and the agent forwards via the configured channel.
 
 **Independent** — no OpenClaw code changes needed. Two parts:
 1. **Hub server** (`server.py`) — Python HTTP server with SQLite storage
 2. **OpenClaw plugin** (`index.ts`) — registers `hub_notify`, `hub_pending`, `hub_done` as native agent tools
 
-Source: [YourJarvisHub](https://github.com/JarvisDeLaAri/YourJarvisHub)
+Inspired by [YourJarvisHub](https://github.com/JarvisDeLaAri/YourJarvisHub)
 
 ---
 
@@ -100,7 +100,7 @@ Your cron / your app / your agent
         |     - Agent decides how to respond (cognitive decision)
         |
         v
-   Channel delivery (WhatsApp / Telegram / Discord / etc.)
+   Channel delivery (configured via HUB_CHANNEL env var)
         |
         |  4. Agent calls hub_done({ id, response }) to close the loop
         v
@@ -157,17 +157,17 @@ curl -X POST http://localhost:10020/notify \
 
 **Response:**
 ```json
-{ "ok": true, "id": 7, "message": "Notification sent to Jarvis" }
+{ "ok": true, "id": 7, "message": "Notification sent to agent" }
 ```
 
 ### POST /done/{id}
 
-Mark a notification as handled. The agent calls this after forwarding to WhatsApp.
+Mark a notification as handled. The agent calls this after forwarding the notification.
 
 ```bash
 curl -X POST http://localhost:10020/done/7 \
   -H "Content-Type: application/json" \
-  -d '{ "response": "Forwarded to WhatsApp" }'
+  -d '{ "response": "Forwarded to user" }'
 ```
 
 ### GET /pending
@@ -254,7 +254,7 @@ With the plugin enabled, agents call hub tools directly:
 ```
 hub_notify({ source: "agent:research", title: "Found results", message: "Research complete. 5 papers found.", priority: "high" })
 hub_pending()
-hub_done({ id: 7, response: "Forwarded to WhatsApp" })
+hub_done({ id: 7, response: "Forwarded to user" })
 ```
 
 ### From an agent (curl fallback — without plugin)
@@ -279,9 +279,10 @@ system_run: curl -s -X POST http://localhost:10020/notify -H "Content-Type: appl
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OPENCLAW_HOST` | `127.0.0.1` | OpenClaw gateway host |
-| `OPENCLAW_PORT` | `0` | OpenClaw gateway port |
+| `OPENCLAW_PORT` | `18789` | OpenClaw gateway port |
 | `OPENCLAW_TOKEN` | `""` | Gateway auth token |
-| `ARIEL_PHONE` | `""` | Phone number for WhatsApp |
+| `OPENCLAW_AGENT` | `agent:main` | Agent model to wake (default value, please update in .env) |
+| `HUB_CHANNEL` | `WhatsApp` | Channel for agent to forward notifications (default value, please update in .env) |
 
 ### Run
 
@@ -352,4 +353,4 @@ Open `flow-comparison.html` in a browser for a side-by-side visual of how the Hu
 
 ---
 
-Built by Jarvis de la Ari & Ariel @ Bresleveloper AI
+Built by Ariel @ Bresleveloper AI

@@ -67,7 +67,7 @@ export default {
       label: "Hub Notify",
       description: [
         "Send a notification through the Hub.",
-        "The hub stores it, wakes the main agent, and the agent forwards to the user on WhatsApp.",
+        "The hub stores it, wakes the main agent, and the agent forwards to the user via the configured channel.",
         "Use this from crons, sub-agents, or any automation that needs to reach the user.",
         "",
         "Priority levels:",

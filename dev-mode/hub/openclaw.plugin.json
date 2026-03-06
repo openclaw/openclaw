@@ -1,7 +1,7 @@
 {
   "id": "hub",
   "name": "Notification Hub",
-  "description": "Send and manage notifications via the Hub. Agents, crons, and apps can notify the user through WhatsApp or any active channel.",
+  "description": "Send and manage notifications via the Hub. Agents, crons, and apps can notify the user through the configured channel.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

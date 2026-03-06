@@ -90,6 +90,17 @@ export async function runCli(argv: string[] = process.argv) {
     return;
   }
 
+  // Apply persisted dev-mode for route-first commands
+  try {
+    const { loadConfig } = await import("../config/config.js");
+    const cfg = loadConfig();
+    if (cfg.cli?.devMode) {
+      process.env.OPENCLAW_DEV_MODE = "1";
+    }
+  } catch (err) {
+    console.error(`[dev-mode] Failed to load dev-mode config: ${err instanceof Error ? err.message : err}`);
+  }
+
   loadDotEnv({ quiet: true });
   normalizeEnv();
   if (shouldEnsureCliPath(normalizedArgv)) {

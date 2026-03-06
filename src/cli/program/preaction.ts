@@ -115,14 +115,17 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     setVerbose(verbose);
 
-    // Load dev-mode flag from config
-    {
+    // Load dev-mode flag from config (fail-safe: don't break recovery commands)
+    try {
       const { loadConfig } = await import("../../config/config.js");
       const cfg = loadConfig();
       if (cfg.cli?.devMode) {
         setDevMode(true);
 
         // Auto-enable hub plugin in dev-mode
+        // Hub is presented as a plugin. If management agrees, we'd like it to be
+        // a built-in tool for agents — enabling in-session alert and response
+        // without requiring a separate server process.
         const { setConfigOverride } = await import("../../config/runtime-overrides.js");
         const path = await import("node:path");
         const { fileURLToPath } = await import("node:url");
@@ -132,33 +135,10 @@ export function registerPreActionHooks(program: Command, programVersion: string)
         if (!currentPaths.includes(hubPluginPath)) {
           setConfigOverride("plugins.load.paths", [...currentPaths, hubPluginPath]);
         }
-
-        // Auto-start hub server if not already running
-        {
-          const { spawn } = await import("node:child_process");
-          const http = await import("node:http");
-          const hubServerPath = path.resolve(hubPluginPath, "server.py");
-          const fs = await import("node:fs");
-          if (fs.existsSync(hubServerPath)) {
-            const isRunning = await new Promise<boolean>((resolve) => {
-              const req = http.request(
-                { hostname: "127.0.0.1", port: 10020, path: "/pending", method: "GET", timeout: 1000 },
-                () => resolve(true),
-              );
-              req.on("error", () => resolve(false));
-              req.on("timeout", () => { req.destroy(); resolve(false); });
-              req.end();
-            });
-            if (!isRunning) {
-              const child = spawn("python3", [hubServerPath], {
-                detached: true,
-                stdio: "ignore",
-              });
-              child.unref();
-            }
-          }
-        }
       }
+    } catch (err) {
+      console.error(`[dev-mode] Failed to activate dev-mode: ${err instanceof Error ? err.message : err}`);
+      console.error("[dev-mode] Config may be broken. Run 'openclaw doctor' to diagnose.");
     }
     const cliLogLevel = getCliLogLevel(actionCommand);
     if (cliLogLevel) {
