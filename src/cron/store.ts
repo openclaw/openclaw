@@ -60,6 +60,18 @@ async function setSecureFileMode(filePath: string): Promise<void> {
   await fs.promises.chmod(filePath, 0o600).catch(() => undefined);
 }
 
+async function fsyncPathBestEffort(targetPath: string): Promise<void> {
+  let handle: fs.promises.FileHandle | null = null;
+  try {
+    handle = await fs.promises.open(targetPath, "r");
+    await handle.sync();
+  } catch {
+    // Best-effort durability hardening; keep save path non-fatal on fsync failures.
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
 export async function saveCronStore(
   storePath: string,
   store: CronStoreFile,
@@ -91,6 +103,7 @@ export async function saveCronStore(
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
   await setSecureFileMode(tmp);
+  await fsyncPathBestEffort(tmp);
   if (previous !== null && !opts?.skipBackup) {
     try {
       const backupPath = `${storePath}.bak`;
@@ -102,6 +115,8 @@ export async function saveCronStore(
   }
   await renameWithRetry(tmp, storePath);
   await setSecureFileMode(storePath);
+  await fsyncPathBestEffort(storePath);
+  await fsyncPathBestEffort(storeDir);
   serializedStoreCache.set(storePath, json);
 }
 
