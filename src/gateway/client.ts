@@ -479,23 +479,33 @@ export class GatewayClient {
     if (!expected) {
       return new Error("gateway tls fingerprint missing");
     }
-    const socket = (
-      this.ws as WebSocket & {
-        _socket?: { getPeerCertificate?: () => { fingerprint256?: string } };
+    try {
+      // Use optional chaining on _socket: under concurrent reconnection load the
+      // underlying TLS socket may be torn down between the open event and this
+      // access, setting ws._socket to null and causing a null dereference. (#36585)
+      const socket = (
+        this.ws as WebSocket & {
+          _socket?: { getPeerCertificate?: () => { fingerprint256?: string } } | null;
+        }
+      )?._socket;
+      if (!socket || typeof socket.getPeerCertificate !== "function") {
+        return new Error("gateway tls fingerprint unavailable");
       }
-    )._socket;
-    if (!socket || typeof socket.getPeerCertificate !== "function") {
+      const cert = socket.getPeerCertificate();
+      const fingerprint = normalizeFingerprint(cert?.fingerprint256 ?? "");
+      if (!fingerprint) {
+        return new Error("gateway tls fingerprint unavailable");
+      }
+      if (fingerprint !== expected) {
+        return new Error("gateway tls fingerprint mismatch");
+      }
+      return null;
+    } catch {
+      // Defensive catch: if the TLS socket is destroyed mid-handshake under
+      // concurrent load, getPeerCertificate() may throw. Treat as unavailable
+      // rather than crashing the gateway. (#36585)
       return new Error("gateway tls fingerprint unavailable");
     }
-    const cert = socket.getPeerCertificate();
-    const fingerprint = normalizeFingerprint(cert?.fingerprint256 ?? "");
-    if (!fingerprint) {
-      return new Error("gateway tls fingerprint unavailable");
-    }
-    if (fingerprint !== expected) {
-      return new Error("gateway tls fingerprint mismatch");
-    }
-    return null;
   }
 
   async request<T = Record<string, unknown>>(
