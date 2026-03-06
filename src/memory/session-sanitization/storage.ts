@@ -334,6 +334,34 @@ export async function sweepExpiredSessionMemoryMcpRawEntries(params: {
   return expired.map(({ entry }) => entry);
 }
 
+/**
+ * Remove audit entries older than `retentionDays` days from the audit log.
+ * Rewrites the file in-place. No-ops if the file doesn't exist or is empty.
+ * Deletes the file entirely if all entries are older than the retention window.
+ */
+export async function sweepOldAuditEntries(params: {
+  agentId: string;
+  sessionId: string;
+  retentionDays: number;
+}): Promise<void> {
+  const filePath = resolveSessionMemoryAuditFile(params.agentId, params.sessionId);
+  const raw = await safeReadUtf8(filePath);
+  if (!raw) return;
+  const entries = parseJsonLines(raw, (value) => sessionMemoryAuditEntrySchema.parse(value));
+  const cutoffMs = Date.now() - params.retentionDays * 24 * 60 * 60 * 1000;
+  const kept = entries.filter((e) => {
+    const ts = typeof e.timestamp === "string" ? Date.parse(e.timestamp) : NaN;
+    return !Number.isFinite(ts) || ts >= cutoffMs;
+  });
+  if (kept.length === entries.length) return; // nothing to sweep
+  if (kept.length === 0) {
+    await fs.rm(filePath, { force: true });
+    return;
+  }
+  await ensureParentDir(filePath);
+  await fs.writeFile(filePath, kept.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+}
+
 export async function deleteSessionMemoryArtifacts(params: {
   agentId: string;
   sessionId: string | undefined;

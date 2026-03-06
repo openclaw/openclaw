@@ -20,27 +20,92 @@ import {
   readSessionMemorySummaryEntries,
   sweepExpiredSessionMemoryMcpRawEntries,
   sweepExpiredSessionMemoryRawEntries,
+  sweepOldAuditEntries,
   writeSessionMemoryMcpRawEntry,
   writeSessionMemoryRawEntry,
 } from "./storage.js";
 import { runTier1PreFilter } from "./tier1.js";
-import type {
-  EscalationTier,
-  SessionMemoryConfidence,
-  SessionMemoryMcpChildResult,
-  SessionMemoryRawEntry,
-  SessionMemoryRecallChildResult,
-  SessionMemoryRecallResult,
-  SessionMemorySignalResult,
-  SessionMemorySummaryEntry,
-  SessionSuspicionState,
-  SessionMemoryWriteResult,
+import {
+  RULE_TAXONOMY,
+  type AuditVerbosity,
+  type EscalationTier,
+  type SessionMemoryAuditEntry,
+  type SessionMemoryConfidence,
+  type SessionMemoryMcpChildResult,
+  type SessionMemoryRawEntry,
+  type SessionMemoryRecallChildResult,
+  type SessionMemoryRecallResult,
+  type SessionMemorySignalResult,
+  type SessionMemorySummaryEntry,
+  type SessionSuspicionState,
+  type SessionMemoryWriteResult,
 } from "./types.js";
 import { runPreFilter } from "./validation.js";
 
 const log = createSubsystemLogger("memory/session-sanitization");
 const warnedUnavailableAgents = new Set<string>();
 const warnedSandboxSkipPassthrough = new Set<string>();
+
+// ---------------------------------------------------------------------------
+// Audit verbosity gating
+// ---------------------------------------------------------------------------
+
+/** Ordinal rank for each verbosity level — higher = more verbose. */
+const VERBOSITY_RANK: Record<AuditVerbosity, number> = {
+  minimal: 0,
+  standard: 1,
+  high: 2,
+  maximum: 3,
+};
+
+/**
+ * Minimum verbosity required to emit each audit event type.
+ * Events not listed here are always emitted (unknown/future events pass through).
+ */
+const EVENT_MIN_VERBOSITY: Readonly<Record<string, AuditVerbosity>> = {
+  // minimal — critical block / termination decisions only
+  structural_block: "minimal",
+  sanitized_block: "minimal",
+  frequency_escalation_tier3: "minimal",
+  write_failed: "minimal",
+  // standard — normal decision events
+  trusted_pass: "standard",
+  twopass_hard_block: "standard",
+  frequency_escalation_tier1: "standard",
+  frequency_escalation_tier2: "standard",
+  sanitized_pass: "standard",
+  write: "standard",
+  discard: "standard",
+  raw_expired: "standard",
+  // high — diagnostic detail (pre-filter breakdown, per-rule events, diffs)
+  syntactic_pass: "high",
+  syntactic_fail: "high",
+  syntactic_flags: "high",
+  schema_pass: "high",
+  schema_fail: "high",
+  rule_triggered: "high",
+  output_diff: "high",
+  flags_summary: "high",
+  // maximum — raw payload capture and configuration snapshot
+  raw_input_captured: "maximum",
+  raw_output_captured: "maximum",
+  audit_config_loaded: "maximum",
+};
+
+function shouldEmitForVerbosity(event: string, verbosity: AuditVerbosity): boolean {
+  const minRequired = EVENT_MIN_VERBOSITY[event];
+  if (!minRequired) return true; // unknown events always emit
+  return VERBOSITY_RANK[verbosity] >= VERBOSITY_RANK[minRequired];
+}
+
+/** Append an audit entry only if the configured verbosity level permits it. */
+async function gatedAudit(
+  params: { agentId: string; sessionId: string; entry: SessionMemoryAuditEntry },
+  verbosity: AuditVerbosity,
+): Promise<void> {
+  if (!shouldEmitForVerbosity(params.entry.event, verbosity)) return;
+  await appendSessionMemoryAuditEntry(params);
+}
 
 // ---------------------------------------------------------------------------
 // Within-session frequency tracking state
@@ -137,6 +202,7 @@ async function emitFrequencyEscalation(params: {
   recentFlags: string[];
   now: number;
   source: "transcript" | "mcp";
+  verbosity?: AuditVerbosity;
 }): Promise<void> {
   if (params.tier === "none") return;
   const eventMap = {
@@ -144,17 +210,20 @@ async function emitFrequencyEscalation(params: {
     tier2: "frequency_escalation_tier2",
     tier3: "frequency_escalation_tier3",
   } as const;
-  await appendSessionMemoryAuditEntry({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    entry: {
-      event: eventMap[params.tier],
-      timestamp: nowIso(params.now),
-      currentScore: params.newScore,
-      threshold: params.threshold,
-      recentFlags: params.recentFlags,
+  await gatedAudit(
+    {
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      entry: {
+        event: eventMap[params.tier],
+        timestamp: nowIso(params.now),
+        currentScore: params.newScore,
+        threshold: params.threshold,
+        recentFlags: params.recentFlags,
+      },
     },
-  });
+    params.verbosity ?? "standard",
+  );
   if (params.tier === "tier3") {
     log.warn("frequency tracking: Tier 3 threshold reached — session marked terminated", {
       agentId: params.agentId,
@@ -173,6 +242,69 @@ type HelperDeps = {
 
 function nowIso(now: number): string {
   return new Date(now).toISOString();
+}
+
+type OutputDiffEntry = {
+  location: string;
+  reason: string;
+  lengthBefore: number;
+  sha256: string;
+};
+
+type OutputReplacementEntry = {
+  location: string;
+  reason: string;
+  lengthBefore: number;
+  lengthAfter: number;
+  sha256Before: string;
+};
+
+/**
+ * Compute a shallow diff between a raw result and its sanitized counterpart.
+ * Returns structured removal and replacement records for the output_diff audit event.
+ * Only works for plain objects; returns empty lists for non-objects.
+ */
+function computeOutputDiff(
+  raw: unknown,
+  sanitized: unknown,
+): { removals: OutputDiffEntry[]; replacements: OutputReplacementEntry[] } {
+  const removals: OutputDiffEntry[] = [];
+  const replacements: OutputReplacementEntry[] = [];
+  if (
+    raw === null ||
+    typeof raw !== "object" ||
+    Array.isArray(raw) ||
+    sanitized === null ||
+    typeof sanitized !== "object" ||
+    Array.isArray(sanitized)
+  ) {
+    return { removals, replacements };
+  }
+  const rawObj = raw as Record<string, unknown>;
+  const sanitizedObj = sanitized as Record<string, unknown>;
+  for (const key of Object.keys(rawObj)) {
+    const rawStr = JSON.stringify(rawObj[key]) ?? "";
+    if (!(key in sanitizedObj)) {
+      removals.push({
+        location: key,
+        reason: "field removed by sanitizer",
+        lengthBefore: rawStr.length,
+        sha256: "",
+      });
+    } else {
+      const sanitizedStr = JSON.stringify(sanitizedObj[key]) ?? "";
+      if (rawStr !== sanitizedStr) {
+        replacements.push({
+          location: key,
+          reason: "field modified by sanitizer",
+          lengthBefore: rawStr.length,
+          lengthAfter: sanitizedStr.length,
+          sha256Before: "",
+        });
+      }
+    }
+  }
+  return { removals, replacements };
 }
 
 function normalizeText(value: string | undefined): string {
@@ -329,22 +461,27 @@ async function sweepAndAuditExpiredRaw(params: {
   agentId: string;
   sessionId: string;
   now: number;
+  verbosity?: AuditVerbosity;
 }): Promise<void> {
   const expired = await sweepExpiredSessionMemoryRawEntries(params);
   if (expired.length === 0) {
     return;
   }
+  const verbosity = params.verbosity ?? "standard";
   await Promise.all(
     expired.map((entry) =>
-      appendSessionMemoryAuditEntry({
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        entry: {
-          event: "raw_expired",
-          timestamp: nowIso(params.now),
-          messageId: entry.messageId,
+      gatedAudit(
+        {
+          agentId: params.agentId,
+          sessionId: params.sessionId,
+          entry: {
+            event: "raw_expired",
+            timestamp: nowIso(params.now),
+            messageId: entry.messageId,
+          },
         },
-      }),
+        verbosity,
+      ),
     ),
   );
 }
@@ -449,6 +586,8 @@ export async function writeTranscriptTurnToSessionMemory(params: {
     syntacticConfig: validationCfg.syntactic,
   });
 
+  const auditVerbosity = validationCfg.audit.verbosity;
+
   // Emit syntactic audit events
   if (validationCfg.syntactic.enabled) {
     const syntacticEvent =
@@ -457,36 +596,63 @@ export async function writeTranscriptTurnToSessionMemory(params: {
         : preFilter.syntactic.flags.length > 0
           ? "syntactic_flags"
           : "syntactic_pass";
-    await appendSessionMemoryAuditEntry({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      entry: {
-        event: syntacticEvent,
-        timestamp: nowIso(now),
-        messageId: rawEntry.messageId,
-        ruleIds: preFilter.syntactic.ruleIds,
-        flags: preFilter.syntactic.flags,
-        stage: "syntactic",
-        profile: "write",
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: syntacticEvent,
+          timestamp: nowIso(now),
+          messageId: rawEntry.messageId,
+          ruleIds: preFilter.syntactic.ruleIds,
+          flags: preFilter.syntactic.flags,
+          stage: "syntactic",
+          profile: "write",
+        },
       },
-    });
+      auditVerbosity,
+    );
   }
 
   // Emit schema audit event
   if (validationCfg.schema.enabled) {
-    await appendSessionMemoryAuditEntry({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      entry: {
-        event: preFilter.schema.pass ? "schema_pass" : "schema_fail",
-        timestamp: nowIso(now),
-        messageId: rawEntry.messageId,
-        violations: preFilter.schema.violations,
-        ruleIds: preFilter.schema.ruleIds,
-        stage: "schema",
-        profile: "write",
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: preFilter.schema.pass ? "schema_pass" : "schema_fail",
+          timestamp: nowIso(now),
+          messageId: rawEntry.messageId,
+          violations: preFilter.schema.violations,
+          ruleIds: preFilter.schema.ruleIds,
+          stage: "schema",
+          profile: "write",
+        },
       },
-    });
+      auditVerbosity,
+    );
+  }
+
+  // rule_triggered fan-out (high+ verbosity): one event per triggered rule
+  for (const ruleId of preFilter.allRuleIds) {
+    const taxEntry = RULE_TAXONOMY[ruleId];
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: "rule_triggered",
+          timestamp: nowIso(now),
+          messageId: rawEntry.messageId,
+          ruleId,
+          ruleCategory: taxEntry?.category,
+          stage: taxEntry?.stage,
+          profile: "write",
+        },
+      },
+      auditVerbosity,
+    );
   }
 
   // --- Frequency tracking update ---
@@ -517,6 +683,7 @@ export async function writeTranscriptTurnToSessionMemory(params: {
         recentFlags: preFilter.allFlags.slice(0, 10),
         now,
         source: "transcript",
+        verbosity: auditVerbosity,
       });
     }
   }
@@ -534,20 +701,23 @@ export async function writeTranscriptTurnToSessionMemory(params: {
     preFilter.allRuleIds.some((id) => validationCfg.twoPass.hardBlockRules.includes(id));
 
   if (isTwoPassDefinitiveFail) {
-    await appendSessionMemoryAuditEntry({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      entry: {
-        event: "twopass_hard_block",
-        timestamp: nowIso(now),
-        messageId: rawEntry.messageId,
-        ruleIds: preFilter.allRuleIds.filter((id) =>
-          validationCfg.twoPass.hardBlockRules.includes(id),
-        ),
-        reason: "skipped semantic pass — hard block rule triggered",
-        profile: "write",
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: "twopass_hard_block",
+          timestamp: nowIso(now),
+          messageId: rawEntry.messageId,
+          ruleIds: preFilter.allRuleIds.filter((id) =>
+            validationCfg.twoPass.hardBlockRules.includes(id),
+          ),
+          reason: "skipped semantic pass — hard block rule triggered",
+          profile: "write",
+        },
       },
-    });
+      auditVerbosity,
+    );
     return;
   }
 
@@ -555,6 +725,7 @@ export async function writeTranscriptTurnToSessionMemory(params: {
     agentId: params.agentId,
     sessionId: params.sessionId,
     now,
+    verbosity: auditVerbosity,
   });
   await writeSessionMemoryRawEntry({
     agentId: params.agentId,
@@ -614,15 +785,18 @@ export async function writeTranscriptTurnToSessionMemory(params: {
         sessionId: params.sessionId,
         entry: rawEntry,
       });
-      await appendSessionMemoryAuditEntry({
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        entry: {
-          event: "discard",
-          timestamp: nowIso(now),
-          messageId: rawEntry.messageId,
+      await gatedAudit(
+        {
+          agentId: params.agentId,
+          sessionId: params.sessionId,
+          entry: {
+            event: "discard",
+            timestamp: nowIso(now),
+            messageId: rawEntry.messageId,
+          },
         },
-      });
+        auditVerbosity,
+      );
       return;
     }
 
@@ -641,26 +815,32 @@ export async function writeTranscriptTurnToSessionMemory(params: {
       sessionId: params.sessionId,
       entry: summaryEntry,
     });
-    await appendSessionMemoryAuditEntry({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      entry: {
-        event: "write",
-        timestamp: nowIso(now),
-        messageId: rawEntry.messageId,
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: "write",
+          timestamp: nowIso(now),
+          messageId: rawEntry.messageId,
+        },
       },
-    });
+      auditVerbosity,
+    );
   } catch (error) {
-    await appendSessionMemoryAuditEntry({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      entry: {
-        event: "write_failed",
-        timestamp: nowIso(now),
-        messageId: rawEntry.messageId,
-        reason: error instanceof Error ? error.message : String(error),
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: "write_failed",
+          timestamp: nowIso(now),
+          messageId: rawEntry.messageId,
+          reason: error instanceof Error ? error.message : String(error),
+        },
       },
-    });
+      auditVerbosity,
+    );
   }
 }
 
@@ -992,6 +1172,8 @@ export async function processMcpToolResult(params: {
 
   const now = params.helperDeps?.now?.() ?? Date.now();
   const sanitizationCfg = resolveSessionSanitizationConfig(params.cfg);
+  const validationCfg = resolveSessionSanitizationValidationConfig(params.cfg);
+  const auditVerbosity = validationCfg.audit.verbosity;
 
   // Trusted list fast path.
   if (
@@ -1000,16 +1182,19 @@ export async function processMcpToolResult(params: {
       server: params.server,
     })
   ) {
-    await appendSessionMemoryAuditEntry({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      entry: {
-        event: "trusted_pass",
-        timestamp: nowIso(now),
-        server: params.server,
-        toolCallId: params.toolCallId,
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: "trusted_pass",
+          timestamp: nowIso(now),
+          server: params.server,
+          toolCallId: params.toolCallId,
+        },
       },
-    });
+      auditVerbosity,
+    );
     return {
       trusted: true,
       safe: true,
@@ -1067,7 +1252,6 @@ export async function processMcpToolResult(params: {
   });
 
   // --- Stage 1: Parallel pre-filter (syntactic + schema) ---
-  const validationCfg = resolveSessionSanitizationValidationConfig(params.cfg);
   const mcpPreFilter = await runPreFilter({
     input: params.rawResult,
     source: "mcp",
@@ -1082,38 +1266,66 @@ export async function processMcpToolResult(params: {
         : mcpPreFilter.syntactic.flags.length > 0
           ? "syntactic_flags"
           : "syntactic_pass";
-    await appendSessionMemoryAuditEntry({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      entry: {
-        event: syntacticEvent,
-        timestamp: nowIso(now),
-        toolCallId: params.toolCallId,
-        server: params.server,
-        ruleIds: mcpPreFilter.syntactic.ruleIds,
-        flags: mcpPreFilter.syntactic.flags,
-        stage: "syntactic",
-        profile: "mcp",
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: syntacticEvent,
+          timestamp: nowIso(now),
+          toolCallId: params.toolCallId,
+          server: params.server,
+          ruleIds: mcpPreFilter.syntactic.ruleIds,
+          flags: mcpPreFilter.syntactic.flags,
+          stage: "syntactic",
+          profile: "mcp",
+        },
       },
-    });
+      auditVerbosity,
+    );
   }
 
   // Emit schema audit event
   if (validationCfg.schema.enabled) {
-    await appendSessionMemoryAuditEntry({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      entry: {
-        event: mcpPreFilter.schema.pass ? "schema_pass" : "schema_fail",
-        timestamp: nowIso(now),
-        toolCallId: params.toolCallId,
-        server: params.server,
-        violations: mcpPreFilter.schema.violations,
-        ruleIds: mcpPreFilter.schema.ruleIds,
-        stage: "schema",
-        profile: "mcp",
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: mcpPreFilter.schema.pass ? "schema_pass" : "schema_fail",
+          timestamp: nowIso(now),
+          toolCallId: params.toolCallId,
+          server: params.server,
+          violations: mcpPreFilter.schema.violations,
+          ruleIds: mcpPreFilter.schema.ruleIds,
+          stage: "schema",
+          profile: "mcp",
+        },
       },
-    });
+      auditVerbosity,
+    );
+  }
+
+  // rule_triggered fan-out (high+ verbosity): one event per triggered rule
+  for (const ruleId of mcpPreFilter.allRuleIds) {
+    const taxEntry = RULE_TAXONOMY[ruleId];
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: "rule_triggered",
+          timestamp: nowIso(now),
+          toolCallId: params.toolCallId,
+          server: params.server,
+          ruleId,
+          ruleCategory: taxEntry?.category,
+          stage: taxEntry?.stage,
+          profile: "mcp",
+        },
+      },
+      auditVerbosity,
+    );
   }
 
   // --- Frequency tracking update ---
@@ -1150,6 +1362,7 @@ export async function processMcpToolResult(params: {
           recentFlags: mcpPreFilter.allFlags.slice(0, 10),
           now,
           source: "mcp",
+          verbosity: auditVerbosity,
         });
       }
     }
@@ -1178,19 +1391,22 @@ export async function processMcpToolResult(params: {
     const blockRuleIds = mcpPreFilter.allRuleIds.filter((id) =>
       validationCfg.twoPass.hardBlockRules.includes(id),
     );
-    await appendSessionMemoryAuditEntry({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      entry: {
-        event: "twopass_hard_block",
-        timestamp: nowIso(now),
-        toolCallId: params.toolCallId,
-        server: params.server,
-        ruleIds: blockRuleIds,
-        reason: "skipped semantic pass — hard block rule triggered",
-        profile: "mcp",
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: "twopass_hard_block",
+          timestamp: nowIso(now),
+          toolCallId: params.toolCallId,
+          server: params.server,
+          ruleIds: blockRuleIds,
+          reason: "skipped semantic pass — hard block rule triggered",
+          profile: "mcp",
+        },
       },
-    });
+      auditVerbosity,
+    );
     return buildBlockedResult(
       mcpPreFilter.allFlags,
       "blocked: syntactic hard block rule",
@@ -1224,18 +1440,21 @@ export async function processMcpToolResult(params: {
         flags: tier1.blockFlags,
       },
     });
-    await appendSessionMemoryAuditEntry({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      entry: {
-        event: "structural_block",
-        timestamp: nowIso(now),
-        server: params.server,
-        toolCallId: params.toolCallId,
-        tier: 1,
-        flags: tier1.blockFlags,
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: "structural_block",
+          timestamp: nowIso(now),
+          server: params.server,
+          toolCallId: params.toolCallId,
+          tier: 1,
+          flags: tier1.blockFlags,
+        },
       },
-    });
+      auditVerbosity,
+    );
     return buildBlockedResult(tier1.blockFlags, tier1.contextNote, 1);
   }
 
@@ -1326,18 +1545,21 @@ export async function processMcpToolResult(params: {
       error: error instanceof Error ? error.message : String(error),
     });
     // Fail closed — treat sub-agent failure as a block.
-    await appendSessionMemoryAuditEntry({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      entry: {
-        event: "sanitized_block",
-        timestamp: nowIso(now),
-        server: params.server,
-        toolCallId: params.toolCallId,
-        tier: 2,
-        flags: ["sub-agent error"],
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: "sanitized_block",
+          timestamp: nowIso(now),
+          server: params.server,
+          toolCallId: params.toolCallId,
+          tier: 2,
+          flags: ["sub-agent error"],
+        },
       },
-    });
+      auditVerbosity,
+    );
     return buildBlockedResult(["sanitization sub-agent failed"], "blocked: sub-agent error", 2);
   }
 
@@ -1359,18 +1581,21 @@ export async function processMcpToolResult(params: {
   });
 
   if (!child.safe) {
-    await appendSessionMemoryAuditEntry({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      entry: {
-        event: "sanitized_block",
-        timestamp: nowIso(now),
-        server: params.server,
-        toolCallId: params.toolCallId,
-        tier: 2,
-        flags: child.flags,
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: "sanitized_block",
+          timestamp: nowIso(now),
+          server: params.server,
+          toolCallId: params.toolCallId,
+          tier: 2,
+          flags: child.flags,
+        },
       },
-    });
+      auditVerbosity,
+    );
     return buildBlockedResult(child.flags, child.contextNote, 2);
   }
 
@@ -1390,17 +1615,56 @@ export async function processMcpToolResult(params: {
     sessionId: params.sessionId,
     entry: summaryEntry,
   });
-  await appendSessionMemoryAuditEntry({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    entry: {
-      event: "sanitized_pass",
-      timestamp: nowIso(now),
-      server: params.server,
-      toolCallId: params.toolCallId,
-      tier: 2,
+
+  // output_diff (high+ verbosity): record what changed between raw and sanitized
+  const { removals, replacements } = computeOutputDiff(params.rawResult, child.structuredResult);
+  if (removals.length > 0 || replacements.length > 0) {
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: "output_diff",
+          timestamp: nowIso(now),
+          server: params.server,
+          toolCallId: params.toolCallId,
+          tier: 2,
+          removals,
+          replacements,
+        },
+      },
+      auditVerbosity,
+    );
+  }
+
+  await gatedAudit(
+    {
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      entry: {
+        event: "sanitized_pass",
+        timestamp: nowIso(now),
+        server: params.server,
+        toolCallId: params.toolCallId,
+        tier: 2,
+      },
     },
-  });
+    auditVerbosity,
+  );
+
+  // Audit retention sweep — fire-and-forget, runs after every successful pass
+  if (validationCfg.audit.enabled) {
+    sweepOldAuditEntries({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      retentionDays: validationCfg.audit.retentionDays,
+    }).catch((err) => {
+      log.warn("mcp sanitization: audit retention sweep failed", {
+        agentId: params.agentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
 
   return {
     trusted: false,
