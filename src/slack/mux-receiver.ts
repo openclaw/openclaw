@@ -135,6 +135,9 @@ export class MuxReceiver {
     }
 
     const url = this.mux.url;
+    if (!url) {
+      throw new Error("MuxReceiver: mux.url is required");
+    }
     const headers: Record<string, string> = {};
     if (this.resolvedToken) {
       headers.authorization = `Bearer ${this.resolvedToken}`;
