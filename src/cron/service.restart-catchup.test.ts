@@ -351,4 +351,55 @@ describe("CronService restart catch-up", () => {
     cron.stop();
     await store.cleanup();
   });
+
+  it("does not replay a cron job that ran recently (within 5 min) to prevent infinite restart loops (#37198)", async () => {
+    // Simulates: cron job runs, triggers gateway restart, gateway restarts.
+    // On startup, runMissedJobs must NOT re-run jobs that completed within the
+    // last 5 minutes — they may have triggered the restart themselves.
+    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    // Job ran 2 minutes ago (within the 5-min grace window).
+    // A tiny timing sliver (lastRunAtMs slightly before the scheduled slot)
+    // would cause previousRunAtMs > lastRunAtMs and re-trigger it.
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "restart-loop-guard",
+        name: "gateway-restart-job",
+        enabled: true,
+        createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+        updatedAtMs: Date.parse("2025-12-13T04:00:00.000Z"),
+        schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "gateway restart" },
+        state: {
+          // Ran at 04:00:00.000 (the :00 slot), which is 2 minutes ago.
+          // nextRunAtMs was already advanced to the next slot before restart.
+          nextRunAtMs: Date.parse("2025-12-13T04:03:00.000Z"),
+          lastRunAtMs: Date.parse("2025-12-13T04:00:00.000Z"),
+          lastRunStatus: "ok",
+          lastStatus: "ok",
+        },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+    });
+
+    await cron.start();
+
+    // Job must NOT be re-run on startup — it ran 2 minutes ago and would
+    // cause another restart, creating an infinite loop.
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
 });

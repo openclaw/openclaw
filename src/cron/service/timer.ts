@@ -718,6 +718,11 @@ function isRunnableJob(params: {
   skipJobIds?: ReadonlySet<string>;
   skipAtIfAlreadyRan?: boolean;
   allowCronMissedRunByLastRun?: boolean;
+  /** When set (during startup catchup), skip jobs whose last successful run
+   * started within this many milliseconds of nowMs. Prevents a cron job that
+   * triggered a gateway restart from being re-run immediately on startup,
+   * which would create an infinite restart loop. (#37198) */
+  skipIfRanWithinMs?: number;
 }): boolean {
   const { job, nowMs } = params;
   if (!job.state) {
@@ -766,6 +771,21 @@ function isRunnableJob(params: {
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
     return false;
   }
+  // Guard against re-running jobs that ran recently and may have triggered the
+  // gateway restart. Without this, a cron job whose payload causes a restart
+  // (e.g. via the gateway tool action=restart) would loop: job runs → restart
+  // → runMissedJobs replays job → restart → ... (#37198)
+  if (typeof params.skipIfRanWithinMs === "number" && params.skipIfRanWithinMs > 0) {
+    const lastRun = job.state.lastRunAtMs;
+    if (
+      typeof lastRun === "number" &&
+      Number.isFinite(lastRun) &&
+      (job.state.lastRunStatus === "ok" || job.state.lastStatus === "ok") &&
+      nowMs - lastRun < params.skipIfRanWithinMs
+    ) {
+      return false;
+    }
+  }
   let previousRunAtMs: number | undefined;
   try {
     previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
@@ -806,6 +826,7 @@ function collectRunnableJobs(
     skipJobIds?: ReadonlySet<string>;
     skipAtIfAlreadyRan?: boolean;
     allowCronMissedRunByLastRun?: boolean;
+    skipIfRanWithinMs?: number;
   },
 ): CronJob[] {
   if (!state.store) {
@@ -818,9 +839,19 @@ function collectRunnableJobs(
       skipJobIds: opts?.skipJobIds,
       skipAtIfAlreadyRan: opts?.skipAtIfAlreadyRan,
       allowCronMissedRunByLastRun: opts?.allowCronMissedRunByLastRun,
+      skipIfRanWithinMs: opts?.skipIfRanWithinMs,
     }),
   );
 }
+
+/**
+ * Startup catchup grace period: if a cron job ran successfully within this
+ * window before the current time, it is excluded from the startup missed-job
+ * sweep. This prevents a job that triggered a gateway restart (e.g. via the
+ * gateway tool action=restart) from being re-run immediately on startup and
+ * creating an infinite restart loop. (#37198)
+ */
+const STARTUP_CATCHUP_SKIP_RECENT_RUN_MS = 5 * 60_000; // 5 minutes
 
 export async function runMissedJobs(
   state: CronServiceState,
@@ -837,6 +868,9 @@ export async function runMissedJobs(
       skipJobIds,
       skipAtIfAlreadyRan: true,
       allowCronMissedRunByLastRun: true,
+      // Skip jobs that ran successfully within the grace window: they may have
+      // triggered the restart themselves and must not be re-run immediately.
+      skipIfRanWithinMs: STARTUP_CATCHUP_SKIP_RECENT_RUN_MS,
     });
     if (missed.length === 0) {
       return [] as Array<{ jobId: string; job: CronJob }>;
