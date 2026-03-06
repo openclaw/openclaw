@@ -62,11 +62,7 @@ Set to `0` for async send mode (fire-and-forget), returns immediately without wa
     "status": "ok",
     "reply": "Agent response",
     "runId": "uuid",
-    "completedAt": 1234567890,
-    "delivery": {
-      "status": "pending",
-      "mode": "announce"
-    }
+    "completedAt": 1234567890
   }
 }
 ```
@@ -90,11 +86,7 @@ Set to `0` for async send mode (fire-and-forget), returns immediately without wa
       "status": "ok",
       "reply": "Agent response",
       "runId": "uuid",
-      "completedAt": 1234567890,
-      "delivery": {
-        "status": "pending",
-        "mode": "announce"
-      }
+      "completedAt": 1234567890
     },
     {
       "sessionKey": "agent:reviewer:main",
@@ -102,11 +94,7 @@ Set to `0` for async send mode (fire-and-forget), returns immediately without wa
       "status": "ok",
       "reply": "Another response",
       "runId": "uuid",
-      "completedAt": 1234567891,
-      "delivery": {
-        "status": "pending",
-        "mode": "announce"
-      }
+      "completedAt": 1234567891
     },
     {
       "sessionKey": "agent:tester:main",
@@ -310,14 +298,14 @@ Determine accessible sessions based on `tools.sessions.visibility` config:
 
 ## Comparison with sessions_send
 
-| Feature              | sessions_send                           | sessions_send_concurrent            |
-| -------------------- | --------------------------------------- | ----------------------------------- |
-| Target count         | 1                                       | 1-20                                |
-| Response mode        | Wait for completion                     | Streaming, return as each completes |
-| Independent timeout  | Not supported                           | Supported                           |
-| Progress feedback    | None                                    | Real-time progress updates          |
-| Concurrent execution | Not supported                           | Supported (uses CommandLane.Nested) |
-| Use case             | Single interaction, multi-turn dialogue | Batch tasks, parallel processing    |
+| Feature              | sessions_send                  | sessions_send_concurrent            |
+| -------------------- | ------------------------------ | ----------------------------------- |
+| Target count         | 1                              | 1-20                                |
+| Response mode        | Wait for completion            | Streaming, return as each completes |
+| Independent timeout  | Not supported                  | Supported                           |
+| Progress feedback    | None                           | Real-time progress updates          |
+| Concurrent execution | Not supported                  | Supported (uses CommandLane.Nested) |
+| Use case             | Single interaction, multi-turn | Batch tasks, parallel processing    |
 
 ## Best Practices
 
@@ -486,7 +474,7 @@ The tool provides real-time progress via `onUpdate` callback:
 2. **Progress update**: Send update as each target completes
 3. **Final update**: Send final result after all targets complete
 
-### Error Handling
+### Error Isolation Implementation
 
 The tool uses `Promise.allSettled` to ensure all requests complete:
 

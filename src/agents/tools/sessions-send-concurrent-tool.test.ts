@@ -15,7 +15,7 @@ describe("sessions_send_concurrent tool", () => {
 
   it("should have correct tool metadata", () => {
     expect(tool.name).toBe("sessions_send_concurrent");
-    expect(tool.label).toBe("Session Send Concurrent");
+    expect(tool.label).toBe("Concurrent Session Messaging");
     expect(tool.description).toContain("concurrently");
     expect(tool.description).toContain("stream");
   });

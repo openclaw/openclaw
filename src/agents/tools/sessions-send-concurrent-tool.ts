@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import type { AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import {
   type GatewayMessageChannel,
@@ -11,6 +12,16 @@ import {
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
+import {
+  createSessionVisibilityGuard,
+  createAgentToAgentPolicy,
+  resolveEffectiveSessionToolsVisibility,
+  resolveSessionReference,
+  resolveSandboxedSessionToolContext,
+  resolveVisibleSessionReference,
+  extractAssistantText,
+  stripToolMessages,
+} from "./sessions-helpers.js";
 
 const SessionsSendConcurrentTargetSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -41,7 +52,6 @@ type ConcurrentResult = {
   error?: string;
   runId: string;
   completedAt: number;
-  delivery?: { status: string; mode: string };
 };
 
 type ConcurrentProgress = {
@@ -70,6 +80,19 @@ export function createSessionsSendConcurrentTool(opts?: {
       onUpdate?: AgentToolUpdateCallback<unknown>,
     ) => {
       const params = args as Record<string, unknown>;
+      const cfg = loadConfig();
+      const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+        resolveSandboxedSessionToolContext({
+          cfg,
+          agentSessionKey: opts?.agentSessionKey,
+          sandboxed: opts?.sandboxed,
+        });
+
+      const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const sessionVisibility = resolveEffectiveSessionToolsVisibility({
+        cfg,
+        sandboxed: opts?.sandboxed === true,
+      });
 
       const targetsParam = params.targets;
       if (!Array.isArray(targetsParam) || targetsParam.length === 0 || targetsParam.length > 20) {
@@ -145,25 +168,69 @@ export function createSessionsSendConcurrentTool(opts?: {
 
         try {
           let sessionKey = target.sessionKey;
+          let displayKey = target.sessionKey || target.label || `target-${index}`;
+
           if (!sessionKey && target.label) {
+            const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
+            const requestedAgentId = target.agentId ? normalizeAgentId(target.agentId) : undefined;
+
+            if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
+              const result: ConcurrentResult = {
+                sessionKey: target.sessionKey || target.label || `target-${index}`,
+                displayKey,
+                status: "forbidden",
+                error: "Sandboxed sessions_send label lookup is limited to this agent",
+                runId: targetRunId,
+                completedAt: Date.now(),
+              };
+              return result;
+            }
+
+            if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
+              if (!a2aPolicy.enabled) {
+                const result: ConcurrentResult = {
+                  sessionKey: target.sessionKey || target.label || `target-${index}`,
+                  displayKey,
+                  status: "forbidden",
+                  error:
+                    "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+                  runId: targetRunId,
+                  completedAt: Date.now(),
+                };
+                return result;
+              }
+              if (!a2aPolicy.isAllowed(requesterAgentId, requestedAgentId)) {
+                const result: ConcurrentResult = {
+                  sessionKey: target.sessionKey || target.label || `target-${index}`,
+                  displayKey,
+                  status: "forbidden",
+                  error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
+                  runId: targetRunId,
+                  completedAt: Date.now(),
+                };
+                return result;
+              }
+            }
+
             const resolveParams: Record<string, unknown> = {
               label: target.label,
-              ...(target.agentId ? { agentId: normalizeAgentId(target.agentId) } : {}),
+              ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+              ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
             };
-
+            let resolvedKey = "";
             try {
               const resolved = await callGateway<{ key: string }>({
                 method: "sessions.resolve",
                 params: resolveParams,
                 timeoutMs: 10_000,
               });
-              sessionKey = typeof resolved?.key === "string" ? resolved.key.trim() : "";
+              resolvedKey = typeof resolved?.key === "string" ? resolved.key.trim() : "";
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
-              if (opts?.sandboxed) {
+              if (restrictToSpawned) {
                 const result: ConcurrentResult = {
                   sessionKey: target.sessionKey || target.label || `target-${index}`,
-                  displayKey: target.sessionKey || target.label || `target-${index}`,
+                  displayKey,
                   status: "forbidden",
                   error: "Session not visible from this sandboxed agent session.",
                   runId: targetRunId,
@@ -173,7 +240,7 @@ export function createSessionsSendConcurrentTool(opts?: {
               }
               const result: ConcurrentResult = {
                 sessionKey: target.sessionKey || target.label || `target-${index}`,
-                displayKey: target.sessionKey || target.label || `target-${index}`,
+                displayKey,
                 status: "error",
                 error: msg || `No session found with label: ${target.label}`,
                 runId: targetRunId,
@@ -181,14 +248,97 @@ export function createSessionsSendConcurrentTool(opts?: {
               };
               return result;
             }
+
+            if (!resolvedKey) {
+              if (restrictToSpawned) {
+                const result: ConcurrentResult = {
+                  sessionKey: target.sessionKey || target.label || `target-${index}`,
+                  displayKey,
+                  status: "forbidden",
+                  error: "Session not visible from this sandboxed agent session.",
+                  runId: targetRunId,
+                  completedAt: Date.now(),
+                };
+                return result;
+              }
+              const result: ConcurrentResult = {
+                sessionKey: target.sessionKey || target.label || `target-${index}`,
+                displayKey,
+                status: "error",
+                error: `No session found with label: ${target.label}`,
+                runId: targetRunId,
+                completedAt: Date.now(),
+              };
+              return result;
+            }
+            sessionKey = resolvedKey;
           }
 
           if (!sessionKey) {
             const result: ConcurrentResult = {
               sessionKey: target.sessionKey || target.label || `target-${index}`,
-              displayKey: target.sessionKey || target.label || `target-${index}`,
+              displayKey,
               status: "error",
-              error: "Session not found",
+              error: "Either sessionKey or label is required",
+              runId: targetRunId,
+              completedAt: Date.now(),
+            };
+            return result;
+          }
+
+          const resolvedSession = await resolveSessionReference({
+            sessionKey,
+            alias,
+            mainKey,
+            requesterInternalKey: effectiveRequesterKey,
+            restrictToSpawned,
+          });
+          if (!resolvedSession.ok) {
+            const result: ConcurrentResult = {
+              sessionKey: target.sessionKey || target.label || `target-${index}`,
+              displayKey,
+              status: resolvedSession.status,
+              error: resolvedSession.error,
+              runId: targetRunId,
+              completedAt: Date.now(),
+            };
+            return result;
+          }
+
+          const visibleSession = await resolveVisibleSessionReference({
+            resolvedSession,
+            requesterSessionKey: effectiveRequesterKey,
+            restrictToSpawned,
+            visibilitySessionKey: sessionKey,
+          });
+          if (!visibleSession.ok) {
+            const result: ConcurrentResult = {
+              sessionKey: target.sessionKey || target.label || `target-${index}`,
+              displayKey: visibleSession.displayKey,
+              status: visibleSession.status,
+              error: visibleSession.error,
+              runId: targetRunId,
+              completedAt: Date.now(),
+            };
+            return result;
+          }
+
+          const resolvedKey = visibleSession.key;
+          displayKey = visibleSession.displayKey;
+
+          const visibilityGuard = await createSessionVisibilityGuard({
+            action: "send",
+            requesterSessionKey: effectiveRequesterKey,
+            visibility: sessionVisibility,
+            a2aPolicy,
+          });
+          const access = visibilityGuard.check(resolvedKey);
+          if (!access.allowed) {
+            const result: ConcurrentResult = {
+              sessionKey: target.sessionKey || target.label || `target-${index}`,
+              displayKey,
+              status: access.status,
+              error: access.error,
               runId: targetRunId,
               completedAt: Date.now(),
             };
@@ -198,7 +348,7 @@ export function createSessionsSendConcurrentTool(opts?: {
           const idempotencyKey = crypto.randomUUID();
           const sendParams = {
             message: target.message,
-            sessionKey,
+            sessionKey: resolvedKey,
             idempotencyKey,
             deliver: false,
             channel: INTERNAL_MESSAGE_CHANNEL,
@@ -211,70 +361,105 @@ export function createSessionsSendConcurrentTool(opts?: {
             },
           };
 
-          const timeoutMs = (target.timeoutSeconds ?? globalTimeoutSeconds) * 1000;
-          const response = await callGateway<{ runId: string }>({
-            method: "agent",
-            params: sendParams,
-            timeoutMs,
-          });
+          const targetTimeoutSeconds = target.timeoutSeconds ?? globalTimeoutSeconds;
+          const isFireAndForget = targetTimeoutSeconds === 0;
 
-          const agentRunId =
-            typeof response?.runId === "string" && response.runId
-              ? response.runId
-              : crypto.randomUUID();
+          let result: ConcurrentResult;
 
-          let waitStatus: "ok" | "error" | "timeout" | "forbidden" = "ok";
-          let waitError: string | undefined;
-          let reply: string | undefined;
-
-          try {
-            const wait = await callGateway<{ status?: string; error?: string }>({
-              method: "agent.wait",
-              params: {
-                runId: agentRunId,
-                timeoutMs,
-              },
-              timeoutMs: timeoutMs + 2000,
-            });
-            waitStatus =
-              typeof wait?.status === "string"
-                ? (wait.status as "ok" | "error" | "timeout" | "forbidden")
-                : "ok";
-            waitError = typeof wait?.error === "string" ? wait.error : undefined;
-          } catch (err) {
-            const messageText =
-              err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-            waitStatus = messageText.includes("gateway timeout") ? "timeout" : "error";
-            waitError = messageText;
-          }
-
-          if (waitStatus === "ok") {
+          if (isFireAndForget) {
+            let agentRunId: string = idempotencyKey;
             try {
-              const history = await callGateway<{ messages: Array<unknown> }>({
-                method: "chat.history",
-                params: { sessionKey, limit: 50 },
+              const response = await callGateway<{ runId: string }>({
+                method: "agent",
+                params: sendParams,
+                timeoutMs: 10_000,
               });
-              const filtered = Array.isArray(history?.messages) ? history.messages : [];
-              const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
-              reply =
-                typeof last === "object" && last !== null && "content" in last
-                  ? String((last as { content: unknown }).content)
-                  : undefined;
-            } catch {
-              // ignore
+              if (typeof response?.runId === "string" && response.runId) {
+                agentRunId = response.runId;
+              }
+              result = {
+                sessionKey: resolvedKey,
+                displayKey,
+                status: "accepted",
+                runId: agentRunId,
+                completedAt: Date.now(),
+              };
+            } catch (err) {
+              const messageText =
+                err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+              result = {
+                sessionKey: resolvedKey,
+                displayKey,
+                status: "error",
+                error: messageText,
+                runId: agentRunId,
+                completedAt: Date.now(),
+              };
             }
-          }
+          } else {
+            const timeoutMs = targetTimeoutSeconds * 1000;
+            const response = await callGateway<{ runId: string }>({
+              method: "agent",
+              params: sendParams,
+              timeoutMs,
+            });
 
-          const result: ConcurrentResult = {
-            sessionKey,
-            displayKey: sessionKey,
-            status: waitStatus,
-            reply,
-            error: waitError,
-            runId: agentRunId,
-            completedAt: Date.now(),
-            delivery: { status: "pending", mode: "announce" },
-          };
+            const agentRunId =
+              typeof response?.runId === "string" && response.runId
+                ? response.runId
+                : crypto.randomUUID();
+
+            let waitStatus: "ok" | "error" | "timeout" | "forbidden" = "ok";
+            let waitError: string | undefined;
+            let reply: string | undefined;
+
+            try {
+              const wait = await callGateway<{ status?: string; error?: string }>({
+                method: "agent.wait",
+                params: {
+                  runId: agentRunId,
+                  timeoutMs,
+                },
+                timeoutMs: timeoutMs + 2000,
+              });
+              waitStatus =
+                typeof wait?.status === "string"
+                  ? (wait.status as "ok" | "error" | "timeout" | "forbidden")
+                  : "ok";
+              waitError = typeof wait?.error === "string" ? wait.error : undefined;
+            } catch (err) {
+              const messageText =
+                err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+              waitStatus = messageText.includes("gateway timeout") ? "timeout" : "error";
+              waitError = messageText;
+            }
+
+            if (waitStatus === "ok") {
+              try {
+                const history = await callGateway<{ messages: Array<unknown> }>({
+                  method: "chat.history",
+                  params: { sessionKey: resolvedKey, limit: 50 },
+                });
+                const filtered = stripToolMessages(
+                  Array.isArray(history?.messages) ? history.messages : [],
+                );
+                const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
+                reply = extractAssistantText(last);
+              } catch {
+                // ignore
+              }
+            }
+
+            result = {
+              sessionKey: resolvedKey,
+              displayKey,
+              status: waitStatus,
+              reply,
+              error: waitError,
+              runId: agentRunId,
+              completedAt: Date.now(),
+            };
+          }
 
           return result;
         } catch (err) {
@@ -292,11 +477,11 @@ export function createSessionsSendConcurrentTool(opts?: {
         }
       });
 
-      const settledResults = await Promise.allSettled(sendPromises);
-
-      for (const settled of settledResults) {
-        if (settled.status === "fulfilled") {
-          results.push(settled.value);
+      // Wrap each promise to trigger onUpdate immediately on completion
+      const wrappedPromises = sendPromises.map(async (promise) => {
+        try {
+          const result = await promise;
+          results.push(result);
           completedCount++;
 
           if (onUpdate) {
@@ -309,7 +494,7 @@ export function createSessionsSendConcurrentTool(opts?: {
                       status: "progress",
                       total: totalTargets,
                       completed: completedCount,
-                      latestResult: settled.value,
+                      latestResult: result,
                     } as ConcurrentProgress,
                     null,
                     2,
@@ -320,25 +505,57 @@ export function createSessionsSendConcurrentTool(opts?: {
                 status: "progress",
                 total: totalTargets,
                 completed: completedCount,
-                latestResult: settled.value,
+                latestResult: result,
               } as ConcurrentProgress,
             });
           }
-        } else {
-          // 处理 rejected promise
+
+          return result;
+        } catch (err) {
+          const messageText =
+            err instanceof Error ? err.message : typeof err === "string" ? err : "error";
           const errorResult: ConcurrentResult = {
             sessionKey: `unknown-${results.length}`,
             displayKey: `unknown-${results.length}`,
             status: "error",
-            error:
-              settled.reason instanceof Error ? settled.reason.message : String(settled.reason),
+            error: messageText,
             runId: crypto.randomUUID(),
             completedAt: Date.now(),
           };
           results.push(errorResult);
           completedCount++;
+
+          if (onUpdate) {
+            onUpdate({
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(
+                    {
+                      status: "progress",
+                      total: totalTargets,
+                      completed: completedCount,
+                      latestResult: errorResult,
+                    } as ConcurrentProgress,
+                    null,
+                    2,
+                  ),
+                },
+              ],
+              details: {
+                status: "progress",
+                total: totalTargets,
+                completed: completedCount,
+                latestResult: errorResult,
+              } as ConcurrentProgress,
+            });
+          }
+
+          return errorResult;
         }
-      }
+      });
+
+      await Promise.allSettled(wrappedPromises);
 
       if (onUpdate) {
         onUpdate({
