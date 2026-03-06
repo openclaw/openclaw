@@ -6,7 +6,7 @@ export type MonitorSlackOpts = {
   botToken?: string;
   appToken?: string;
   accountId?: string;
-  mode?: "socket" | "http";
+  mode?: "socket" | "http" | "mux";
   config?: OpenClawConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;

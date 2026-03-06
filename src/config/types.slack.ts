@@ -79,11 +79,24 @@ export type SlackThreadConfig = {
   initialHistoryLimit?: number;
 };
 
+export type SlackMuxConfig = {
+  /** WebSocket URL of the openclaw-mux service (e.g., wss://openclaw-mux.example.com/ws). */
+  url: string;
+  /** Backstage base URL for OAuth token resolution. */
+  backstageUrl?: string;
+  /** Backstage MCP URL for token cache lookup. Defaults to `{backstageUrl}/api/mcp-actions/v1`. */
+  backstageMcpUrl?: string;
+  /** Explicit auth token (overrides OAuth resolution). */
+  token?: string;
+};
+
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
-  /** Slack connection mode (socket|http). Default: socket. */
-  mode?: "socket" | "http";
+  /** Slack connection mode (socket|http|mux). Default: socket. */
+  mode?: "socket" | "http" | "mux";
+  /** Mux configuration (required when mode is "mux"). */
+  mux?: SlackMuxConfig;
   /** Slack signing secret (required for HTTP mode). */
   signingSecret?: string;
   /** Slack Events API webhook path (default: /slack/events). */
