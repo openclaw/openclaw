@@ -166,9 +166,220 @@ const createTelegramSendPluginRegistration = () => ({
   }),
 });
 
+const createTelegramPollPluginRegistration = () => ({
+  pluginId: "telegram",
+  source: "test",
+  plugin: createStubPlugin({
+    id: "telegram",
+    label: "Telegram",
+    actions: {
+      listActions: () => ["poll"],
+      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
+        return await handleTelegramAction(
+          { action, to: params.to, accountId: accountId ?? undefined },
+          cfg,
+        );
+      }) as unknown as NonNullable<ChannelPlugin["actions"]>["handleAction"],
+    },
+  }),
+});
+
 const { messageCommand } = await import("./message.js");
 
 describe("messageCommand", () => {
+  it("threads resolved SecretRef config into outbound send actions", async () => {
+    const rawConfig = {
+      channels: {
+        telegram: {
+          token: { $secret: "vault://telegram/token" },
+        },
+      },
+    };
+    const resolvedConfig = {
+      channels: {
+        telegram: {
+          token: "12345:resolved-token",
+        },
+      },
+    };
+    testConfig = rawConfig;
+    resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
+      resolvedConfig: resolvedConfig as unknown as Record<string, unknown>,
+      diagnostics: ["resolved channels.telegram.token"],
+    });
+    await setRegistry(
+      createTestRegistry([
+        {
+          ...createTelegramSendPluginRegistration(),
+        },
+      ]),
+    );
+
+    const deps = makeDeps();
+    await messageCommand(
+      {
+        action: "send",
+        channel: "telegram",
+        target: "123456",
+        message: "hi",
+      },
+      deps,
+      runtime,
+    );
+
+    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: rawConfig,
+        commandName: "message",
+      }),
+    );
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "send", to: "123456", accountId: undefined }),
+      resolvedConfig,
+    );
+  });
+
+  it("threads resolved SecretRef config into outbound adapter sends", async () => {
+    const rawConfig = {
+      channels: {
+        telegram: {
+          token: { $secret: "vault://telegram/token" },
+        },
+      },
+    };
+    const resolvedConfig = {
+      channels: {
+        telegram: {
+          token: "12345:resolved-token",
+        },
+      },
+    };
+    testConfig = rawConfig;
+    resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
+      resolvedConfig: resolvedConfig as unknown as Record<string, unknown>,
+      diagnostics: ["resolved channels.telegram.token"],
+    });
+    const sendText = vi.fn(async (_ctx: { cfg?: unknown; to: string; text: string }) => ({
+      channel: "telegram" as const,
+      messageId: "msg-1",
+      chatId: "123456",
+    }));
+    const sendMedia = vi.fn(async (_ctx: { cfg?: unknown }) => ({
+      channel: "telegram" as const,
+      messageId: "msg-2",
+      chatId: "123456",
+    }));
+    await setRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createStubPlugin({
+            id: "telegram",
+            label: "Telegram",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const deps = makeDeps();
+    await messageCommand(
+      {
+        action: "send",
+        channel: "telegram",
+        target: "123456",
+        message: "hi",
+      },
+      deps,
+      runtime,
+    );
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: resolvedConfig,
+        to: "123456",
+        text: "hi",
+      }),
+    );
+    expect(sendText.mock.calls[0]?.[0]?.cfg).not.toBe(rawConfig);
+  });
+
+  it("keeps local-fallback resolved cfg in outbound adapter sends", async () => {
+    const rawConfig = {
+      channels: {
+        telegram: {
+          token: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    };
+    const locallyResolvedConfig = {
+      channels: {
+        telegram: {
+          token: "12345:local-fallback-token",
+        },
+      },
+    };
+    testConfig = rawConfig;
+    resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
+      resolvedConfig: locallyResolvedConfig as unknown as Record<string, unknown>,
+      diagnostics: ["gateway secrets.resolve unavailable; used local resolver fallback."],
+    });
+    const sendText = vi.fn(async (_ctx: { cfg?: unknown }) => ({
+      channel: "telegram" as const,
+      messageId: "msg-3",
+      chatId: "123456",
+    }));
+    const sendMedia = vi.fn(async (_ctx: { cfg?: unknown }) => ({
+      channel: "telegram" as const,
+      messageId: "msg-4",
+      chatId: "123456",
+    }));
+    await setRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createStubPlugin({
+            id: "telegram",
+            label: "Telegram",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const deps = makeDeps();
+    await messageCommand(
+      {
+        action: "send",
+        channel: "telegram",
+        target: "123456",
+        message: "hi",
+      },
+      deps,
+      runtime,
+    );
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: locallyResolvedConfig,
+      }),
+    );
+    expect(sendText.mock.calls[0]?.[0]?.cfg).not.toBe(rawConfig);
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("[secrets] gateway secrets.resolve unavailable"),
+    );
+  });
+
   it("defaults channel when only one configured", async () => {
     process.env.TELEGRAM_BOT_TOKEN = "token-abc";
     await setRegistry(
@@ -271,6 +482,36 @@ describe("messageCommand", () => {
       expect.objectContaining({
         action: "poll",
         to: "channel:123456789",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("routes telegram polls through message action", async () => {
+    await setRegistry(
+      createTestRegistry([
+        {
+          ...createTelegramPollPluginRegistration(),
+        },
+      ]),
+    );
+    const deps = makeDeps();
+    await messageCommand(
+      {
+        action: "poll",
+        channel: "telegram",
+        target: "123456789",
+        pollQuestion: "Ship it?",
+        pollOption: ["Yes", "No"],
+        pollDurationSeconds: 120,
+      },
+      deps,
+      runtime,
+    );
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "poll",
+        to: "123456789",
       }),
       expect.any(Object),
     );

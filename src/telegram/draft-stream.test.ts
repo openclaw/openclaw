@@ -218,6 +218,66 @@ describe("createTelegramDraftStream", () => {
     );
   });
 
+  it("materializes draft previews using rendered HTML text", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      renderText: (text) => ({
+        text: text.replace("**bold**", "<b>bold</b>"),
+        parseMode: "HTML",
+      }),
+    });
+
+    stream.update("**bold**");
+    await stream.flush();
+    await stream.materialize?.();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>bold</b>", {
+      message_thread_id: 42,
+      parse_mode: "HTML",
+    });
+  });
+
+  it("retries materialize send without thread when dm thread lookup fails", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockRejectedValueOnce(new Error("400: Bad Request: message thread not found"))
+      .mockResolvedValueOnce({ message_id: 55 });
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    const materializedId = await stream.materialize?.();
+
+    expect(materializedId).toBe(55);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Hello", { message_thread_id: 42 });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Hello", undefined);
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview materialize send failed with message_thread_id, retrying without thread",
+    );
+  });
+
+  it("returns existing preview id when materializing message transport", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "message",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    const materializedId = await stream.materialize?.();
+
+    expect(materializedId).toBe(17);
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("does not edit or delete messages after DM draft stream finalization", async () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });

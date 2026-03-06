@@ -62,7 +62,7 @@ Schema instead. See [Plugin manifest](/plugins/manifest).
 Plugins can register:
 
 - Gateway RPC methods
-- Gateway HTTP handlers
+- Gateway HTTP routes
 - Agent tools
 - CLI commands
 - Background services
@@ -106,6 +106,87 @@ Notes:
 - Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
 
+## Gateway HTTP routes
+
+Plugins can expose HTTP endpoints with `api.registerHttpRoute(...)`.
+
+```ts
+api.registerHttpRoute({
+  path: "/acme/webhook",
+  auth: "plugin",
+  match: "exact",
+  handler: async (_req, res) => {
+    res.statusCode = 200;
+    res.end("ok");
+    return true;
+  },
+});
+```
+
+Route fields:
+
+- `path`: route path under the gateway HTTP server.
+- `auth`: required. Use `"gateway"` to require normal gateway auth, or `"plugin"` for plugin-managed auth/webhook verification.
+- `match`: optional. `"exact"` (default) or `"prefix"`.
+- `replaceExisting`: optional. Allows the same plugin to replace its own existing route registration.
+- `handler`: return `true` when the route handled the request.
+
+Notes:
+
+- `api.registerHttpHandler(...)` is obsolete. Use `api.registerHttpRoute(...)`.
+- Plugin routes must declare `auth` explicitly.
+- Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
+
+## Plugin SDK import paths
+
+Use SDK subpaths instead of the monolithic `openclaw/plugin-sdk` import when
+authoring plugins:
+
+- `openclaw/plugin-sdk/core` for generic plugin APIs, provider auth types, and shared helpers.
+- `openclaw/plugin-sdk/compat` for bundled/internal plugin code that needs broader shared runtime helpers than `core`.
+- `openclaw/plugin-sdk/telegram` for Telegram channel plugins.
+- `openclaw/plugin-sdk/discord` for Discord channel plugins.
+- `openclaw/plugin-sdk/slack` for Slack channel plugins.
+- `openclaw/plugin-sdk/signal` for Signal channel plugins.
+- `openclaw/plugin-sdk/imessage` for iMessage channel plugins.
+- `openclaw/plugin-sdk/whatsapp` for WhatsApp channel plugins.
+- `openclaw/plugin-sdk/line` for LINE channel plugins.
+- `openclaw/plugin-sdk/msteams` for the bundled Microsoft Teams plugin surface.
+- Bundled extension-specific subpaths are also available:
+  `openclaw/plugin-sdk/acpx`, `openclaw/plugin-sdk/bluebubbles`,
+  `openclaw/plugin-sdk/copilot-proxy`, `openclaw/plugin-sdk/device-pair`,
+  `openclaw/plugin-sdk/diagnostics-otel`, `openclaw/plugin-sdk/diffs`,
+  `openclaw/plugin-sdk/feishu`,
+  `openclaw/plugin-sdk/google-gemini-cli-auth`, `openclaw/plugin-sdk/googlechat`,
+  `openclaw/plugin-sdk/irc`, `openclaw/plugin-sdk/llm-task`,
+  `openclaw/plugin-sdk/lobster`, `openclaw/plugin-sdk/matrix`,
+  `openclaw/plugin-sdk/mattermost`, `openclaw/plugin-sdk/memory-core`,
+  `openclaw/plugin-sdk/memory-lancedb`,
+  `openclaw/plugin-sdk/minimax-portal-auth`,
+  `openclaw/plugin-sdk/nextcloud-talk`, `openclaw/plugin-sdk/nostr`,
+  `openclaw/plugin-sdk/open-prose`, `openclaw/plugin-sdk/phone-control`,
+  `openclaw/plugin-sdk/qwen-portal-auth`, `openclaw/plugin-sdk/synology-chat`,
+  `openclaw/plugin-sdk/talk-voice`, `openclaw/plugin-sdk/test-utils`,
+  `openclaw/plugin-sdk/thread-ownership`, `openclaw/plugin-sdk/tlon`,
+  `openclaw/plugin-sdk/twitch`, `openclaw/plugin-sdk/voice-call`,
+  `openclaw/plugin-sdk/zalo`, and `openclaw/plugin-sdk/zalouser`.
+
+Compatibility note:
+
+- `openclaw/plugin-sdk` remains supported for existing external plugins.
+- New and migrated bundled plugins should use channel or extension-specific
+  subpaths; use `core` for generic surfaces and `compat` only when broader
+  shared helpers are required.
+
+Performance note:
+
+- Plugin discovery and manifest metadata use short in-process caches to reduce
+  bursty startup/reload work.
+- Set `OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE=1` or
+  `OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE=1` to disable these caches.
+- Tune cache windows with `OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS` and
+  `OPENCLAW_PLUGIN_MANIFEST_CACHE_MS`.
+
 ## Discovery & precedence
 
 OpenClaw scans, in order:
@@ -124,13 +205,21 @@ OpenClaw scans, in order:
 - `~/.openclaw/extensions/*.ts`
 - `~/.openclaw/extensions/*/index.ts`
 
-4. Bundled extensions (shipped with OpenClaw, **disabled by default**)
+4. Bundled extensions (shipped with OpenClaw, mostly disabled by default)
 
 - `<openclaw>/extensions/*`
 
-Bundled plugins must be enabled explicitly via `plugins.entries.<id>.enabled`
-or `openclaw plugins enable <id>`. Installed plugins are enabled by default,
-but can be disabled the same way.
+Most bundled plugins must be enabled explicitly via
+`plugins.entries.<id>.enabled` or `openclaw plugins enable <id>`.
+
+Default-on bundled plugin exceptions:
+
+- `device-pair`
+- `phone-control`
+- `talk-voice`
+- active memory slot plugin (default slot: `memory-core`)
+
+Installed plugins are enabled by default, but can be disabled the same way.
 
 Hardening notes:
 
@@ -372,6 +461,59 @@ Notes:
 - Hook eligibility rules still apply (OS/bins/env/config requirements).
 - Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
 - You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
+
+### Agent lifecycle hooks (`api.on`)
+
+For typed runtime lifecycle hooks, use `api.on(...)`:
+
+```ts
+export default function register(api) {
+  api.on(
+    "before_prompt_build",
+    (event, ctx) => {
+      return {
+        prependSystemContext: "Follow company style guide.",
+      };
+    },
+    { priority: 10 },
+  );
+}
+```
+
+Important hooks for prompt construction:
+
+- `before_model_resolve`: runs before session load (`messages` are not available). Use this to deterministically override `modelOverride` or `providerOverride`.
+- `before_prompt_build`: runs after session load (`messages` are available). Use this to shape prompt input.
+- `before_agent_start`: legacy compatibility hook. Prefer the two explicit hooks above.
+
+Core-enforced hook policy:
+
+- Operators can disable prompt mutation hooks per plugin via `plugins.entries.<id>.hooks.allowPromptInjection: false`.
+- When disabled, OpenClaw blocks `before_prompt_build` and ignores prompt-mutating fields returned from legacy `before_agent_start` while preserving legacy `modelOverride` and `providerOverride`.
+
+`before_prompt_build` result fields:
+
+- `prependContext`: prepends text to the user prompt for this run. Best for turn-specific or dynamic content.
+- `systemPrompt`: full system prompt override.
+- `prependSystemContext`: prepends text to the current system prompt.
+- `appendSystemContext`: appends text to the current system prompt.
+
+Prompt build order in embedded runtime:
+
+1. Apply `prependContext` to the user prompt.
+2. Apply `systemPrompt` override when provided.
+3. Apply `prependSystemContext + current system prompt + appendSystemContext`.
+
+Merge and precedence notes:
+
+- Hook handlers run by priority (higher first).
+- For merged context fields, values are concatenated in execution order.
+- `before_prompt_build` values are applied before legacy `before_agent_start` fallback values.
+
+Migration guidance:
+
+- Move static guidance from `prependContext` to `prependSystemContext` (or `appendSystemContext`) so providers can cache stable system-prefix content.
+- Keep `prependContext` for per-turn dynamic context that should stay tied to the user message.
 
 ## Provider plugins (model auth)
 

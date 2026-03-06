@@ -7,6 +7,7 @@ import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { getChildLogger } from "../../logging.js";
+import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { SlackMessageEvent } from "../types.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
@@ -52,6 +53,7 @@ export type SlackMonitorContext = {
   slashCommand: Required<import("../../config/config.js").SlackSlashCommandConfig>;
   textLimit: number;
   ackReactionScope: string;
+  typingReaction: string;
   mediaMaxBytes: number;
   removeAckAfterReply: boolean;
 
@@ -61,6 +63,7 @@ export type SlackMonitorContext = {
   resolveSlackSystemEventSessionKey: (params: {
     channelId?: string | null;
     channelType?: string | null;
+    senderId?: string | null;
   }) => string;
   isChannelAllowed: (params: {
     channelId?: string;
@@ -114,6 +117,7 @@ export function createSlackMonitorContext(params: {
   slashCommand: SlackMonitorContext["slashCommand"];
   textLimit: number;
   ackReactionScope: string;
+  typingReaction: string;
   mediaMaxBytes: number;
   removeAckAfterReply: boolean;
 }): SlackMonitorContext {
@@ -149,6 +153,7 @@ export function createSlackMonitorContext(params: {
   const resolveSlackSystemEventSessionKey = (p: {
     channelId?: string | null;
     channelType?: string | null;
+    senderId?: string | null;
   }) => {
     const channelId = p.channelId?.trim() ?? "";
     if (!channelId) {
@@ -163,6 +168,27 @@ export function createSlackMonitorContext(params: {
         ? `slack:group:${channelId}`
         : `slack:channel:${channelId}`;
     const chatType = isDirectMessage ? "direct" : isGroup ? "group" : "channel";
+    const senderId = p.senderId?.trim() ?? "";
+
+    // Resolve through shared channel/account bindings so system events route to
+    // the same agent session as regular inbound messages.
+    try {
+      const peerKind = isDirectMessage ? "direct" : isGroup ? "group" : "channel";
+      const peerId = isDirectMessage ? senderId : channelId;
+      if (peerId) {
+        const route = resolveAgentRoute({
+          cfg: params.cfg,
+          channel: "slack",
+          accountId: params.accountId,
+          teamId: params.teamId,
+          peer: { kind: peerKind, id: peerId },
+        });
+        return route.sessionKey;
+      }
+    } catch {
+      // Fall through to legacy key derivation.
+    }
+
     return resolveSessionKey(
       params.sessionScope,
       { From: from, ChatType: chatType, Provider: "slack" },
@@ -390,6 +416,7 @@ export function createSlackMonitorContext(params: {
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
     ackReactionScope: params.ackReactionScope,
+    typingReaction: params.typingReaction,
     mediaMaxBytes: params.mediaMaxBytes,
     removeAckAfterReply: params.removeAckAfterReply,
     logger,
