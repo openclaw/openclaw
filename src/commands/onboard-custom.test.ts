@@ -78,7 +78,7 @@ function stubFetchForCustomApi(params: {
 /** Filter fetch mock calls to only verification/probe requests (excludes /models discovery). */
 function filterVerificationCalls(fetchMock: ReturnType<typeof vi.fn>) {
   return fetchMock.mock.calls.filter(
-    ([url]: [unknown]) => typeof url !== "string" || !url.endsWith("/models"),
+    ([url]: unknown[]) => typeof url !== "string" || !url.endsWith("/models"),
   );
 }
 
@@ -272,11 +272,7 @@ describe("promptCustomApiConfig", () => {
       select: ["plaintext", "unknown", "baseUrl", "plaintext"],
     });
     stubFetchForCustomApi({
-      verificationResponses: [
-        { ok: false, status: 404 },
-        { ok: false, status: 404 },
-        { ok: true },
-      ],
+      verificationResponses: [{ ok: false, status: 404 }, { ok: false, status: 404 }, { ok: true }],
     });
     await runPromptCustomApi(prompter);
 
@@ -327,20 +323,18 @@ describe("promptCustomApiConfig", () => {
     });
 
     let verificationCallCount = 0;
-    const fetchMock = vi
-      .fn()
-      .mockImplementation((url: string, init?: { signal?: AbortSignal }) => {
-        if (typeof url === "string" && url.endsWith("/models")) {
-          return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
-        }
-        verificationCallCount++;
-        if (verificationCallCount === 1) {
-          return new Promise((_resolve, reject) => {
-            init?.signal?.addEventListener("abort", () => reject(new Error("AbortError")));
-          });
-        }
-        return Promise.resolve({ ok: true, json: async () => ({}) });
-      });
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: { signal?: AbortSignal }) => {
+      if (typeof url === "string" && url.endsWith("/models")) {
+        return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+      }
+      verificationCallCount++;
+      if (verificationCallCount === 1) {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("AbortError")));
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const promise = runPromptCustomApi(prompter);

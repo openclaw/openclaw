@@ -439,6 +439,8 @@ async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<Cus
 
 type DiscoveredModel = { id: string; owned_by?: string };
 
+const MANUAL_INPUT_SENTINEL = "__manual_input__";
+
 /**
  * Attempt to discover models from an OpenAI-compatible `/models` endpoint.
  * Tries `baseUrl/models` first; if the baseUrl lacks a `/v1` suffix and the
@@ -454,34 +456,30 @@ async function discoverModelsFromEndpoint(params: {
     headers.Authorization = `Bearer ${params.apiKey}`;
   }
 
-  const urls = [
-    `${trimmed}/models`,
-    ...(/\/v1$/i.test(trimmed) ? [] : [`${trimmed}/v1/models`]),
-  ];
+  const urls = [`${trimmed}/models`, ...(/\/v1$/i.test(trimmed) ? [] : [`${trimmed}/v1/models`])];
 
   for (const url of urls) {
     try {
-      const res = await fetchWithTimeout(
-        url,
-        { method: "GET", headers },
-        DISCOVER_TIMEOUT_MS,
-      );
+      const res = await fetchWithTimeout(url, { method: "GET", headers }, DISCOVER_TIMEOUT_MS);
       if (!res.ok) {
         continue;
       }
       const data = (await res.json()) as { data?: Array<{ id?: string; owned_by?: string }> };
       const models = (data.data ?? [])
-        .map((m) => ({ id: typeof m.id === "string" ? m.id.trim() : "", owned_by: m.owned_by }))
-        .filter((m): m is DiscoveredModel => Boolean(m.id));
-      if (models.length > 0) return models;
+        .filter((m): m is { id: string; owned_by?: string } => {
+          const id = typeof m.id === "string" ? m.id.trim() : "";
+          return Boolean(id) && id !== MANUAL_INPUT_SENTINEL;
+        })
+        .map((m): DiscoveredModel => ({ id: m.id.trim(), owned_by: m.owned_by }));
+      if (models.length > 0) {
+        return models;
+      }
     } catch {
       continue;
     }
   }
   return [];
 }
-
-const MANUAL_INPUT_SENTINEL = "__manual_input__";
 
 async function promptCustomApiModelId(
   prompter: WizardPrompter,
@@ -540,8 +538,13 @@ async function applyCustomApiRetryChoice(params: {
     baseUrl = retryInput.baseUrl;
     apiKey = retryInput.apiKey;
     resolvedApiKey = retryInput.resolvedApiKey;
-    // Re-discover when baseUrl changes
+    const discoverSpinner = params.prompter.progress("Discovering available models...");
     models = await discoverModelsFromEndpoint({ baseUrl, apiKey: resolvedApiKey });
+    if (models && models.length > 0) {
+      discoverSpinner.stop(`Found ${models.length} model(s).`);
+    } else {
+      discoverSpinner.stop("No models discovered, enter manually.");
+    }
   }
   if (params.retryChoice === "model" || params.retryChoice === "both") {
     modelId = await promptCustomApiModelId(params.prompter, models);
@@ -768,18 +771,14 @@ export async function promptCustomApiConfig(params: {
   let discoveredModels: DiscoveredModel[] = [];
   {
     const discoverSpinner = prompter.progress("Discovering available models...");
-    try {
-      discoveredModels = await discoverModelsFromEndpoint({
-        baseUrl: baseUrl,
-        apiKey: resolvedApiKey,
-      });
-      if (discoveredModels.length > 0) {
-        discoverSpinner.stop(`Found ${discoveredModels.length} model(s).`);
-      } else {
-        discoverSpinner.stop("No models discovered, enter manually.");
-      }
-    } catch {
-      discoverSpinner.stop("Model discovery failed, enter manually.");
+    discoveredModels = await discoverModelsFromEndpoint({
+      baseUrl: baseUrl,
+      apiKey: resolvedApiKey,
+    });
+    if (discoveredModels.length > 0) {
+      discoverSpinner.stop(`Found ${discoveredModels.length} model(s).`);
+    } else {
+      discoverSpinner.stop("No models discovered, enter manually.");
     }
   }
 
@@ -836,7 +835,9 @@ export async function promptCustomApiConfig(params: {
             discoveredModels,
           });
           ({ baseUrl, apiKey, resolvedApiKey, modelId } = retryResult);
-          if (retryResult.discoveredModels) discoveredModels = retryResult.discoveredModels;
+          if (retryResult.discoveredModels) {
+            discoveredModels = retryResult.discoveredModels;
+          }
           continue;
         }
       }
@@ -870,7 +871,9 @@ export async function promptCustomApiConfig(params: {
       discoveredModels,
     });
     ({ baseUrl, apiKey, resolvedApiKey, modelId } = retryResult);
-    if (retryResult.discoveredModels) discoveredModels = retryResult.discoveredModels;
+    if (retryResult.discoveredModels) {
+      discoveredModels = retryResult.discoveredModels;
+    }
     if (compatibilityChoice === "unknown") {
       compatibility = null;
     }
