@@ -446,6 +446,16 @@ function renderAgentOverview(params: {
 
       <div class="agent-model-select" style="margin-top: 20px;">
         <div class="label">Model Selection</div>
+        ${
+          !configForm
+            ? html`
+                <div class="callout warn" style="margin-top: 12px">
+                  Config is not loaded yet. Model settings are read-only until the config snapshot finishes loading.
+                  Try <strong>Reload Config</strong> or wait a moment.
+                </div>
+              `
+            : nothing
+        }
         <div class="row" style="gap: 12px; flex-wrap: wrap;">
           <label class="field" style="min-width: 260px; flex: 1;">
             <span>Primary model${isDefault ? " (default)" : ""}</span>
