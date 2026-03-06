@@ -27,6 +27,7 @@ import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
   loadSessionStore,
+  parseSessionThreadInfo,
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveSessionFilePath,
@@ -50,7 +51,7 @@ import {
   isExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
-import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
+import { isHeartbeatEventDrivenReason, resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
   type HeartbeatRunResult,
@@ -612,19 +613,27 @@ export async function runHeartbeatOnce(opts: {
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? loadConfig();
   const agentId = normalizeAgentId(opts.agentId ?? resolveDefaultAgentId(cfg));
-  const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
-  if (!heartbeatsEnabled) {
+  const reason = opts.reason;
+  const isEventDrivenReason = isHeartbeatEventDrivenReason(reason);
+  const baseHeartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
+  // Event-driven wakes (exec/cron/hook) should still produce follow-up turns
+  // even when periodic heartbeat is disabled. Route to "last" by default.
+  const heartbeat =
+    isEventDrivenReason && !baseHeartbeat?.target
+      ? { ...baseHeartbeat, target: "last" }
+      : baseHeartbeat;
+  if (!heartbeatsEnabled && !isEventDrivenReason) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+  if (!isHeartbeatEnabledForAgent(cfg, agentId) && !isEventDrivenReason) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat) && !isEventDrivenReason) {
     return { status: "skipped", reason: "disabled" };
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
+  if (!isEventDrivenReason && !isWithinActiveHours(cfg, heartbeat, startedAt)) {
     return { status: "skipped", reason: "quiet-hours" };
   }
 
@@ -651,7 +660,15 @@ export async function runHeartbeatOnce(opts: {
   }
   const { entry, sessionKey, storePath } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
-  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
+  const explicitThreadId = isEventDrivenReason
+    ? parseSessionThreadInfo(sessionKey).threadId
+    : undefined;
+  const delivery = resolveHeartbeatDeliveryTarget({
+    cfg,
+    entry,
+    heartbeat,
+    explicitThreadId,
+  });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
@@ -1114,20 +1131,21 @@ export function startHeartbeatRunner(opts: {
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-    if (!heartbeatsEnabled) {
+    const reason = params?.reason;
+    const isEventDrivenReason = isHeartbeatEventDrivenReason(reason);
+    if (!heartbeatsEnabled && !isEventDrivenReason) {
       return {
         status: "skipped",
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-    if (state.agents.size === 0) {
+    if (state.agents.size === 0 && !isEventDrivenReason) {
       return {
         status: "skipped",
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
 
-    const reason = params?.reason;
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = params?.sessionKey?.trim() || undefined;
     const isInterval = reason === "interval";
@@ -1136,22 +1154,29 @@ export function startHeartbeatRunner(opts: {
     let ran = false;
 
     if (requestedSessionKey || requestedAgentId) {
-      const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
+      const targetAgentId =
+        requestedAgentId ??
+        resolveAgentIdFromSessionKey(requestedSessionKey) ??
+        resolveDefaultAgentId(state.cfg);
       const targetAgent = state.agents.get(targetAgentId);
+      const targetHeartbeat =
+        targetAgent?.heartbeat ?? resolveHeartbeatConfig(state.cfg, targetAgentId);
       if (!targetAgent) {
-        scheduleNext();
-        return { status: "skipped", reason: "disabled" };
+        if (!isEventDrivenReason) {
+          scheduleNext();
+          return { status: "skipped", reason: "disabled" };
+        }
       }
       try {
         const res = await runOnce({
           cfg: state.cfg,
-          agentId: targetAgent.agentId,
-          heartbeat: targetAgent.heartbeat,
+          agentId: targetAgentId,
+          heartbeat: targetHeartbeat,
           reason,
           sessionKey: requestedSessionKey,
           deps: { runtime: state.runtime },
         });
-        if (res.status !== "skipped" || res.reason !== "disabled") {
+        if (targetAgent && (res.status !== "skipped" || res.reason !== "disabled")) {
           advanceAgentSchedule(targetAgent, now);
         }
         scheduleNext();
@@ -1161,7 +1186,31 @@ export function startHeartbeatRunner(opts: {
         log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
           error: errMsg,
         });
-        advanceAgentSchedule(targetAgent, now);
+        if (targetAgent) {
+          advanceAgentSchedule(targetAgent, now);
+        }
+        scheduleNext();
+        return { status: "failed", reason: errMsg };
+      }
+    }
+
+    if (state.agents.size === 0 && isEventDrivenReason) {
+      const fallbackAgentId = resolveDefaultAgentId(state.cfg);
+      try {
+        const res = await runOnce({
+          cfg: state.cfg,
+          agentId: fallbackAgentId,
+          heartbeat: resolveHeartbeatConfig(state.cfg, fallbackAgentId),
+          reason,
+          deps: { runtime: state.runtime },
+        });
+        scheduleNext();
+        return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
+      } catch (err) {
+        const errMsg = formatErrorMessage(err);
+        log.error(`heartbeat runner: event runOnce threw unexpectedly: ${errMsg}`, {
+          error: errMsg,
+        });
         scheduleNext();
         return { status: "failed", reason: errMsg };
       }

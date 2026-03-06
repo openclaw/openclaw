@@ -241,6 +241,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  explicitThreadId?: string | number;
 }): OutboundTarget {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
@@ -268,6 +269,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     entry,
     requestedChannel: target === "last" ? "last" : target,
     explicitTo: heartbeat?.to,
+    explicitThreadId: params.explicitThreadId,
     mode: "heartbeat",
   });
 
