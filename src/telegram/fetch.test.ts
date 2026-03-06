@@ -248,6 +248,9 @@ describe("resolveTelegramFetch", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
     expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
+    // Verify partial fallback: dns order + net-level autoSelectFamily still fire
+    expect(setDefaultAutoSelectFamily).toHaveBeenCalledWith(false);
+    expect(setDefaultResultOrder).toHaveBeenCalledWith("ipv4first");
   });
 
   it("retries with ipv4 fallback once per request, not once per process", async () => {
