@@ -23,8 +23,13 @@ export const updateHandlers: GatewayRequestHandlers = {
     const actor = resolveControlPlaneActor(client);
     const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
     // Prefer live deliveryContext from params over extractDeliveryInfo() (see #18612).
-    const { deliveryContext: extractedDeliveryContext, threadId } = extractDeliveryInfo(sessionKey);
-    const deliveryContext = parseDeliveryContextFromParams(params) ?? extractedDeliveryContext;
+    // Also prefer threadId from params when present — the session-key-derived value
+    // is empty for Slack sessions where replyToMode="all" but the key is not :thread:-scoped.
+    const { deliveryContext: extractedDeliveryContext, threadId: extractedThreadId } =
+      extractDeliveryInfo(sessionKey);
+    const paramsDeliveryContext = parseDeliveryContextFromParams(params);
+    const deliveryContext = paramsDeliveryContext ?? extractedDeliveryContext;
+    const threadId = paramsDeliveryContext?.threadId ?? extractedThreadId;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
       typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)
