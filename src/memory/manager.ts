@@ -56,8 +56,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     | "voyage"
     | "mistral"
     | "ollama"
+    | "siliconflow"
     | "auto";
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+  protected fallbackFrom?:
+    | "openai"
+    | "local"
+    | "gemini"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "siliconflow";
   protected fallbackReason?: string;
   private readonly providerUnavailableReason?: string;
   protected openAi?: OpenAiEmbeddingClient;

@@ -9,7 +9,15 @@ export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
-  provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "auto";
+  provider:
+    | "openai"
+    | "local"
+    | "gemini"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "siliconflow"
+    | "auto";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
@@ -25,7 +33,15 @@ export type ResolvedMemorySearchConfig = {
   experimental: {
     sessionMemory: boolean;
   };
-  fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  fallback:
+    | "openai"
+    | "gemini"
+    | "local"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "siliconflow"
+    | "none";
   model: string;
   local: {
     modelPath?: string;
@@ -156,6 +172,7 @@ function mergeConfig(
     provider === "gemini" ||
     provider === "voyage" ||
     provider === "mistral" ||
+    provider === "siliconflow" ||
     provider === "ollama" ||
     provider === "auto";
   const batch = {
@@ -190,7 +207,9 @@ function mergeConfig(
             ? DEFAULT_MISTRAL_MODEL
             : provider === "ollama"
               ? DEFAULT_OLLAMA_MODEL
-              : undefined;
+              : provider === "siliconflow"
+                ? DEFAULT_OPENAI_MODEL
+                : undefined;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
