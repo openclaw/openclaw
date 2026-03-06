@@ -78,8 +78,9 @@ function resolveTimingPolicy(
 function resolveChannelStaleEventThresholdMs(
   channelId: string,
   defaultThresholdMs: number,
+  hasExplicitOverride: boolean,
 ): number {
-  if (channelId === "imessage") {
+  if (channelId === "imessage" && !hasExplicitOverride) {
     return Math.max(defaultThresholdMs, DEFAULT_IMESSAGE_STALE_EVENT_THRESHOLD_MS);
   }
   return defaultThresholdMs;
@@ -94,6 +95,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     abortSignal,
   } = deps;
   const timing = resolveTimingPolicy(deps);
+  const hasExplicitStaleEventThreshold =
+    deps.timing?.staleEventThresholdMs !== undefined || deps.staleEventThresholdMs !== undefined;
 
   const cooldownMs = cooldownCycles * checkIntervalMs;
   const restartRecords = new Map<string, RestartRecord>();
@@ -138,6 +141,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             staleEventThresholdMs: resolveChannelStaleEventThresholdMs(
               channelId,
               timing.staleEventThresholdMs,
+              hasExplicitStaleEventThreshold,
             ),
             channelConnectGraceMs: timing.channelConnectGraceMs,
           };

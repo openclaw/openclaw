@@ -542,6 +542,23 @@ describe("channel-health-monitor", () => {
       await expectNoRestart(manager);
     });
 
+    it("respects explicit stale thresholds for iMessage", async () => {
+      const customThreshold = 10 * 60_000;
+      const now = Date.now();
+      const manager = createIMessageSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - customThreshold - 60_000,
+          lastEventAt: now - customThreshold - 30_000,
+        }),
+      );
+      const monitor = await startAndRunCheck(manager, {
+        staleEventThresholdMs: customThreshold,
+      });
+      expect(manager.stopChannel).toHaveBeenCalledWith("imessage", "default");
+      expect(manager.startChannel).toHaveBeenCalledWith("imessage", "default");
+      monitor.stop();
+    });
+
     it("still restarts iMessage channels after very long event silence", async () => {
       const sevenHours = 7 * 60 * 60_000;
       const now = Date.now();
