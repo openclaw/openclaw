@@ -8,12 +8,14 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
 } from "./zod-schema.core.js";
+import { ContextualActivationSchema } from "./zod-schema.providers-core.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
 const WhatsAppGroupEntrySchema = z
   .object({
     requireMention: z.boolean().optional(),
+    contextualActivation: ContextualActivationSchema.optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
   })

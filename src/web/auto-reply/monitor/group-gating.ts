@@ -1,8 +1,13 @@
 import { hasControlCommand } from "../../../auto-reply/command-detection.js";
+import {
+  engagementStates,
+  shouldParticipateInGroup,
+} from "../../../auto-reply/contextual-activation.js";
 import { parseActivationCommand } from "../../../auto-reply/group-activation.js";
 import { recordPendingHistoryEntryIfEnabled } from "../../../auto-reply/reply/history.js";
 import { resolveMentionGating } from "../../../channels/mention-gating.js";
 import type { loadConfig } from "../../../config/config.js";
+import { resolveChannelGroupContextualActivation } from "../../../config/group-policy.js";
 import { normalizeE164 } from "../../../utils.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
@@ -79,7 +84,7 @@ function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verbose
   return { shouldProcess: false } as const;
 }
 
-export function applyGroupGating(params: ApplyGroupGatingParams) {
+export async function applyGroupGating(params: ApplyGroupGatingParams) {
   const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId);
   if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
     params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
@@ -145,7 +150,40 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     shouldBypassMention,
   });
   params.msg.wasMentioned = mentionGate.effectiveWasMentioned;
+
+  // Resolve contextual activation config once for both engaged and peeking paths
+  const contextualConfig = resolveChannelGroupContextualActivation({
+    cfg: params.cfg,
+    channel: "whatsapp",
+    groupId: params.conversationId,
+  });
+
+  // When engaged via contextual activation, skip mention gating and ask the model
+  // whether to continue or disengage.
+  if (contextualConfig?.model) {
+    const engagement = engagementStates.get(params.groupHistoryKey);
+    if (engagement?.mode === "engaged") {
+      const decision = await callContextualDecision(params, contextualConfig);
+      if (decision.shouldProcess) {
+        return { shouldProcess: true };
+      }
+      // Model decided to disengage — fall through to normal mention gating below
+    }
+  }
+
   if (!shouldBypassMention && requireMention && mentionGate.shouldSkip) {
+    // Contextual activation (peeking): ask a decision model before skipping
+    if (contextualConfig?.model) {
+      const decision = await callContextualDecision(params, contextualConfig);
+      if (decision.shouldProcess) {
+        return { shouldProcess: true };
+      }
+      if (decision.error) {
+        params.logVerbose(
+          `[contextual-activation] WhatsApp group ${params.conversationId}: error: ${decision.error}`,
+        );
+      }
+    }
     return skipGroupMessageAndStoreHistory(
       params,
       `Group message stored for context (no mention detected) in ${params.conversationId}: ${params.msg.body}`,
@@ -153,4 +191,31 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   }
 
   return { shouldProcess: true };
+}
+
+async function callContextualDecision(
+  params: ApplyGroupGatingParams,
+  contextualConfig: NonNullable<ReturnType<typeof resolveChannelGroupContextualActivation>>,
+) {
+  const existingHistory = params.groupHistories.get(params.groupHistoryKey) ?? [];
+  const recentMessages = existingHistory.map((h) => ({
+    sender: h.sender,
+    body: h.body,
+    timestamp: h.timestamp,
+  }));
+  const senderLabel =
+    params.msg.senderName && params.msg.senderE164
+      ? `${params.msg.senderName} (${params.msg.senderE164})`
+      : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
+  return shouldParticipateInGroup({
+    cfg: params.cfg,
+    config: contextualConfig,
+    recentMessages,
+    currentMessage: {
+      sender: senderLabel,
+      body: params.msg.body,
+      timestamp: params.msg.timestamp,
+    },
+    groupKey: params.groupHistoryKey,
+  });
 }

@@ -12,6 +12,7 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { normalizeCommandBody } from "../auto-reply/commands-registry.js";
+import { engagementStates, shouldParticipateInGroup } from "../auto-reply/contextual-activation.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import {
   buildPendingHistoryContextFromMap,
@@ -605,23 +606,89 @@ export const buildTelegramMessageContext = async ({
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
+  const contextualConfig = (groupConfig as TelegramGroupConfig | undefined)?.contextualActivation;
+  const groupKey = historyKey ?? "";
+
+  // When engaged via contextual activation, skip mention gating entirely and ask
+  // the model whether to continue or disengage.
+  if (isGroup && contextualConfig?.model) {
+    const engagement = engagementStates.get(groupKey);
+    if (engagement?.mode === "engaged") {
+      const decision = await callTelegramContextualDecision({
+        cfg,
+        contextualConfig,
+        groupHistories,
+        groupKey,
+        msg,
+        rawBody,
+        senderId: senderId || chatId,
+        botName: primaryCtx.me?.first_name ?? primaryCtx.me?.username,
+      });
+      if (decision.shouldProcess) {
+        // Stay engaged, skip mention gate — fall through to process
+      } else {
+        // Model disengaged — fall through to normal mention gating below
+      }
+    }
+  }
+
   if (isGroup && requireMention && canDetectMention) {
     if (mentionGate.shouldSkip) {
-      logger.info({ chatId, reason: "no-mention" }, "skipping group message");
-      recordPendingHistoryEntryIfEnabled({
-        historyMap: groupHistories,
-        historyKey: historyKey ?? "",
-        limit: historyLimit,
-        entry: historyKey
-          ? {
-              sender: buildSenderLabel(msg, senderId || chatId),
-              body: rawBody,
-              timestamp: msg.date ? msg.date * 1000 : undefined,
-              messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-            }
-          : null,
-      });
-      return null;
+      // Contextual activation (peeking): ask the decision model before skipping
+      if (contextualConfig?.model) {
+        const decision = await callTelegramContextualDecision({
+          cfg,
+          contextualConfig,
+          groupHistories,
+          groupKey,
+          msg,
+          rawBody,
+          senderId: senderId || chatId,
+          botName: primaryCtx.me?.first_name ?? primaryCtx.me?.username,
+        });
+        if (decision.shouldProcess) {
+          logVerbose(`[contextual-activation] Telegram group ${chatId}: decided to participate`);
+          // Fall through — treat as if mentioned
+        } else {
+          if (decision.error) {
+            logVerbose(
+              `[contextual-activation] Telegram group ${chatId}: error: ${decision.error}`,
+            );
+          }
+          logger.info({ chatId, reason: "no-mention-contextual-skip" }, "skipping group message");
+          recordPendingHistoryEntryIfEnabled({
+            historyMap: groupHistories,
+            historyKey: groupKey,
+            limit: historyLimit,
+            entry: historyKey
+              ? {
+                  sender: buildSenderLabel(msg, senderId || chatId),
+                  body: rawBody,
+                  timestamp: msg.date ? msg.date * 1000 : undefined,
+                  messageId:
+                    typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+                }
+              : null,
+          });
+          return null;
+        }
+      } else {
+        logger.info({ chatId, reason: "no-mention" }, "skipping group message");
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: groupHistories,
+          historyKey: groupKey,
+          limit: historyLimit,
+          entry: historyKey
+            ? {
+                sender: buildSenderLabel(msg, senderId || chatId),
+                body: rawBody,
+                timestamp: msg.date ? msg.date * 1000 : undefined,
+                messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+              }
+            : null,
+        });
+        return null;
+      }
     }
   }
 
@@ -976,6 +1043,37 @@ export const buildTelegramMessageContext = async ({
     accountId: account.accountId,
   };
 };
+
+async function callTelegramContextualDecision(params: {
+  cfg: OpenClawConfig;
+  contextualConfig: NonNullable<TelegramGroupConfig["contextualActivation"]>;
+  groupHistories: Map<string, HistoryEntry[]>;
+  groupKey: string;
+  // oxlint-disable-next-line typescript/no-explicit-any
+  msg: any;
+  rawBody: string;
+  senderId: string | number;
+  botName?: string;
+}) {
+  const existingHistory = params.groupHistories.get(params.groupKey) ?? [];
+  const recentMessages = existingHistory.map((h) => ({
+    sender: h.sender,
+    body: h.body,
+    timestamp: h.timestamp,
+  }));
+  return shouldParticipateInGroup({
+    cfg: params.cfg,
+    config: params.contextualConfig,
+    recentMessages,
+    currentMessage: {
+      sender: buildSenderLabel(params.msg as never, params.senderId),
+      body: params.rawBody,
+      timestamp: params.msg.date ? params.msg.date * 1000 : undefined,
+    },
+    groupKey: params.groupKey,
+    botName: params.botName,
+  });
+}
 
 export type TelegramMessageContext = NonNullable<
   Awaited<ReturnType<typeof buildTelegramMessageContext>>
