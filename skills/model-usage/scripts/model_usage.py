@@ -185,6 +185,29 @@ def latest_day_cost(entries: List[Dict[str, Any]], model: str) -> Tuple[Optional
     return None, None
 
 
+def latest_model_date(entries: List[Dict[str, Any]], model: str) -> Optional[str]:
+    if not entries:
+        return None
+    sorted_entries = sorted(
+        entries,
+        key=lambda entry: entry.get("date") or "",
+    )
+    for entry in reversed(sorted_entries):
+        day = entry.get("date") if isinstance(entry.get("date"), str) else None
+
+        breakdowns = entry.get("modelBreakdowns")
+        if isinstance(breakdowns, list):
+            for item in breakdowns:
+                if isinstance(item, dict) and item.get("modelName") == model:
+                    return day
+
+        models_used = entry.get("modelsUsed")
+        if isinstance(models_used, list) and model in models_used:
+            return day
+
+    return None
+
+
 def render_text_current(
     provider: str,
     model: str,
@@ -267,7 +290,12 @@ def main() -> int:
     if args.mode == "current":
         model = args.model
         latest_date = None
-        if not model:
+        if model:
+            latest_date = latest_model_date(entries, model)
+            if latest_date is None:
+                eprint(f"Model '{model}' not found in codexbar cost payload.")
+                return 2
+        else:
             model, latest_date = pick_current_model(entries)
         if not model:
             eprint("No model data found in codexbar cost payload.")
