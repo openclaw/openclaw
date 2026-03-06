@@ -109,7 +109,19 @@ export type {
   GatewayRequestHandlerOptions,
   RespondFn,
 } from "../gateway/server-methods/types.js";
-export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
+export type {
+  PluginRuntime,
+  RuntimeLogger,
+  SubagentRunParams,
+  SubagentRunResult,
+  SubagentWaitParams,
+  SubagentWaitResult,
+  SubagentGetSessionMessagesParams,
+  SubagentGetSessionMessagesResult,
+  SubagentGetSessionParams,
+  SubagentGetSessionResult,
+  SubagentDeleteSessionParams,
+} from "../plugins/runtime/types.js";
 export { normalizePluginHttpPath } from "../plugins/http-path.js";
 export { registerPluginHttpRoute } from "../plugins/http-registry.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
@@ -120,20 +132,36 @@ export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matchin
 
 export type { FileLockHandle, FileLockOptions } from "./file-lock.js";
 export { acquireFileLock, withFileLock } from "./file-lock.js";
+export type { KeyedAsyncQueueHooks } from "./keyed-async-queue.js";
+export { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
 export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
 export {
   registerWebhookTarget,
+  registerWebhookTargetWithPluginRoute,
   rejectNonPostWebhookRequest,
+  resolveWebhookTargetWithAuthOrReject,
+  resolveWebhookTargetWithAuthOrRejectSync,
   resolveSingleWebhookTarget,
   resolveSingleWebhookTargetAsync,
   resolveWebhookTargets,
 } from "./webhook-targets.js";
-export type { WebhookTargetMatchResult } from "./webhook-targets.js";
+export type {
+  RegisterWebhookPluginRouteOptions,
+  RegisterWebhookTargetOptions,
+  WebhookTargetMatchResult,
+} from "./webhook-targets.js";
 export {
   applyBasicWebhookRequestGuards,
+  beginWebhookRequestPipelineOrReject,
+  createWebhookInFlightLimiter,
   isJsonContentType,
+  readWebhookBodyOrReject,
   readJsonWebhookBodyOrReject,
+  WEBHOOK_BODY_READ_DEFAULTS,
+  WEBHOOK_IN_FLIGHT_DEFAULTS,
 } from "./webhook-request-guards.js";
+export type { WebhookBodyReadProfile, WebhookInFlightLimiter } from "./webhook-request-guards.js";
+export { keepHttpServerTaskAlive, waitUntilAbort } from "./channel-lifecycle.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {
@@ -144,10 +172,15 @@ export {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
+export {
+  promptSingleChannelSecretInput,
+  type SingleChannelSecretInputPromptResult,
+} from "../channels/plugins/onboarding/helpers.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
+export { resolveAllowlistMatchByCandidates } from "../channels/allowlist-match.js";
 export type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
@@ -200,17 +233,27 @@ export {
   normalizeAllowFrom,
   ReplyRuntimeConfigSchemaShape,
   requireOpenAllowFrom,
+  SecretInputSchema,
   TtsAutoSchema,
   TtsConfigSchema,
   TtsModeSchema,
   TtsProviderSchema,
 } from "../config/zod-schema.core.js";
+export {
+  assertSecretInputResolved,
+  hasConfiguredSecretInput,
+  isSecretRef,
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "../config/types.secrets.js";
+export type { SecretInput, SecretRef } from "../config/types.secrets.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
+  normalizeAgentId,
   resolveThreadSessionKeys,
 } from "../routing/session-key.js";
 export {
@@ -223,9 +266,22 @@ export {
   type SenderGroupAccessDecision,
   type SenderGroupAccessReason,
 } from "./group-access.js";
-export { resolveSenderCommandAuthorization } from "./command-auth.js";
+export {
+  resolveDirectDmAuthorizationOutcome,
+  resolveSenderCommandAuthorization,
+  resolveSenderCommandAuthorizationWithRuntime,
+} from "./command-auth.js";
+export type { CommandAuthorizationRuntime } from "./command-auth.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
-export { createInboundEnvelopeBuilder } from "./inbound-envelope.js";
+export {
+  createInboundEnvelopeBuilder,
+  resolveInboundRouteEnvelopeBuilder,
+  resolveInboundRouteEnvelopeBuilderWithRuntime,
+} from "./inbound-envelope.js";
+export {
+  listConfiguredAccountIds,
+  resolveAccountWithDefaultFallback,
+} from "./account-resolution.js";
 export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 export { handleSlackMessageAction } from "./slack-message-actions.js";
 export { extractToolSend } from "./tool-send.js";
@@ -244,6 +300,7 @@ export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { createLoggerBackedRuntime } from "./runtime.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
+export { readBooleanParam } from "./boolean-param.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
 export { generatePkceVerifierChallenge, toFormUrlEncoded } from "./oauth-utils.js";
 export { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
@@ -353,7 +410,7 @@ export type { ScopeTokenProvider } from "./fetch-auth.js";
 export { rawDataToString } from "../infra/ws.js";
 export { isWSLSync, isWSL2Sync, isWSLEnv } from "../infra/wsl.js";
 export { isTruthyEnvValue } from "../infra/env.js";
-export { resolveToolsBySender } from "../config/group-policy.js";
+export { resolveChannelGroupRequireMention, resolveToolsBySender } from "../config/group-policy.js";
 export {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,
@@ -498,6 +555,8 @@ export type {
 } from "../infra/diagnostic-events.js";
 export { detectMime, extensionForMime, getFileExtension } from "../media/mime.js";
 export { extractOriginalFilename } from "../media/store.js";
+export { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
+export type { SkillCommandSpec } from "../agents/skills.js";
 
 // Channel: Discord
 export {
@@ -506,6 +565,8 @@ export {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "../discord/accounts.js";
+export { inspectDiscordAccount } from "../discord/account-inspect.js";
+export type { InspectedDiscordAccount } from "../discord/account-inspect.js";
 export { collectDiscordAuditChannelIds } from "../discord/audit.js";
 export { discordOnboardingAdapter } from "../channels/plugins/onboarding/discord.js";
 export {
@@ -544,6 +605,8 @@ export {
   resolveSlackReplyToMode,
   type ResolvedSlackAccount,
 } from "../slack/accounts.js";
+export { inspectSlackAccount } from "../slack/account-inspect.js";
+export type { InspectedSlackAccount } from "../slack/account-inspect.js";
 export { extractSlackToolSend, listSlackMessageActions } from "../slack/message-actions.js";
 export { slackOnboardingAdapter } from "../channels/plugins/onboarding/slack.js";
 export {
@@ -559,6 +622,8 @@ export {
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
 } from "../telegram/accounts.js";
+export { inspectTelegramAccount } from "../telegram/account-inspect.js";
+export type { InspectedTelegramAccount } from "../telegram/account-inspect.js";
 export { telegramOnboardingAdapter } from "../channels/plugins/onboarding/telegram.js";
 export {
   looksLikeTelegramTargetId,
@@ -641,6 +706,21 @@ export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";
+
+// Context engine
+export type {
+  ContextEngine,
+  ContextEngineInfo,
+  AssembleResult,
+  CompactResult,
+  IngestResult,
+  IngestBatchResult,
+  BootstrapResult,
+  SubagentSpawnPreparation,
+  SubagentEndReason,
+} from "../context-engine/types.js";
+export { registerContextEngine } from "../context-engine/registry.js";
+export type { ContextEngineFactory } from "../context-engine/registry.js";
 
 // Security utilities
 export { redactSensitiveText } from "../logging/redact.js";

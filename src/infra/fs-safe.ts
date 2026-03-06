@@ -1,9 +1,12 @@
+import { randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
 import { constants as fsConstants } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { logWarn } from "../logger.js";
 import { sameFileIdentity } from "./file-identity.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { assertNoPathAliasEscape } from "./path-alias-guards.js";
@@ -282,13 +285,97 @@ async function readOpenedFileSafely(params: {
   };
 }
 
-export async function writeFileWithinRoot(params: {
-  rootDir: string;
-  relativePath: string;
+export type SafeWritableOpenResult = {
+  handle: FileHandle;
+  createdForWrite: boolean;
+  openedRealPath: string;
+  openedStat: Stats;
+};
+
+function emitWriteBoundaryWarning(reason: string) {
+  logWarn(`security: fs-safe write boundary warning (${reason})`);
+}
+
+function buildAtomicWriteTempPath(targetPath: string): string {
+  const dir = path.dirname(targetPath);
+  const base = path.basename(targetPath);
+  return path.join(dir, `.${base}.${process.pid}.${randomUUID()}.tmp`);
+}
+
+async function writeTempFileForAtomicReplace(params: {
+  tempPath: string;
   data: string | Buffer;
   encoding?: BufferEncoding;
-  mkdir?: boolean;
+  mode: number;
+}): Promise<Stats> {
+  const tempHandle = await fs.open(params.tempPath, OPEN_WRITE_CREATE_FLAGS, params.mode);
+  try {
+    if (typeof params.data === "string") {
+      await tempHandle.writeFile(params.data, params.encoding ?? "utf8");
+    } else {
+      await tempHandle.writeFile(params.data);
+    }
+    return await tempHandle.stat();
+  } finally {
+    await tempHandle.close().catch(() => {});
+  }
+}
+
+async function verifyAtomicWriteResult(params: {
+  rootDir: string;
+  targetPath: string;
+  expectedStat: Stats;
 }): Promise<void> {
+  const rootReal = await fs.realpath(params.rootDir);
+  const rootWithSep = ensureTrailingSep(rootReal);
+  const opened = await openVerifiedLocalFile(params.targetPath, { rejectHardlinks: true });
+  try {
+    if (!sameFileIdentity(opened.stat, params.expectedStat)) {
+      throw new SafeOpenError("path-mismatch", "path changed during write");
+    }
+    if (!isPathInside(rootWithSep, opened.realPath)) {
+      throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+    }
+  } finally {
+    await opened.handle.close().catch(() => {});
+  }
+}
+
+export async function resolveOpenedFileRealPathForHandle(
+  handle: FileHandle,
+  ioPath: string,
+): Promise<string> {
+  try {
+    return await fs.realpath(ioPath);
+  } catch (err) {
+    if (!isNotFoundPathError(err)) {
+      throw err;
+    }
+  }
+
+  const fdCandidates =
+    process.platform === "linux"
+      ? [`/proc/self/fd/${handle.fd}`, `/dev/fd/${handle.fd}`]
+      : process.platform === "win32"
+        ? []
+        : [`/dev/fd/${handle.fd}`];
+  for (const fdPath of fdCandidates) {
+    try {
+      return await fs.realpath(fdPath);
+    } catch {
+      // try next fd path
+    }
+  }
+  throw new SafeOpenError("path-mismatch", "unable to resolve opened file path");
+}
+
+export async function openWritableFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  mkdir?: boolean;
+  mode?: number;
+  truncateExisting?: boolean;
+}): Promise<SafeWritableOpenResult> {
   const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
   try {
     await assertNoPathAliasEscape({
@@ -319,16 +406,18 @@ export async function writeFileWithinRoot(params: {
     }
   }
 
+  const fileMode = params.mode ?? 0o600;
+
   let handle: FileHandle;
   let createdForWrite = false;
   try {
     try {
-      handle = await fs.open(ioPath, OPEN_WRITE_EXISTING_FLAGS, 0o600);
+      handle = await fs.open(ioPath, OPEN_WRITE_EXISTING_FLAGS, fileMode);
     } catch (err) {
       if (!isNotFoundPathError(err)) {
         throw err;
       }
-      handle = await fs.open(ioPath, OPEN_WRITE_CREATE_FLAGS, 0o600);
+      handle = await fs.open(ioPath, OPEN_WRITE_CREATE_FLAGS, fileMode);
       createdForWrite = true;
     }
   } catch (err) {
@@ -343,18 +432,29 @@ export async function writeFileWithinRoot(params: {
 
   let openedRealPath: string | null = null;
   try {
-    const [stat, lstat] = await Promise.all([handle.stat(), fs.lstat(ioPath)]);
-    if (lstat.isSymbolicLink() || !stat.isFile()) {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
       throw new SafeOpenError("invalid-path", "path is not a regular file under root");
     }
     if (stat.nlink > 1) {
       throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
     }
-    if (!sameFileIdentity(stat, lstat)) {
-      throw new SafeOpenError("path-mismatch", "path changed during write");
+
+    try {
+      const lstat = await fs.lstat(ioPath);
+      if (lstat.isSymbolicLink() || !lstat.isFile()) {
+        throw new SafeOpenError("invalid-path", "path is not a regular file under root");
+      }
+      if (!sameFileIdentity(stat, lstat)) {
+        throw new SafeOpenError("path-mismatch", "path changed during write");
+      }
+    } catch (err) {
+      if (!isNotFoundPathError(err)) {
+        throw err;
+      }
     }
 
-    const realPath = await fs.realpath(ioPath);
+    const realPath = await resolveOpenedFileRealPathForHandle(handle, ioPath);
     openedRealPath = realPath;
     const realStat = await fs.stat(realPath);
     if (!sameFileIdentity(stat, realStat)) {
@@ -369,20 +469,133 @@ export async function writeFileWithinRoot(params: {
 
     // Truncate only after boundary and identity checks complete. This avoids
     // irreversible side effects if a symlink target changes before validation.
-    if (!createdForWrite) {
+    if (params.truncateExisting !== false && !createdForWrite) {
       await handle.truncate(0);
     }
-    if (typeof params.data === "string") {
-      await handle.writeFile(params.data, params.encoding ?? "utf8");
-    } else {
-      await handle.writeFile(params.data);
-    }
+    return {
+      handle,
+      createdForWrite,
+      openedRealPath: realPath,
+      openedStat: stat,
+    };
   } catch (err) {
-    if (createdForWrite && err instanceof SafeOpenError && openedRealPath) {
-      await fs.rm(openedRealPath, { force: true }).catch(() => {});
+    const cleanupCreatedPath = createdForWrite && err instanceof SafeOpenError;
+    const cleanupPath = openedRealPath ?? ioPath;
+    await handle.close().catch(() => {});
+    if (cleanupCreatedPath) {
+      await fs.rm(cleanupPath, { force: true }).catch(() => {});
+    }
+    throw err;
+  }
+}
+
+export async function writeFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  data: string | Buffer;
+  encoding?: BufferEncoding;
+  mkdir?: boolean;
+}): Promise<void> {
+  const target = await openWritableFileWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    mkdir: params.mkdir,
+    truncateExisting: false,
+  });
+  const destinationPath = target.openedRealPath;
+  const targetMode = target.openedStat.mode & 0o777;
+  await target.handle.close().catch(() => {});
+  let tempPath: string | null = null;
+  try {
+    tempPath = buildAtomicWriteTempPath(destinationPath);
+    const writtenStat = await writeTempFileForAtomicReplace({
+      tempPath,
+      data: params.data,
+      encoding: params.encoding,
+      mode: targetMode || 0o600,
+    });
+    await fs.rename(tempPath, destinationPath);
+    tempPath = null;
+    try {
+      await verifyAtomicWriteResult({
+        rootDir: params.rootDir,
+        targetPath: destinationPath,
+        expectedStat: writtenStat,
+      });
+    } catch (err) {
+      emitWriteBoundaryWarning(`post-write verification failed: ${String(err)}`);
+      throw err;
+    }
+  } finally {
+    if (tempPath) {
+      await fs.rm(tempPath, { force: true }).catch(() => {});
+    }
+  }
+}
+
+export async function copyFileWithinRoot(params: {
+  sourcePath: string;
+  rootDir: string;
+  relativePath: string;
+  maxBytes?: number;
+  mkdir?: boolean;
+  rejectSourceHardlinks?: boolean;
+}): Promise<void> {
+  const source = await openVerifiedLocalFile(params.sourcePath, {
+    rejectHardlinks: params.rejectSourceHardlinks,
+  });
+  if (params.maxBytes !== undefined && source.stat.size > params.maxBytes) {
+    await source.handle.close().catch(() => {});
+    throw new SafeOpenError(
+      "too-large",
+      `file exceeds limit of ${params.maxBytes} bytes (got ${source.stat.size})`,
+    );
+  }
+
+  let target: SafeWritableOpenResult | null = null;
+  let sourceClosedByStream = false;
+  let targetClosedByStream = false;
+  try {
+    target = await openWritableFileWithinRoot({
+      rootDir: params.rootDir,
+      relativePath: params.relativePath,
+      mkdir: params.mkdir,
+    });
+    const sourceStream = source.handle.createReadStream();
+    const targetStream = target.handle.createWriteStream();
+    sourceStream.once("close", () => {
+      sourceClosedByStream = true;
+    });
+    targetStream.once("close", () => {
+      targetClosedByStream = true;
+    });
+    await pipeline(sourceStream, targetStream);
+  } catch (err) {
+    if (target?.createdForWrite) {
+      await fs.rm(target.openedRealPath, { force: true }).catch(() => {});
     }
     throw err;
   } finally {
-    await handle.close().catch(() => {});
+    if (!sourceClosedByStream) {
+      await source.handle.close().catch(() => {});
+    }
+    if (target && !targetClosedByStream) {
+      await target.handle.close().catch(() => {});
+    }
   }
+}
+
+export async function writeFileFromPathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  sourcePath: string;
+  mkdir?: boolean;
+}): Promise<void> {
+  await copyFileWithinRoot({
+    sourcePath: params.sourcePath,
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    mkdir: params.mkdir,
+    rejectSourceHardlinks: true,
+  });
 }

@@ -1,3 +1,22 @@
+# Opt-in extension dependencies at build time (space-separated directory names).
+# Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel matrix" .
+#
+# A multi-stage build is used instead of `RUN --mount=type=bind` because
+# bind mounts require BuildKit, which is not available in plain Docker.
+# This stage extracts only the package.json files we need from extensions/,
+# so the main build layer is not invalidated by unrelated extension source changes.
+ARG OPENCLAW_EXTENSIONS=""
+FROM node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935 AS ext-deps
+ARG OPENCLAW_EXTENSIONS
+COPY extensions /tmp/extensions
+RUN mkdir -p /out && \
+    for ext in $OPENCLAW_EXTENSIONS; do \
+      if [ -f "/tmp/extensions/$ext/package.json" ]; then \
+        mkdir -p "/out/$ext" && \
+        cp "/tmp/extensions/$ext/package.json" "/out/$ext/package.json"; \
+      fi; \
+    done
+
 FROM node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935
 
 # OCI base-image metadata for downstream image consumers.
@@ -34,6 +53,8 @@ COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY --chown=node:node ui/package.json ./ui/package.json
 COPY --chown=node:node patches ./patches
 COPY --chown=node:node scripts ./scripts
+
+COPY --from=ext-deps --chown=node:node /out/ ./extensions/
 
 USER node
 # Reduce OOM risk on low-memory hosts during dependency installation.
@@ -72,7 +93,7 @@ RUN if [ -n "$OPENCLAW_INSTALL_DOCKER_CLI" ]; then \
       # Update OPENCLAW_DOCKER_GPG_FINGERPRINT when Docker rotates release keys.
       curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc && \
       expected_fingerprint="$(printf '%s' "$OPENCLAW_DOCKER_GPG_FINGERPRINT" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')" && \
-      actual_fingerprint="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == \"fpr\" { print toupper($10); exit }')" && \
+      actual_fingerprint="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == "fpr" { print toupper($10); exit }')" && \
       if [ -z "$actual_fingerprint" ] || [ "$actual_fingerprint" != "$expected_fingerprint" ]; then \
         echo "ERROR: Docker apt key fingerprint mismatch (expected $expected_fingerprint, got ${actual_fingerprint:-<empty>})" >&2; \
         exit 1; \

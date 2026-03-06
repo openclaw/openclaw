@@ -60,6 +60,8 @@ export function createOpenClawTools(options?: {
   hasRepliedRef?: { value: boolean };
   /** If true, the model has native vision capability */
   modelHasVision?: boolean;
+  /** If true, nodes action="invoke" can call media-returning commands directly. */
+  allowMediaInvokeCommands?: boolean;
   /** Explicit agent ID override for cron/hook sessions. */
   requesterAgentIdOverride?: string;
   /** Require explicit message targets (no implicit last-route sends). */
@@ -70,6 +72,8 @@ export function createOpenClawTools(options?: {
   requesterSenderId?: string | null;
   /** Whether the requesting sender is an owner. */
   senderIsOwner?: boolean;
+  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  sessionId?: string;
 }): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const imageTool = options?.agentDir?.trim()
@@ -125,6 +129,7 @@ export function createOpenClawTools(options?: {
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
       allowHostControl: options?.allowHostBrowserControl,
+      agentSessionKey: options?.agentSessionKey,
     }),
     createCanvasTool({ config: options?.config }),
     createNodesTool({
@@ -134,6 +139,8 @@ export function createOpenClawTools(options?: {
       currentChannelId: options?.currentChannelId,
       currentThreadTs: options?.currentThreadTs,
       config: options?.config,
+      modelHasVision: options?.modelHasVision,
+      allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
     }),
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
@@ -199,6 +206,7 @@ export function createOpenClawTools(options?: {
         config: options?.config,
       }),
       sessionKey: options?.agentSessionKey,
+      sessionId: options?.sessionId,
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
