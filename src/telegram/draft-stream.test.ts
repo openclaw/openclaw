@@ -239,6 +239,27 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
+  it("clears draft after materializing to avoid duplicate display in DM", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    const materializedId = await stream.materialize?.();
+
+    expect(materializedId).toBe(17);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
+    // Draft should be cleared with empty string after real message is sent.
+    const draftCalls = api.sendMessageDraft.mock.calls;
+    const clearCall = draftCalls.find((call) => call[2] === "");
+    expect(clearCall).toBeDefined();
+    expect(clearCall?.[0]).toBe(123);
+    expect(clearCall?.[3]).toEqual({ message_thread_id: 42 });
+  });
+
   it("retries materialize send without thread when dm thread lookup fails", async () => {
     const api = createMockDraftApi();
     api.sendMessage
@@ -258,6 +279,10 @@ describe("createTelegramDraftStream", () => {
     expect(materializedId).toBe(55);
     expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Hello", { message_thread_id: 42 });
     expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Hello", undefined);
+    const draftCalls = api.sendMessageDraft.mock.calls;
+    const clearCall = draftCalls.find((call) => call[2] === "");
+    expect(clearCall).toBeDefined();
+    expect(clearCall?.[3]).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(
       "telegram stream preview materialize send failed with message_thread_id, retrying without thread",
     );
