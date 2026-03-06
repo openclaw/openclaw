@@ -17,7 +17,6 @@ const OPENAI_GPT_54_PRO_COST = { input: 30, output: 180, cacheRead: 0, cacheWrit
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
-const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
@@ -148,22 +147,6 @@ function buildOpenAIGpt54FallbackModel(modelId: string, template?: Model<Api> | 
   } as Model<Api>);
 }
 
-function buildOpenAICodexSparkFallbackModel(template?: Model<Api> | null): Model<Api> {
-  return normalizeModelCompat({
-    ...template,
-    id: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
-    name: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
-    api: "openai-codex-responses",
-    provider: "openai-codex",
-    baseUrl: "https://chatgpt.com/backend-api",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: template?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: template?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-    maxTokens: template?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-  } as Model<Api>);
-}
-
 export function augmentKnownForwardCompatModels(models: Model<Api>[]): Model<Api>[] {
   const next = [...models];
   const existing = new Set(
@@ -250,32 +233,12 @@ export function augmentKnownForwardCompatModels(models: Model<Api>[]): Model<Api
           maxTokens: DEFAULT_CONTEXT_TOKENS,
         } as Model<Api>),
     );
-    pushIfMissing(
-      "openai-codex",
-      OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
-      buildOpenAICodexSparkFallbackModel(
-        cloneSyntheticTemplateModel({
-          models: next,
-          normalizedProvider: "openai-codex",
-          trimmedModelId: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
-          templateIds: [OPENAI_CODEX_GPT_53_MODEL_ID, ...OPENAI_CODEX_TEMPLATE_MODEL_IDS],
-          patch: {
-            api: "openai-codex-responses",
-            provider: "openai-codex",
-            baseUrl: "https://chatgpt.com/backend-api",
-            reasoning: true,
-            input: ["text", "image"],
-          },
-        }),
-      ),
-    );
   }
 
   return next;
 }
 
 const CODEX_GPT54_ELIGIBLE_PROVIDERS = new Set(["openai-codex"]);
-const CODEX_GPT53_SPARK_ELIGIBLE_PROVIDERS = new Set(["openai-codex"]);
 const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
 
 function resolveOpenAICodexForwardCompatModel(
@@ -292,9 +255,6 @@ function resolveOpenAICodexForwardCompatModel(
   if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
     templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
     eligibleProviders = CODEX_GPT54_ELIGIBLE_PROVIDERS;
-  } else if (lower === OPENAI_CODEX_GPT_53_SPARK_MODEL_ID) {
-    templateIds = [OPENAI_CODEX_GPT_53_MODEL_ID, ...OPENAI_CODEX_TEMPLATE_MODEL_IDS];
-    eligibleProviders = CODEX_GPT53_SPARK_ELIGIBLE_PROVIDERS;
   } else if (lower === OPENAI_CODEX_GPT_53_MODEL_ID) {
     templateIds = OPENAI_CODEX_TEMPLATE_MODEL_IDS;
     eligibleProviders = CODEX_GPT53_ELIGIBLE_PROVIDERS;
@@ -316,10 +276,6 @@ function resolveOpenAICodexForwardCompatModel(
       id: trimmedModelId,
       name: trimmedModelId,
     } as Model<Api>);
-  }
-
-  if (lower === OPENAI_CODEX_GPT_53_SPARK_MODEL_ID) {
-    return buildOpenAICodexSparkFallbackModel();
   }
 
   return normalizeModelCompat({
