@@ -260,9 +260,15 @@ export abstract class MemoryManagerSyncOps {
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
     // WAL mode survives SIGTERM mid-write; default DELETE journal corrupts on crash.
-    const row = db.prepare("PRAGMA journal_mode = WAL").get() as { journal_mode: string } | undefined;
+    // Read back the result to detect environments (e.g. network mounts) where WAL
+    // is silently unavailable — exec() would discard the return value and hide the failure.
+    const row = db.prepare("PRAGMA journal_mode = WAL").get() as
+      | { journal_mode: string }
+      | undefined;
     if (row?.journal_mode !== "wal") {
-      log.warn(`memory index: WAL mode unavailable (got ${row?.journal_mode ?? "unknown"}); database may be vulnerable to corruption on SIGTERM`);
+      log.warn(
+        `memory index: WAL mode unavailable (got ${row?.journal_mode ?? "unknown"}); database may be vulnerable to corruption on SIGTERM`,
+      );
     }
     return db;
   }
