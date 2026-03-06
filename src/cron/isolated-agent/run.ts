@@ -468,7 +468,7 @@ export async function runCronIsolatedAgentTurn(params: {
         agentDir,
         fallbacksOverride:
           payloadFallbacks ?? resolveAgentModelFallbacksOverride(params.cfg, agentId),
-        run: async (providerOverride, modelOverride) => {
+        run: async (providerOverride, modelOverride, runOptions) => {
           if (abortSignal?.aborted) {
             throw new Error(abortReason());
           }
@@ -534,6 +534,7 @@ export async function runCronIsolatedAgentTurn(params: {
             // be blocked by a target it cannot satisfy (#27898).
             requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
             disableMessageTool: deliveryRequested || deliveryPlan.mode === "none",
+            allowRateLimitCooldownProbe: runOptions?.allowRateLimitCooldownProbe,
             abortSignal,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
