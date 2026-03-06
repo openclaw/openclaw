@@ -74,10 +74,31 @@ const ExecSecretRefSchema = z
   })
   .strict();
 
+const VAULT_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}#[A-Za-z0-9_-]{1,128}$/;
+
+const VaultSecretRefSchema = z
+  .object({
+    source: z.literal("vault"),
+    provider: z
+      .string()
+      .regex(
+        SECRET_PROVIDER_ALIAS_PATTERN,
+        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "proxmox-vault").',
+      ),
+    id: z
+      .string()
+      .regex(
+        VAULT_SECRET_REF_ID_PATTERN,
+        'Vault secret reference id must match "path/to/secret#fieldName" (example: "telegram-bot#token").',
+      ),
+  })
+  .strict();
+
 export const SecretRefSchema = z.discriminatedUnion("source", [
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
+  VaultSecretRefSchema,
 ]);
 
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
@@ -141,10 +162,26 @@ const SecretsExecProviderSchema = z
   })
   .strict();
 
+const SecretsVaultProviderSchema = z
+  .object({
+    source: z.literal("vault"),
+    addr: z.string().url("secrets.providers.*.addr must be a valid URL."),
+    token: z.string().min(1).optional(),
+    tokenEnv: z.string().regex(ENV_SECRET_REF_ID_PATTERN).optional(),
+    mountPath: z.string().min(1).optional(),
+    timeoutMs: z.number().int().positive().max(120000).optional(),
+  })
+  .strict()
+  .refine(
+    (v) => v.token !== undefined || v.tokenEnv !== undefined,
+    "Vault provider requires either 'token' or 'tokenEnv'.",
+  );
+
 export const SecretProviderSchema = z.discriminatedUnion("source", [
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
+  SecretsVaultProviderSchema,
 ]);
 
 export const SecretsConfigSchema = z
@@ -160,6 +197,7 @@ export const SecretsConfigSchema = z
         env: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         file: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         exec: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
+        vault: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
       })
       .strict()
       .optional(),

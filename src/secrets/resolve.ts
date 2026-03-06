@@ -8,6 +8,7 @@ import type {
   SecretProviderConfig,
   SecretRef,
   SecretRefSource,
+  VaultSecretProviderConfig,
 } from "../config/types.secrets.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
@@ -33,12 +34,14 @@ const DEFAULT_FILE_MAX_BYTES = 1024 * 1024;
 const DEFAULT_FILE_TIMEOUT_MS = 5_000;
 const DEFAULT_EXEC_TIMEOUT_MS = 5_000;
 const DEFAULT_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
+const DEFAULT_VAULT_TIMEOUT_MS = 5_000;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
 export type SecretRefResolveCache = {
   resolvedByRefKey?: Map<string, Promise<unknown>>;
   filePayloadByProvider?: Map<string, Promise<unknown>>;
+  vaultPayloadByPath?: Map<string, Promise<unknown>>;
 };
 
 type ResolveSecretRefOptions = {
@@ -782,6 +785,154 @@ async function resolveExecRefs(params: {
   return resolved;
 }
 
+async function resolveVaultRefs(params: {
+  refs: SecretRef[];
+  providerName: string;
+  providerConfig: VaultSecretProviderConfig;
+  env: NodeJS.ProcessEnv;
+  cache?: SecretRefResolveCache;
+}): Promise<ProviderResolutionOutput> {
+  // Resolve the Vault token
+  let token: string;
+  if (params.providerConfig.token) {
+    token = params.providerConfig.token;
+  } else if (params.providerConfig.tokenEnv) {
+    const envToken = params.env[params.providerConfig.tokenEnv];
+    if (!envToken) {
+      throw providerResolutionError({
+        source: "vault",
+        provider: params.providerName,
+        message: `Vault provider "${params.providerName}": environment variable "${params.providerConfig.tokenEnv}" is missing or empty.`,
+      });
+    }
+    token = envToken;
+  } else {
+    throw providerResolutionError({
+      source: "vault",
+      provider: params.providerName,
+      message: `Vault provider "${params.providerName}": either "token" or "tokenEnv" must be configured.`,
+    });
+  }
+
+  const addr = params.providerConfig.addr.replace(/\/$/, "");
+  const mount = (params.providerConfig.mountPath ?? "secret").replace(/^\/|\/$/g, "");
+  const timeoutMs = normalizePositiveInt(params.providerConfig.timeoutMs, DEFAULT_VAULT_TIMEOUT_MS);
+
+  // Validate ref format and group by KV path (everything before '#')
+  const byPath = new Map<string, SecretRef[]>();
+  for (const ref of params.refs) {
+    const hashIdx = ref.id.indexOf("#");
+    if (hashIdx <= 0 || hashIdx === ref.id.length - 1) {
+      throw refResolutionError({
+        source: "vault",
+        provider: params.providerName,
+        refId: ref.id,
+        message: `Vault ref id "${ref.id}" must be in format "path/to/secret#fieldName".`,
+      });
+    }
+    const secretPath = ref.id.slice(0, hashIdx);
+    const existing = byPath.get(secretPath);
+    if (existing) {
+      existing.push(ref);
+    } else {
+      byPath.set(secretPath, [ref]);
+    }
+  }
+
+  const resolved = new Map<string, unknown>();
+
+  for (const [secretPath, pathRefs] of byPath) {
+    const url = `${addr}/v1/${mount}/data/${secretPath}`;
+    const cacheKey = `${params.providerName}:${url}`;
+
+    let payload: unknown;
+    if (params.cache?.vaultPayloadByPath?.has(cacheKey)) {
+      payload = await (params.cache.vaultPayloadByPath.get(cacheKey) as Promise<unknown>);
+    } else {
+      const fetchPromise = (async (): Promise<unknown> => {
+        const controller = new AbortController();
+        const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(url, {
+            headers: {
+              "X-Vault-Token": token,
+              "Content-Type": "application/json",
+            },
+            signal: controller.signal,
+          });
+          if (!response.ok) {
+            if (response.status === 403) {
+              throw new Error(
+                `Permission denied (HTTP 403). Verify the Vault token has read access to "${secretPath}".`,
+              );
+            }
+            if (response.status === 404) {
+              throw new Error(`Secret not found at path "${secretPath}" (HTTP 404).`);
+            }
+            throw new Error(`Vault returned HTTP ${response.status} for path "${secretPath}".`);
+          }
+          return (await response.json()) as unknown;
+        } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") {
+            throw new Error(
+              `Vault provider "${params.providerName}" timed out after ${timeoutMs}ms fetching "${secretPath}".`,
+            );
+          }
+          throw err;
+        } finally {
+          clearTimeout(timeoutHandle);
+        }
+      })();
+
+      if (params.cache) {
+        params.cache.vaultPayloadByPath ??= new Map();
+        params.cache.vaultPayloadByPath.set(cacheKey, fetchPromise);
+      }
+      payload = await fetchPromise;
+    }
+
+    // KV v2 response shape: { data: { data: { fieldName: value, ... } } }
+    if (!isRecord(payload)) {
+      throw providerResolutionError({
+        source: "vault",
+        provider: params.providerName,
+        message: `Vault provider "${params.providerName}": invalid response for path "${secretPath}".`,
+      });
+    }
+    const outerData = (payload as Record<string, unknown>).data;
+    if (!isRecord(outerData)) {
+      throw providerResolutionError({
+        source: "vault",
+        provider: params.providerName,
+        message: `Vault provider "${params.providerName}": response missing "data" for path "${secretPath}".`,
+      });
+    }
+    const kvData = (outerData as Record<string, unknown>).data;
+    if (!isRecord(kvData)) {
+      throw providerResolutionError({
+        source: "vault",
+        provider: params.providerName,
+        message: `Vault provider "${params.providerName}": response missing "data.data" for path "${secretPath}". Is this a KV v2 mount?`,
+      });
+    }
+
+    for (const ref of pathRefs) {
+      const fieldName = ref.id.slice(ref.id.indexOf("#") + 1);
+      if (!(fieldName in kvData)) {
+        throw refResolutionError({
+          source: "vault",
+          provider: params.providerName,
+          refId: ref.id,
+          message: `Vault secret at "${secretPath}" does not contain field "${fieldName}".`,
+        });
+      }
+      resolved.set(ref.id, kvData[fieldName]);
+    }
+  }
+
+  return resolved;
+}
+
 async function resolveProviderRefs(params: {
   refs: SecretRef[];
   source: SecretRefSource;
@@ -814,6 +965,15 @@ async function resolveProviderRefs(params: {
         providerConfig: params.providerConfig,
         env: params.options.env ?? process.env,
         limits: params.limits,
+      });
+    }
+    if (params.providerConfig.source === "vault") {
+      return await resolveVaultRefs({
+        refs: params.refs,
+        providerName: params.providerName,
+        providerConfig: params.providerConfig,
+        env: params.options.env ?? process.env,
+        cache: params.options.cache,
       });
     }
     throw providerResolutionError({

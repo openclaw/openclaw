@@ -40,7 +40,7 @@ export async function applyAuthChoiceAnthropic(
       },
     });
     let token = "";
-    let tokenRef: { source: "env" | "file" | "exec"; provider: string; id: string } | undefined;
+    let tokenRef: { source: "env" | "file" | "exec" | "vault"; provider: string; id: string } | undefined;
     if (selectedMode === "ref") {
       const resolved = await promptSecretRefForOnboarding({
         provider: "anthropic-setup-token",
