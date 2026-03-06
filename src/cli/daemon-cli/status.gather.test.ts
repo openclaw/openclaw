@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { captureEnv } from "../../test-utils/env.js";
 
 const callGatewayStatusProbe = vi.fn(async (_opts?: unknown) => ({ ok: true as const }));
@@ -18,13 +19,15 @@ const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null)
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
 const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
-const serviceReadCommand = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({
-  programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
-  environment: {
-    OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
-    OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
-  },
-}));
+const serviceReadCommand = vi.fn(
+  async (_env?: NodeJS.ProcessEnv): Promise<GatewayServiceCommandConfig | null> => ({
+    programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+    environment: {
+      OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+      OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+    },
+  }),
+);
 const resolveGatewayBindHost = vi.fn(
   async (_bindMode?: string, _customBindHost?: string) => "0.0.0.0",
 );
