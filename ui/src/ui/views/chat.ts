@@ -486,9 +486,22 @@ export function renderChat(props: ChatProps) {
           props.sttActive
             ? html`
           <div class="chat-stt-overlay">
+            <div
+            class="chat-stt-overlay"
+            tabindex="0"
+            @click=${() => toggleStt()}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                toggleStt();
+              }
+            }}
+            ${ref((el) => el && (el as HTMLElement).focus())}
+          >
             <div class="chat-stt-overlay__content">
               <div class="chat-stt-overlay__icon">${icons.mic}</div>
               <div class="chat-stt-overlay__text">${props.sttText || "Listening..."}</div>
+              <div style="font-size: 12px; opacity: 0.6; margin-top: 8px;">点击或按 ESC 退出</div>
             </div>
           </div>
         `
