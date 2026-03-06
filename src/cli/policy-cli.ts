@@ -30,7 +30,7 @@ function parseAndCanonicalizePolicy(rawPolicy: string): string {
   try {
     parsed = JSON.parse(rawPolicy);
   } catch (err) {
-    throw new Error(`Policy JSON parse failed: ${String(err)}`);
+    throw new Error(`Policy JSON parse failed: ${String(err)}`, { cause: err });
   }
   const validated = SignedPolicySchema.safeParse(parsed);
   if (!validated.success) {
