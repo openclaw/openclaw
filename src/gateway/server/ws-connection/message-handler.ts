@@ -625,7 +625,10 @@ export function attachGatewayWsMessageHandler(params: {
             authOk,
             hasSharedAuth,
             isLocalClient,
-            isLoopbackRemote: isLoopbackAddress(remoteAddr ?? ""),
+            // Allow the bypass only when the TCP connection is loopback AND there are no
+            // untrusted proxy headers. If X-Forwarded-For is present from a non-configured
+            // proxy, the actual browser may be remote (local nginx proxying for remote users).
+            isLoopbackRemote: isLoopbackAddress(remoteAddr ?? "") && !hasUntrustedProxyHeaders,
           });
           if (decision.kind === "allow") {
             return true;

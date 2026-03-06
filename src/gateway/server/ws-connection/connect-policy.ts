@@ -76,10 +76,16 @@ export function evaluateMissingDeviceIdentity(params: {
   hasSharedAuth: boolean;
   isLocalClient: boolean;
   /**
-   * True when the raw socket remote address is a loopback address (e.g. 127.0.0.1 or ::1).
+   * True when the raw socket remote address is a loopback address (e.g. 127.0.0.1 or ::1)
+   * AND there are no untrusted proxy headers present.
+   *
    * Used to allow allowInsecureAuth for Control UI connections that arrive through a local
-   * reverse proxy (nginx/caddy on the same host) where isLocalClient is false because the
-   * proxy adds X-Forwarded-For headers but is not listed in gateway.trustedProxies.
+   * reverse proxy (nginx/caddy on the same host) that does NOT forward X-Forwarded-For.
+   * This ensures remote browsers proxied through a local nginx cannot bypass device auth —
+   * if proxy headers indicate a non-local client origin, this flag is false.
+   *
+   * For proxies that DO forward X-Forwarded-For, configure gateway.trustedProxies so that
+   * isLocalClient correctly reflects the resolved client address.
    */
   isLoopbackRemote?: boolean;
 }): MissingDeviceIdentityDecision {
@@ -95,9 +101,10 @@ export function evaluateMissingDeviceIdentity(params: {
     // (needed for device identity) is unavailable in insecure HTTP contexts.
     // Remote connections are still rejected to preserve the MitM protection
     // that the security fix (#20684) intended.
-    // isLoopbackRemote also allows the bypass when the connection arrives through a
-    // local reverse proxy (e.g. nginx on 127.0.0.1) where isLocalClient would be false
-    // because proxy headers are present but trustedProxies is not configured.
+    // isLoopbackRemote allows the bypass when the connection is from a local proxy
+    // that does NOT forward proxy headers for remote clients. If proxy headers ARE
+    // present from a non-configured proxy, message-handler sets isLoopbackRemote=false
+    // to prevent remote browsers from bypassing device auth through a local nginx.
     const isEffectivelyLocal = params.isLocalClient || params.isLoopbackRemote === true;
     if (!params.controlUiAuthPolicy.allowInsecureAuthConfigured || !isEffectivelyLocal) {
       return { kind: "reject-control-ui-insecure-auth" };
