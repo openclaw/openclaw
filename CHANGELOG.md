@@ -2881,6 +2881,7 @@ Docs: https://docs.openclaw.ai
 - BlueBubbles: resolve short message IDs safely and expose full IDs in templates. (#1387) Thanks @tyler6204.
 - Infra: preserve fetch helper methods when wrapping abort signals. (#1387)
 - macOS: default distribution packaging to universal binaries. (#1396) Thanks @JustYannicc.
+- Embedded runner: forward sender identity into attempt execution so Feishu doc auto-grant receives requester context again. (#32915) Thanks @cszhouwei.
 
 ## 2026.1.20
 
