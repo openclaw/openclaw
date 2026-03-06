@@ -154,18 +154,15 @@ async function runNonStreamingChatSend(params: {
   message?: string;
   sessionKey?: string;
   deliver?: boolean;
+  requestParams?: Record<string, unknown>;
   client?: unknown;
   expectBroadcast?: boolean;
 }) {
-  const sendParams: {
-    sessionKey: string;
-    message: string;
-    idempotencyKey: string;
-    deliver?: boolean;
-  } = {
+  const sendParams: Record<string, unknown> = {
     sessionKey: params.sessionKey ?? "main",
     message: params.message ?? "hello",
     idempotencyKey: params.idempotencyKey,
+    ...params.requestParams,
   };
   if (typeof params.deliver === "boolean") {
     sendParams.deliver = params.deliver;
@@ -362,6 +359,75 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(payload)).toBe("hello");
   });
 
+  it("chat.send forwards explicit thread metadata into inbound context", async () => {
+    createTranscriptFixture("openclaw-chat-send-thread-explicit-");
+    mockState.finalText = "thread ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-thread-explicit",
+      requestParams: {
+        threadId: "1710000000.9999",
+        threadLabel: "Thread label from webchat",
+        parentSessionKey: "agent:main:slack:channel:c123",
+      },
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        MessageThreadId: "1710000000.9999",
+        ThreadLabel: "Thread label from webchat",
+        ParentSessionKey: "agent:main:slack:channel:c123",
+      }),
+    );
+  });
+
+  it("chat.send normalizes numeric threadId params into string thread metadata", async () => {
+    createTranscriptFixture("openclaw-chat-send-thread-explicit-number-");
+    mockState.finalText = "thread ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-thread-explicit-number",
+      requestParams: {
+        threadId: 42,
+      },
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        MessageThreadId: "42",
+      }),
+    );
+  });
+
+  it("chat.send derives thread metadata from thread session keys when params are omitted", async () => {
+    createTranscriptFixture("openclaw-chat-send-thread-derived-");
+    mockState.finalText = "thread derived";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-thread-derived",
+      sessionKey: "agent:main:discord:channel:c1:thread:abc",
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        MessageThreadId: "abc",
+        ParentSessionKey: "agent:main:discord:channel:c1",
+      }),
+    );
+  });
+
   it("chat.send inherits originating routing metadata from session delivery context", async () => {
     createTranscriptFixture("openclaw-chat-send-origin-routing-");
     mockState.finalText = "ok";
@@ -395,7 +461,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         OriginatingTo: "telegram:6812765697",
         ExplicitDeliverRoute: true,
         AccountId: "default",
-        MessageThreadId: 42,
+        MessageThreadId: "42",
       }),
     );
   });

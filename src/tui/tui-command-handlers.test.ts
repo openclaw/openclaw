@@ -10,6 +10,8 @@ function createHarness(params?: {
   loadHistory?: LoadHistoryMock;
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
+  sessionKey?: string;
+  sessionDisplayName?: string;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
@@ -26,10 +28,10 @@ function createHarness(params?: {
     tui: { requestRender } as never,
     opts: {},
     state: {
-      currentSessionKey: "agent:main:main",
+      currentSessionKey: params?.sessionKey ?? "agent:main:main",
       activeChatRunId: null,
       isConnected: params?.isConnected ?? true,
-      sessionInfo: {},
+      sessionInfo: params?.sessionDisplayName ? { displayName: params.sessionDisplayName } : {},
     } as never,
     deliverDefault: false,
     openOverlay: vi.fn(),
@@ -140,5 +142,24 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
+  });
+
+  it("derives thread metadata from sessionKey and forwards it to sendChat", async () => {
+    const { handleCommand, sendChat } = createHarness({
+      sessionKey: "agent:main:discord:channel:c1:thread:abc",
+      sessionDisplayName: "Discord thread",
+    });
+
+    await handleCommand("hello thread");
+
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:channel:c1:thread:abc",
+        message: "hello thread",
+        threadId: "abc",
+        parentSessionKey: "agent:main:discord:channel:c1",
+        threadLabel: "Discord thread",
+      }),
+    );
   });
 });

@@ -1,5 +1,10 @@
+import {
+  parseAgentSessionKey,
+  resolveSessionThreadInfo,
+} from "../../../../src/sessions/session-key-utils.js";
 import { extractText } from "../chat/message-extract.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import type { SessionsListResult } from "../types.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 
@@ -30,6 +35,7 @@ export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   sessionKey: string;
+  sessionsResult?: SessionsListResult | null;
   chatLoading: boolean;
   chatMessages: unknown[];
   chatThinkingLevel: string | null;
@@ -49,6 +55,36 @@ export type ChatEventPayload = {
   message?: unknown;
   errorMessage?: string;
 };
+
+function normalizeSessionKey(value: string | undefined | null): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function sessionKeysEquivalent(left: string | undefined | null, right: string | undefined | null) {
+  const normalizedLeft = normalizeSessionKey(left);
+  const normalizedRight = normalizeSessionKey(right);
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+  if (normalizedLeft === normalizedRight) {
+    return true;
+  }
+
+  const parsedLeft = parseAgentSessionKey(normalizedLeft);
+  const parsedRight = parseAgentSessionKey(normalizedRight);
+  if (parsedLeft && parsedRight) {
+    return parsedLeft.agentId === parsedRight.agentId && parsedLeft.rest === parsedRight.rest;
+  }
+
+  if (parsedLeft && parsedLeft.agentId === "main" && parsedLeft.rest === normalizedRight) {
+    return true;
+  }
+  if (parsedRight && parsedRight.agentId === "main" && parsedRight.rest === normalizedLeft) {
+    return true;
+  }
+
+  return false;
+}
 
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
@@ -71,6 +107,40 @@ export async function loadChatHistory(state: ChatState) {
     state.lastError = String(err);
   } finally {
     state.chatLoading = false;
+  }
+}
+
+export async function syncChatHistoryDuringRun(state: ChatState) {
+  if (!state.client || !state.connected || !state.chatRunId) {
+    return;
+  }
+  const requestClient = state.client;
+  const requestRunId = state.chatRunId;
+  const requestSessionKey = state.sessionKey;
+  try {
+    const res = await requestClient.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
+      "chat.history",
+      {
+        sessionKey: requestSessionKey,
+        limit: 200,
+      },
+    );
+    if (!state.client || state.client !== requestClient || !state.connected) {
+      return;
+    }
+    if (!state.chatRunId || state.chatRunId !== requestRunId) {
+      return;
+    }
+    if (!sessionKeysEquivalent(state.sessionKey, requestSessionKey)) {
+      return;
+    }
+    const nextMessages = Array.isArray(res.messages) ? res.messages : [];
+    state.chatMessages = nextMessages.filter((message) => !isAssistantSilentReply(message));
+    if (typeof res.thinkingLevel === "string") {
+      state.chatThinkingLevel = res.thinkingLevel;
+    }
+  } catch {
+    // Best-effort realtime sync while a run is active.
   }
 }
 
@@ -194,12 +264,23 @@ export async function sendChatMessage(
         })
         .filter((a): a is NonNullable<typeof a> => a !== null)
     : undefined;
+  const threadInfo = resolveSessionThreadInfo(state.sessionKey);
+  const currentSessionDisplayName = state.sessionsResult?.sessions
+    ?.find((row) => row.key === state.sessionKey)
+    ?.displayName?.trim();
+  const threadLabel =
+    threadInfo.threadId != null && currentSessionDisplayName
+      ? currentSessionDisplayName
+      : undefined;
 
   try {
     await state.client.request("chat.send", {
       sessionKey: state.sessionKey,
       message: msg,
       deliver: false,
+      threadId: threadInfo.threadId ?? undefined,
+      threadLabel,
+      parentSessionKey: threadInfo.parentSessionKey ?? undefined,
       idempotencyKey: runId,
       attachments: apiAttachments,
     });
@@ -245,7 +326,10 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
-  if (payload.sessionKey !== state.sessionKey) {
+  const sameSession = sessionKeysEquivalent(payload.sessionKey, state.sessionKey);
+  const runMatchesActive =
+    Boolean(payload.runId) && Boolean(state.chatRunId) && payload.runId === state.chatRunId;
+  if (!sameSession && !runMatchesActive) {
     return null;
   }
 
