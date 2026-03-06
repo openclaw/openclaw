@@ -73,6 +73,42 @@ export const notificationConfigSchema = z.object({
   email: z.object({ enabled: z.boolean(), address: z.string().email().optional() }),
 });
 
+export const notificationFilterSchema = z.object({
+  enabledEvents: z
+    .array(
+      z.enum([
+        "trade_executed",
+        "strategy_promoted",
+        "strategy_killed",
+        "risk_alert",
+        "risk_breached",
+        "daily_brief",
+        "system_error",
+        "exchange_disconnected",
+        "heartbeat_complete",
+      ]),
+    )
+    .default(["trade_executed", "strategy_promoted", "risk_alert", "daily_brief", "system_error"]),
+});
+
+export const configImportSchema = z.object({
+  risk: riskConfigSchema.optional(),
+  agent: agentBehaviorSchema.optional(),
+  gates: promotionGateSchema.optional(),
+  notifications: z
+    .object({
+      telegramBotToken: z.string().optional(),
+      telegramChatId: z.string().optional(),
+      discordWebhookUrl: z.string().optional(),
+      emailHost: z.string().optional(),
+      emailPort: z.number().optional(),
+      emailFrom: z.string().optional(),
+      emailTo: z.string().optional(),
+      enabledEvents: notificationFilterSchema.shape.enabledEvents.optional(),
+    })
+    .optional(),
+});
+
 export const approvalActionSchema = z.object({
   eventId: z.string().min(1),
   action: z.enum(["approve", "reject"]),

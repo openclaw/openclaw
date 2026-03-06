@@ -87,6 +87,11 @@ export class RiskController {
     };
   }
 
+  /** Return a snapshot of the current risk configuration. */
+  getConfig(): TradingRiskConfig {
+    return { ...this.config };
+  }
+
   /** Update risk configuration. */
   updateConfig(config: Partial<TradingRiskConfig>): void {
     Object.assign(this.config, config);

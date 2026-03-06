@@ -58,6 +58,7 @@
         <button class="setting-nav-item" data-section="gates" onclick="SE.goSection('gates')">Promotion Gates</button>
         <button class="setting-nav-item" data-section="notifications" onclick="SE.goSection('notifications')">Notifications</button>
         <button class="setting-nav-item" data-section="plugins" onclick="SE.goSection('plugins')">Plugins</button>
+        <button class="setting-nav-item" data-section="soul" onclick="SE.goSection('soul')">Soul Template</button>
         <button class="setting-nav-item" data-section="advanced" onclick="SE.goSection('advanced')">Advanced</button>
       </nav>
 
@@ -286,6 +287,32 @@
               </div>
             </div>
 
+            <!-- Auto-Kill Rules -->
+            <div class="gate-group" style="margin-top:16px">
+              <h3 class="gate-group__title" style="color:var(--loss)">AUTO-KILL Rules</h3>
+              <p class="setting-section__desc" style="margin-bottom:10px;font-size:11px">Strategies matching these criteria will be automatically terminated.</p>
+              <div class="gate-fields">
+                <div class="setting-field">
+                  <label class="setting-field__label">Sharpe Below</label>
+                  <input type="number" id="killSharpe" class="setting-input setting-input--sm" step="0.1" />
+                  <span class="setting-field__hint">for consecutive days</span>
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Kill Days</label>
+                  <input type="number" id="killDays" class="setting-input setting-input--sm" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Max Drawdown Breach</label>
+                  <input type="number" id="killDD" class="setting-input setting-input--sm" step="0.01" />
+                  <span class="setting-field__hint">Immediate kill if DD exceeds</span>
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Stale Days (No Trades)</label>
+                  <input type="number" id="killStale" class="setting-input setting-input--sm" />
+                </div>
+              </div>
+            </div>
+
             <button class="save-btn" onclick="SE.saveGates()">Save Gate Config</button>
           </div>
         </section>
@@ -376,6 +403,21 @@
           <div id="pluginList"></div>
         </section>
 
+        <!-- Section: Soul Template -->
+        <section class="setting-section" id="section-soul">
+          <h2 class="setting-section__title">Soul Template</h2>
+          <p class="setting-section__desc">Customize the AI agent's personality and trading philosophy. This template guides the agent's decision-making.</p>
+
+          <div class="soul-editor">
+            <div class="soul-editor__header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+              <span class="soul-editor__filename" style="font-family:var(--mono);font-size:11px;color:var(--text-lo)">SOUL-FINANCIAL.md</span>
+              <button class="btn-sm" onclick="SE.resetSoul()">Reset to Default</button>
+            </div>
+            <textarea class="soul-editor__textarea" id="soulTemplate" rows="16" spellcheck="false" style="font-family:var(--mono);font-size:11px;line-height:1.6;background:rgba(0,0,0,0.3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:12px;width:100%;resize:vertical;tab-size:2;box-sizing:border-box"></textarea>
+            <button class="save-btn" onclick="SE.saveSoul()" style="margin-top:8px">Save Soul Template</button>
+          </div>
+        </section>
+
         <!-- Section: Advanced -->
         <section class="setting-section" id="section-advanced">
           <h2 class="setting-section__title">Advanced</h2>
@@ -389,12 +431,29 @@
               </div>
               <button class="btn-outline" onclick="SE.exportConfig()">Export</button>
             </div>
+            <div class="danger-action">
+              <div>
+                <div class="danger-action__title">Import Configuration</div>
+                <div class="danger-action__desc">Upload a previously exported JSON config file</div>
+              </div>
+              <label class="btn-outline" style="cursor:pointer">
+                Import
+                <input type="file" accept=".json" id="importFile" style="display:none" onchange="SE.importConfig(this)" />
+              </label>
+            </div>
             <div class="danger-action danger-action--destructive">
               <div>
                 <div class="danger-action__title">Reset All Settings</div>
                 <div class="danger-action__desc">Reset all configuration to defaults. This cannot be undone.</div>
               </div>
               <button class="btn-danger" onclick="SE.confirmReset()">Reset</button>
+            </div>
+            <div class="danger-action danger-action--destructive">
+              <div>
+                <div class="danger-action__title">Stop All Trading</div>
+                <div class="danger-action__desc">Immediately halt all live and paper trading. Strategies stay intact.</div>
+              </div>
+              <button class="btn-danger" onclick="SE.stopAllTrading()">STOP</button>
             </div>
           </div>
         </section>
@@ -606,6 +665,7 @@
           gates: pageData.gates || {},
           notifications: pageData.notifications || {},
           plugins: pageData.plugins || {},
+          soul: pageData.soulTemplate || "",
         };
 
         // ── POST/PUT API helpers ──
@@ -765,6 +825,13 @@
           $("gate23DD").value = l23.maxDrawdown || -0.1;
           $("gate23Win").value = l23.minWinRate || 0.5;
           $("gate23Trades").value = l23.minTrades || 50;
+
+          // Auto-Kill
+          var ak = g.autoKill || {};
+          $("killSharpe").value = ak.sharpeBelowThreshold != null ? ak.sharpeBelowThreshold : 0;
+          $("killDays").value = ak.killDays != null ? ak.killDays : 5;
+          $("killDD").value = ak.maxDrawdownBreach != null ? ak.maxDrawdownBreach : -0.3;
+          $("killStale").value = ak.staleDays != null ? ak.staleDays : 14;
         }
 
         // ── Render: Notifications ──
@@ -806,6 +873,12 @@
           el.innerHTML = html;
         }
 
+        // ── Render: Soul Template ──
+        function renderSoulTemplate(soul) {
+          var el = $("soulTemplate");
+          if (el) el.value = soul || "";
+        }
+
         // ── Master render ──
         function renderAll() {
           renderExchanges(state.exchanges, state.exchangeHealth);
@@ -814,6 +887,7 @@
           renderGatesForm(state.gates);
           renderNotifications(state.notifications);
           renderPlugins(state.plugins);
+          renderSoulTemplate(state.soul);
         }
 
         // ── SSE Connection Manager ──
@@ -894,6 +968,7 @@
           if (data.gates) state.gates = data.gates;
           if (data.notifications) state.notifications = data.notifications;
           if (data.plugins) state.plugins = data.plugins;
+          if (data.soulTemplate != null) state.soul = data.soulTemplate;
           renderAll();
         }
 
@@ -1118,6 +1193,12 @@
                 minWinRate: pf("gate23Win") || 0.5,
                 minTrades: pi("gate23Trades") || 50,
               },
+              autoKill: {
+                sharpeBelowThreshold: pf("killSharpe") || 0,
+                killDays: pi("killDays") || 5,
+                maxDrawdownBreach: pf("killDD") || -0.3,
+                staleDays: pi("killStale") || 14,
+              },
             };
             putApi("/api/v1/finance/config/gates", body)
               .then(function () {
@@ -1200,7 +1281,78 @@
           },
           executeReset: function () {
             SE.closeReset();
-            toast("Reset is not yet implemented", "error");
+            postApi("/api/v1/finance/config/reset", {})
+              .then(function () {
+                toast("All settings reset to defaults", "success");
+                setTimeout(function () { location.reload(); }, 1000);
+              })
+              .catch(function (e) {
+                toast("Reset failed: " + e.message, "error");
+              });
+          },
+
+          importConfig: function (input) {
+            var file = input.files && input.files[0];
+            if (!file) return;
+            var reader = new FileReader();
+            reader.onload = function (e) {
+              try {
+                var config = JSON.parse(e.target.result);
+                postApi("/api/v1/finance/config/import", config)
+                  .then(function () {
+                    toast("Config imported successfully", "success");
+                    setTimeout(function () { location.reload(); }, 1000);
+                  })
+                  .catch(function (err) {
+                    toast("Import failed: " + err.message, "error");
+                  });
+              } catch (err) {
+                toast("Invalid JSON file", "error");
+              }
+              // Reset file input so the same file can be re-selected
+              input.value = "";
+            };
+            reader.readAsText(file);
+          },
+
+          stopAllTrading: function () {
+            if (!confirm("STOP ALL TRADING?\n\nThis will immediately halt all live and paper trading. Strategies will remain intact but no new orders will be placed.")) return;
+            postApi("/api/v1/finance/trading/halt", {})
+              .then(function () {
+                toast("All trading halted", "success");
+              })
+              .catch(function (e) {
+                toast("Halt failed: " + e.message, "error");
+              });
+          },
+
+          saveSoul: function () {
+            var template = $("soulTemplate").value;
+            putApi("/api/v1/finance/config/soul", { template: template })
+              .then(function () {
+                toast("Soul template saved", "success");
+              })
+              .catch(function (e) {
+                toast("Save failed: " + e.message, "error");
+              });
+          },
+
+          resetSoul: function () {
+            if (!confirm("Reset soul template to default? Your customizations will be lost.")) return;
+            putApi("/api/v1/finance/config/soul", { template: null })
+              .then(function (r) {
+                toast("Soul template reset to default", "success");
+                if (r && r.template) {
+                  $("soulTemplate").value = r.template;
+                  state.soul = r.template;
+                } else {
+                  $("soulTemplate").value = "";
+                  state.soul = "";
+                }
+              })
+              .catch(function (e) {
+                toast("Reset failed: " + e.message, "error");
+              });
           },
         };
 

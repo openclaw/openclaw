@@ -9,6 +9,8 @@ import {
   riskConfigSchema,
   agentBehaviorSchema,
   promotionGateSchema,
+  notificationFilterSchema,
+  configImportSchema,
 } from "../schemas.js";
 import type { HttpReq, HttpRes, RuntimeServices } from "../types-http.js";
 import { parseJsonBody, jsonResponse, errorResponse } from "../types-http.js";
@@ -290,16 +292,22 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
     },
   });
 
-  // ── PUT /api/v1/finance/config/notifications — Update notification config (Telegram) ──
+  // ── PUT /api/v1/finance/config/notifications — Update notification config ──
   api.registerHttpRoute({
     path: "/api/v1/finance/config/notifications",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
         const body = await parseJsonBody(req);
-        const telegramBotToken =
-          typeof body.telegramBotToken === "string" ? body.telegramBotToken.trim() : undefined;
-        const telegramChatId =
-          typeof body.telegramChatId === "string" ? body.telegramChatId.trim() : undefined;
+        const str = (v: unknown) => (typeof v === "string" ? v.trim() : undefined);
+        const num = (v: unknown, fallback: number) => (typeof v === "number" ? v : fallback);
+
+        const telegramBotToken = str(body.telegramBotToken);
+        const telegramChatId = str(body.telegramChatId);
+        const discordWebhookUrl = str(body.discordWebhookUrl);
+        const emailHost = str(body.emailHost);
+        const emailPort = num(body.emailPort, 587);
+        const emailFrom = str(body.emailFrom);
+        const emailTo = str(body.emailTo);
 
         // Persist via the plugin config store if available
         const pluginConfig = (api as unknown as { pluginConfig?: Record<string, unknown> })
@@ -308,17 +316,254 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
           const notif = (pluginConfig.notifications ?? {}) as Record<string, unknown>;
           if (telegramBotToken !== undefined) notif.telegramBotToken = telegramBotToken;
           if (telegramChatId !== undefined) notif.telegramChatId = telegramChatId;
+          if (discordWebhookUrl !== undefined) notif.discordWebhookUrl = discordWebhookUrl;
+          if (emailHost !== undefined) notif.emailHost = emailHost;
+          if (body.emailPort !== undefined) notif.emailPort = emailPort;
+          if (emailFrom !== undefined) notif.emailFrom = emailFrom;
+          if (emailTo !== undefined) notif.emailTo = emailTo;
+          pluginConfig.notifications = notif;
+        }
+
+        const channels: string[] = [];
+        if (telegramChatId || telegramBotToken) channels.push("Telegram");
+        if (discordWebhookUrl) channels.push("Discord");
+        if (emailHost || emailFrom || emailTo) channels.push("Email");
+
+        eventStore.addEvent({
+          type: "system",
+          title: "Notification config updated",
+          detail: channels.length
+            ? `Channels updated: ${channels.join(", ")}`
+            : "Notification config saved (no channel changes)",
+          status: "completed",
+        });
+
+        jsonResponse(res, 200, { status: "updated" });
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
+  // ── PUT /api/v1/finance/config/notification-filters — Update notification event filters ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/config/notification-filters",
+    handler: async (req: HttpReq, res: HttpRes) => {
+      try {
+        const body = await parseJsonBody(req);
+        const parsed = notificationFilterSchema.safeParse(body);
+        if (!parsed.success) {
+          errorResponse(res, 400, parsed.error.issues.map((i) => i.message).join("; "));
+          return;
+        }
+
+        const pluginConfig = (api as unknown as { pluginConfig?: Record<string, unknown> })
+          .pluginConfig;
+        if (pluginConfig) {
+          const notif = (pluginConfig.notifications ?? {}) as Record<string, unknown>;
+          notif.enabledEvents = parsed.data.enabledEvents;
           pluginConfig.notifications = notif;
         }
 
         eventStore.addEvent({
           type: "system",
-          title: "Notification config updated",
-          detail: `Telegram Chat ID: ${telegramChatId ? "set" : "unchanged"}, Bot Token: ${telegramBotToken ? "set" : "unchanged"}`,
+          title: "Notification filters updated",
+          detail: `Enabled events: ${parsed.data.enabledEvents.join(", ")}`,
           status: "completed",
         });
 
-        jsonResponse(res, 200, { status: "updated" });
+        jsonResponse(res, 200, {
+          status: "updated",
+          enabledEvents: parsed.data.enabledEvents,
+        });
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
+  // ── GET /api/v1/finance/config/export — Export full finance configuration ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/config/export",
+    handler: async (_req: HttpReq, res: HttpRes) => {
+      try {
+        const pluginConfig = (api as unknown as { pluginConfig?: Record<string, unknown> })
+          .pluginConfig;
+
+        const riskCfg = riskController.getConfig();
+        const exchanges = registry.listExchanges().map((e) => ({
+          id: e.id,
+          exchange: e.exchange,
+          testnet: e.testnet ?? false,
+        }));
+
+        const agentConfigStore = runtime.services?.get?.("fin-agent-config") as
+          | { getConfig?: () => Record<string, unknown> }
+          | undefined;
+        const gateConfigStore = runtime.services?.get?.("fin-gate-config") as
+          | { getConfig?: () => Record<string, unknown> }
+          | undefined;
+
+        jsonResponse(res, 200, {
+          risk: riskCfg,
+          exchanges,
+          agent: agentConfigStore?.getConfig?.() ?? null,
+          gates: gateConfigStore?.getConfig?.() ?? null,
+          notifications: pluginConfig?.notifications ?? null,
+          exportedAt: new Date().toISOString(),
+          version: "1.0",
+        });
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
+  // ── POST /api/v1/finance/config/import — Import finance configuration ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/config/import",
+    handler: async (req: HttpReq, res: HttpRes) => {
+      try {
+        const body = await parseJsonBody(req);
+        const parsed = configImportSchema.safeParse(body);
+        if (!parsed.success) {
+          errorResponse(res, 400, parsed.error.issues.map((i) => i.message).join("; "));
+          return;
+        }
+
+        const imported: string[] = [];
+
+        if (parsed.data.risk) {
+          riskController.updateConfig(parsed.data.risk);
+          imported.push("risk");
+        }
+
+        if (parsed.data.agent) {
+          const agentConfigStore = runtime.services?.get?.("fin-agent-config") as
+            | { update: (cfg: Record<string, unknown>) => void }
+            | undefined;
+          if (agentConfigStore?.update) {
+            agentConfigStore.update(parsed.data.agent);
+            imported.push("agent");
+          }
+        }
+
+        if (parsed.data.gates) {
+          const gateConfigStore = runtime.services?.get?.("fin-gate-config") as
+            | { update: (cfg: Record<string, unknown>) => void }
+            | undefined;
+          if (gateConfigStore?.update) {
+            gateConfigStore.update(parsed.data.gates);
+            imported.push("gates");
+          }
+        }
+
+        if (parsed.data.notifications) {
+          const pluginConfig = (api as unknown as { pluginConfig?: Record<string, unknown> })
+            .pluginConfig;
+          if (pluginConfig) {
+            const notif = (pluginConfig.notifications ?? {}) as Record<string, unknown>;
+            Object.assign(notif, parsed.data.notifications);
+            pluginConfig.notifications = notif;
+            imported.push("notifications");
+          }
+        }
+
+        eventStore.addEvent({
+          type: "system",
+          title: "Configuration imported",
+          detail: `Imported sections: ${imported.join(", ") || "none"}`,
+          status: "completed",
+        });
+
+        jsonResponse(res, 200, { status: "imported", sections: imported });
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
+  // ── POST /api/v1/finance/config/reset — Reset all config to defaults ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/config/reset",
+    handler: async (_req: HttpReq, res: HttpRes) => {
+      try {
+        // Reset risk controller to balanced defaults
+        riskController.updateConfig({
+          enabled: true,
+          maxAutoTradeUsd: 100,
+          confirmThresholdUsd: 1000,
+          maxDailyLossUsd: 500,
+          maxPositionPct: 20,
+          maxLeverage: 3,
+        });
+
+        // Clear all exchanges
+        const exchanges = registry.listExchanges();
+        for (const ex of exchanges) {
+          registry.removeExchange(ex.id);
+        }
+
+        // Reset agent config
+        const agentConfigStore = runtime.services?.get?.("fin-agent-config") as
+          | { update: (cfg: Record<string, unknown>) => void }
+          | undefined;
+        if (agentConfigStore?.update) {
+          agentConfigStore.update({
+            heartbeatIntervalMs: 60000,
+            discoveryEnabled: true,
+            evolutionEnabled: true,
+            mutationRate: 0.1,
+            maxConcurrentStrategies: 10,
+          });
+        }
+
+        // Reset gate config
+        const gateConfigStore = runtime.services?.get?.("fin-gate-config") as
+          | { update: (cfg: Record<string, unknown>) => void }
+          | undefined;
+        if (gateConfigStore?.update) {
+          gateConfigStore.update({
+            l0l1: {
+              minDays: 7,
+              minSharpe: 0.5,
+              maxDrawdown: -0.15,
+              minWinRate: 0.4,
+              minTrades: 20,
+            },
+            l1l2: {
+              minDays: 14,
+              minSharpe: 1.0,
+              maxDrawdown: -0.1,
+              minWinRate: 0.45,
+              minTrades: 50,
+            },
+            l2l3: {
+              minDays: 30,
+              minSharpe: 1.5,
+              maxDrawdown: -0.08,
+              minWinRate: 0.5,
+              minTrades: 100,
+            },
+          });
+        }
+
+        // Clear notification config
+        const pluginConfig = (api as unknown as { pluginConfig?: Record<string, unknown> })
+          .pluginConfig;
+        if (pluginConfig) {
+          pluginConfig.notifications = {};
+        }
+
+        eventStore.addEvent({
+          type: "system",
+          title: "Configuration reset to defaults",
+          detail:
+            "All settings (risk, exchanges, agent, gates, notifications) reset to factory defaults",
+          status: "completed",
+        });
+
+        jsonResponse(res, 200, { status: "reset", message: "All configuration reset to defaults" });
       } catch (err) {
         errorResponse(res, 500, (err as Error).message);
       }

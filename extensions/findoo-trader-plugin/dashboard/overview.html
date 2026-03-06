@@ -42,6 +42,15 @@
       .onboard-btn--next{color:#fff;background:var(--accent,#6366f1)}
       .onboard-btn--next:hover{filter:brightness(1.1)}
       .onboard-nav{display:flex;gap:8px}
+
+      /* ── Macro Context Card ── */
+      .macro-ctx{margin-bottom:12px}
+      .macro-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+      .macro-item{display:flex;flex-direction:column;gap:2px;padding:8px;background:rgba(0,0,0,.15);border-radius:6px}
+      .macro-item__label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.3px}
+      .macro-item__val{font-size:16px;font-weight:600;color:var(--text-hi)}
+      .macro-item__bar{height:3px;background:var(--border);border-radius:2px;overflow:hidden}
+      .macro-item__bar-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--loss),var(--warn),var(--gain));transition:width .5s}
     </style>
   </head>
   <body>
@@ -359,6 +368,41 @@
           </div>
           <div class="daily-brief-card__body" id="briefBody">
             No brief available &mdash; Agent will generate one during next heartbeat.
+          </div>
+        </div>
+
+        <!-- Row 3b: Macro Context -->
+        <div class="card panel-card fade-up d5 macro-ctx" id="macroCtx">
+          <div class="panel-card__head">
+            <div class="panel-card__title">Macro Context</div>
+            <span class="card__badge num" id="macroRegime">--</span>
+          </div>
+          <div class="macro-grid">
+            <div class="macro-item">
+              <span class="macro-item__label">Fear & Greed</span>
+              <span class="macro-item__val num" id="macroFearGreed">--</span>
+              <div class="macro-item__bar"><div class="macro-item__bar-fill" id="macroFgBar" style="width:50%"></div></div>
+            </div>
+            <div class="macro-item">
+              <span class="macro-item__label">BTC Dominance</span>
+              <span class="macro-item__val num" id="macroBtcDom">--</span>
+            </div>
+            <div class="macro-item">
+              <span class="macro-item__label">DXY Index</span>
+              <span class="macro-item__val num" id="macroDxy">--</span>
+            </div>
+            <div class="macro-item">
+              <span class="macro-item__label">VIX</span>
+              <span class="macro-item__val num" id="macroVix">--</span>
+            </div>
+            <div class="macro-item">
+              <span class="macro-item__label">ETH/BTC Ratio</span>
+              <span class="macro-item__val num" id="macroEthBtc">--</span>
+            </div>
+            <div class="macro-item">
+              <span class="macro-item__label">Total Crypto MCap</span>
+              <span class="macro-item__val num" id="macroMcap">--</span>
+            </div>
           </div>
         </div>
 
@@ -1182,6 +1226,7 @@
           updateEquityChart(t.snapshots);
           updateAllocChart(t.allocations || (state.fund && state.fund.allocations));
           renderMarketStatus(t);
+          renderMacro(t.macro);
           renderDailyBrief(state.events);
           checkEmptyState(t, state.config);
         }
@@ -1312,6 +1357,7 @@
           updateEquityChart(data.snapshots);
           updateAllocChart(data.allocations);
           renderMarketStatus(data);
+          renderMacro(data.macro);
         }
 
         function onFundData(data) {
@@ -1600,6 +1646,33 @@
           $("orderPrice").style.opacity = isMarket ? ".5" : "1";
           $("orderPrice").value = isMarket ? "Market" : "";
         });
+
+        // ── Render: Macro Context ──
+        function renderMacro(macro) {
+          if (!macro) return;
+          var fg = $("macroFearGreed");
+          if (fg && macro.fearGreedIndex != null) {
+            fg.textContent = macro.fearGreedIndex;
+            fg.className = "macro-item__val num " + (macro.fearGreedIndex > 50 ? "gain" : macro.fearGreedIndex < 30 ? "loss" : "");
+            var bar = $("macroFgBar");
+            if (bar) bar.style.width = macro.fearGreedIndex + "%";
+          }
+          var dom = $("macroBtcDom");
+          if (dom && macro.btcDominance != null) dom.textContent = macro.btcDominance.toFixed(1) + "%";
+          var dxy = $("macroDxy");
+          if (dxy && macro.dxyIndex != null) dxy.textContent = macro.dxyIndex.toFixed(1);
+          var vix = $("macroVix");
+          if (vix && macro.vix != null) vix.textContent = macro.vix.toFixed(1);
+          var ethbtc = $("macroEthBtc");
+          if (ethbtc && macro.ethBtcRatio != null) ethbtc.textContent = macro.ethBtcRatio.toFixed(4);
+          var mcap = $("macroMcap");
+          if (mcap && macro.totalCryptoMcap != null) mcap.textContent = "$" + (macro.totalCryptoMcap / 1e12).toFixed(2) + "T";
+          var regime = $("macroRegime");
+          if (regime && macro.regime) {
+            regime.textContent = macro.regime;
+            regime.className = "card__badge num " + (macro.regime === "RISK_ON" ? "gain" : macro.regime === "RISK_OFF" ? "loss" : "");
+          }
+        }
 
         // ── Render: Multi-Market Status ──
         var EXCHANGE_MARKET_MAP = {
