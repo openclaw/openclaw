@@ -12,7 +12,8 @@ init_registry() {
 }
 
 # Add a new task
-# Usage: add_task <task_id> <agent> <repo> <branch> <worktree> <host> <tmux_session> <description>
+# Usage: add_task <task_id> <agent> <repo> <branch> <worktree> <host> <tmux_session> <description> [watchers_json]
+# watchers_json: optional JSON array of watcher objects, e.g. '[{"type":"session","sessionKey":"agent:main:main"}]'
 add_task() {
     local task_id="$1"
     local agent="$2"
@@ -22,6 +23,7 @@ add_task() {
     local host="$6"
     local tmux_session="$7"
     local description="$8"
+    local watchers_json="${9:-[]}"
     local started_at=$(date +%s)000  # milliseconds
 
     init_registry
@@ -37,7 +39,8 @@ add_task() {
         --arg tmuxSession "$tmux_session" \
         --arg description "$description" \
         --argjson startedAt "$started_at" \
-        '{id: $id, agent: $agent, repo: $repo, branch: $branch, worktree: $worktree, host: $host, tmuxSession: $tmuxSession, description: $description, startedAt: $startedAt, status: "running", notifyOnComplete: true}')
+        --argjson watchers "$watchers_json" \
+        '{id: $id, agent: $agent, repo: $repo, branch: $branch, worktree: $worktree, host: $host, tmuxSession: $tmuxSession, description: $description, startedAt: $startedAt, status: "running", notifyOnComplete: true, watchers: $watchers, notified: {}}')
 
     jq --argjson task "$task" '.tasks += [$task]' "$REGISTRY_FILE" > "$REGISTRY_FILE.tmp"
     mv "$REGISTRY_FILE.tmp" "$REGISTRY_FILE"
@@ -100,6 +103,20 @@ get_task() {
     local task_id="$1"
     init_registry
     jq -r ".tasks[] | select(.id == \"$task_id\")" "$REGISTRY_FILE"
+}
+
+# Mark a watcher notification event as sent (idempotency flag)
+# Usage: mark_notified <task_id> <event>
+# event: prCreated | completed
+mark_notified() {
+    local task_id="$1"
+    local event="$2"
+
+    init_registry
+
+    jq ".tasks |= map(if .id == \"$task_id\" then .notified.${event} = true else . end)" \
+        "$REGISTRY_FILE" > "$REGISTRY_FILE.tmp"
+    mv "$REGISTRY_FILE.tmp" "$REGISTRY_FILE"
 }
 
 # Remove completed tasks older than N days
