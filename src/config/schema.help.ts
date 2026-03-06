@@ -979,6 +979,18 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
+  "agents.defaults.cliBackends.*.mcp":
+    "MCP wiring options for CLI backends. Useful for merging custom MCP servers with OpenClaw's built-in MCP server in claude-cli sessions.",
+  "agents.defaults.cliBackends.*.mcp.enabled":
+    "Enables MCP config injection for this CLI backend (default on for claude-cli). Disable to run without MCP tools.",
+  "agents.defaults.cliBackends.*.mcp.strict":
+    "When true, passes --strict-mcp-config to the CLI. Set false only when you intentionally allow unknown MCP config references.",
+  "agents.defaults.cliBackends.*.mcp.configPath":
+    "Optional primary MCP config path. When set for claude-cli, OpenClaw merges this config with its own MCP server entry.",
+  "agents.defaults.cliBackends.*.mcp.mergeConfigPath":
+    "Optional additional MCP config path merged on top of the primary config for this backend.",
+  "agents.defaults.cliBackends.*.mcp.servers":
+    "Inline MCP servers merged into the effective backend MCP config (map of server name to server config object).",
   "agents.defaults.compaction":
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
   "agents.defaults.compaction.mode":

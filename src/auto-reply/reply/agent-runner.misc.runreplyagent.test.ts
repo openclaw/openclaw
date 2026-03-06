@@ -787,7 +787,17 @@ describe("runReplyAgent block streaming", () => {
 });
 
 describe("runReplyAgent claude-cli routing", () => {
-  function createRun() {
+  function createRun(params?: {
+    typingMode?: "instant" | "thinking";
+    opts?: {
+      onReasoningStream?: (payload: {
+        text?: string;
+        isReasoning?: boolean;
+      }) => Promise<void> | void;
+      onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
+      onReasoningEnd?: () => Promise<void> | void;
+    };
+  }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "webchat",
@@ -840,7 +850,8 @@ describe("runReplyAgent claude-cli routing", () => {
       blockStreamingEnabled: false,
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
-      typingMode: "instant",
+      typingMode: params?.typingMode ?? "instant",
+      opts: params?.opts,
     });
   }
 
@@ -878,6 +889,95 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expect(lifecyclePhases).toEqual(["start", "end"]);
     expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("forwards cli thinking/tool stream events to reply callbacks", async () => {
+    const runId = "00000000-0000-0000-0000-000000000002";
+    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
+    const onReasoningStream = vi.fn();
+    const onToolStart = vi.fn();
+    const toolPhases: string[] = [];
+    const thinkingEvents: string[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.runId !== runId) {
+        return;
+      }
+      if (evt.stream === "tool" && typeof evt.data?.phase === "string") {
+        toolPhases.push(evt.data.phase);
+      }
+      if (evt.stream === "thinking" && typeof evt.data?.text === "string") {
+        thinkingEvents.push(evt.data.text);
+      }
+    });
+    runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
+        onToolUseEvent?: (payload: { name: string; toolUseId?: string; input?: unknown }) => void;
+        onToolResult?: (payload: { toolUseId?: string; text?: string; isError?: boolean }) => void;
+        onAssistantTurn?: (text: string) => void;
+      }) => {
+        params.onThinkingTurn?.({
+          text: "Check_*files*\n\nThen_more",
+          delta: "Check_*files*\n\nThen_more",
+        });
+        params.onToolUseEvent?.({ name: "Read", toolUseId: "toolu_1" });
+        params.onToolResult?.({ toolUseId: "toolu_1", text: "README contents" });
+        params.onAssistantTurn?.("Final answer");
+        return {
+          payloads: [{ text: "Final answer" }],
+          meta: {
+            agentMeta: {
+              provider: "claude-cli",
+              model: "opus-4.5",
+            },
+          },
+        };
+      },
+    );
+
+    const result = await createRun({
+      typingMode: "thinking",
+      opts: {
+        onReasoningStream,
+        onToolStart,
+      },
+    });
+    unsubscribe();
+    randomSpy.mockRestore();
+
+    expect(onReasoningStream).toHaveBeenCalledWith({
+      text: "Reasoning:\n_Check\\_\\*files\\*_\n\n_Then\\_more_",
+      isReasoning: true,
+    });
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "Read",
+      phase: "start",
+    });
+    expect(thinkingEvents).toEqual(["Check_*files*\n\nThen_more"]);
+    expect(toolPhases).toEqual(expect.arrayContaining(["start", "result"]));
+    expect(result).toMatchObject({ text: "Final answer" });
+  });
+
+  it("closes reasoning stream when cli runner throws after thinking", async () => {
+    const onReasoningEnd = vi.fn();
+    runCliAgentMock.mockImplementationOnce(
+      async (params: { onThinkingTurn?: (payload: { text: string; delta?: string }) => void }) => {
+        params.onThinkingTurn?.({ text: "debug path", delta: "debug path" });
+        throw new Error("cli boom");
+      },
+    );
+
+    const result = await createRun({
+      typingMode: "thinking",
+      opts: {
+        onReasoningEnd,
+      },
+    });
+
+    expect(result).toMatchObject({
+      text: expect.stringContaining("cli boom"),
+    });
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -33,6 +33,42 @@ describe("resolveCliBackendConfig reliability merge", () => {
     expect(resolved?.config.reliability?.watchdog?.resume?.maxMs).toBe(180_000);
     expect(resolved?.config.reliability?.watchdog?.fresh?.noOutputTimeoutRatio).toBe(0.8);
   });
+
+  it("merges claude-cli MCP overrides without dropping defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              mcp: {
+                strict: false,
+                servers: {
+                  myserver: {
+                    type: "stdio",
+                    command: "node",
+                    args: ["server.js"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.mcp?.enabled).toBe(true);
+    expect(resolved?.config.mcp?.strict).toBe(false);
+    expect(resolved?.config.mcp?.servers).toMatchObject({
+      myserver: {
+        type: "stdio",
+        command: "node",
+      },
+    });
+  });
 });
 
 describe("resolveCliBackendConfig claude-cli defaults", () => {

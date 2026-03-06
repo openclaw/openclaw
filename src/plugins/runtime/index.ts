@@ -1,4 +1,6 @@
 import { createRequire } from "node:module";
+import { runModelAwareAgent } from "../../agents/model-aware-runner.js";
+import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
 import { textToSpeechTelephony } from "../../tts/tts.js";
@@ -31,6 +33,7 @@ function resolveVersion(): string {
 export function createPluginRuntime(): PluginRuntime {
   const runtime = {
     version: resolveVersion(),
+    agents: { runEmbeddedPiAgent, runModelAwareAgent },
     config: createRuntimeConfig(),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),

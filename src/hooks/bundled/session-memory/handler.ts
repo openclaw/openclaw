@@ -45,6 +45,11 @@ async function getRecentSessionContent(
             if (role === "user" && hasInterSessionUserProvenance(msg)) {
               continue;
             }
+            const provider = typeof msg.provider === "string" ? msg.provider : "";
+            const model = typeof msg.model === "string" ? msg.model : "";
+            if (role === "assistant" && provider === "openclaw" && model === "delivery-mirror") {
+              continue;
+            }
             // Extract text content
             const text = Array.isArray(msg.content)
               ? // oxlint-disable-next-line typescript/no-explicit-any

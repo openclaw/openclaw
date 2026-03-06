@@ -4,7 +4,7 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import { isCliProvider, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
@@ -171,6 +171,35 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+
+  const previousProviderCandidate =
+    previousSessionEntry?.modelProvider ?? previousSessionEntry?.providerOverride ?? "";
+  const previousHasCliSessionMarker = Boolean(
+    previousSessionEntry?.claudeCliSessionId?.trim() ||
+    Object.keys(previousSessionEntry?.cliSessionIds ?? {}).length > 0,
+  );
+  const shouldEmitAutoRotationResetHooks =
+    isNewSession &&
+    !resetTriggered &&
+    previousSessionEntry?.sessionId &&
+    (isCliProvider(provider, cfg) ||
+      isCliProvider(previousProviderCandidate, cfg) ||
+      previousHasCliSessionMarker);
+
+  if (shouldEmitAutoRotationResetHooks) {
+    await emitResetCommandHooks({
+      action: "reset",
+      ctx: finalized,
+      cfg,
+      sessionKey,
+      sessionEntry,
+      previousSessionEntry,
+      workspaceDir,
+      routeHookMessages: false,
+      commandSource: "auto-rotation",
+      senderId: finalized.SenderId,
+    });
+  }
 
   await applyResetModelOverride({
     cfg,

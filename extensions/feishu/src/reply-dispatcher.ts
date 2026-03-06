@@ -50,6 +50,8 @@ export type CreateFeishuReplyDispatcherParams = {
   rootId?: string;
   mentionTargets?: MentionTarget[];
   accountId?: string;
+  /** Bot open_id used to identify this app's typing reaction during cleanup lookup. */
+  botOpenId?: string;
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
@@ -104,6 +106,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         cfg,
         messageId: replyToMessageId,
         accountId,
+        botOpenId: params.botOpenId,
         runtime: params.runtime,
       });
     },

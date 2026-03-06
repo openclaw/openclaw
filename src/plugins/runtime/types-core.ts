@@ -9,6 +9,10 @@ export type RuntimeLogger = {
 
 export type PluginRuntimeCore = {
   version: string;
+  agents: {
+    runEmbeddedPiAgent: typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent;
+    runModelAwareAgent: typeof import("../../agents/model-aware-runner.js").runModelAwareAgent;
+  };
   config: {
     loadConfig: typeof import("../../config/config.js").loadConfig;
     writeConfigFile: typeof import("../../config/config.js").writeConfigFile;
