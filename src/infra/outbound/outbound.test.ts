@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
+import { clearLifecycleDbCacheForTest, getLifecycleDb } from "../message-lifecycle/db.js";
 import {
   ackDelivery,
   computeBackoffMs,
@@ -54,6 +55,7 @@ describe("delivery-queue", () => {
   });
 
   afterAll(() => {
+    clearLifecycleDbCacheForTest();
     if (!fixtureRoot) {
       return;
     }
@@ -79,16 +81,9 @@ describe("delivery-queue", () => {
         },
         tmpDir,
       );
-
-      // Entry file exists after enqueue.
-      const queueDir = path.join(tmpDir, "delivery-queue");
-      const files = fs.readdirSync(queueDir).filter((f) => f.endsWith(".json"));
-      expect(files).toHaveLength(1);
-      expect(files[0]).toBe(`${id}.json`);
-
-      // Entry contents are correct.
-      const entry = JSON.parse(fs.readFileSync(path.join(queueDir, files[0]), "utf-8"));
-      expect(entry).toMatchObject({
+      const entries = await loadPendingDeliveries(tmpDir);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
         id,
         channel: "whatsapp",
         to: "+1555",
@@ -102,11 +97,10 @@ describe("delivery-queue", () => {
         },
         retryCount: 0,
       });
-      expect(entry.payloads).toEqual([{ text: "hello" }]);
+      expect(entries[0]?.payloads).toEqual([{ text: "hello" }]);
 
-      // Ack removes the file.
       await ackDelivery(id, tmpDir);
-      const remaining = fs.readdirSync(queueDir).filter((f) => f.endsWith(".json"));
+      const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(0);
     });
 
@@ -128,17 +122,29 @@ describe("delivery-queue", () => {
 
       await failDelivery(id, "connection refused", tmpDir);
 
-      const queueDir = path.join(tmpDir, "delivery-queue");
-      const entry = JSON.parse(fs.readFileSync(path.join(queueDir, `${id}.json`), "utf-8"));
-      expect(entry.retryCount).toBe(1);
-      expect(typeof entry.lastAttemptAt).toBe("number");
-      expect(entry.lastAttemptAt).toBeGreaterThan(0);
-      expect(entry.lastError).toBe("connection refused");
+      const db = getLifecycleDb(tmpDir);
+      const row = db
+        .prepare(
+          "SELECT attempt_count, last_attempt_at, last_error, status FROM message_outbox WHERE id=?",
+        )
+        .get(id) as
+        | {
+            attempt_count: number;
+            last_attempt_at: number | null;
+            last_error: string | null;
+            status: string;
+          }
+        | undefined;
+      expect(row?.attempt_count).toBe(1);
+      expect(typeof row?.last_attempt_at).toBe("number");
+      expect((row?.last_attempt_at ?? 0) > 0).toBe(true);
+      expect(row?.last_error).toBe("connection refused");
+      expect(row?.status).toBe("failed_retryable");
     });
   });
 
   describe("moveToFailed", () => {
-    it("moves entry to failed/ subdirectory", async () => {
+    it("marks entry as terminal failed", async () => {
       const id = await enqueueDelivery(
         {
           channel: "slack",
@@ -150,10 +156,42 @@ describe("delivery-queue", () => {
 
       await moveToFailed(id, tmpDir);
 
-      const queueDir = path.join(tmpDir, "delivery-queue");
-      const failedDir = path.join(queueDir, "failed");
-      expect(fs.existsSync(path.join(queueDir, `${id}.json`))).toBe(false);
-      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+      const remaining = await loadPendingDeliveries(tmpDir);
+      expect(remaining).toHaveLength(0);
+      const db = getLifecycleDb(tmpDir);
+      const row = db.prepare("SELECT status FROM message_outbox WHERE id=?").get(id) as
+        | { status: string }
+        | undefined;
+      expect(row?.status).toBe("failed_terminal");
+    });
+
+    it("does not overwrite already-acked rows", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "slack",
+          to: "#general",
+          payloads: [{ text: "hi" }],
+        },
+        tmpDir,
+      );
+
+      // Simulate the live delivery path acking the row first
+      await ackDelivery(id, tmpDir);
+      const db = getLifecycleDb(tmpDir);
+      const beforeRow = db
+        .prepare("SELECT status, completed_at FROM message_outbox WHERE id=?")
+        .get(id) as { status: string; completed_at: number } | undefined;
+      expect(beforeRow?.status).toBe("delivered");
+      const ackTimestamp = beforeRow?.completed_at;
+
+      // Recovery worker tries to move to failed — should be a no-op
+      await moveToFailed(id, tmpDir);
+
+      const afterRow = db
+        .prepare("SELECT status, completed_at FROM message_outbox WHERE id=?")
+        .get(id) as { status: string; completed_at: number } | undefined;
+      expect(afterRow?.status).toBe("delivered");
+      expect(afterRow?.completed_at).toBe(ackTimestamp);
     });
   });
 
@@ -196,23 +234,20 @@ describe("delivery-queue", () => {
       expect(entries).toHaveLength(2);
     });
 
-    it("backfills lastAttemptAt for legacy retry entries during load", async () => {
+    it("loads retry metadata for pending entries", async () => {
       const id = await enqueueDelivery(
         { channel: "whatsapp", to: "+1", payloads: [{ text: "legacy" }] },
         tmpDir,
       );
-      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
-      const legacyEntry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      legacyEntry.retryCount = 2;
-      delete legacyEntry.lastAttemptAt;
-      fs.writeFileSync(filePath, JSON.stringify(legacyEntry), "utf-8");
+      await failDelivery(id, "first error", tmpDir);
+      await failDelivery(id, "second error", tmpDir);
 
-      const entries = await loadPendingDeliveries(tmpDir);
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.lastAttemptAt).toBe(entries[0]?.enqueuedAt);
-
-      const persisted = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      expect(persisted.lastAttemptAt).toBe(persisted.enqueuedAt);
+      const db = getLifecycleDb(tmpDir);
+      const row = db
+        .prepare("SELECT attempt_count, last_attempt_at FROM message_outbox WHERE id=?")
+        .get(id) as { attempt_count: number; last_attempt_at: number | null } | undefined;
+      expect(row?.attempt_count).toBe(2);
+      expect(typeof row?.last_attempt_at).toBe("number");
     });
   });
 
@@ -278,26 +313,50 @@ describe("delivery-queue", () => {
   describe("recoverPendingDeliveries", () => {
     const baseCfg = {};
     const createLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+    // Age all queued entries to simulate having survived a gateway crash.
+    // Without aging, entries have next_attempt_at = now and might be picked up
+    // before the direct delivery path finishes (startup-cutoff prevents this in prod).
+    const makeEntriesEligible = () => {
+      const db = getLifecycleDb(tmpDir);
+      const past = Date.now() - 10_000;
+      db.prepare(
+        `UPDATE message_outbox SET queued_at=?, next_attempt_at=? WHERE status='queued'`,
+      ).run(past, past);
+    };
     const enqueueCrashRecoveryEntries = async () => {
       await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
       await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir);
+      // Age entries to simulate having survived a gateway crash — they are unambiguously
+      // before the startup cutoff and must not be mistaken for live deliveries.
+      makeEntriesEligible();
     };
     const setEntryState = (
       id: string,
-      state: { retryCount: number; lastAttemptAt?: number; enqueuedAt?: number },
+      state: {
+        retryCount: number;
+        lastAttemptAt?: number;
+        enqueuedAt?: number;
+        nextAttemptAt?: number;
+      },
     ) => {
-      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
-      const entry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      entry.retryCount = state.retryCount;
-      if (state.lastAttemptAt === undefined) {
-        delete entry.lastAttemptAt;
-      } else {
-        entry.lastAttemptAt = state.lastAttemptAt;
-      }
-      if (state.enqueuedAt !== undefined) {
-        entry.enqueuedAt = state.enqueuedAt;
-      }
-      fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
+      const db = getLifecycleDb(tmpDir);
+      const now = Date.now();
+      db.prepare(
+        `UPDATE message_outbox
+           SET attempt_count=?,
+               last_attempt_at=?,
+               queued_at=?,
+               next_attempt_at=?,
+               status=?
+         WHERE id=?`,
+      ).run(
+        state.retryCount,
+        state.lastAttemptAt ?? null,
+        state.enqueuedAt ?? now,
+        state.nextAttemptAt ?? now,
+        state.retryCount > 0 ? "failed_retryable" : "queued",
+        id,
+      );
     };
     const runRecovery = async ({
       deliver,
@@ -335,7 +394,7 @@ describe("delivery-queue", () => {
       expect(remaining).toHaveLength(0);
     });
 
-    it("moves entries that exceeded max retries to failed/", async () => {
+    it("moves entries that exceeded max retries to terminal failed status", async () => {
       // Create an entry and manually set retryCount to MAX_RETRIES.
       const id = await enqueueDelivery(
         { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
@@ -350,9 +409,11 @@ describe("delivery-queue", () => {
       expect(result.skippedMaxRetries).toBe(1);
       expect(result.deferredBackoff).toBe(0);
 
-      // Entry should be in failed/ directory.
-      const failedDir = path.join(tmpDir, "delivery-queue", "failed");
-      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+      const db = getLifecycleDb(tmpDir);
+      const row = db.prepare("SELECT status FROM message_outbox WHERE id=?").get(id) as
+        | { status: string }
+        | undefined;
+      expect(row?.status).toBe("failed_terminal");
     });
 
     it("increments retryCount on failed recovery attempt", async () => {
@@ -364,14 +425,18 @@ describe("delivery-queue", () => {
       expect(result.failed).toBe(1);
       expect(result.recovered).toBe(0);
 
-      // Entry should still be in queue with incremented retryCount.
-      const entries = await loadPendingDeliveries(tmpDir);
-      expect(entries).toHaveLength(1);
-      expect(entries[0].retryCount).toBe(1);
-      expect(entries[0].lastError).toBe("network down");
+      const db = getLifecycleDb(tmpDir);
+      const row = db
+        .prepare(
+          "SELECT attempt_count, last_error, status FROM message_outbox WHERE id IS NOT NULL",
+        )
+        .get() as { attempt_count: number; last_error: string | null; status: string } | undefined;
+      expect(row?.attempt_count).toBe(1);
+      expect(row?.last_error).toBe("network down");
+      expect(row?.status).toBe("failed_retryable");
     });
 
-    it("moves entries to failed/ immediately on permanent delivery errors", async () => {
+    it("moves entries to failed_terminal immediately on permanent delivery errors", async () => {
       const id = await enqueueDelivery(
         { channel: "msteams", to: "user:abc", payloads: [{ text: "hi" }] },
         tmpDir,
@@ -386,9 +451,12 @@ describe("delivery-queue", () => {
       expect(result.recovered).toBe(0);
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(0);
-      const failedDir = path.join(tmpDir, "delivery-queue", "failed");
-      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
-      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
+      const db = getLifecycleDb(tmpDir);
+      const row = db.prepare("SELECT status, error_class FROM message_outbox WHERE id=?").get(id) as
+        | { status: string; error_class: string | null }
+        | undefined;
+      expect(row?.status).toBe("failed_terminal");
+      expect(row?.error_class).toBe("terminal");
     });
 
     it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
@@ -456,7 +524,9 @@ describe("delivery-queue", () => {
       expect(remaining).toHaveLength(3);
 
       // Should have logged a warning about deferred entries.
-      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next restart"));
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("deferred to next recovery pass"),
+      );
     });
 
     it("defers entries until backoff becomes eligible", async () => {
@@ -467,7 +537,7 @@ describe("delivery-queue", () => {
       setEntryState(id, { retryCount: 3, lastAttemptAt: Date.now() });
 
       const deliver = vi.fn().mockResolvedValue([]);
-      const { result, log } = await runRecovery({
+      const { result } = await runRecovery({
         deliver,
         maxRecoveryMs: 60_000,
       });
@@ -483,7 +553,7 @@ describe("delivery-queue", () => {
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(1);
 
-      expect(log.info).toHaveBeenCalledWith(expect.stringContaining("not ready for retry yet"));
+      expect(result.deferredBackoff).toBe(1);
     });
 
     it("continues past high-backoff entries and recovers ready entries behind them", async () => {
