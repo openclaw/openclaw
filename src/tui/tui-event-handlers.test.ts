@@ -484,4 +484,72 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-silent");
     expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
   });
+
+  it("displays usage text as system message when chat usage event arrives", () => {
+    const { state, chatLog, tui, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    // First finalize a run so the usage event arrives post-finalization
+    handleChatEvent({
+      runId: "run-usage",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "Hello" }] },
+    });
+    chatLog.addSystem.mockClear();
+    tui.requestRender.mockClear();
+
+    handleChatEvent({
+      runId: "run-usage",
+      sessionKey: state.currentSessionKey,
+      state: "usage",
+      usageText: "Usage: 1.2k in / 350 out · est $0.02",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith("Usage: 1.2k in / 350 out · est $0.02");
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("ignores usage event with empty usageText", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-empty-usage",
+      sessionKey: state.currentSessionKey,
+      state: "usage",
+      usageText: "",
+    });
+
+    expect(chatLog.addSystem).not.toHaveBeenCalled();
+  });
+
+  it("does not re-register run tracking for usage events", () => {
+    const { state, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    // Finalize a run first
+    handleChatEvent({
+      runId: "run-track",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "Hi" }] },
+    });
+
+    // activeChatRunId should be cleared after finalization
+    expect(state.activeChatRunId).toBeNull();
+
+    // Usage event should NOT set activeChatRunId
+    handleChatEvent({
+      runId: "run-track",
+      sessionKey: state.currentSessionKey,
+      state: "usage",
+      usageText: "Usage: 100 in / 50 out",
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+  });
 });

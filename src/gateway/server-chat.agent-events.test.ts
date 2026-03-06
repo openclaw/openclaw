@@ -753,4 +753,92 @@ describe("agent event handler", () => {
       "Disk usage crossed 95 percent on /data and needs cleanup now.",
     );
   });
+
+  it("broadcasts chat usage event when a usage stream event arrives", () => {
+    const { handler, broadcast, nodeSendToSession, chatRunState } = createHarness();
+    registerAgentRunContext("run-usage", {
+      sessionKey: "session-usage",
+      isControlUiVisible: true,
+    });
+    chatRunState.registry.add("run-usage", {
+      sessionKey: "session-usage",
+      clientRunId: "client-usage",
+    });
+
+    // Emit assistant text + lifecycle end to finalize the run
+    handler({
+      runId: "run-usage",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world" },
+    });
+    emitLifecycleEnd(handler, "run-usage");
+    broadcast.mockClear();
+    nodeSendToSession.mockClear();
+
+    // Emit usage event (arrives after finalization)
+    handler({
+      runId: "run-usage",
+      seq: 3,
+      stream: "usage",
+      ts: Date.now(),
+      sessionKey: "session-usage",
+      data: { text: "Usage: 1.2k in / 350 out · est $0.02" },
+    });
+
+    const usageChatCalls = chatBroadcastCalls(broadcast);
+    expect(usageChatCalls.length).toBe(1);
+    const [, payload] = usageChatCalls[0];
+    // After lifecycle end the chat link is removed, so clientRunId falls back
+    // to the source evt.runId ("run-usage") — this is expected because the
+    // TUI usage handler uses addSystem() which is not run-scoped.
+    expect(payload).toMatchObject({
+      runId: "run-usage",
+      sessionKey: "session-usage",
+      state: "usage",
+      usageText: "Usage: 1.2k in / 350 out · est $0.02",
+    });
+
+    const sessionCalls = sessionChatCalls(nodeSendToSession);
+    expect(sessionCalls.length).toBe(1);
+    expect(sessionCalls[0][2]).toMatchObject({
+      state: "usage",
+      usageText: "Usage: 1.2k in / 350 out · est $0.02",
+    });
+  });
+
+  it("does not broadcast usage event when isControlUiVisible is false", () => {
+    const { handler, broadcast, chatRunState } = createHarness();
+    registerAgentRunContext("run-hidden", {
+      sessionKey: "session-hidden",
+      isControlUiVisible: false,
+    });
+    chatRunState.registry.add("run-hidden", {
+      sessionKey: "session-hidden",
+      clientRunId: "client-hidden",
+    });
+
+    handler({
+      runId: "run-hidden",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hi" },
+    });
+    emitLifecycleEnd(handler, "run-hidden");
+    broadcast.mockClear();
+
+    handler({
+      runId: "run-hidden",
+      seq: 3,
+      stream: "usage",
+      ts: Date.now(),
+      sessionKey: "session-hidden",
+      data: { text: "Usage: 100 in / 50 out" },
+    });
+
+    const usageChatCalls = chatBroadcastCalls(broadcast);
+    expect(usageChatCalls.length).toBe(0);
+  });
 });

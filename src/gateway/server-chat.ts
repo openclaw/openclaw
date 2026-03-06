@@ -603,6 +603,22 @@ export function createAgentEventHandler({
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
         }
       }
+
+      // Supplementary usage event — emitted after the run finalizes
+      // because usage computation happens after runAgentTurnWithFallback
+      // returns. Broadcast as a separate chat event so TUI/WebSocket
+      // clients can display the usage footer.
+      if (evt.stream === "usage" && typeof evt.data?.text === "string") {
+        const usagePayload = {
+          runId: clientRunId,
+          sessionKey,
+          seq: evt.seq,
+          state: "usage" as const,
+          usageText: evt.data.text,
+        };
+        broadcast("chat", usagePayload);
+        nodeSendToSession(sessionKey, "chat", usagePayload);
+      }
     }
 
     if (lifecyclePhase === "end" || lifecyclePhase === "error") {

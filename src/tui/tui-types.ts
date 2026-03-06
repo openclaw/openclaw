@@ -13,9 +13,10 @@ export type TuiOptions = {
 export type ChatEvent = {
   runId: string;
   sessionKey: string;
-  state: "delta" | "final" | "aborted" | "error";
+  state: "delta" | "final" | "aborted" | "error" | "usage";
   message?: unknown;
   errorMessage?: string;
+  usageText?: string;
 };
 
 export type AgentEvent = {

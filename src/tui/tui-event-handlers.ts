@@ -187,6 +187,16 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
     }
+    // Handle usage events early — they arrive after the run is finalized
+    // and should not reset activeChatRunId or re-register the run.
+    if (evt.state === "usage") {
+      const usageText = typeof evt.usageText === "string" ? evt.usageText : "";
+      if (usageText) {
+        chatLog.addSystem(usageText);
+      }
+      tui.requestRender();
+      return;
+    }
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId) {
       state.activeChatRunId = evt.runId;

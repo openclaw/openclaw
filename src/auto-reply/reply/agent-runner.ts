@@ -591,6 +591,20 @@ export async function runReplyAgent(params: {
       }
     }
 
+    // Emit usage as a separate agent event so CC Chat / TUI can display it.
+    // The lifecycle "end" event fires before usage is computed (inside
+    // runAgentTurnWithFallback), so the streaming buffer is already flushed
+    // by the time we reach this point. A dedicated "usage" stream lets
+    // server-chat broadcast it as a supplementary chat event.
+    if (responseUsageLine) {
+      emitAgentEvent({
+        runId,
+        sessionKey,
+        stream: "usage",
+        data: { text: responseUsageLine },
+      });
+    }
+
     // If verbose is enabled, prepend operational run notices.
     let finalPayloads = guardedReplyPayloads;
     const verboseNotices: ReplyPayload[] = [];
