@@ -58,23 +58,26 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
  *
  * Applies to:
  * - direct Anthropic provider
+ * - any custom provider using the `anthropic-messages` API
  * - Anthropic Claude models on Bedrock when cache retention is explicitly configured
  *
  * OpenRouter uses openai-completions API with hardcoded cache_control instead
  * of the cacheRetention stream option.
  *
- * Defaults to "short" for direct Anthropic when not explicitly configured.
+ * Defaults to "short" for Anthropic-compatible providers when not explicitly configured.
  */
 function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  modelApi?: string,
 ): CacheRetention | undefined {
   const isAnthropicDirect = provider === "anthropic";
+  const isAnthropicApi = modelApi === "anthropic-messages";
   const hasBedrockOverride =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
   const isAnthropicBedrock = provider === "amazon-bedrock" && hasBedrockOverride;
 
-  if (!isAnthropicDirect && !isAnthropicBedrock) {
+  if (!isAnthropicDirect && !isAnthropicApi && !isAnthropicBedrock) {
     return undefined;
   }
 
@@ -93,43 +96,42 @@ function resolveCacheRetention(
     return "long";
   }
 
-  // Default to "short" only for direct Anthropic when not explicitly configured.
+  // Default to "short" for direct Anthropic or any anthropic-messages API provider.
   // Bedrock retains upstream provider defaults unless explicitly set.
-  if (!isAnthropicDirect) {
-    return undefined;
+  if (isAnthropicDirect || isAnthropicApi) {
+    return "short";
   }
 
-  // Default to "short" for direct Anthropic when not explicitly configured
-  return "short";
+  return undefined;
 }
 
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  modelApi?: string,
 ): StreamFn | undefined {
-  if (!extraParams || Object.keys(extraParams).length === 0) {
-    return undefined;
-  }
-
   const streamParams: CacheRetentionStreamOptions = {};
-  if (typeof extraParams.temperature === "number") {
-    streamParams.temperature = extraParams.temperature;
+
+  if (extraParams && Object.keys(extraParams).length > 0) {
+    if (typeof extraParams.temperature === "number") {
+      streamParams.temperature = extraParams.temperature;
+    }
+    if (typeof extraParams.maxTokens === "number") {
+      streamParams.maxTokens = extraParams.maxTokens;
+    }
+    const transport = extraParams.transport;
+    if (transport === "sse" || transport === "websocket" || transport === "auto") {
+      streamParams.transport = transport;
+    } else if (transport != null) {
+      const transportSummary = typeof transport === "string" ? transport : typeof transport;
+      log.warn(`ignoring invalid transport param: ${transportSummary}`);
+    }
+    if (typeof extraParams.openaiWsWarmup === "boolean") {
+      streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
+    }
   }
-  if (typeof extraParams.maxTokens === "number") {
-    streamParams.maxTokens = extraParams.maxTokens;
-  }
-  const transport = extraParams.transport;
-  if (transport === "sse" || transport === "websocket" || transport === "auto") {
-    streamParams.transport = transport;
-  } else if (transport != null) {
-    const transportSummary = typeof transport === "string" ? transport : typeof transport;
-    log.warn(`ignoring invalid transport param: ${transportSummary}`);
-  }
-  if (typeof extraParams.openaiWsWarmup === "boolean") {
-    streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
-  }
-  const cacheRetention = resolveCacheRetention(extraParams, provider);
+  const cacheRetention = resolveCacheRetention(extraParams, provider, modelApi);
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
   }
@@ -142,7 +144,7 @@ function createStreamFnWithExtraParams(
   // data_collection, ignore, sort, quantizations, etc.
   const providerRouting =
     provider === "openrouter" &&
-    extraParams.provider != null &&
+    extraParams?.provider != null &&
     typeof extraParams.provider === "object"
       ? (extraParams.provider as Record<string, unknown>)
       : undefined;
@@ -1047,6 +1049,7 @@ export function applyExtraParamsToAgent(
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
   agentId?: string,
+  modelApi?: string,
 ): void {
   const extraParams = resolveExtraParams({
     cfg,
@@ -1068,7 +1071,7 @@ export function applyExtraParamsToAgent(
         )
       : undefined;
   const merged = Object.assign({}, extraParams, override);
-  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
+  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider, modelApi);
 
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);

@@ -990,6 +990,140 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
+  it("enables prompt caching for custom providers using anthropic-messages API", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "my-enterprise-proxy",
+      "claude-opus-4-6",
+      undefined,
+      undefined,
+      undefined,
+      "anthropic-messages",
+    );
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "my-enterprise-proxy",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("short");
+  });
+
+  it("respects explicit cacheRetention for custom anthropic-messages providers", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "my-enterprise-proxy/claude-opus-4-6": {
+              params: {
+                cacheRetention: "long",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(
+      agent,
+      cfg,
+      "my-enterprise-proxy",
+      "claude-opus-4-6",
+      undefined,
+      undefined,
+      undefined,
+      "anthropic-messages",
+    );
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "my-enterprise-proxy",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("long");
+  });
+
+  it("allows disabling caching for custom anthropic-messages providers via cacheRetention=none", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "my-enterprise-proxy/claude-opus-4-6": {
+              params: {
+                cacheRetention: "none",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(
+      agent,
+      cfg,
+      "my-enterprise-proxy",
+      "claude-opus-4-6",
+      undefined,
+      undefined,
+      undefined,
+      "anthropic-messages",
+    );
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "my-enterprise-proxy",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("none");
+  });
+
+  it("does not enable caching for custom providers using openai-completions API", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "my-enterprise-proxy",
+      "claude-opus-4-6",
+      undefined,
+      undefined,
+      undefined,
+      "openai-completions",
+    );
+
+    const model = {
+      api: "openai-completions",
+      provider: "my-enterprise-proxy",
+      id: "claude-opus-4-6",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBeUndefined();
+  });
+
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
