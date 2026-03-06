@@ -1386,6 +1386,7 @@ export async function writeConfigFile(
 ): Promise<void> {
   const io = createConfigIO();
   let nextCfg = cfg;
+  const hadRuntimeSnapshot = runtimeConfigSnapshot !== null;
   if (runtimeConfigSnapshot && runtimeConfigSourceSnapshot) {
     const runtimePatch = createMergePatch(runtimeConfigSnapshot, cfg);
     nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
@@ -1396,4 +1397,9 @@ export async function writeConfigFile(
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
   });
+  if (hadRuntimeSnapshot) {
+    // Keep follow-up loadConfig() calls in sync with the just-persisted config
+    // instead of serving a stale pre-write runtime snapshot.
+    setRuntimeConfigSnapshot(cfg, nextCfg);
+  }
 }
