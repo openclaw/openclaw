@@ -1,105 +1,558 @@
+* {
+  box-sizing: border-box;
+}
+
+/* ════════════════════════════════════════════════════════
+   Theme System — 3 Theme Families + Mode Variants
+   ════════════════════════════════════════════════════════ */
+
+/* ─── Design Tokens (shared across all themes) ─── */
+
 :root {
-  /* Background - Warmer dark with depth */
-  --bg: #12141a;
-  --bg-accent: #14161d;
-  --bg-elevated: #1a1d25;
-  --bg-hover: #262a35;
-  --bg-muted: #262a35;
+  --icon-size-xs: 0.9rem;
+  --icon-size-sm: 1.05rem;
+  --icon-size-md: 1.25rem;
+  --icon-size-xl: 2.4rem;
 
-  /* Card / Surface - More contrast between levels */
-  --card: #181b22;
-  --card-foreground: #f4f4f5;
-  --card-highlight: rgba(255, 255, 255, 0.05);
-  --popover: #181b22;
-  --popover-foreground: #f4f4f5;
+  --font-inter: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-serif: "Playfair Display", Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  /* Panel */
-  --panel: #12141a;
-  --panel-strong: #1a1d25;
-  --panel-hover: #262a35;
-  --chrome: rgba(18, 20, 26, 0.95);
-  --chrome-strong: rgba(18, 20, 26, 0.98);
-
-  /* Text - Slightly warmer */
-  --text: #e4e4e7;
-  --text-strong: #fafafa;
-  --chat-text: #e4e4e7;
-  --muted: #71717a;
-  --muted-strong: #52525b;
-  --muted-foreground: #71717a;
-
-  /* Border - Subtle but defined */
-  --border: #27272a;
-  --border-strong: #3f3f46;
-  --border-hover: #52525b;
-  --input: #27272a;
-  --ring: #ff5c5c;
-
-  /* Accent - Punchy signature red */
-  --accent: #ff5c5c;
-  --accent-hover: #ff7070;
-  --accent-muted: #ff5c5c;
-  --accent-subtle: rgba(255, 92, 92, 0.15);
-  --accent-foreground: #fafafa;
-  --accent-glow: rgba(255, 92, 92, 0.25);
-  --primary: #ff5c5c;
-  --primary-foreground: #ffffff;
-
-  /* Secondary - Teal accent for variety */
-  --secondary: #1e2028;
-  --secondary-foreground: #f4f4f5;
-  --accent-2: #14b8a6;
-  --accent-2-muted: rgba(20, 184, 166, 0.7);
-  --accent-2-subtle: rgba(20, 184, 166, 0.15);
-
-  /* Semantic - More saturated */
-  --ok: #22c55e;
-  --ok-muted: rgba(34, 197, 94, 0.75);
-  --ok-subtle: rgba(34, 197, 94, 0.12);
-  --destructive: #ef4444;
-  --destructive-foreground: #fafafa;
-  --warn: #f59e0b;
-  --warn-muted: rgba(245, 158, 11, 0.75);
-  --warn-subtle: rgba(245, 158, 11, 0.12);
-  --danger: #ef4444;
-  --danger-muted: rgba(239, 68, 68, 0.75);
-  --danger-subtle: rgba(239, 68, 68, 0.12);
-  --info: #3b82f6;
-
-  /* Focus - With glow */
-  --focus: rgba(255, 92, 92, 0.25);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring), 0 0 20px var(--accent-glow);
-
-  /* Grid */
-  --grid-line: rgba(255, 255, 255, 0.04);
-
-  /* Theme transition */
   --theme-switch-x: 50%;
   --theme-switch-y: 50%;
+}
 
-  /* Typography */
-  --mono:
-    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
-  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-display: var(--font-body);
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --clay-duration-fast: 0ms;
+    --clay-duration-normal: 0ms;
+    --clay-duration-slow: 0ms;
+  }
 
-  /* Shadows - Richer with subtle color */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.03);
-  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.03);
-  --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.03);
-  --shadow-glow: 0 0 30px var(--accent-glow);
+  * {
+    animation-duration: 0s !important;
+    transition-duration: 0s !important;
+  }
+}
 
-  /* Radii - Slightly larger for friendlier feel */
+/* ─── Theme: dark (Home) — Neutral Dark Console ─── */
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --vscode-bg: #10121a;
+  --vscode-sidebar: #0c0e14;
+  --vscode-panel: #141620;
+  --vscode-panel-border: rgba(255, 255, 255, 0.06);
+  --vscode-surface: #181a24;
+  --vscode-hover: #1e2028;
+  --vscode-contrast: #08090e;
+  --vscode-text: #dcdce0;
+  --vscode-muted: #8585a0;
+  --vscode-subtle: #666e80;
+  --vscode-ghost: #121418;
+  --vscode-accent: #ee5242;
+  --vscode-accent-alpha: rgba(238, 82, 66, 0.14);
+  --vscode-selection: #3d1418;
+  --vscode-success: #00d4aa;
+  --vscode-danger: #ee5242;
+
+  --kn-claw: #ee5242;
+  --kn-claw-bright: #fd8e2e;
+  --kn-claw-dim: rgba(238, 82, 66, 0.12);
+  --kn-claw-ember: #fb9231;
+  --kn-claw-deep: #9a2d1f;
+  --kn-ocean: #0c0e14;
+  --kn-ocean-bright: #1e2028;
+  --kn-ocean-mid: #141620;
+  --kn-ocean-dim: rgba(12, 14, 20, 0.8);
+  --kn-ocean-deep: #10121a;
+  --kn-silver: #8a8a98;
+  --kn-silver-bright: #c0c0cc;
+  --kn-silver-dim: rgba(138, 138, 152, 0.12);
+  --kn-bioluminescence: #00d4aa;
+  --kn-warm-dark: #1a1218;
+  --kn-void: #1a1218;
+
+  --glass-blur: 8px;
+  --glass-saturate: 120%;
+  --glass-bg: rgba(16, 18, 26, 0.82);
+  --glass-bg-elevated: rgba(20, 22, 32, 0.88);
+  --glass-border: rgba(255, 255, 255, 0.06);
+  --glass-border-hover: rgba(202, 58, 41, 0.3);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --glass-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --glass-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --glass-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.6);
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 12px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+}
+
+/* ─── Theme: light — Clean Warm White ─── */
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --vscode-bg: #f9f7f4;
+  --vscode-sidebar: #f2f0ec;
+  --vscode-panel: #fdfcfa;
+  --vscode-panel-border: rgba(42, 36, 32, 0.08);
+  --vscode-surface: #fdfcfa;
+  --vscode-hover: #ede9e4;
+  --vscode-contrast: #e5e0da;
+  --vscode-text: #2a2520;
+  --vscode-muted: #726450;
+  --vscode-subtle: #857868;
+  --vscode-ghost: #e8e4de;
+  --vscode-accent: #c42e1e;
+  --vscode-accent-alpha: rgba(196, 46, 30, 0.1);
+  --vscode-selection: rgba(196, 46, 30, 0.15);
+  --vscode-success: #1a8a66;
+  --vscode-danger: #c42e1e;
+
+  --kn-claw: #c42e1e;
+  --kn-claw-bright: #dc4535;
+  --kn-claw-dim: rgba(196, 46, 30, 0.08);
+  --kn-claw-ember: #dc4535;
+  --kn-claw-deep: #a02818;
+  --kn-ocean: #f9f7f4;
+  --kn-ocean-bright: #fdfcfa;
+  --kn-ocean-mid: #f2f0ec;
+  --kn-ocean-dim: rgba(249, 247, 244, 0.92);
+  --kn-ocean-deep: #e5e0da;
+  --kn-silver: #726450;
+  --kn-silver-bright: #2a2520;
+  --kn-silver-dim: rgba(114, 100, 80, 0.1);
+  --kn-bioluminescence: #1a8a66;
+  --kn-warm-dark: #2a2520;
+  --kn-void: #e8e4de;
+
+  --glass-blur: 8px;
+  --glass-saturate: 105%;
+  --glass-bg: rgba(253, 252, 250, 0.95);
+  --glass-bg-elevated: rgba(253, 252, 250, 0.98);
+  --glass-border: rgba(42, 36, 32, 0.1);
+  --glass-border-hover: rgba(220, 69, 53, 0.35);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --glass-shadow-sm: 0 1px 3px rgba(42, 36, 32, 0.06), 0 1px 2px rgba(42, 36, 32, 0.04);
+  --glass-shadow-md: 0 4px 12px rgba(42, 36, 32, 0.08), 0 1px 3px rgba(42, 36, 32, 0.04);
+  --glass-shadow-lg: 0 8px 28px rgba(42, 36, 32, 0.1), 0 2px 6px rgba(42, 36, 32, 0.05);
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 12px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+}
+
+/* ─── Theme: openknot — Minimalist Premium Noir ─── */
+
+:root[data-theme="openknot"] {
+  color-scheme: dark;
+
+  --vscode-bg: #000000;
+  --vscode-sidebar: #080808;
+  --vscode-panel: #0c0c0c;
+  --vscode-panel-border: rgba(167, 139, 250, 0.08);
+  --vscode-surface: #111111;
+  --vscode-hover: #181818;
+  --vscode-contrast: #000000;
+  --vscode-text: #e4e4e7;
+  --vscode-muted: #8c8c94;
+  --vscode-subtle: #66666c;
+  --vscode-ghost: #18181b;
+  --vscode-accent: #a78bfa;
+  --vscode-accent-alpha: rgba(167, 139, 250, 0.14);
+  --vscode-selection: #2e1a5e;
+  --vscode-success: #a78bfa;
+  --vscode-danger: #a78bfa;
+
+  --kn-claw: #a78bfa;
+  --kn-claw-bright: #c4b5fd;
+  --kn-claw-dim: rgba(167, 139, 250, 0.12);
+  --kn-claw-ember: #c4b5fd;
+  --kn-claw-deep: #7c3aed;
+  --kn-ocean: #000000;
+  --kn-ocean-bright: #1a1a1e;
+  --kn-ocean-mid: #0e0e12;
+  --kn-ocean-dim: rgba(0, 0, 0, 0.8);
+  --kn-ocean-deep: #000000;
+  --kn-silver: #8c8c94;
+  --kn-silver-bright: #a1a1aa;
+  --kn-silver-dim: rgba(140, 140, 148, 0.12);
+  --kn-bioluminescence: #c4b5fd;
+  --kn-warm-dark: #18181b;
+  --kn-void: #18181b;
+
+  --glass-blur: 12px;
+  --glass-saturate: 110%;
+  --glass-bg: rgba(12, 12, 12, 0.85);
+  --glass-bg-elevated: rgba(17, 17, 17, 0.9);
+  --glass-border: rgba(167, 139, 250, 0.08);
+  --glass-border-hover: rgba(167, 139, 250, 0.3);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --glass-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.5);
+  --glass-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(167, 139, 250, 0.06);
+  --glass-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(167, 139, 250, 0.08);
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 12px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+}
+
+/* ─── Theme: openknot-light — Knot light variant ─── */
+
+:root[data-theme="openknot-light"] {
+  color-scheme: light;
+
+  --vscode-bg: #f4f1ff;
+  --vscode-sidebar: #ebe6fa;
+  --vscode-panel: #faf8ff;
+  --vscode-panel-border: rgba(124, 58, 237, 0.18);
+  --vscode-surface: #faf8ff;
+  --vscode-hover: #e5def8;
+  --vscode-contrast: #ddd4f3;
+  --vscode-text: #241f36;
+  --vscode-muted: #5e5578;
+  --vscode-subtle: #6d6388;
+  --vscode-ghost: #e7e0fa;
+  --vscode-accent: #6b2ed0;
+  --vscode-accent-alpha: rgba(107, 46, 208, 0.15);
+  --vscode-selection: rgba(107, 46, 208, 0.22);
+  --vscode-success: #5b21b6;
+  --vscode-danger: #6b2ed0;
+
+  --kn-claw: #6b2ed0;
+  --kn-claw-bright: #7c3aed;
+  --kn-claw-dim: rgba(107, 46, 208, 0.14);
+  --kn-claw-ember: #7c3aed;
+  --kn-claw-deep: #5a20b8;
+  --kn-ocean: #f4f1ff;
+  --kn-ocean-bright: #faf8ff;
+  --kn-ocean-mid: #ebe6fa;
+  --kn-ocean-dim: rgba(244, 241, 255, 0.9);
+  --kn-ocean-deep: #ddd4f3;
+  --kn-silver: #5e5578;
+  --kn-silver-bright: #241f36;
+  --kn-silver-dim: rgba(94, 85, 120, 0.14);
+  --kn-bioluminescence: #7c3aed;
+  --kn-warm-dark: #241f36;
+  --kn-void: #e7e0fa;
+
+  --glass-blur: 12px;
+  --glass-saturate: 112%;
+  --glass-bg: rgba(250, 248, 255, 0.92);
+  --glass-bg-elevated: rgba(250, 248, 255, 0.96);
+  --glass-border: rgba(124, 58, 237, 0.25);
+  --glass-border-hover: rgba(124, 58, 237, 0.45);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  --glass-shadow-sm: 0 1px 4px rgba(36, 31, 54, 0.1), 0 1px 2px rgba(36, 31, 54, 0.06);
+  --glass-shadow-md: 0 4px 16px rgba(36, 31, 54, 0.12), 0 1px 4px rgba(36, 31, 54, 0.06);
+  --glass-shadow-lg: 0 10px 36px rgba(36, 31, 54, 0.15), 0 2px 8px rgba(36, 31, 54, 0.08);
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 12px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+}
+
+/* ─── Theme: dash — Warm dark (dark counterpart of dash-light) ─── */
+
+:root[data-theme="dash"] {
+  color-scheme: dark;
+
+  --vscode-bg: #1a1610;
+  --vscode-sidebar: #14110c;
+  --vscode-panel: #211c14;
+  --vscode-panel-border: rgba(196, 140, 64, 0.18);
+  --vscode-surface: #28221a;
+  --vscode-hover: #302920;
+  --vscode-contrast: #100d08;
+  --vscode-text: #e8e4d8;
+  --vscode-muted: #9e9580;
+  --vscode-subtle: #807862;
+  --vscode-ghost: #252018;
+  --vscode-accent: #d48438;
+  --vscode-accent-alpha: rgba(212, 132, 56, 0.15);
+  --vscode-selection: rgba(212, 132, 56, 0.22);
+  --vscode-success: #d4903a;
+  --vscode-danger: #c45030;
+
+  --kn-claw: #d48438;
+  --kn-claw-bright: #e09040;
+  --kn-claw-dim: rgba(212, 132, 56, 0.15);
+  --kn-claw-ember: #e8a050;
+  --kn-claw-deep: #8a5420;
+  --kn-ocean: #1a1610;
+  --kn-ocean-bright: #302920;
+  --kn-ocean-mid: #211c14;
+  --kn-ocean-dim: rgba(26, 22, 16, 0.88);
+  --kn-ocean-deep: #100d08;
+  --kn-silver: #9e9580;
+  --kn-silver-bright: #d6d0c0;
+  --kn-silver-dim: rgba(158, 149, 128, 0.14);
+  --kn-bioluminescence: #d4903a;
+  --kn-warm-dark: #252018;
+  --kn-void: #252018;
+
+  --glass-blur: 0px;
+  --glass-saturate: 100%;
+  --glass-bg: rgba(33, 28, 20, 0.94);
+  --glass-bg-elevated: rgba(40, 34, 26, 0.96);
+  --glass-border: rgba(196, 140, 64, 0.18);
+  --glass-border-hover: rgba(196, 140, 64, 0.34);
+  --glass-highlight: none;
+  --glass-shadow-sm: none;
+  --glass-shadow-md: none;
+  --glass-shadow-lg: none;
+
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-full: 0px;
+}
+
+/* ─── Theme: dash-light — Warm parchment with orange accent ─── */
+
+:root[data-theme="dash-light"] {
+  color-scheme: light;
+
+  --vscode-bg: #faf8f1;
+  --vscode-sidebar: #f2eddc;
+  --vscode-panel: #fffdf7;
+  --vscode-panel-border: rgba(180, 110, 40, 0.16);
+  --vscode-surface: #fffaf0;
+  --vscode-hover: #ede6d2;
+  --vscode-contrast: #e3d9bf;
+  --vscode-text: #2a2518;
+  --vscode-muted: #6b5e46;
+  --vscode-subtle: #7a6e56;
+  --vscode-ghost: #e4dcc7;
+  --vscode-accent: #8e5218;
+  --vscode-accent-alpha: rgba(142, 82, 24, 0.12);
+  --vscode-selection: rgba(142, 82, 24, 0.18);
+  --vscode-success: #8a6018;
+  --vscode-danger: #904820;
+
+  --kn-claw: #8e5218;
+  --kn-claw-bright: #a86420;
+  --kn-claw-dim: rgba(142, 82, 24, 0.15);
+  --kn-claw-ember: #d08a30;
+  --kn-claw-deep: #7a4a16;
+  --kn-ocean: #faf8f1;
+  --kn-ocean-bright: #fffdf7;
+  --kn-ocean-mid: #f2eddc;
+  --kn-ocean-dim: rgba(250, 248, 241, 0.92);
+  --kn-ocean-deep: #e3d9bf;
+  --kn-silver: #6b5e46;
+  --kn-silver-bright: #2a2518;
+  --kn-silver-dim: rgba(107, 94, 70, 0.14);
+  --kn-bioluminescence: #8e5218;
+  --kn-warm-dark: #2a2518;
+  --kn-void: #e4dcc7;
+
+  --glass-blur: 0px;
+  --glass-saturate: 100%;
+  --glass-bg: rgba(255, 253, 247, 0.94);
+  --glass-bg-elevated: rgba(255, 253, 247, 0.98);
+  --glass-border: rgba(168, 100, 32, 0.2);
+  --glass-border-hover: rgba(168, 100, 32, 0.36);
+  --glass-highlight: none;
+  --glass-shadow-sm: none;
+  --glass-shadow-md: none;
+  --glass-shadow-lg: none;
+
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-full: 0px;
+}
+
+/* ─── Theme: clawdash — Chrome Metallic ─── */
+
+:root[data-theme="clawdash"] {
+  color-scheme: dark;
+
+  --vscode-bg: #050507;
+  --vscode-sidebar: #08080c;
+  --vscode-panel: #0c0c10;
+  --vscode-panel-border: rgba(192, 200, 212, 0.1);
+  --vscode-surface: #101014;
+  --vscode-hover: #161620;
+  --vscode-contrast: #020204;
+  --vscode-text: #e8ecf0;
+  --vscode-muted: #8a94a4;
+  --vscode-subtle: #5e6676;
+  --vscode-ghost: #1a1a22;
+  --vscode-accent: #e8453a;
+  --vscode-accent-alpha: rgba(232, 69, 58, 0.14);
+  --vscode-selection: #3d1418;
+  --vscode-success: #00d4aa;
+  --vscode-danger: #e8453a;
+
+  --kn-claw: #e8453a;
+  --kn-claw-bright: #ff4e41;
+  --kn-claw-dim: rgba(232, 69, 58, 0.12);
+  --kn-claw-ember: #fd8e2e;
+  --kn-claw-deep: #9a2d1f;
+  --kn-ocean: #08080c;
+  --kn-ocean-bright: #161620;
+  --kn-ocean-mid: #0c0c10;
+  --kn-ocean-dim: rgba(8, 8, 12, 0.8);
+  --kn-ocean-deep: #050507;
+  --kn-silver: #7a8494;
+  --kn-silver-bright: #c0c8d4;
+  --kn-silver-dim: rgba(192, 200, 212, 0.12);
+  --kn-bioluminescence: #00d4aa;
+  --kn-warm-dark: #1a1a22;
+  --kn-void: #1a1a22;
+
+  --glass-blur: 16px;
+  --glass-saturate: 150%;
+  --glass-bg: rgba(12, 12, 16, 0.8);
+  --glass-bg-elevated: rgba(16, 16, 20, 0.88);
+  --glass-border: rgba(192, 200, 212, 0.08);
+  --glass-border-hover: rgba(192, 200, 212, 0.25);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --glass-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 4px rgba(192, 200, 212, 0.04);
+  --glass-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 12px rgba(192, 200, 212, 0.06);
+  --glass-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 24px rgba(192, 200, 212, 0.08);
+
+  --radius-xs: 3px;
   --radius-sm: 6px;
   --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
   --radius-full: 9999px;
-  --radius: 8px;
+}
 
-  /* Transitions - Snappy but smooth */
+/* ─── Semantic Alias Layer ───
+   Maps foundation vars to the short names used throughout
+   component CSS, so themes work without per-component overrides. */
+
+:root,
+:root[data-theme="dark"],
+:root[data-theme="light"],
+:root[data-theme="openknot"],
+:root[data-theme="openknot-light"],
+:root[data-theme="dash"],
+:root[data-theme="dash-light"],
+:root[data-theme="clawdash"] {
+  /* Core surfaces */
+  --bg: var(--vscode-bg);
+  --bg-accent: var(--vscode-sidebar);
+  --bg-elevated: var(--vscode-surface);
+  --bg-hover: var(--vscode-hover);
+  --bg-muted: var(--vscode-sidebar);
+  --bg-content: var(--vscode-bg);
+
+  /* Card/popover surfaces */
+  --card: var(--vscode-panel);
+  --card-foreground: var(--vscode-text);
+  --card-highlight: rgba(255, 255, 255, 0.04);
+  --popover: var(--vscode-panel);
+  --popover-foreground: var(--vscode-text);
+
+  /* Panel/chrome surfaces */
+  --panel: var(--vscode-sidebar);
+  --panel-strong: var(--vscode-panel);
+  --panel-hover: var(--vscode-hover);
+  --chrome: var(--glass-bg);
+  --chrome-strong: var(--glass-bg-elevated);
+
+  /* Typography */
+  --text: var(--vscode-text);
+  --text-strong: var(--vscode-text);
+  --chat-text: var(--vscode-text);
+  --chat-max-width: 74rem;
+  --muted: var(--vscode-muted);
+  --muted-strong: var(--vscode-subtle);
+  --muted-foreground: var(--vscode-muted);
+
+  /* Borders + controls */
+  --border: var(--glass-border);
+  --border-strong: var(--glass-border-hover);
+  --border-hover: var(--glass-border-hover);
+  --input: var(--glass-border);
+  --ring: var(--vscode-accent);
+
+  /* Accent */
+  --accent: var(--vscode-accent);
+  --accent-strong: var(--kn-claw-deep);
+  --accent-hover: var(--kn-claw-bright);
+  --accent-muted: var(--vscode-accent);
+  --accent-subtle: var(--vscode-accent-alpha);
+  --accent-foreground: #14110c;
+  --accent-glow: var(--kn-claw-dim);
+  --accent-soft: var(--vscode-accent-alpha);
+  --primary: var(--vscode-accent);
+  --primary-foreground: #14110c;
+
+  /* Secondary */
+  --secondary: var(--vscode-sidebar);
+  --secondary-foreground: var(--vscode-text);
+  --accent-2: var(--kn-bioluminescence);
+  --accent-2-muted: var(--kn-silver);
+  --accent-2-subtle: var(--kn-silver-dim);
+
+  /* Semantic */
+  --ok: var(--vscode-success);
+  --ok-muted: var(--vscode-success);
+  --ok-subtle: var(--kn-silver-dim);
+  --destructive: var(--vscode-danger);
+  --destructive-foreground: #14110c;
+  --warn: var(--kn-claw-ember);
+  --warn-muted: var(--kn-claw-ember);
+  --warn-subtle: var(--kn-claw-dim);
+  --danger: var(--vscode-danger);
+  --danger-muted: var(--vscode-danger);
+  --danger-subtle: var(--kn-claw-dim);
+  --info: #3b82f6;
+  --success: var(--vscode-success);
+
+  /* Focus */
+  --focus: var(--kn-claw-dim);
+  --focus-offset-color: var(--bg);
+  --focus-ring-width: 2px;
+  --focus-ring-offset-width: 2px;
+  --focus-ring-color: var(--vscode-accent);
+  --focus-ring:
+    0 0 0 var(--focus-ring-offset-width) var(--focus-offset-color),
+    0 0 0 calc(var(--focus-ring-offset-width) + var(--focus-ring-width)) var(--focus-ring-color);
+  --focus-glow:
+    0 0 0 var(--focus-ring-offset-width) var(--focus-offset-color),
+    0 0 0 calc(var(--focus-ring-offset-width) + var(--focus-ring-width)) var(--focus-ring-color),
+    0 0 18px var(--accent-glow);
+
+  --grid-line: rgba(255, 255, 255, 0.04);
+
+  /* Shadows */
+  --shadow-sm: var(--glass-shadow-sm);
+  --shadow-md: var(--glass-shadow-md);
+  --shadow-lg: var(--glass-shadow-lg);
+  --shadow-xl: var(--glass-shadow-lg);
+  --shadow-glow: 0 0 30px var(--accent-glow);
+
+  /* Radii — aliased from foundation */
+  --radius: var(--radius-md);
+
+  /* Timing */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -107,88 +560,108 @@
   --duration-normal: 200ms;
   --duration-slow: 350ms;
 
-  color-scheme: dark;
+  /* Typography stacks */
+  --mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* Clay compat layer (dashboard-lit components) */
+  --clay-bg: var(--vscode-bg);
+  --clay-bg-card: var(--vscode-panel);
+  --clay-bg-elevated: var(--vscode-surface);
+  --clay-bg-button: var(--vscode-hover);
+  --clay-bg-interactive: var(--vscode-accent-alpha);
+  --clay-bg-pressed: var(--vscode-selection);
+  --clay-bg-scrim: rgba(0, 0, 0, 0.6);
+  --clay-border-color: var(--glass-border);
+  --clay-border-subtle: var(--vscode-panel-border);
+  --clay-shadow: var(--glass-shadow-sm);
+  --clay-shadow-elevated: var(--glass-shadow-md);
+  --clay-shadow-pressed: var(--glass-shadow-sm);
+  --clay-shadow-subtle: var(--glass-shadow-sm);
+  --clay-radius-sm: var(--radius-sm);
+  --clay-radius: var(--radius-md);
+  --clay-radius-md: var(--radius-md);
+  --clay-radius-lg: var(--radius-lg);
+  --clay-radius-xl: var(--radius-xl);
+  --clay-radius-pill: var(--radius-full);
+  --clay-duration-fast: 150ms;
+  --clay-duration-normal: 250ms;
+  --clay-duration-slow: 400ms;
+  --clay-easing: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Layout semantic tokens */
+  --topbar-bg: var(--vscode-sidebar);
+  --topbar-shadow: none;
+  --topbar-border: 1px solid var(--glass-border);
+  --topbar-title-color: var(--vscode-text);
+  --topbar-title-weight: 600;
+  --sidebar-bg: var(--vscode-sidebar);
+  --sidebar-border: none;
+  --sidebar-nav-inactive: var(--vscode-muted);
+  --sidebar-nav-active-bg: var(--vscode-accent-alpha);
+  --sidebar-nav-active-bar: 3px solid var(--vscode-accent);
+  --agent-header-bg: var(--vscode-panel);
+  --agent-header-border: 1px solid var(--glass-border);
+  --agent-tab-active-bg: var(--vscode-accent-alpha);
+  --agent-tab-hover-bg: var(--vscode-accent-alpha);
 }
 
-/* Light theme - Clean with subtle warmth */
-:root[data-theme="light"] {
-  --bg: #fafafa;
-  --bg-accent: #f5f5f5;
-  --bg-elevated: #ffffff;
-  --bg-hover: #f0f0f0;
-  --bg-muted: #f0f0f0;
-  --bg-content: #f5f5f5;
-
-  --card: #ffffff;
-  --card-foreground: #18181b;
-  --card-highlight: rgba(0, 0, 0, 0.03);
-  --popover: #ffffff;
-  --popover-foreground: #18181b;
-
-  --panel: #fafafa;
-  --panel-strong: #f5f5f5;
-  --panel-hover: #ebebeb;
-  --chrome: rgba(250, 250, 250, 0.95);
-  --chrome-strong: rgba(250, 250, 250, 0.98);
-
-  --text: #3f3f46;
-  --text-strong: #18181b;
-  --chat-text: #3f3f46;
-  --muted: #71717a;
-  --muted-strong: #52525b;
-  --muted-foreground: #71717a;
-
-  --border: #e4e4e7;
-  --border-strong: #d4d4d8;
-  --border-hover: #a1a1aa;
-  --input: #e4e4e7;
-
-  --accent: #dc2626;
-  --accent-hover: #ef4444;
-  --accent-muted: #dc2626;
-  --accent-subtle: rgba(220, 38, 38, 0.12);
+/* Light theme semantic overrides */
+:root[data-theme="light"],
+:root[data-theme="openknot-light"],
+:root[data-theme="dash-light"] {
+  --card-highlight: rgba(255, 255, 255, 0.55);
   --accent-foreground: #ffffff;
-  --accent-glow: rgba(220, 38, 38, 0.15);
-  --primary: #dc2626;
   --primary-foreground: #ffffff;
-
-  --secondary: #f4f4f5;
-  --secondary-foreground: #3f3f46;
-  --accent-2: #0d9488;
-  --accent-2-muted: rgba(13, 148, 136, 0.75);
-  --accent-2-subtle: rgba(13, 148, 136, 0.12);
-
-  --ok: #16a34a;
-  --ok-muted: rgba(22, 163, 74, 0.75);
-  --ok-subtle: rgba(22, 163, 74, 0.1);
-  --destructive: #dc2626;
-  --destructive-foreground: #fafafa;
-  --warn: #d97706;
-  --warn-muted: rgba(217, 119, 6, 0.75);
-  --warn-subtle: rgba(217, 119, 6, 0.1);
-  --danger: #dc2626;
-  --danger-muted: rgba(220, 38, 38, 0.75);
-  --danger-subtle: rgba(220, 38, 38, 0.1);
-  --info: #2563eb;
-
-  --focus: rgba(220, 38, 38, 0.2);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring), 0 0 16px var(--accent-glow);
-
-  --grid-line: rgba(0, 0, 0, 0.05);
-
-  /* Light shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
-  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
-  --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.04);
-  --shadow-glow: 0 0 24px var(--accent-glow);
-
-  color-scheme: light;
+  --destructive-foreground: #ffffff;
+  --focus-offset-color: var(--bg);
+  --grid-line: rgba(42, 36, 32, 0.1);
+  --muted-strong: var(--vscode-muted);
+  --input: rgba(42, 36, 32, 0.62);
 }
 
-* {
-  box-sizing: border-box;
+:root[data-theme="light"] {
+  --card-highlight: rgba(255, 255, 255, 0.7);
+  --grid-line: rgba(42, 36, 32, 0.06);
+  --input: rgba(42, 36, 32, 0.22);
+  --clay-bg-scrim: rgba(42, 37, 32, 0.18);
 }
+
+:root[data-theme="dash-light"] {
+  --card-highlight: rgba(255, 255, 255, 0.72);
+  --grid-line: color-mix(in srgb, var(--vscode-text) 12%, transparent);
+  --input: color-mix(in srgb, var(--vscode-text) 30%, transparent);
+  --clay-bg-scrim: rgba(20, 18, 10, 0.24);
+}
+
+/* Button foreground overrides — where accent luminance makes white text low-contrast */
+:root[data-theme="openknot"] {
+  --accent-foreground: #18181b;
+  --primary-foreground: #18181b;
+  --destructive-foreground: #18181b;
+}
+
+:root[data-theme="dash"] {
+  --accent-foreground: #14110c;
+  --primary-foreground: #14110c;
+}
+
+/* ─── Accessibility: High Contrast ─── */
+
+@media (prefers-contrast: more) {
+  :root {
+    --glass-shadow-sm: 0 0 0 2px var(--vscode-text);
+    --glass-shadow-md: 0 0 0 2px var(--vscode-text);
+    --glass-shadow-lg: 0 0 0 2px var(--vscode-text);
+    --glass-border: rgba(255, 255, 255, 0.3);
+  }
+}
+
+/* ════════════════════════════════════════════════════════
+   Base Styles
+   ════════════════════════════════════════════════════════ */
 
 html,
 body {
@@ -197,8 +670,8 @@ body {
 
 body {
   margin: 0;
-  font: 400 14px/1.55 var(--font-body);
-  letter-spacing: -0.02em;
+  font: 400 15px/1.55 var(--font-body);
+  letter-spacing: -0.01em;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -286,7 +759,193 @@ select {
   background: var(--border-strong);
 }
 
-/* Animations - Polished with spring feel */
+/* ════════════════════════════════════════════════════════
+   Theme-Specific Decorative Effects
+   ════════════════════════════════════════════════════════ */
+
+/* ─── Dark — Flat neutral background ─── */
+
+:root[data-theme="dark"] body {
+  background: var(--bg);
+}
+
+@keyframes star-twinkle {
+  0% {
+    opacity: 0.35;
+  }
+  100% {
+    opacity: 0.55;
+  }
+}
+
+:root[data-theme="dark"] body::after {
+  display: none;
+}
+
+/* ─── openknot — Lavender stars ─── */
+
+:root[data-theme="openknot"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.35;
+  animation: star-twinkle 8s ease-in-out infinite alternate;
+  box-shadow:
+    120px 40px 0 0.4px rgba(196, 181, 253, 0.5),
+    340px 90px 0 0.3px rgba(196, 181, 253, 0.3),
+    580px 60px 0 0.5px rgba(196, 181, 253, 0.6),
+    800px 130px 0 0.3px rgba(196, 181, 253, 0.4),
+    90px 200px 0 0.5px rgba(196, 181, 253, 0.4),
+    470px 220px 0 0.4px rgba(196, 181, 253, 0.5),
+    900px 250px 0 0.5px rgba(196, 181, 253, 0.6),
+    200px 420px 0 0.5px rgba(196, 181, 253, 0.5),
+    640px 450px 0 0.4px rgba(196, 181, 253, 0.4),
+    380px 580px 0 0.3px rgba(196, 181, 253, 0.4),
+    780px 570px 0 0.3px rgba(196, 181, 253, 0.5),
+    520px 660px 0 0.4px rgba(196, 181, 253, 0.5);
+}
+
+/* ─── dash — Flat warm-dark overrides (mirrors dash-light style) ─── */
+
+:root[data-theme="dash"] .page-title,
+:root[data-theme="dash-light"] .page-title,
+:root[data-theme="dash"] .panel-title,
+:root[data-theme="dash-light"] .panel-title,
+:root[data-theme="dash"] .agent-chat__welcome h2,
+:root[data-theme="dash-light"] .agent-chat__welcome h2 {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+}
+
+:root[data-theme="dash"] .sidebar-brand__title,
+:root[data-theme="dash-light"] .sidebar-brand__title {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+:root[data-theme="dash"] .glass-dashboard-card,
+:root[data-theme="dash-light"] .glass-dashboard-card,
+:root[data-theme="dash"] .stat-card,
+:root[data-theme="dash-light"] .stat-card,
+:root[data-theme="dash"] .agent-chat__starter,
+:root[data-theme="dash-light"] .agent-chat__starter {
+  border-style: dashed;
+}
+
+:root[data-theme="dash"] .sidebar {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--vscode-sidebar);
+}
+
+:root[data-theme="dash"] .glass-dashboard-card {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--vscode-panel);
+}
+
+:root[data-theme="dash"] body::after {
+  display: none;
+}
+
+/* dash-light keeps its own overrides minimal */
+:root[data-theme="dash-light"] .sidebar {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--vscode-sidebar);
+}
+
+:root[data-theme="dash-light"] .glass-dashboard-card {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--vscode-panel);
+}
+
+:root[data-theme="dash-light"] body::after {
+  display: none;
+}
+
+/* ─── light — Clean warm-white ambient gradient ─── */
+
+:root[data-theme="light"] body {
+  background:
+    radial-gradient(ellipse 90% 60% at 50% -15%, rgba(220, 69, 53, 0.02) 0%, transparent 55%),
+    radial-gradient(ellipse 70% 50% at 85% 40%, rgba(26, 138, 102, 0.015) 0%, transparent 50%),
+    var(--bg);
+}
+
+:root[data-theme="light"] body::after {
+  display: none;
+}
+
+/* ─── openknot-light — Lavender parchment ambient ─── */
+
+:root[data-theme="openknot-light"] body {
+  background:
+    radial-gradient(ellipse 90% 60% at 50% -15%, rgba(124, 58, 237, 0.05) 0%, transparent 55%),
+    radial-gradient(ellipse 70% 50% at 85% 40%, rgba(109, 40, 217, 0.03) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 15% 80%, rgba(124, 58, 237, 0.02) 0%, transparent 45%),
+    var(--bg);
+}
+
+:root[data-theme="openknot-light"] body::after {
+  display: none;
+}
+
+/* ─── dash-light — Paper dossier ambient ─── */
+
+:root[data-theme="dash-light"] body {
+  background:
+    radial-gradient(ellipse 90% 60% at 50% -15%, rgba(89, 96, 49, 0.035) 0%, transparent 55%),
+    radial-gradient(ellipse 70% 50% at 85% 40%, rgba(67, 74, 34, 0.02) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 15% 80%, rgba(89, 96, 49, 0.015) 0%, transparent 45%),
+    var(--bg);
+}
+
+/* ─── clawdash — Chrome Metallic Overrides ─── */
+
+:root[data-theme="clawdash"] body {
+  background:
+    radial-gradient(ellipse 80% 50% at 40% -10%, rgba(192, 200, 212, 0.06) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 70% 30%, rgba(202, 58, 41, 0.04) 0%, transparent 50%),
+    var(--bg);
+}
+
+:root[data-theme="clawdash"] body::after {
+  display: none;
+}
+
+:root[data-theme="clawdash"] .nav-item--active {
+  border-image: linear-gradient(to bottom, var(--kn-silver-bright), var(--kn-claw)) 1;
+  border-image-slice: 1;
+}
+
+/* ─── High Contrast Overrides (all themes) ─── */
+
+@media (prefers-contrast: more) {
+  .topbar,
+  .sidebar,
+  .nav-item--active,
+  .stat-card,
+  .callout,
+  .pill,
+  pre,
+  input,
+  button {
+    box-shadow: 0 0 0 2px var(--text) !important;
+    border-width: 1.5px;
+  }
+}
+
+/* ════════════════════════════════════════════════════════
+   Animations
+   ════════════════════════════════════════════════════════ */
+
 @keyframes rise {
   from {
     opacity: 0;
@@ -355,6 +1014,15 @@ select {
   }
   50% {
     box-shadow: 0 0 20px var(--accent-glow);
+  }
+}
+
+@keyframes chrome-shimmer {
+  0% {
+    left: -100%;
+  }
+  100% {
+    left: 100%;
   }
 }
 
