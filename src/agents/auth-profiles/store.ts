@@ -9,14 +9,14 @@ import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath }
 import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 type LegacyAuthStore = Record<string, AuthProfileCredential>;
-type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
-type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
   readOnly?: boolean;
 };
 
-const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
+function isAuthStoreReadOnly(): boolean {
+  return process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
+}
 
 const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
 
@@ -77,6 +77,14 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
   runtimeAuthStoreSnapshots.clear();
 }
 
+function _syncAuthProfileStore(target: AuthProfileStore, source: AuthProfileStore): void {
+  target.version = source.version;
+  target.profiles = source.profiles;
+  target.order = source.order;
+  target.lastGood = source.lastGood;
+  target.usageStats = source.usageStats;
+}
+
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
   updater: (store: AuthProfileStore) => boolean;
@@ -98,71 +106,6 @@ export async function updateAuthProfileStoreWithLock(params: {
   }
 }
 
-/**
- * Normalise a raw auth-profiles.json credential entry.
- *
- * The official format uses `type` and (for api_key credentials) `key`.
- * A common mistake — caused by the similarity with the `openclaw.json`
- * `auth.profiles` section which uses `mode` — is to write `mode` instead of
- * `type` and `apiKey` instead of `key`.  Accept both spellings so users don't
- * silently lose their credentials.
- */
-function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<AuthProfileCredential> {
-  const entry = { ...raw } as Record<string, unknown>;
-  // mode → type alias (openclaw.json uses "mode"; auth-profiles.json uses "type")
-  if (!("type" in entry) && typeof entry["mode"] === "string") {
-    entry["type"] = entry["mode"];
-  }
-  // apiKey → key alias for ApiKeyCredential
-  if (!("key" in entry) && typeof entry["apiKey"] === "string") {
-    entry["key"] = entry["apiKey"];
-  }
-  return entry as Partial<AuthProfileCredential>;
-}
-
-function parseCredentialEntry(
-  raw: unknown,
-  fallbackProvider?: string,
-): { ok: true; credential: AuthProfileCredential } | { ok: false; reason: CredentialRejectReason } {
-  if (!raw || typeof raw !== "object") {
-    return { ok: false, reason: "non_object" };
-  }
-  const typed = normalizeRawCredentialEntry(raw as Record<string, unknown>);
-  if (!AUTH_PROFILE_TYPES.has(typed.type as AuthProfileCredential["type"])) {
-    return { ok: false, reason: "invalid_type" };
-  }
-  const provider = typed.provider ?? fallbackProvider;
-  if (typeof provider !== "string" || provider.trim().length === 0) {
-    return { ok: false, reason: "missing_provider" };
-  }
-  return {
-    ok: true,
-    credential: {
-      ...typed,
-      provider,
-    } as AuthProfileCredential,
-  };
-}
-
-function warnRejectedCredentialEntries(source: string, rejected: RejectedCredentialEntry[]): void {
-  if (rejected.length === 0) {
-    return;
-  }
-  const reasons = rejected.reduce(
-    (acc, current) => {
-      acc[current.reason] = (acc[current.reason] ?? 0) + 1;
-      return acc;
-    },
-    {} as Partial<Record<CredentialRejectReason, number>>,
-  );
-  log.warn("ignored invalid auth profile entries during store load", {
-    source,
-    dropped: rejected.length,
-    reasons,
-    keys: rejected.slice(0, 10).map((entry) => entry.key),
-  });
-}
-
 function coerceLegacyStore(raw: unknown): LegacyAuthStore | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -172,16 +115,32 @@ function coerceLegacyStore(raw: unknown): LegacyAuthStore | null {
     return null;
   }
   const entries: LegacyAuthStore = {};
-  const rejected: RejectedCredentialEntry[] = [];
   for (const [key, value] of Object.entries(record)) {
-    const parsed = parseCredentialEntry(value, key);
-    if (!parsed.ok) {
-      rejected.push({ key, reason: parsed.reason });
+    if (!value || typeof value !== "object") {
       continue;
     }
-    entries[key] = parsed.credential;
+    const typed = value as Partial<AuthProfileCredential>;
+    const mode = (typed as { mode?: unknown }).mode;
+    const credentialType =
+      typed.type ?? (mode === "api_key" || mode === "oauth" || mode === "token" ? mode : undefined);
+    if (credentialType !== "api_key" && credentialType !== "oauth" && credentialType !== "token") {
+      continue;
+    }
+    const legacyApiKey = (typed as { apiKey?: unknown }).apiKey;
+    const raw_entry: Record<string, unknown> = {
+      ...(typed as Record<string, unknown>),
+      type: credentialType,
+      provider: String(typed.provider ?? key),
+    };
+    if (
+      credentialType === "api_key" &&
+      typeof raw_entry.key !== "string" &&
+      typeof legacyApiKey === "string"
+    ) {
+      raw_entry.key = legacyApiKey;
+    }
+    entries[key] = raw_entry as AuthProfileCredential;
   }
-  warnRejectedCredentialEntries("auth.json", rejected);
   return Object.keys(entries).length > 0 ? entries : null;
 }
 
@@ -195,16 +154,35 @@ function coerceAuthStore(raw: unknown): AuthProfileStore | null {
   }
   const profiles = record.profiles as Record<string, unknown>;
   const normalized: Record<string, AuthProfileCredential> = {};
-  const rejected: RejectedCredentialEntry[] = [];
   for (const [key, value] of Object.entries(profiles)) {
-    const parsed = parseCredentialEntry(value);
-    if (!parsed.ok) {
-      rejected.push({ key, reason: parsed.reason });
+    if (!value || typeof value !== "object") {
       continue;
     }
-    normalized[key] = parsed.credential;
+    const typed = value as Partial<AuthProfileCredential>;
+    const mode = (typed as { mode?: unknown }).mode;
+    const { mode: _mode, apiKey: legacyApiKey, ...rest } = typed as Record<string, unknown>;
+    const credentialType =
+      typed.type ?? (mode === "api_key" || mode === "oauth" || mode === "token" ? mode : undefined);
+    if (credentialType !== "api_key" && credentialType !== "oauth" && credentialType !== "token") {
+      continue;
+    }
+    if (!typed.provider) {
+      continue;
+    }
+    const credential: Record<string, unknown> = {
+      ...rest,
+      type: credentialType,
+      provider: String(typed.provider),
+    };
+    if (
+      credentialType === "api_key" &&
+      typeof credential.key !== "string" &&
+      typeof legacyApiKey === "string"
+    ) {
+      credential.key = legacyApiKey;
+    }
+    normalized[key] = credential as AuthProfileCredential;
   }
-  warnRejectedCredentialEntries("auth-profiles.json", rejected);
   const order =
     record.order && typeof record.order === "object"
       ? Object.entries(record.order as Record<string, unknown>).reduce(
@@ -338,22 +316,19 @@ function applyLegacyStore(store: AuthProfileStore, legacy: LegacyAuthStore): voi
   }
 }
 
-function loadCoercedStore(authPath: string): AuthProfileStore | null {
-  const raw = loadJsonFile(authPath);
-  return coerceAuthStore(raw);
-}
-
 export function loadAuthProfileStore(): AuthProfileStore {
   const authPath = resolveAuthStorePath();
-  const asStore = loadCoercedStore(authPath);
+  const raw = loadJsonFile(authPath);
+  const asStore = coerceAuthStore(raw);
   if (asStore) {
-    // Sync from external CLI tools on every load.
+    // Sync from external CLI tools on every load
     const synced = syncExternalCliCredentials(asStore);
-    if (synced) {
+    if (synced && !isAuthStoreReadOnly()) {
       saveJsonFile(authPath, asStore);
     }
     return asStore;
   }
+
   const legacyRaw = loadJsonFile(resolveLegacyAuthStorePath());
   const legacy = coerceLegacyStore(legacyRaw);
   if (legacy) {
@@ -377,24 +352,21 @@ function loadAuthProfileStoreForAgent(
 ): AuthProfileStore {
   const readOnly = options?.readOnly === true;
   const authPath = resolveAuthStorePath(agentDir);
-  const asStore = loadCoercedStore(authPath);
+  const raw = loadJsonFile(authPath);
+  const asStore = coerceAuthStore(raw);
   if (asStore) {
-    // Runtime secret activation must remain read-only:
-    // sync external CLI credentials in-memory, but never persist while readOnly.
     const synced = syncExternalCliCredentials(asStore);
-    if (synced && !readOnly) {
+    if (synced && !readOnly && !isAuthStoreReadOnly()) {
       saveJsonFile(authPath, asStore);
     }
     return asStore;
   }
 
-  // Fallback: inherit auth-profiles from main agent if subagent has none
   if (agentDir && !readOnly) {
-    const mainAuthPath = resolveAuthStorePath(); // without agentDir = main
+    const mainAuthPath = resolveAuthStorePath();
     const mainRaw = loadJsonFile(mainAuthPath);
     const mainStore = coerceAuthStore(mainRaw);
     if (mainStore && Object.keys(mainStore.profiles).length > 0) {
-      // Clone main store to subagent directory for auth inheritance
       saveJsonFile(authPath, mainStore);
       log.info("inherited auth-profiles from main agent", { agentDir });
       return mainStore;
@@ -412,17 +384,13 @@ function loadAuthProfileStoreForAgent(
   }
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);
-  // Keep external CLI credentials visible in runtime even during read-only loads.
   const syncedCli = syncExternalCliCredentials(store);
-  const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
-  const shouldWrite = !readOnly && !forceReadOnly && (legacy !== null || mergedOAuth || syncedCli);
+  const shouldWrite =
+    !readOnly && !isAuthStoreReadOnly() && (legacy !== null || mergedOAuth || syncedCli);
   if (shouldWrite) {
     saveJsonFile(authPath, store);
   }
 
-  // PR #368: legacy auth.json could get re-migrated from other agent dirs,
-  // overwriting fresh OAuth creds with stale tokens (fixes #363). Delete only
-  // after we've successfully written auth-profiles.json.
   if (shouldWrite && legacy !== null) {
     const legacyPath = resolveLegacyAuthStorePath(agentDir);
     try {
@@ -476,24 +444,20 @@ export function ensureAuthProfileStore(
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
-  const merged = mergeAuthProfileStores(mainStore, store);
-
-  return merged;
+  return mergeAuthProfileStores(mainStore, store);
 }
 
 export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
   const authPath = resolveAuthStorePath(agentDir);
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).map(([profileId, credential]) => {
-      if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
-        const sanitized = { ...credential } as Record<string, unknown>;
-        delete sanitized.key;
-        return [profileId, sanitized];
+      if (credential.type === "api_key" && credential.keyRef) {
+        const { key: _key, ...rest } = credential;
+        return [profileId, rest];
       }
-      if (credential.type === "token" && credential.tokenRef && credential.token !== undefined) {
-        const sanitized = { ...credential } as Record<string, unknown>;
-        delete sanitized.token;
-        return [profileId, sanitized];
+      if (credential.type === "token" && credential.tokenRef) {
+        const { token: _token, ...rest } = credential;
+        return [profileId, rest];
       }
       return [profileId, credential];
     }),
