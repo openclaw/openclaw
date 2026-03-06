@@ -106,6 +106,32 @@ function getHooksForName<K extends PluginHookName>(
 }
 
 /**
+ * Maximum length (in characters) for plugin-injected prompt context.
+ * Prevents a single plugin from consuming the entire context window.
+ * Generous enough for legitimate use (documentation, code snippets)
+ * while guarding against accidental or malicious prompt inflation.
+ */
+export const MAX_HOOK_CONTEXT_LENGTH = 50_000;
+
+/**
+ * Clamp a string to `MAX_HOOK_CONTEXT_LENGTH`, appending a truncation
+ * marker so the model (and operators) can see that content was cut.
+ */
+function clampHookString(
+  value: string | undefined,
+  label: string,
+  warn: ((msg: string) => void) | undefined,
+): string | undefined {
+  if (!value) return value;
+  if (value.length <= MAX_HOOK_CONTEXT_LENGTH) return value;
+  warn?.(
+    `[hooks] ${label} from plugin exceeded ${MAX_HOOK_CONTEXT_LENGTH} chars ` +
+      `(${value.length}) and was truncated`,
+  );
+  return value.slice(0, MAX_HOOK_CONTEXT_LENGTH) + "\n[…truncated by openclaw]";
+}
+
+/**
  * Create a hook runner for a specific registry.
  */
 export function createHookRunner(registry: PluginRegistry, options: HookRunnerOptions = {}) {
@@ -232,28 +258,35 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   /**
    * Run before_prompt_build hook.
    * Allows plugins to inject context and system prompt before prompt submission.
+   * Applies length limits to prevent a plugin from consuming the context window.
    */
   async function runBeforePromptBuild(
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforePromptBuildResult | undefined> {
-    return runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
+    const raw = await runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
       "before_prompt_build",
       event,
       ctx,
       mergeBeforePromptBuild,
     );
+    if (!raw) return raw;
+    return {
+      systemPrompt: clampHookString(raw.systemPrompt, "systemPrompt", logger?.warn),
+      prependContext: clampHookString(raw.prependContext, "prependContext", logger?.warn),
+    };
   }
 
   /**
    * Run before_agent_start hook.
    * Legacy compatibility hook that combines model resolve + prompt build phases.
+   * Applies the same length limits as runBeforePromptBuild.
    */
   async function runBeforeAgentStart(
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforeAgentStartResult | undefined> {
-    return runModifyingHook<"before_agent_start", PluginHookBeforeAgentStartResult>(
+    const raw = await runModifyingHook<"before_agent_start", PluginHookBeforeAgentStartResult>(
       "before_agent_start",
       event,
       ctx,
@@ -262,6 +295,12 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         ...mergeBeforeModelResolve(acc, next),
       }),
     );
+    if (!raw) return raw;
+    return {
+      ...raw,
+      systemPrompt: clampHookString(raw.systemPrompt, "systemPrompt", logger?.warn),
+      prependContext: clampHookString(raw.prependContext, "prependContext", logger?.warn),
+    };
   }
 
   /**

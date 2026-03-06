@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { createHookRunner } from "./hooks.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createHookRunner, MAX_HOOK_CONTEXT_LENGTH } from "./hooks.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeModelResolveResult,
@@ -71,5 +71,61 @@ describe("phase hooks merger", () => {
 
     expect(result?.prependContext).toBe("context A\n\ncontext B");
     expect(result?.systemPrompt).toBe("system A");
+  });
+
+  it("truncates prependContext that exceeds MAX_HOOK_CONTEXT_LENGTH", async () => {
+    const oversized = "x".repeat(MAX_HOOK_CONTEXT_LENGTH + 500);
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "big",
+      () => ({ prependContext: oversized }),
+      10,
+    );
+
+    const warn = vi.fn();
+    const runner = createHookRunner(registry, { logger: { warn, error: vi.fn() } });
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.prependContext?.length).toBeLessThan(oversized.length);
+    expect(result?.prependContext).toContain("[…truncated by openclaw]");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("prependContext"));
+  });
+
+  it("truncates systemPrompt that exceeds MAX_HOOK_CONTEXT_LENGTH", async () => {
+    const oversized = "s".repeat(MAX_HOOK_CONTEXT_LENGTH + 100);
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "big",
+      () => ({ systemPrompt: oversized }),
+      10,
+    );
+
+    const warn = vi.fn();
+    const runner = createHookRunner(registry, { logger: { warn, error: vi.fn() } });
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.systemPrompt?.length).toBeLessThan(oversized.length);
+    expect(result?.systemPrompt).toContain("[…truncated by openclaw]");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("systemPrompt"));
+  });
+
+  it("does not truncate context within the length limit", async () => {
+    const normalContext = "a".repeat(1000);
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "normal",
+      () => ({ prependContext: normalContext }),
+      10,
+    );
+
+    const warn = vi.fn();
+    const runner = createHookRunner(registry, { logger: { warn, error: vi.fn() } });
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.prependContext).toBe(normalContext);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
