@@ -161,6 +161,9 @@ vi.mock("node:fs", async (importOriginal) => {
       }
       fsState.entries.delete(absInMock(p));
     },
+    chmod: async (_p: string, _mode: number) => {
+      // no-op in mock
+    },
   } as unknown as typeof actual.promises;
 
   const wrapped = { ...actual, promises };
@@ -184,6 +187,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         return await (actual.writeFile as any)(p, data, "utf-8");
       }
       setFile(p, data);
+    },
+    chmod: async (_p: string, _mode: number) => {
+      // no-op in mock
     },
   };
   return { ...wrapped, default: wrapped };
