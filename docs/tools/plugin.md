@@ -62,7 +62,7 @@ Schema instead. See [Plugin manifest](/plugins/manifest).
 Plugins can register:
 
 - Gateway RPC methods
-- Gateway HTTP handlers
+- Gateway HTTP routes
 - Agent tools
 - CLI commands
 - Background services
@@ -106,6 +106,37 @@ Notes:
 - Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
 
+## Gateway HTTP routes
+
+Plugins can expose HTTP endpoints with `api.registerHttpRoute(...)`.
+
+```ts
+api.registerHttpRoute({
+  path: "/acme/webhook",
+  auth: "plugin",
+  match: "exact",
+  handler: async (_req, res) => {
+    res.statusCode = 200;
+    res.end("ok");
+    return true;
+  },
+});
+```
+
+Route fields:
+
+- `path`: route path under the gateway HTTP server.
+- `auth`: required. Use `"gateway"` to require normal gateway auth, or `"plugin"` for plugin-managed auth/webhook verification.
+- `match`: optional. `"exact"` (default) or `"prefix"`.
+- `replaceExisting`: optional. Allows the same plugin to replace its own existing route registration.
+- `handler`: return `true` when the route handled the request.
+
+Notes:
+
+- `api.registerHttpHandler(...)` is obsolete. Use `api.registerHttpRoute(...)`.
+- Plugin routes must declare `auth` explicitly.
+- Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
+
 ## Plugin SDK import paths
 
 Use SDK subpaths instead of the monolithic `openclaw/plugin-sdk` import when
@@ -146,6 +177,38 @@ Compatibility note:
 - New and migrated bundled plugins should use channel or extension-specific
   subpaths; use `core` for generic surfaces and `compat` only when broader
   shared helpers are required.
+
+## Read-only channel inspection
+
+If your plugin registers a channel, prefer implementing
+`plugin.config.inspectAccount(cfg, accountId)` alongside `resolveAccount(...)`.
+
+Why:
+
+- `resolveAccount(...)` is the runtime path. It is allowed to assume credentials
+  are fully materialized and can fail fast when required secrets are missing.
+- Read-only command paths such as `openclaw status`, `openclaw status --all`,
+  `openclaw channels status`, `openclaw channels resolve`, and doctor/config
+  repair flows should not need to materialize runtime credentials just to
+  describe configuration.
+
+Recommended `inspectAccount(...)` behavior:
+
+- Return descriptive account state only.
+- Preserve `enabled` and `configured`.
+- Include credential source/status fields when relevant, such as:
+  - `tokenSource`, `tokenStatus`
+  - `botTokenSource`, `botTokenStatus`
+  - `appTokenSource`, `appTokenStatus`
+  - `signingSecretSource`, `signingSecretStatus`
+- You do not need to return raw token values just to report read-only
+  availability. Returning `tokenStatus: "available"` (and the matching source
+  field) is enough for status-style commands.
+- Use `configured_unavailable` when a credential is configured via SecretRef but
+  unavailable in the current command path.
+
+This lets read-only commands report “configured but unavailable in this command
+path” instead of crashing or misreporting the account as not configured.
 
 Performance note:
 
@@ -454,6 +517,11 @@ Important hooks for prompt construction:
 - `before_model_resolve`: runs before session load (`messages` are not available). Use this to deterministically override `modelOverride` or `providerOverride`.
 - `before_prompt_build`: runs after session load (`messages` are available). Use this to shape prompt input.
 - `before_agent_start`: legacy compatibility hook. Prefer the two explicit hooks above.
+
+Core-enforced hook policy:
+
+- Operators can disable prompt mutation hooks per plugin via `plugins.entries.<id>.hooks.allowPromptInjection: false`.
+- When disabled, OpenClaw blocks `before_prompt_build` and ignores prompt-mutating fields returned from legacy `before_agent_start` while preserving legacy `modelOverride` and `providerOverride`.
 
 `before_prompt_build` result fields:
 
