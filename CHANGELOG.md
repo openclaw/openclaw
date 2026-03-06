@@ -180,6 +180,7 @@ Docs: https://docs.openclaw.ai
 - Memory/doctor SecretRef handling: treat SecretRef-backed memory-search API keys as configured, and fail embedding setup with explicit unresolved-secret errors instead of crashing. (#36835) Thanks @joshavant.
 - Memory/flush default prompt: ban timestamped variant filenames during default memory flush runs so durable notes stay in the canonical daily `memory/YYYY-MM-DD.md` file. (#34951) thanks @zerone0x.
 - Agents/reply delivery timing: flush embedded Pi block replies before waiting on compaction retries so already-generated assistant replies reach channels before compaction wait completes. (#35489) thanks @Sid-Qin.
+- Agents/gateway config guidance: stop exposing `config.schema` through the agent `gateway` tool, remove prompt/docs guidance that told agents to call it, and keep agents on `config.get` plus `config.patch`/`config.apply` for config changes. (#7382) thanks @kakuteki.
 
 ## 2026.3.2
 
