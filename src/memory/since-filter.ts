@@ -19,7 +19,7 @@ export function parseSince(since: string): Date | null {
   const relativeMatch = RELATIVE_DAYS_RE.exec(trimmed);
   if (relativeMatch) {
     const days = Number(relativeMatch[1]);
-    if (!Number.isInteger(days) || days < 0) {
+    if (!Number.isInteger(days) || days < 0 || days > 36500) {
       return null;
     }
     return new Date(Date.now() - days * DAY_MS);

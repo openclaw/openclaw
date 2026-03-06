@@ -13,7 +13,7 @@ type SessionTextEntry = {
   index: number;
 };
 
-const SESSION_MODEL = "session-ingest";
+const SESSION_MODEL_FALLBACK = "fts-only";
 const SESSION_SOURCE = "sessions";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const FTS_TABLE = "chunks_fts";
@@ -56,6 +56,15 @@ export async function ingestSessionToMemory(params: {
   maxChunks?: number;
 }): Promise<{ chunksWritten: number; error?: string }> {
   try {
+    // B10: Only ingest for builtin backend
+    if (params.config) {
+      const backendCfg = params.config.agents?.defaults?.memorySearch ?? {};
+      const backend = (backendCfg as Record<string, unknown>).backend;
+      if (backend && backend !== "builtin") {
+        return { chunksWritten: 0 };
+      }
+    }
+
     const texts = extractSessionText(params.messages);
     if (texts.length === 0) {
       return { chunksWritten: 0 };
@@ -66,9 +75,20 @@ export async function ingestSessionToMemory(params: {
       return { chunksWritten: 0 };
     }
 
+    // B7: Respect sessions source opt-out
+    if (params.config) {
+      const agentId = params.agentId?.trim() || params.sessionKey?.split(":")[0]?.trim() || "main";
+      const cfg = resolveMemorySearchConfig(params.config, agentId);
+      const sources = cfg?.sources ?? ["memory"];
+      if (!sources.includes("sessions")) {
+        return { chunksWritten: 0 };
+      }
+    }
+
+    // B9: Create memory DB directory if it does not exist yet
     const dbDir = path.dirname(dbPath);
     if (!fs.existsSync(dbDir)) {
-      return { chunksWritten: 0 };
+      fs.mkdirSync(dbDir, { recursive: true });
     }
 
     const joinedText = texts
@@ -79,6 +99,17 @@ export async function ingestSessionToMemory(params: {
     const chunks = rawChunks.slice(0, maxChunks);
     if (chunks.length === 0) {
       return { chunksWritten: 0 };
+    }
+
+    // B2: Resolve embedding model from config to match hybrid search filter
+    let sessionModel = SESSION_MODEL_FALLBACK;
+    if (params.config) {
+      const resolvedAgentId =
+        params.agentId?.trim() || params.sessionKey?.split(":")[0]?.trim() || "main";
+      const memCfg = resolveMemorySearchConfig(params.config, resolvedAgentId);
+      if (memCfg?.model) {
+        sessionModel = memCfg.model;
+      }
     }
 
     const sessionPath = `session/${params.sessionKey ?? params.sessionId ?? "unknown"}`;
@@ -146,7 +177,7 @@ export async function ingestSessionToMemory(params: {
             startLine,
             endLine,
             chunkHash,
-            SESSION_MODEL,
+            sessionModel,
             chunk,
             "[]",
             now,
@@ -155,15 +186,7 @@ export async function ingestSessionToMemory(params: {
           );
 
           if (insertFts) {
-            insertFts.run(
-              chunk,
-              id,
-              sessionPath,
-              SESSION_SOURCE,
-              SESSION_MODEL,
-              startLine,
-              endLine,
-            );
+            insertFts.run(chunk, id, sessionPath, SESSION_SOURCE, sessionModel, startLine, endLine);
           }
 
           written += 1;
@@ -256,7 +279,24 @@ function sanitizeText(text: string, role: "user" | "assistant"): string {
     return "";
   }
 
-  return trimmed;
+  return redactSensitiveText(trimmed);
+}
+
+/**
+ * B3: Redact sensitive patterns (API keys, tokens, passwords) before storage.
+ */
+function redactSensitiveText(text: string): string {
+  return text
+    .replace(/\b(sk-[a-zA-Z0-9]{20,})/g, "[REDACTED]")
+    .replace(/\b(xox[bprs]-[a-zA-Z0-9-]{20,})/g, "[REDACTED]")
+    .replace(/\b(ghp_[a-zA-Z0-9]{36,})/g, "[REDACTED]")
+    .replace(/\b(gho_[a-zA-Z0-9]{36,})/g, "[REDACTED]")
+    .replace(/\b(AKIA[0-9A-Z]{16})/g, "[REDACTED]")
+    .replace(/(Bearer\s+)[a-zA-Z0-9._-]{20,}/gi, "$1[REDACTED]")
+    .replace(
+      /((?:api[_-]?key|secret|token|password|passwd|credentials)\s*[=:]\s*)[^\s"']{8,}/gi,
+      "$1[REDACTED]",
+    );
 }
 
 function looksLikeBase64Data(text: string): boolean {

@@ -704,13 +704,15 @@ export async function compactEmbeddedPiSessionDirect(
             workspaceDir: params.workspaceDir,
             config: params.config,
             agentId: sessionAgentId,
-          }).then((result) => {
-            if (result.error) {
-              log.warn(`session memory ingest failed: ${result.error}`);
-            }
-          }).catch((err) => {
-            log.warn(`session memory ingest rejected: ${String(err)}`);
-          });
+          })
+            .then((result) => {
+              if (result.error) {
+                log.warn(`session memory ingest failed: ${result.error}`);
+              }
+            })
+            .catch((err) => {
+              log.warn(`session memory ingest rejected: ${String(err)}`);
+            });
         }
 
         const diagEnabled = log.isEnabled("debug");
