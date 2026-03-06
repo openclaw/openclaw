@@ -25,7 +25,7 @@ import {
   listAgentEntries,
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
-import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { clearConfigCache, loadConfig, writeConfigFile } from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
@@ -64,6 +64,82 @@ const BOOTSTRAP_FILE_NAMES_POST_ONBOARDING = BOOTSTRAP_FILE_NAMES.filter(
 const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME] as const;
 
 const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
+
+const DEFAULT_AGENT_CREATE_READY_TIMEOUT_MS = 3000;
+const DEFAULT_AGENT_CREATE_READY_POLL_MS = 25;
+
+function resolvePositiveIntFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function resolveAgentCreateReadyTimeoutMs(): number {
+  return resolvePositiveIntFromEnv(
+    "OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS",
+    DEFAULT_AGENT_CREATE_READY_TIMEOUT_MS,
+  );
+}
+
+function resolveAgentCreateReadyPollMs(): number {
+  return resolvePositiveIntFromEnv(
+    "OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS",
+    DEFAULT_AGENT_CREATE_READY_POLL_MS,
+  );
+}
+
+function delayMs(durationMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, durationMs);
+  });
+}
+
+async function waitForAgentReady(params: {
+  agentId: string;
+  refreshRuntimeConfigFromDisk?: () => Promise<void>;
+}): Promise<{ ok: true } | { ok: false }> {
+  const timeoutMs = resolveAgentCreateReadyTimeoutMs();
+  const pollMs = resolveAgentCreateReadyPollMs();
+  const refreshIntervalMs = Math.max(50, pollMs);
+  const deadline = Date.now() + timeoutMs;
+  let lastRefreshAtMs = 0;
+
+  for (;;) {
+    const now = Date.now();
+    if (
+      now - lastRefreshAtMs >= refreshIntervalMs &&
+      typeof params.refreshRuntimeConfigFromDisk === "function"
+    ) {
+      lastRefreshAtMs = now;
+      try {
+        await params.refreshRuntimeConfigFromDisk();
+      } catch {
+        // Best-effort: transient refresh failures should not prevent retries.
+      }
+    }
+    clearConfigCache();
+    // Readiness must reflect runtime visibility because follow-up RPCs resolve
+    // agent IDs from loadConfig().
+    const cfg = loadConfig();
+    const foundInEntries = findAgentEntryIndex(listAgentEntries(cfg), params.agentId) >= 0;
+    const resolvableForFiles = resolveAgentIdOrError(params.agentId, cfg) === params.agentId;
+    if (foundInEntries && resolvableForFiles) {
+      return { ok: true };
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return { ok: false };
+    }
+    await delayMs(Math.min(pollMs, remainingMs));
+  }
+}
 
 function resolveAgentWorkspaceFileOrRespondError(
   params: Record<string, unknown>,
@@ -473,7 +549,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const result = listAgentsForGateway(cfg);
     respond(true, result, undefined);
   },
-  "agents.create": async ({ params, respond }) => {
+  "agents.create": async ({ params, respond, context }) => {
     if (!validateAgentsCreateParams(params)) {
       respond(
         false,
@@ -542,6 +618,30 @@ export const agentsHandlers: GatewayRequestHandlers = {
       "",
     ];
     await fs.appendFile(identityPath, lines.join("\n"), "utf-8");
+
+    const refreshRuntimeConfigForCreate =
+      typeof context.refreshRuntimeConfigFromDisk === "function"
+        ? async () => {
+            // Refresh runtime from the config we just persisted for this mutation.
+            // Avoid re-reading arbitrary on-disk edits during readiness polling.
+            await context.refreshRuntimeConfigFromDisk?.(nextConfig);
+          }
+        : undefined;
+    const ready = await waitForAgentReady({
+      agentId,
+      refreshRuntimeConfigFromDisk: refreshRuntimeConfigForCreate,
+    });
+    if (!ready.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.AGENT_TIMEOUT,
+          `agent "${agentId}" created but not yet resolvable after ${resolveAgentCreateReadyTimeoutMs()}ms`,
+        ),
+      );
+      return;
+    }
 
     respond(true, { ok: true, agentId, name: rawName, workspace: workspaceDir }, undefined);
   },
@@ -732,10 +832,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const content = String(params.content ?? "");
+    const relativeIoPath = path.relative(workspaceDir, resolvedPath.ioPath);
     try {
       await writeFileWithinRoot({
         rootDir: workspaceDir,
-        relativePath: name,
+        relativePath: relativeIoPath,
         data: content,
         encoding: "utf8",
       });
