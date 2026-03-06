@@ -111,6 +111,7 @@ const useVmForks =
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
+const includeUiSuite = process.env.OPENCLAW_TEST_INCLUDE_UI !== "0";
 const runs = [
   ...(useVmForks
     ? [
@@ -171,6 +172,15 @@ const runs = [
             // Keep them on process forks for determinism even when other suites use vmForks.
             "--pool=forks",
           ],
+        },
+      ]
+    : []),
+  ...(includeUiSuite
+    ? [
+        {
+          name: "ui",
+          args: ["vitest", "run", "--config", "ui/vitest.config.ts"],
+          rawArgs: true,
         },
       ]
     : []),
@@ -338,16 +348,18 @@ const runOnce = (entry, extraArgs = []) =>
       entry.name === "extensions" && maxWorkers === 1 && entry.args.includes("--pool=vmForks")
         ? entry.args.map((arg) => (arg === "--pool=vmForks" ? "--pool=forks" : arg))
         : entry.args;
-    const args = maxWorkers
-      ? [
-          ...entryArgs,
-          "--maxWorkers",
-          String(maxWorkers),
-          ...silentArgs,
-          ...windowsCiArgs,
-          ...extraArgs,
-        ]
-      : [...entryArgs, ...silentArgs, ...windowsCiArgs, ...extraArgs];
+    const args = entry.rawArgs
+      ? [...entryArgs, ...extraArgs]
+      : maxWorkers
+        ? [
+            ...entryArgs,
+            "--maxWorkers",
+            String(maxWorkers),
+            ...silentArgs,
+            ...windowsCiArgs,
+            ...extraArgs,
+          ]
+        : [...entryArgs, ...silentArgs, ...windowsCiArgs, ...extraArgs];
     const nodeOptions = process.env.NODE_OPTIONS ?? "";
     const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
       (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
