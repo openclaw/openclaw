@@ -498,9 +498,7 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
   }
 
   const trimmedKey = accessToken?.trim();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers: Record<string, string> = {};
   if (trimmedKey) {
     headers.Authorization = `Bearer ${trimmedKey}`;
   }

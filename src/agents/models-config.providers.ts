@@ -642,7 +642,6 @@ async function buildChutesProvider(accessToken?: string): Promise<ProviderConfig
   return {
     baseUrl: CHUTES_BASE_URL,
     api: "openai-completions",
-    auth: "api-key",
     models,
   };
 }
