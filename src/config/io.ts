@@ -1386,9 +1386,10 @@ export async function writeConfigFile(
 ): Promise<void> {
   const io = createConfigIO();
   let nextCfg = cfg;
-  if (runtimeConfigSnapshot && runtimeConfigSourceSnapshot) {
-    const runtimePatch = createMergePatch(runtimeConfigSnapshot, cfg);
-    nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
+  const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
+  if (hadBothSnapshots) {
+    const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
+    nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
   }
   const sameConfigPath =
     options.expectedConfigPath === undefined || options.expectedConfigPath === io.configPath;
@@ -1396,4 +1397,15 @@ export async function writeConfigFile(
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
   });
+  // Keep follow-up loadConfig() in sync with the just-persisted config (fixes race where a
+  // second connection's agents.update fails with "agent not found" after agents.create).
+  // Only pass nextCfg as source when we had both snapshots; otherwise we would set
+  // runtimeConfigSourceSnapshot to a resolved config and break env-ref preservation on next merge.
+  if (runtimeConfigSnapshot !== null) {
+    if (hadBothSnapshots) {
+      setRuntimeConfigSnapshot(cfg, nextCfg);
+    } else {
+      setRuntimeConfigSnapshot(cfg);
+    }
+  }
 }
