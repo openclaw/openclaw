@@ -119,7 +119,9 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
   activeSnapshot = next;
   registerAuthStoreSnapshotSaveHook((agentDir, store) => {
-    if (!activeSnapshot) return;
+    if (!activeSnapshot) {
+      return;
+    }
     const resolvedDir = resolveUserPath(agentDir ?? resolveOpenClawAgentDir());
     const entry = activeSnapshot.authStores.find((e) => e.agentDir === resolvedDir);
     if (entry) {
