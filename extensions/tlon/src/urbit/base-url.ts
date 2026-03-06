@@ -48,10 +48,14 @@ export function validateUrbitBaseUrl(raw: string): UrbitBaseUrlValidation {
   return { ok: true, baseUrl: `${parsed.protocol}//${host}`, hostname };
 }
 
-export function isBlockedUrbitHostname(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-  if (!normalized) {
-    return false;
-  }
-  return isBlockedHostnameOrIp(normalized);
-}
+    export function isBlockedUrbitHostname(hostname: string): boolean {
+      if (typeof hostname !== 'string') {
+        return false;
+      }
+
+      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+      if (!normalized) {
+        return false;
+      }
+      return isBlockedHostnameOrIp(normalized);
+    }
