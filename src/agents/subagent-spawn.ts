@@ -88,7 +88,7 @@ export type SpawnSubagentContext = {
 };
 
 export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
-  "auto-announces on completion, do not poll/sleep. The response will be sent back as an user message.";
+  "Auto-announce is push-based. After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool. Wait for completion events to arrive as user messages, track expected child session keys, and only send your final answer after ALL expected completions arrive. If a child completion event arrives AFTER your final answer, reply ONLY with NO_REPLY.";
 export const SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound session stays active after this task; continue in-thread for follow-ups.";
 
@@ -410,56 +410,47 @@ export async function spawnSubagentDirect(
     }
     thinkingOverride = normalized;
   }
-  try {
-    await callGateway({
-      method: "sessions.patch",
-      params: { key: childSessionKey, spawnDepth: childDepth },
-      timeoutMs: 10_000,
-    });
-  } catch (err) {
-    const messageText =
-      err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+  const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
+    try {
+      await callGateway({
+        method: "sessions.patch",
+        params: { key: childSessionKey, ...patch },
+        timeoutMs: 10_000,
+      });
+      return undefined;
+    } catch (err) {
+      return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+    }
+  };
+
+  const spawnDepthPatchError = await patchChildSession({ spawnDepth: childDepth });
+  if (spawnDepthPatchError) {
     return {
       status: "error",
-      error: messageText,
+      error: spawnDepthPatchError,
       childSessionKey,
     };
   }
 
   if (resolvedModel) {
-    try {
-      await callGateway({
-        method: "sessions.patch",
-        params: { key: childSessionKey, model: resolvedModel },
-        timeoutMs: 10_000,
-      });
-      modelApplied = true;
-    } catch (err) {
-      const messageText =
-        err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+    const modelPatchError = await patchChildSession({ model: resolvedModel });
+    if (modelPatchError) {
       return {
         status: "error",
-        error: messageText,
+        error: modelPatchError,
         childSessionKey,
       };
     }
+    modelApplied = true;
   }
   if (thinkingOverride !== undefined) {
-    try {
-      await callGateway({
-        method: "sessions.patch",
-        params: {
-          key: childSessionKey,
-          thinkingLevel: thinkingOverride === "off" ? null : thinkingOverride,
-        },
-        timeoutMs: 10_000,
-      });
-    } catch (err) {
-      const messageText =
-        err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+    const thinkingPatchError = await patchChildSession({
+      thinkingLevel: thinkingOverride === "off" ? null : thinkingOverride,
+    });
+    if (thinkingPatchError) {
       return {
         status: "error",
-        error: messageText,
+        error: thinkingPatchError,
         childSessionKey,
       };
     }
@@ -505,7 +496,7 @@ export async function spawnSubagentDirect(
     childSessionKey,
     label: label || undefined,
     task,
-    acpEnabled: cfg.acp?.enabled !== false,
+    acpEnabled: cfg.acp?.enabled !== false && !childRuntime.sandboxed,
     childDepth,
     maxSpawnDepth,
   });
@@ -620,13 +611,14 @@ export async function spawnSubagentDirect(
           }
           buf = strictBuf;
         } else {
-          buf = Buffer.from(contentVal, "utf8");
-          const estimatedBytes = buf.byteLength;
+          // Avoid allocating oversized UTF-8 buffers before enforcing file limits.
+          const estimatedBytes = Buffer.byteLength(contentVal, "utf8");
           if (estimatedBytes > maxFileBytes) {
             fail(
               `attachments_file_bytes_exceeded (name=${name} bytes=${estimatedBytes} maxFileBytes=${maxFileBytes})`,
             );
           }
+          buf = Buffer.from(contentVal, "utf8");
         }
 
         const bytes = buf.byteLength;

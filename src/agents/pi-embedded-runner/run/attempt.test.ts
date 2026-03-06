@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaBaseUrlForRun,
@@ -8,6 +9,7 @@ import {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldInjectOllamaCompatNumCtx,
+  decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
@@ -53,6 +55,8 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result).toEqual({
       prependContext: "from-cache",
       systemPrompt: "legacy-system",
+      prependSystemContext: undefined,
+      appendSystemContext: undefined,
     });
   });
 
@@ -69,6 +73,58 @@ describe("resolvePromptBuildHookResult", () => {
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith({ prompt: "hello", messages }, {});
     expect(result.prependContext).toBe("from-hook");
+  });
+
+  it("merges prompt-build and legacy context fields in deterministic order", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(() => true),
+      runBeforePromptBuild: vi.fn(async () => ({
+        prependContext: "prompt context",
+        prependSystemContext: "prompt prepend",
+        appendSystemContext: "prompt append",
+      })),
+      runBeforeAgentStart: vi.fn(async () => ({
+        prependContext: "legacy context",
+        prependSystemContext: "legacy prepend",
+        appendSystemContext: "legacy append",
+      })),
+    };
+
+    const result = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      hookCtx: {},
+      hookRunner,
+    });
+
+    expect(result.prependContext).toBe("prompt context\n\nlegacy context");
+    expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
+    expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+  });
+});
+
+describe("composeSystemPromptWithHookContext", () => {
+  it("returns undefined when no hook system context is provided", () => {
+    expect(composeSystemPromptWithHookContext({ baseSystemPrompt: "base" })).toBeUndefined();
+  });
+
+  it("builds prepend/base/append system prompt order", () => {
+    expect(
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: "  base system  ",
+        prependSystemContext: "  prepend  ",
+        appendSystemContext: "  append  ",
+      }),
+    ).toBe("prepend\n\nbase system\n\nappend");
+  });
+
+  it("avoids blank separators when base system prompt is empty", () => {
+    expect(
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: "   ",
+        appendSystemContext: "  append only  ",
+      }),
+    ).toBe("append only");
   });
 });
 
@@ -244,6 +300,57 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("\t  ");
     expect(baseFn).toHaveBeenCalledTimes(1);
   });
+
+  it("assigns fallback ids to missing/blank tool call ids in streamed and final messages", async () => {
+    const partialToolCall = { type: "toolCall", name: " read ", id: "   " };
+    const finalToolCallA = { type: "toolCall", name: " exec ", id: "" };
+    const finalToolCallB: { type: string; name: string; id?: string } = {
+      type: "toolCall",
+      name: " write ",
+    };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCallA, finalToolCallB] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(partialToolCall.id).toBe("call_auto_1");
+    expect(finalToolCallA.name).toBe("exec");
+    expect(finalToolCallA.id).toBe("call_auto_1");
+    expect(finalToolCallB.name).toBe("write");
+    expect(finalToolCallB.id).toBe("call_auto_2");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("trims surrounding whitespace on tool call ids", async () => {
+    const finalToolCall = { type: "toolCall", name: " read ", id: "  call_42  " };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("read");
+    expect(finalToolCall.id).toBe("call_42");
+  });
 });
 
 describe("isOllamaCompatProvider", () => {
@@ -400,5 +507,44 @@ describe("shouldInjectOllamaCompatNumCtx", () => {
         providerId: "ollama",
       }),
     ).toBe(false);
+  });
+});
+
+describe("decodeHtmlEntitiesInObject", () => {
+  it("decodes HTML entities in string values", () => {
+    const result = decodeHtmlEntitiesInObject(
+      "source .env &amp;&amp; psql &quot;$DB&quot; -c &lt;query&gt;",
+    );
+    expect(result).toBe('source .env && psql "$DB" -c <query>');
+  });
+
+  it("recursively decodes nested objects", () => {
+    const input = {
+      command: "cd ~/dev &amp;&amp; npm run build",
+      args: ["--flag=&quot;value&quot;", "&lt;input&gt;"],
+      nested: { deep: "a &amp; b" },
+    };
+    const result = decodeHtmlEntitiesInObject(input) as Record<string, unknown>;
+    expect(result.command).toBe("cd ~/dev && npm run build");
+    expect((result.args as string[])[0]).toBe('--flag="value"');
+    expect((result.args as string[])[1]).toBe("<input>");
+    expect((result.nested as Record<string, string>).deep).toBe("a & b");
+  });
+
+  it("passes through non-string primitives unchanged", () => {
+    expect(decodeHtmlEntitiesInObject(42)).toBe(42);
+    expect(decodeHtmlEntitiesInObject(null)).toBe(null);
+    expect(decodeHtmlEntitiesInObject(true)).toBe(true);
+    expect(decodeHtmlEntitiesInObject(undefined)).toBe(undefined);
+  });
+
+  it("returns strings without entities unchanged", () => {
+    const input = "plain string with no entities";
+    expect(decodeHtmlEntitiesInObject(input)).toBe(input);
+  });
+
+  it("decodes numeric character references", () => {
+    expect(decodeHtmlEntitiesInObject("&#39;hello&#39;")).toBe("'hello'");
+    expect(decodeHtmlEntitiesInObject("&#x27;world&#x27;")).toBe("'world'");
   });
 });

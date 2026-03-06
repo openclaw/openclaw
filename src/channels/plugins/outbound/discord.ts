@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../../config/config.js";
 import {
   getThreadBindingManager,
   type ThreadBindingRecord,
@@ -10,6 +11,7 @@ import {
 import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import { normalizeDiscordOutboundTarget } from "../normalize/discord.js";
 import type { ChannelOutboundAdapter } from "../types.js";
+import { sendTextMediaPayload } from "./direct-text-media.js";
 
 function resolveDiscordOutboundTarget(params: {
   to: string;
@@ -37,6 +39,7 @@ function resolveDiscordWebhookIdentity(params: {
 }
 
 async function maybeSendDiscordWebhookText(params: {
+  cfg?: OpenClawConfig;
   text: string;
   threadId?: string | number | null;
   accountId?: string | null;
@@ -67,6 +70,7 @@ async function maybeSendDiscordWebhookText(params: {
     webhookToken: binding.webhookToken,
     accountId: binding.accountId,
     threadId: binding.threadId,
+    cfg: params.cfg,
     replyTo: params.replyToId ?? undefined,
     username: persona.username,
     avatarUrl: persona.avatarUrl,
@@ -80,42 +84,12 @@ export const discordOutbound: ChannelOutboundAdapter = {
   textChunkLimit: 2000,
   pollMaxOptions: 10,
   resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
-  sendPayload: async (ctx) => {
-    const text = ctx.payload.text ?? "";
-    const urls = ctx.payload.mediaUrls?.length
-      ? ctx.payload.mediaUrls
-      : ctx.payload.mediaUrl
-        ? [ctx.payload.mediaUrl]
-        : [];
-    if (!text && urls.length === 0) {
-      return { channel: "discord", messageId: "" };
-    }
-    if (urls.length > 0) {
-      let lastResult = await discordOutbound.sendMedia!({
-        ...ctx,
-        text,
-        mediaUrl: urls[0],
-      });
-      for (let i = 1; i < urls.length; i++) {
-        lastResult = await discordOutbound.sendMedia!({
-          ...ctx,
-          text: "",
-          mediaUrl: urls[i],
-        });
-      }
-      return lastResult;
-    }
-    const limit = discordOutbound.textChunkLimit;
-    const chunks = limit && discordOutbound.chunker ? discordOutbound.chunker(text, limit) : [text];
-    let lastResult: Awaited<ReturnType<NonNullable<typeof discordOutbound.sendText>>>;
-    for (const chunk of chunks) {
-      lastResult = await discordOutbound.sendText!({ ...ctx, text: chunk });
-    }
-    return lastResult!;
-  },
-  sendText: async ({ to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
+  sendPayload: async (ctx) =>
+    await sendTextMediaPayload({ channel: "discord", ctx, adapter: discordOutbound }),
+  sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
     if (!silent) {
       const webhookResult = await maybeSendDiscordWebhookText({
+        cfg,
         text,
         threadId,
         accountId,
@@ -133,10 +107,12 @@ export const discordOutbound: ChannelOutboundAdapter = {
       replyTo: replyToId ?? undefined,
       accountId: accountId ?? undefined,
       silent: silent ?? undefined,
+      cfg,
     });
     return { channel: "discord", ...result };
   },
   sendMedia: async ({
+    cfg,
     to,
     text,
     mediaUrl,
@@ -156,14 +132,16 @@ export const discordOutbound: ChannelOutboundAdapter = {
       replyTo: replyToId ?? undefined,
       accountId: accountId ?? undefined,
       silent: silent ?? undefined,
+      cfg,
     });
     return { channel: "discord", ...result };
   },
-  sendPoll: async ({ to, poll, accountId, threadId, silent }) => {
+  sendPoll: async ({ cfg, to, poll, accountId, threadId, silent }) => {
     const target = resolveDiscordOutboundTarget({ to, threadId });
     return await sendPollDiscord(target, poll, {
       accountId: accountId ?? undefined,
       silent: silent ?? undefined,
+      cfg,
     });
   },
 };

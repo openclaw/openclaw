@@ -126,7 +126,7 @@ export async function installPackageDir(params: {
     await sanitizeManifestForNpmInstall(params.targetDir);
     params.logger?.info?.(params.depsLogMessage);
     const npmRes = await runCommandWithTimeout(
-      ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+      ["npm", "install", "--omit=dev", "--omit=peer", "--silent", "--ignore-scripts"],
       {
         timeoutMs: Math.max(params.timeoutMs, 300_000),
         cwd: params.targetDir,
@@ -146,4 +146,21 @@ export async function installPackageDir(params: {
   }
 
   return { ok: true };
+}
+
+export async function installPackageDirWithManifestDeps(params: {
+  sourceDir: string;
+  targetDir: string;
+  mode: "install" | "update";
+  timeoutMs: number;
+  logger?: { info?: (message: string) => void };
+  copyErrorPrefix: string;
+  depsLogMessage: string;
+  manifestDependencies?: Record<string, unknown>;
+  afterCopy?: () => void | Promise<void>;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  return installPackageDir({
+    ...params,
+    hasDeps: Object.keys(params.manifestDependencies ?? {}).length > 0,
+  });
 }

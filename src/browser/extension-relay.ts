@@ -249,8 +249,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
   );
 
   const initPromise = (async (): Promise<ChromeExtensionRelayServer> => {
-    const relayAuthToken = resolveRelayAuthTokenForPort(info.port);
-    const relayAuthTokens = new Set(resolveRelayAcceptedTokensForPort(info.port));
+    const relayAuthToken = await resolveRelayAuthTokenForPort(info.port);
+    const relayAuthTokens = new Set(await resolveRelayAcceptedTokensForPort(info.port));
 
     let extensionWs: WebSocket | null = null;
     const cdpClients = new Set<WebSocket>();

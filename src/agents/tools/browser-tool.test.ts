@@ -82,6 +82,12 @@ const configMocks = vi.hoisted(() => ({
 }));
 vi.mock("../../config/config.js", () => configMocks);
 
+const sessionTabRegistryMocks = vi.hoisted(() => ({
+  trackSessionBrowserTab: vi.fn(),
+  untrackSessionBrowserTab: vi.fn(),
+}));
+vi.mock("../../browser/session-tab-registry.js", () => sessionTabRegistryMocks);
+
 const toolCommonMocks = vi.hoisted(() => ({
   imageResultFromFile: vi.fn(),
 }));
@@ -108,16 +114,33 @@ function mockSingleBrowserProxyNode() {
   ]);
 }
 
-describe("browser tool snapshot maxChars", () => {
+function resetBrowserToolMocks() {
+  vi.clearAllMocks();
+  configMocks.loadConfig.mockReturnValue({ browser: {} });
+  nodesUtilsMocks.listNodes.mockResolvedValue([]);
+}
+
+function registerBrowserToolAfterEachReset() {
   afterEach(() => {
-    vi.clearAllMocks();
-    configMocks.loadConfig.mockReturnValue({ browser: {} });
-    nodesUtilsMocks.listNodes.mockResolvedValue([]);
+    resetBrowserToolMocks();
   });
+}
+
+async function runSnapshotToolCall(params: {
+  snapshotFormat: "ai" | "aria";
+  refs?: "aria" | "dom";
+  maxChars?: number;
+  profile?: string;
+}) {
+  const tool = createBrowserTool();
+  await tool.execute?.("call-1", { action: "snapshot", ...params });
+}
+
+describe("browser tool snapshot maxChars", () => {
+  registerBrowserToolAfterEachReset();
 
   it("applies the default ai snapshot limit", async () => {
-    const tool = createBrowserTool();
-    await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "ai" });
+    await runSnapshotToolCall({ snapshotFormat: "ai" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       undefined,
@@ -184,8 +207,7 @@ describe("browser tool snapshot maxChars", () => {
     configMocks.loadConfig.mockReturnValue({
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
-    const tool = createBrowserTool();
-    await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "ai" });
+    await runSnapshotToolCall({ snapshotFormat: "ai" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       undefined,
@@ -263,11 +285,7 @@ describe("browser tool snapshot maxChars", () => {
 });
 
 describe("browser tool url alias support", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-    configMocks.loadConfig.mockReturnValue({ browser: {} });
-    nodesUtilsMocks.listNodes.mockResolvedValue([]);
-  });
+  registerBrowserToolAfterEachReset();
 
   it("accepts url alias for open", async () => {
     const tool = createBrowserTool();
@@ -278,6 +296,23 @@ describe("browser tool url alias support", () => {
       "https://example.com",
       expect.objectContaining({ profile: undefined }),
     );
+  });
+
+  it("tracks opened tabs when session context is available", async () => {
+    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
+      targetId: "tab-123",
+      title: "Example",
+      url: "https://example.com",
+    });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+    await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
+
+    expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      targetId: "tab-123",
+      baseUrl: undefined,
+      profile: undefined,
+    });
   });
 
   it("accepts url alias for navigate", async () => {
@@ -305,14 +340,30 @@ describe("browser tool url alias support", () => {
       "targetUrl required",
     );
   });
+
+  it("untracks explicit tab close for tracked sessions", async () => {
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+    await tool.execute?.("call-1", {
+      action: "close",
+      targetId: "tab-xyz",
+    });
+
+    expect(browserClientMocks.browserCloseTab).toHaveBeenCalledWith(
+      undefined,
+      "tab-xyz",
+      expect.objectContaining({ profile: undefined }),
+    );
+    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      targetId: "tab-xyz",
+      baseUrl: undefined,
+      profile: undefined,
+    });
+  });
 });
 
 describe("browser tool act compatibility", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-    configMocks.loadConfig.mockReturnValue({ browser: {} });
-    nodesUtilsMocks.listNodes.mockResolvedValue([]);
-  });
+  registerBrowserToolAfterEachReset();
 
   it("accepts flattened act params for backward compatibility", async () => {
     const tool = createBrowserTool();
@@ -364,10 +415,7 @@ describe("browser tool act compatibility", () => {
 });
 
 describe("browser tool snapshot labels", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-    configMocks.loadConfig.mockReturnValue({ browser: {} });
-  });
+  registerBrowserToolAfterEachReset();
 
   it("returns image + text when labels are requested", async () => {
     const tool = createBrowserTool();
@@ -409,11 +457,7 @@ describe("browser tool snapshot labels", () => {
 });
 
 describe("browser tool external content wrapping", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-    configMocks.loadConfig.mockReturnValue({ browser: {} });
-    nodesUtilsMocks.listNodes.mockResolvedValue([]);
-  });
+  registerBrowserToolAfterEachReset();
 
   it("wraps aria snapshots as external content", async () => {
     browserClientMocks.browserSnapshot.mockResolvedValueOnce({
@@ -525,11 +569,7 @@ describe("browser tool external content wrapping", () => {
 });
 
 describe("browser tool act stale target recovery", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-    configMocks.loadConfig.mockReturnValue({ browser: {} });
-    nodesUtilsMocks.listNodes.mockResolvedValue([]);
-  });
+  registerBrowserToolAfterEachReset();
 
   it("retries chrome act once without targetId when tab id is stale", async () => {
     browserActionsMocks.browserAct

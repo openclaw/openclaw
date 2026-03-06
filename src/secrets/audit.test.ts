@@ -190,4 +190,68 @@ describe("secrets audit", () => {
     const callCount = callLog.split("\n").filter((line) => line.trim().length > 0).length;
     expect(callCount).toBe(1);
   });
+
+  it("short-circuits per-ref fallback for provider-wide batch failures", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const execLogPath = path.join(fixture.rootDir, "exec-fail-calls.log");
+    const execScriptPath = path.join(fixture.rootDir, "resolver-fail.mjs");
+    await fs.writeFile(
+      execScriptPath,
+      [
+        "#!/usr/bin/env node",
+        "import fs from 'node:fs';",
+        `fs.appendFileSync(${JSON.stringify(execLogPath)}, 'x\\n');`,
+        "process.exit(1);",
+      ].join("\n"),
+      { encoding: "utf8", mode: 0o700 },
+    );
+
+    await fs.writeFile(
+      fixture.configPath,
+      `${JSON.stringify(
+        {
+          secrets: {
+            providers: {
+              execmain: {
+                source: "exec",
+                command: execScriptPath,
+                jsonOnly: true,
+                passEnv: ["PATH"],
+              },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                api: "openai-completions",
+                apiKey: { source: "exec", provider: "execmain", id: "providers/openai/apiKey" },
+                models: [{ id: "gpt-5", name: "gpt-5" }],
+              },
+              moonshot: {
+                baseUrl: "https://api.moonshot.cn/v1",
+                api: "openai-completions",
+                apiKey: { source: "exec", provider: "execmain", id: "providers/moonshot/apiKey" },
+                models: [{ id: "moonshot-v1-8k", name: "moonshot-v1-8k" }],
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await fs.rm(fixture.authStorePath, { force: true });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(report.summary.unresolvedRefCount).toBeGreaterThanOrEqual(2);
+
+    const callLog = await fs.readFile(execLogPath, "utf8");
+    const callCount = callLog.split("\n").filter((line) => line.trim().length > 0).length;
+    expect(callCount).toBe(1);
+  });
 });

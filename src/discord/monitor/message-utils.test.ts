@@ -30,6 +30,91 @@ function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;
 }
 
+const DISCORD_CDN_HOSTNAMES = [
+  "cdn.discordapp.com",
+  "media.discordapp.net",
+  "*.discordapp.com",
+  "*.discordapp.net",
+];
+
+function expectDiscordCdnSsrFPolicy(policy: unknown) {
+  expect(policy).toEqual(
+    expect.objectContaining({
+      allowRfc2544BenchmarkRange: true,
+      hostnameAllowlist: expect.arrayContaining(DISCORD_CDN_HOSTNAMES),
+    }),
+  );
+}
+
+function expectSinglePngDownload(params: {
+  result: unknown;
+  expectedUrl: string;
+  filePathHint: string;
+  expectedPath: string;
+  placeholder: "<media:image>" | "<media:sticker>";
+}) {
+  expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+  const call = fetchRemoteMedia.mock.calls[0]?.[0] as {
+    url?: string;
+    filePathHint?: string;
+    maxBytes?: number;
+    fetchImpl?: unknown;
+    ssrfPolicy?: unknown;
+  };
+  expect(call).toMatchObject({
+    url: params.expectedUrl,
+    filePathHint: params.filePathHint,
+    maxBytes: 512,
+    fetchImpl: undefined,
+  });
+  expectDiscordCdnSsrFPolicy(call.ssrfPolicy);
+  expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+  expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
+  expect(params.result).toEqual([
+    {
+      path: params.expectedPath,
+      contentType: "image/png",
+      placeholder: params.placeholder,
+    },
+  ]);
+}
+
+function expectAttachmentImageFallback(params: { result: unknown; attachment: { url: string } }) {
+  expect(saveMediaBuffer).not.toHaveBeenCalled();
+  expect(params.result).toEqual([
+    {
+      path: params.attachment.url,
+      contentType: "image/png",
+      placeholder: "<media:image>",
+    },
+  ]);
+}
+
+function asForwardedSnapshotMessage(params: {
+  content: string;
+  embeds: Array<{ title?: string; description?: string }>;
+}) {
+  return asMessage({
+    content: "",
+    rawData: {
+      message_snapshots: [
+        {
+          message: {
+            content: params.content,
+            embeds: params.embeds,
+            attachments: [],
+            author: {
+              id: "u2",
+              username: "Bob",
+              discriminator: "0",
+            },
+          },
+        },
+      ],
+    },
+  });
+}
+
 describe("resolveDiscordMessageChannelId", () => {
   it.each([
     {
@@ -89,13 +174,20 @@ describe("resolveForwardedMediaList", () => {
     );
 
     expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
-    expect(fetchRemoteMedia).toHaveBeenCalledWith({
+    const call = fetchRemoteMedia.mock.calls[0]?.[0] as {
+      url?: string;
+      filePathHint?: string;
+      maxBytes?: number;
+      fetchImpl?: unknown;
+      ssrfPolicy?: unknown;
+    };
+    expect(call).toMatchObject({
       url: attachment.url,
       filePathHint: attachment.filename,
       maxBytes: 512,
       fetchImpl: undefined,
-      ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
     });
+    expectDiscordCdnSsrFPolicy(call.ssrfPolicy);
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
     expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
     expect(result).toEqual([
@@ -157,14 +249,7 @@ describe("resolveForwardedMediaList", () => {
       512,
     );
 
-    expect(saveMediaBuffer).not.toHaveBeenCalled();
-    expect(result).toEqual([
-      {
-        path: attachment.url,
-        contentType: "image/png",
-        placeholder: "<media:image>",
-      },
-    ]);
+    expectAttachmentImageFallback({ result, attachment });
   });
 
   it("downloads forwarded stickers", async () => {
@@ -191,23 +276,13 @@ describe("resolveForwardedMediaList", () => {
       512,
     );
 
-    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
-    expect(fetchRemoteMedia).toHaveBeenCalledWith({
-      url: "https://media.discordapp.net/stickers/sticker-1.png",
+    expectSinglePngDownload({
+      result,
+      expectedUrl: "https://media.discordapp.net/stickers/sticker-1.png",
       filePathHint: "wave.png",
-      maxBytes: 512,
-      fetchImpl: undefined,
-      ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+      expectedPath: "/tmp/sticker.png",
+      placeholder: "<media:sticker>",
     });
-    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
-    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
-    expect(result).toEqual([
-      {
-        path: "/tmp/sticker.png",
-        contentType: "image/png",
-        placeholder: "<media:sticker>",
-      },
-    ]);
   });
 
   it("returns empty when no snapshots are present", async () => {
@@ -260,23 +335,13 @@ describe("resolveMediaList", () => {
       512,
     );
 
-    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
-    expect(fetchRemoteMedia).toHaveBeenCalledWith({
-      url: "https://media.discordapp.net/stickers/sticker-2.png",
+    expectSinglePngDownload({
+      result,
+      expectedUrl: "https://media.discordapp.net/stickers/sticker-2.png",
       filePathHint: "hello.png",
-      maxBytes: 512,
-      fetchImpl: undefined,
-      ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+      expectedPath: "/tmp/sticker-2.png",
+      placeholder: "<media:sticker>",
     });
-    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
-    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
-    expect(result).toEqual([
-      {
-        path: "/tmp/sticker-2.png",
-        contentType: "image/png",
-        placeholder: "<media:sticker>",
-      },
-    ]);
   });
 
   it("forwards fetchImpl to sticker downloads", async () => {
@@ -324,14 +389,7 @@ describe("resolveMediaList", () => {
       512,
     );
 
-    expect(saveMediaBuffer).not.toHaveBeenCalled();
-    expect(result).toEqual([
-      {
-        path: attachment.url,
-        contentType: "image/png",
-        placeholder: "<media:image>",
-      },
-    ]);
+    expectAttachmentImageFallback({ result, attachment });
   });
 
   it("falls back to URL when saveMediaBuffer fails", async () => {
@@ -443,7 +501,7 @@ describe("Discord media SSRF policy", () => {
     saveMediaBuffer.mockClear();
   });
 
-  it("passes ssrfPolicy with Discord CDN allowedHostnames and allowRfc2544BenchmarkRange", async () => {
+  it("passes Discord CDN hostname allowlist with RFC2544 enabled", async () => {
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("img"),
       contentType: "image/png",
@@ -460,41 +518,80 @@ describe("Discord media SSRF policy", () => {
       1024,
     );
 
-    const policy = fetchRemoteMedia.mock.calls[0][0].ssrfPolicy;
-    expect(policy).toEqual({
-      allowedHostnames: ["cdn.discordapp.com", "media.discordapp.net"],
-      allowRfc2544BenchmarkRange: true,
+    const policy = fetchRemoteMedia.mock.calls[0]?.[0]?.ssrfPolicy;
+    expectDiscordCdnSsrFPolicy(policy);
+  });
+
+  it("merges provided ssrfPolicy with Discord CDN defaults", async () => {
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("img"),
+      contentType: "image/png",
     });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/b.png",
+      contentType: "image/png",
+    });
+
+    await resolveMediaList(
+      asMessage({
+        attachments: [{ id: "b1", url: "https://cdn.discordapp.com/b.png", filename: "b.png" }],
+      }),
+      1024,
+      undefined,
+      {
+        allowPrivateNetwork: true,
+        hostnameAllowlist: ["assets.example.com"],
+        allowedHostnames: ["assets.example.com"],
+      },
+    );
+
+    const policy = fetchRemoteMedia.mock.calls[0]?.[0]?.ssrfPolicy;
+    expect(policy).toEqual(
+      expect.objectContaining({
+        allowPrivateNetwork: true,
+        allowRfc2544BenchmarkRange: true,
+        allowedHostnames: expect.arrayContaining(["assets.example.com"]),
+        hostnameAllowlist: expect.arrayContaining(["assets.example.com", ...DISCORD_CDN_HOSTNAMES]),
+      }),
+    );
   });
 });
 
 describe("resolveDiscordMessageText", () => {
   it("includes forwarded message snapshots in body text", () => {
     const text = resolveDiscordMessageText(
-      asMessage({
-        content: "",
-        rawData: {
-          message_snapshots: [
-            {
-              message: {
-                content: "forwarded hello",
-                embeds: [],
-                attachments: [],
-                author: {
-                  id: "u2",
-                  username: "Bob",
-                  discriminator: "0",
-                },
-              },
-            },
-          ],
-        },
+      asForwardedSnapshotMessage({
+        content: "forwarded hello",
+        embeds: [],
       }),
       { includeForwarded: true },
     );
 
     expect(text).toContain("[Forwarded message from @Bob]");
     expect(text).toContain("forwarded hello");
+  });
+
+  it("resolves user mentions in content", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "Hello <@123> and <@456>!",
+        mentionedUsers: [
+          { id: "123", username: "alice", globalName: "Alice Wonderland", discriminator: "0" },
+          { id: "456", username: "bob", discriminator: "0" },
+        ],
+      }),
+    );
+    expect(text).toBe("Hello @Alice Wonderland and @bob!");
+  });
+
+  it("leaves content unchanged if no mentions present", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "Hello world",
+        mentionedUsers: [],
+      }),
+    );
+    expect(text).toBe("Hello world");
   });
 
   it("uses sticker placeholders when content is empty", () => {
@@ -560,24 +657,9 @@ describe("resolveDiscordMessageText", () => {
 
   it("joins forwarded snapshot embed title and description when content is empty", () => {
     const text = resolveDiscordMessageText(
-      asMessage({
+      asForwardedSnapshotMessage({
         content: "",
-        rawData: {
-          message_snapshots: [
-            {
-              message: {
-                content: "",
-                embeds: [{ title: "Forwarded title", description: "Forwarded details" }],
-                attachments: [],
-                author: {
-                  id: "u2",
-                  username: "Bob",
-                  discriminator: "0",
-                },
-              },
-            },
-          ],
-        },
+        embeds: [{ title: "Forwarded title", description: "Forwarded details" }],
       }),
       { includeForwarded: true },
     );

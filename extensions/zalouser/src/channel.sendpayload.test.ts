@@ -1,9 +1,10 @@
-import type { ReplyPayload } from "openclaw/plugin-sdk";
+import type { ReplyPayload } from "openclaw/plugin-sdk/zalouser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { zalouserPlugin } from "./channel.js";
 
 vi.mock("./send.js", () => ({
   sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
+  sendReactionZalouser: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 vi.mock("./accounts.js", async (importOriginal) => {
