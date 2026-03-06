@@ -1,14 +1,11 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-<<<<<<< HEAD
 import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
-=======
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
->>>>>>> c7148f1a6 (fix(agents): back off before overload failover)
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
