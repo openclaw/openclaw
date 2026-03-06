@@ -21,6 +21,7 @@ export async function loadSessions(
     limit?: number;
     includeGlobal?: boolean;
     includeUnknown?: boolean;
+    agentId?: string;
   },
 ) {
   if (!state.client || !state.connected) {
@@ -45,6 +46,10 @@ export async function loadSessions(
     }
     if (limit > 0) {
       params.limit = limit;
+    }
+    const agentId = overrides?.agentId?.trim();
+    if (agentId) {
+      params.agentId = agentId;
     }
     const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
