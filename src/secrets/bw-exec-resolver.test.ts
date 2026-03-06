@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+// @ts-expect-error — .mjs has no type declarations; tested via runtime assertions below.
 import { extractField, groupByItem, parseRef } from "../../scripts/bw-exec-resolver.mjs";
 
 const SCRIPT_PATH = path.resolve(import.meta.dirname, "../../scripts/bw-exec-resolver.mjs");
