@@ -228,13 +228,14 @@ function evaluateSegments(
     
     // P1 Fix: For shell wrapper + script mode, also check the script path
     // Example: bash script.sh → check both /usr/bin/bash AND /path/to/script.sh
+    // P2 Fix: Use segment.env (command env) instead of process.env for consistency
     if (!match && isShellWrapperSegment(segment)) {
       const scriptPath = extractShellScriptPath(segment.argv);
       if (scriptPath) {
         const scriptResolution = resolveCommandResolutionFromArgv(
           [scriptPath],
           params.cwd,
-          process.env,
+          segment.env,
         );
         const scriptCandidatePath = resolveAllowlistCandidatePath(scriptResolution, params.cwd);
         if (scriptCandidatePath) {
