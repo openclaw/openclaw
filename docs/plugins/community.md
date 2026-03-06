@@ -50,6 +50,6 @@ Use this format when adding entries:
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
 - **Viber** — Connect OpenClaw to Viber via the Bot API. Supports text, media, inline keyboards, webhook signature verification, and allowlists. Built for Southeast Asian and Eastern European markets where Viber is the dominant messaging app.
-  npm: `@imaginarium/openclaw-channel-viber`
+  npm: `@patrickrkahn/openclaw-channel-viber`
   repo: `https://github.com/patrickrkahn/openclaw-channel-viber`
-  install: `openclaw plugins install @imaginarium/openclaw-channel-viber`
+  install: `openclaw plugins install @patrickrkahn/openclaw-channel-viber`
