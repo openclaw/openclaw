@@ -9,9 +9,26 @@ import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const resolveCopilotApiTokenMock = vi.fn();
+const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
+  computeBackoffMock: vi.fn(
+    (
+      _policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
+      _attempt: number,
+    ) => 321,
+  ),
+  sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
+}));
 
 vi.mock("./pi-embedded-runner/run/attempt.js", () => ({
   runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
+}));
+
+vi.mock("../infra/backoff.js", () => ({
+  computeBackoff: (
+    policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
+    attempt: number,
+  ) => computeBackoffMock(policy, attempt),
+  sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
 }));
 
 vi.mock("../providers/github-copilot-token.js", () => ({
@@ -43,6 +60,8 @@ beforeEach(() => {
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockClear();
   resolveCopilotApiTokenMock.mockReset();
+  computeBackoffMock.mockClear();
+  sleepWithAbortMock.mockClear();
 });
 
 const baseUsage = {
@@ -687,6 +706,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+    expect(computeBackoffMock).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
   });
 
   it("rotates for overloaded prompt failures across auto-pinned profiles", async () => {
@@ -697,6 +719,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+    expect(computeBackoffMock).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
   });
 
   it("rotates on timeout without cooling down the timed-out profile", async () => {
@@ -707,6 +732,8 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+    expect(computeBackoffMock).not.toHaveBeenCalled();
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
   });
 
   it("rotates on bare service unavailable without cooling down the profile", async () => {

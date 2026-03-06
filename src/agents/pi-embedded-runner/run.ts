@@ -1,10 +1,14 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+<<<<<<< HEAD
 import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
+=======
+import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
+>>>>>>> c7148f1a6 (fix(agents): back off before overload failover)
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
@@ -80,6 +84,12 @@ type CopilotTokenState = {
 const COPILOT_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const COPILOT_REFRESH_RETRY_MS = 60 * 1000;
 const COPILOT_REFRESH_MIN_DELAY_MS = 5 * 1000;
+const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
+  initialMs: 250,
+  maxMs: 1_500,
+  factor: 2,
+  jitter: 0.2,
+};
 
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -723,6 +733,7 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
+      let overloadFailoverAttempts = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -1188,11 +1199,13 @@ export async function runEmbeddedPiAgent(
               profileId: lastProfileId,
               reason: promptProfileFailureReason,
             });
+            const promptFailoverFailure = isFailoverErrorMessage(errorText);
             if (
-              isFailoverErrorMessage(errorText) &&
+              promptFailoverFailure &&
               promptFailoverReason !== "timeout" &&
               (await advanceAuthProfile())
             ) {
+              await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               continue;
             }
             const fallbackThinking = pickFallbackThinkingLevel({
@@ -1208,7 +1221,8 @@ export async function runEmbeddedPiAgent(
             }
             // FIX: Throw FailoverError for prompt errors when fallbacks configured
             // This enables model fallback for quota/rate limit errors during prompt submission
-            if (fallbackConfigured && isFailoverErrorMessage(errorText)) {
+            if (fallbackConfigured && promptFailoverFailure) {
+              await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               throw new FailoverError(errorText, {
                 reason: promptFailoverReason ?? "unknown",
                 provider,
@@ -1298,10 +1312,12 @@ export async function runEmbeddedPiAgent(
 
             const rotated = await advanceAuthProfile();
             if (rotated) {
+              await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               continue;
             }
 
             if (fallbackConfigured) {
+              await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               // Prefer formatted error message (user-friendly) over raw errorMessage
               const message =
                 (lastAssistant
