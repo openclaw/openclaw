@@ -427,7 +427,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
   });
 
-  it("updates currentSessionKey from chat event when session key changes", () => {
+  it("updates currentSessionKey from chat event when session key changes from unknown", () => {
     const { state, chatLog, tui, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null, currentSessionKey: "agent:main:unknown" },
     });
@@ -447,6 +447,72 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     // Verify the event was processed (assistant updated)
     expect(chatLog.updateAssistant).toHaveBeenCalled();
     expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("updates currentSessionKey and lastSessionKey to prevent spurious reset", () => {
+    const { state, chatLog, tui, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, currentSessionKey: "agent:main:unknown" },
+    });
+
+    // First event resolves the session key
+    handleChatEvent({
+      runId: "run-1",
+      sessionKey: "agent:main:resolved",
+      state: "delta",
+      message: { content: "first" },
+    });
+
+    expect(state.currentSessionKey).toBe("agent:main:resolved");
+
+    // Second event should NOT trigger a session reset
+    // (lastSessionKey should have been updated along with currentSessionKey)
+    handleChatEvent({
+      runId: "run-2",
+      sessionKey: "agent:main:resolved",
+      state: "delta",
+      message: { content: "second" },
+    });
+
+    // Both messages should be processed without session reset
+    expect(chatLog.updateAssistant).toHaveBeenCalledTimes(2);
+    expect(tui.requestRender).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects session key updates from different agent prefixes", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, currentSessionKey: "agent:main:session-1" },
+    });
+
+    // Try to hijack with a different agent prefix
+    handleChatEvent({
+      runId: "run-hijack",
+      sessionKey: "agent:other:session-2",
+      state: "delta",
+      message: { content: "hijack attempt" },
+    });
+
+    // Session key should NOT be updated
+    expect(state.currentSessionKey).toBe("agent:main:session-1");
+    // Event should still be processed (we just don't update the session key)
+    expect(chatLog.updateAssistant).toHaveBeenCalled();
+  });
+
+  it("accepts session key updates within same agent prefix", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, currentSessionKey: "agent:main:session-1" },
+    });
+
+    // Update within same agent prefix
+    handleChatEvent({
+      runId: "run-update",
+      sessionKey: "agent:main:session-2",
+      state: "delta",
+      message: { content: "same agent update" },
+    });
+
+    // Session key should be updated
+    expect(state.currentSessionKey).toBe("agent:main:session-2");
+    expect(chatLog.updateAssistant).toHaveBeenCalled();
   });
 
   it("processes chat events after session key update", () => {

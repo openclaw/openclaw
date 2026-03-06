@@ -156,8 +156,22 @@ export function createEventHandlers(context: EventHandlerContext) {
     // the gateway resolves or updates the session key during message processing.
     // This ensures push notifications are not filtered out when the session key
     // changes between send and receive (e.g., "unknown" -> resolved session key).
+    // Only accept the update if:
+    // 1. Current key is "unknown" (initial unresolved state), OR
+    // 2. The new key shares the same agent prefix (same logical session)
     if (evt.sessionKey && evt.sessionKey !== state.currentSessionKey) {
-      state.currentSessionKey = evt.sessionKey;
+      const currentKey = state.currentSessionKey;
+      const shouldUpdate =
+        currentKey.includes("unknown") ||
+        (currentKey.startsWith("agent:") &&
+          evt.sessionKey.startsWith("agent:") &&
+          currentKey.split(":")[1] === evt.sessionKey.split(":")[1]);
+
+      if (shouldUpdate) {
+        state.currentSessionKey = evt.sessionKey;
+        // Also update lastSessionKey to prevent spurious session reset on next event
+        lastSessionKey = evt.sessionKey;
+      }
     }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
