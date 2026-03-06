@@ -618,7 +618,7 @@ describe("session-memory hook", () => {
     const files = (await fs.readdir(memoryDir)).filter((f) => f.endsWith(".md"));
     expect(files.length).toBeGreaterThan(0);
     const content = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
-    expect(content).toContain("Custom summary from upstream hook");
+    expect(content).toBe("Custom summary from upstream hook");
     expect(content).not.toContain("original");
   });
 

@@ -353,6 +353,11 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // An empty string is a valid redaction signal — hooks may intentionally
     // set it to persist a blank marker while avoiding transcript retention.
     const customContent = context.sessionSaveContent;
+    if (typeof customContent === "string") {
+      log.debug("Using custom session content from upstream hook", {
+        length: customContent.length,
+      });
+    }
     const entry = typeof customContent === "string" ? customContent : entryParts.join("\n");
 
     // Write under memory root with alias-safe file validation.
