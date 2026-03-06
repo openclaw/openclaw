@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi";
+export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi" | "exa";
 
 type SearchProviderEntry = {
   value: SearchProvider;
