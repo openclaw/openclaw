@@ -130,11 +130,23 @@ export async function runCronIsolatedAgentTurn(params: {
   // This ensures auth-profiles, workspace, and agentDir all resolve to the
   // correct per-agent paths (e.g. ~/.openclaw/agents/<agentId>/agent/).
   const agentId = normalizedRequested ?? defaultAgentId;
-  const agentCfg: AgentDefaultsConfig = Object.assign(
-    {},
-    params.cfg.agents?.defaults,
-    agentOverrideRest as Partial<AgentDefaultsConfig>,
-  );
+  const agentDefaultsBase = params.cfg.agents?.defaults;
+  const agentOverrideDefaults = agentOverrideRest as Partial<AgentDefaultsConfig>;
+  const agentCfg: AgentDefaultsConfig = Object.assign({}, agentDefaultsBase, agentOverrideDefaults);
+  if (agentDefaultsBase?.sandbox || agentOverrideDefaults?.sandbox) {
+    agentCfg.sandbox = Object.assign(
+      {},
+      agentDefaultsBase?.sandbox,
+      agentOverrideDefaults?.sandbox,
+    );
+    if (agentDefaultsBase?.sandbox?.docker || agentOverrideDefaults?.sandbox?.docker) {
+      agentCfg.sandbox.docker = Object.assign(
+        {},
+        agentDefaultsBase?.sandbox?.docker,
+        agentOverrideDefaults?.sandbox?.docker,
+      );
+    }
+  }
   // Merge agent model override with defaults instead of replacing, so that
   // `fallbacks` from `agents.defaults.model` are preserved when the agent
   // (or its per-cron model pin) only specifies `primary`.

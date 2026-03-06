@@ -250,4 +250,44 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.model).toBe("claude-opus-4-6");
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
+
+  it("preserves sandbox.docker defaults when agent override sets partial docker config", async () => {
+    resolveAgentConfigMock.mockReturnValue({
+      sandbox: {
+        docker: {
+          image: "ghcr.io/openclaw/sandbox:custom",
+        },
+      },
+    });
+
+    const cfg = {
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              network: "none",
+              dangerouslyAllowContainerNamespaceJoin: true,
+              dangerouslyAllowExternalBindSources: true,
+            },
+          },
+        },
+      },
+    };
+
+    await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg,
+        agentId: "specialist",
+      }),
+    );
+
+    expect(runWithModelFallbackMock).toHaveBeenCalled();
+    const runCfg = runWithModelFallbackMock.mock.calls[0]?.[0]?.cfg;
+    expect(runCfg?.agents?.defaults?.sandbox?.docker).toMatchObject({
+      image: "ghcr.io/openclaw/sandbox:custom",
+      network: "none",
+      dangerouslyAllowContainerNamespaceJoin: true,
+      dangerouslyAllowExternalBindSources: true,
+    });
+  });
 });
