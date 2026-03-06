@@ -543,4 +543,81 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
   });
+
+  it("blockSessionSave prevents memory file creation", async () => {
+    const tempDir = await createCaseWorkspace("block-save");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([{ role: "user", content: "secret" }]),
+    });
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "s1", sessionFile },
+    });
+    event.context.blockSessionSave = true;
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const memoryFiles = await fs.readdir(memoryDir).catch(() => [] as string[]);
+    expect(memoryFiles.filter((f) => f.endsWith(".md"))).toHaveLength(0);
+  });
+
+  it("sessionSaveContent overrides saved content", async () => {
+    const tempDir = await createCaseWorkspace("custom-content");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([{ role: "user", content: "original" }]),
+    });
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "s1", sessionFile },
+    });
+    event.context.sessionSaveContent = "Custom summary from upstream hook";
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = (await fs.readdir(memoryDir)).filter((f) => f.endsWith(".md"));
+    expect(files.length).toBeGreaterThan(0);
+    const content = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+    expect(content).toContain("Custom summary from upstream hook");
+    expect(content).not.toContain("original");
+  });
+
+  it("sessionSaveContent empty string writes blank marker file", async () => {
+    const tempDir = await createCaseWorkspace("empty-content");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([{ role: "user", content: "sensitive data" }]),
+    });
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "s1", sessionFile },
+    });
+    // Empty string is a valid override — persists a blank marker without
+    // loading the transcript or generating an LLM slug.
+    event.context.sessionSaveContent = "";
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = (await fs.readdir(memoryDir)).filter((f) => f.endsWith(".md"));
+    expect(files.length).toBeGreaterThan(0);
+    const content = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+    // Should be truly empty — blank marker file
+    expect(content).toBe("");
+  });
 });
