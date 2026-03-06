@@ -30,10 +30,16 @@ export function resolveSlackAutoThreadId(params: {
     return undefined;
   }
   const parsedTarget = parseSlackTarget(params.to, { defaultKind: "channel" });
-  if (!parsedTarget || parsedTarget.kind !== "channel") {
+  if (!parsedTarget) {
     return undefined;
   }
-  if (parsedTarget.id.toLowerCase() !== context.currentChannelId.toLowerCase()) {
+  // Build a canonical address for comparison.
+  // Channel targets: compare raw channel ID (e.g. "C0AC3LUJQQM").
+  // DM/user targets: compare as "user:<id>" to match the stored currentChannelId format.
+  // This allows thread auto-injection to work for both channel threads and DM threads.
+  const targetAddress =
+    parsedTarget.kind === "channel" ? parsedTarget.id : `user:${parsedTarget.id}`;
+  if (targetAddress.toLowerCase() !== context.currentChannelId.toLowerCase()) {
     return undefined;
   }
   if (context.replyToMode === "first" && context.hasRepliedRef?.value) {
