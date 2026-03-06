@@ -591,4 +591,15 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }),
     );
   });
+
+  it("sets disableBlockStreaming in replyOptions to prevent silent block-chunk drops", () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as any,
+      agentId: "agent1",
+      runtime: { log: vi.fn(), error: vi.fn() } as any,
+      chatId: "oc_chat_1",
+    });
+
+    expect(result.replyOptions.disableBlockStreaming).toBe(true);
+  });
 });
