@@ -132,12 +132,15 @@ function extractText(result?: ToolResult): string {
   const lines: string[] = [];
   for (const entry of result.content) {
     if (entry.type === "text" && entry.text) {
-      // Filter out MEDIA: lines that reference images (rendered inline instead).
-      // Non-image MEDIA: lines (TTS audio, video clips) pass through as text.
-      const filtered = entry.text
-        .split("\n")
-        .filter((line) => !MEDIA_IMAGE_LINE_RE.test(line.trim()))
-        .join("\n");
+      // Filter out MEDIA: lines only when images will actually render inline.
+      // On non-image terminals, preserve MEDIA paths as fallback text so users
+      // see the file reference instead of a blank output.
+      const filtered = willRenderImages
+        ? entry.text
+            .split("\n")
+            .filter((line) => !MEDIA_IMAGE_LINE_RE.test(line.trim()))
+            .join("\n")
+        : entry.text;
       if (filtered.trim()) {
         lines.push(sanitizeRenderableText(filtered));
       }
@@ -268,6 +271,11 @@ export class ToolExecutionComponent extends Container {
             }
             try {
               const buf = readFileSync(filePath);
+              // Post-read size guard (mirrors server-side readImageAsBase64).
+              if (buf.length === 0 || buf.length > MAX_IMAGE_BYTES) {
+                lastMediaRenderedFromFile = false;
+                continue;
+              }
               const base64 = buf.toString("base64");
               const ext = extname(filePath).slice(1).toLowerCase();
               const mime = MIME_BY_EXT[ext] ?? "image/png";

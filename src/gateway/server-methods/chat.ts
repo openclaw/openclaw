@@ -888,8 +888,17 @@ async function injectMediaImagesIntoHistory(messages: unknown[]): Promise<unknow
       ) {
         continue;
       }
-      const affordable: typeof pendingImages = [];
+      // Deduplicate by base64 content (mirrors main injection path).
+      const seen64 = new Set<string>();
+      const deduped: typeof pendingImages = [];
       for (const img of pendingImages) {
+        if (!seen64.has(img.data)) {
+          seen64.add(img.data);
+          deduped.push(img);
+        }
+      }
+      const affordable: typeof pendingImages = [];
+      for (const img of deduped) {
         const imgBytes = img.data.length;
         if (totalInjectedBytes + imgBytes > MAX_TOTAL_INJECTED_BYTES) {
           continue;
