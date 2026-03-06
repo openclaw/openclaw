@@ -1451,6 +1451,28 @@ describe("shared send behaviors", () => {
     }
   });
 
+  it("skips threading params when replyToMessageId is invalid", async () => {
+    const chatId = "123";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 56,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "reply text", {
+      token: "tok",
+      api,
+      replyToMessageId: "not-a-number" as unknown as number,
+      quoteText: "quoted",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
+      parse_mode: "HTML",
+    });
+  });
+
   it("wraps chat-not-found with actionable context", async () => {
     const cases = [
       {
