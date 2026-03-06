@@ -6,7 +6,7 @@ import {
   resolveDmGroupAccessWithLists,
   resolveDefaultGroupPolicy,
   isDangerousNameMatchingEnabled,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/msteams";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import { resolveMSTeamsAllowlistMatch, resolveMSTeamsRouteConfig } from "../policy.js";
