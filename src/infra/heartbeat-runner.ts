@@ -476,6 +476,11 @@ type HeartbeatReasonFlags = {
   isWakeReason: boolean;
 };
 
+function shouldCarryEventSessionThreadId(heartbeat?: HeartbeatConfig): boolean {
+  const target = typeof heartbeat?.target === "string" ? heartbeat.target.trim().toLowerCase() : "";
+  return target.length === 0 || target === "last";
+}
+
 type HeartbeatSkipReason = "empty-heartbeat-file";
 
 type HeartbeatPreflight = HeartbeatReasonFlags & {
@@ -660,9 +665,10 @@ export async function runHeartbeatOnce(opts: {
   }
   const { entry, sessionKey, storePath } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
-  const explicitThreadId = isEventDrivenReason
-    ? parseSessionThreadInfo(sessionKey).threadId
-    : undefined;
+  const explicitThreadId =
+    isEventDrivenReason && shouldCarryEventSessionThreadId(heartbeat)
+      ? parseSessionThreadInfo(sessionKey).threadId
+      : undefined;
   const delivery = resolveHeartbeatDeliveryTarget({
     cfg,
     entry,
