@@ -1312,7 +1312,7 @@ private fun queryInstalledApps(context: Context): List<InstalledApp> {
 
   return candidatePackages
     .asSequence()
-    .mapNotNull { packageName ->
+    .map { packageName ->
       runCatching {
         val appInfo = packageManager.getApplicationInfo(packageName, 0)
         val label = packageManager.getApplicationLabel(appInfo)?.toString()?.trim().orEmpty()
@@ -1321,7 +1321,13 @@ private fun queryInstalledApps(context: Context): List<InstalledApp> {
           packageName = packageName,
           isSystemApp = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0,
         )
-      }.getOrNull()
+      }.getOrElse {
+        InstalledApp(
+          label = packageName,
+          packageName = packageName,
+          isSystemApp = false,
+        )
+      }
     }
     .sortedWith(compareBy<InstalledApp> { it.label.lowercase() }.thenBy { it.packageName })
     .toList()
