@@ -127,7 +127,7 @@ function createWebSearchSchema(provider: (typeof SEARCH_PROVIDERS)[number]) {
       search_lang: Type.Optional(
         Type.String({
           description:
-            "Short ISO language code for search results (e.g., 'de', 'en', 'fr', 'tr'). Must be a 2-letter code, NOT a locale.",
+            "Language code for search results (e.g., 'en', 'de', 'fr', 'zh-hans', 'zh-hant'). Use ISO 639-1 codes or locale variants where required by the provider.",
         }),
       ),
       ui_lang: Type.Optional(
