@@ -276,6 +276,7 @@ export async function launchOpenClawChrome(
 
     return spawn(exe.path, args, {
       stdio: "pipe",
+      detached: true, // Create new process group for clean shutdown of all child processes
       env: {
         ...process.env,
         // Reduce accidental sharing with the user's env.
@@ -417,8 +418,14 @@ export async function stopOpenClawChrome(
   }
 
   try {
-    proc.kill("SIGKILL");
-  } catch {
-    // ignore
+    // On Unix, kill the entire process group to ensure all child processes
+    // (renderers, GPU, utility) are terminated. On Windows, fall back to SIGKILL.
+    if (process.platform !== "win32") {
+      process.kill(-running.pid, "SIGKILL");
+    } else {
+      proc.kill("SIGKILL");
+    }
+  } catch (err) {
+    log.warn(`Failed to kill Chrome process group: ${err}`);
   }
 }
