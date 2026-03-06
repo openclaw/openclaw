@@ -345,7 +345,9 @@ export class MuxReceiver {
       if (!payload.exp) {
         return false;
       }
-      return payload.exp < Date.now() / 1000 - 60;
+      // Treat tokens as expired 60s *before* actual expiry to avoid using
+      // nearly-expired tokens that may fail mid-request.
+      return payload.exp < Date.now() / 1000 + 60;
     } catch {
       return false;
     }

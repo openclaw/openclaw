@@ -427,6 +427,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       ctx.botUserId = botUserId;
       ctx.teamId = teamId;
       ctx.apiAppId = apiAppId;
+      // Keep the function alive until abort — without this, control falls
+      // through to the finally block which calls app.stop() immediately.
+      if (opts.abortSignal && !opts.abortSignal.aborted) {
+        await new Promise<void>((resolve) => {
+          opts.abortSignal!.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }
     } else if (slackMode === "socket") {
       let reconnectAttempts = 0;
       while (!opts.abortSignal?.aborted) {
