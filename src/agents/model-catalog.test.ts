@@ -106,7 +106,7 @@ describe("loadModelCatalog", () => {
                   id: "gpt-5.3-codex",
                   provider: "openai-codex",
                   name: "GPT-5.3 Codex",
-                  reasoning: true,
+                  reasoning: false,
                   contextWindow: 200000,
                   input: ["text"],
                 },
@@ -131,6 +131,7 @@ describe("loadModelCatalog", () => {
     const spark = result.find((entry) => entry.id === "gpt-5.3-codex-spark");
     expect(spark?.name).toBe("gpt-5.3-codex-spark");
     expect(spark?.reasoning).toBe(true);
+    expect(spark?.input).toEqual(["text", "image"]);
   });
 
   it("matches the canonical codex facts layer for gpt-5.4", async () => {
@@ -150,8 +151,8 @@ describe("loadModelCatalog", () => {
                   id: "gpt-5.3-codex",
                   provider: "openai-codex",
                   name: "GPT-5.3 Codex",
-                  reasoning: true,
-                  input: ["text", "image"],
+                  reasoning: false,
+                  input: ["text"],
                   contextWindow: 200000,
                   maxTokens: 64000,
                 },
@@ -178,6 +179,8 @@ describe("loadModelCatalog", () => {
       provider: canonical.provider,
       id: canonical.id,
       name: canonical.name,
+      reasoning: canonical.reasoning,
+      input: canonical.input,
       contextWindow: canonical.contextWindow,
       maxTokens: canonical.maxTokens,
     });

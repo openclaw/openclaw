@@ -135,6 +135,8 @@ export function applyCanonicalForwardCompatCatalogEntries<T extends CatalogEntry
       ...baseModel,
       id: facts.id,
       name: facts.name,
+      reasoning: facts.reasoning,
+      input: [...facts.input],
       ...(typeof facts.contextWindow === "number" ? { contextWindow: facts.contextWindow } : {}),
       ...(typeof facts.maxTokens === "number" ? { maxTokens: facts.maxTokens } : {}),
     } as T);
