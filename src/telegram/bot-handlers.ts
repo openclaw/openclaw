@@ -1387,6 +1387,11 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
       }
+      // Prevent self-reply loops by ignoring messages authored by this bot.
+      // Keep this self-only (not all bots) so bot-to-bot/channel workflows still work.
+      if (event.ctx.me?.id != null && event.msg.from?.id === event.ctx.me.id) {
+        return;
+      }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId: event.chatId,
         isGroup: event.isGroup,
