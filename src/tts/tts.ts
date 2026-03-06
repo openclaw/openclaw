@@ -291,7 +291,10 @@ export function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig
 
 export function resolveTtsConfig(cfg: OpenClawConfig, agentId?: string): ResolvedTtsConfig {
   const globalRaw: TtsConfig = cfg.messages?.tts ?? {};
-  const agentTts = agentId ? cfg.agents?.list?.find((a) => a.id === agentId)?.tts : undefined;
+  const normalizedAgentId = agentId?.trim() ? normalizeAgentId(agentId) : undefined;
+  const agentTts = normalizedAgentId
+    ? cfg.agents?.list?.find((a) => normalizeAgentId(a.id) === normalizedAgentId)?.tts
+    : undefined;
   const raw = mergeTtsConfig(globalRaw, agentTts);
   const providerSource = raw.provider ? "config" : "default";
   const edgeOutputFormat = raw.edge?.outputFormat?.trim();
