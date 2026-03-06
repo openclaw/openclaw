@@ -416,7 +416,7 @@ export async function resolveReplyDirectives(params: {
   const isModelListAlias =
     directives.hasModelDirective &&
     ["status", "list"].includes(directives.rawModelDirective?.trim().toLowerCase() ?? "");
-  const effectiveModelDirective = isModelListAlias ? undefined : directives.rawModelDirective;
+  let effectiveModelDirective = isModelListAlias ? undefined : directives.rawModelDirective;
 
   const inlineStatusRequested = hasInlineStatus && allowTextCommands && command.isAuthorizedSender;
 
