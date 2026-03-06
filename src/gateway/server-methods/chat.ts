@@ -891,8 +891,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         typeof sessionScopeParts[1] === "string" &&
         sessionChannelHint === routeChannelCandidate;
       const clientMode = client?.connect?.client?.mode;
+      const isFromTuiClient =
+        clientInfo?.id?.trim().toLowerCase() === "openclaw-tui" ||
+        clientInfo?.displayName?.trim().toLowerCase() === "openclaw-tui";
       const isFromWebchatClient =
-        isWebchatClient(client?.connect?.client) || clientMode === GATEWAY_CLIENT_MODES.UI;
+        isWebchatClient(clientInfo) || clientMode === GATEWAY_CLIENT_MODES.UI || isFromTuiClient;
       const configuredMainKey = (cfg.session?.mainKey ?? "main").trim().toLowerCase();
       const isConfiguredMainSessionScope =
         normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
