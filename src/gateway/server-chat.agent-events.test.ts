@@ -310,6 +310,98 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("preserves pre-tool assistant text when later segments stream as non-prefix snapshots", () => {
+    let now = 10_500;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-segmented", {
+      sessionKey: "session-segmented",
+      clientRunId: "client-segmented",
+    });
+
+    handler({
+      runId: "run-segmented",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Before tool call", delta: "Before tool call" },
+    });
+
+    now = 10_700;
+    handler({
+      runId: "run-segmented",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "After tool call", delta: "\nAfter tool call" },
+    });
+
+    emitLifecycleEnd(handler, "run-segmented", 3);
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(3);
+    const secondPayload = chatCalls[1]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    const finalPayload = chatCalls[2]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(secondPayload.state).toBe("delta");
+    expect(secondPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
+    expect(finalPayload.state).toBe("final");
+    expect(finalPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy.mockRestore();
+  });
+
+  it("flushes merged segmented text before final when latest segment is throttled", () => {
+    let now = 10_800;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-segmented-flush", {
+      sessionKey: "session-segmented-flush",
+      clientRunId: "client-segmented-flush",
+    });
+
+    handler({
+      runId: "run-segmented-flush",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Before tool call", delta: "Before tool call" },
+    });
+
+    now = 10_860;
+    handler({
+      runId: "run-segmented-flush",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "After tool call", delta: "\nAfter tool call" },
+    });
+
+    emitLifecycleEnd(handler, "run-segmented-flush", 3);
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(3);
+    const flushPayload = chatCalls[1]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    const finalPayload = chatCalls[2]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(flushPayload.state).toBe("delta");
+    expect(flushPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
+    expect(finalPayload.state).toBe("final");
+    expect(finalPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy.mockRestore();
+  });
+
   it("does not flush an extra delta when the latest text already broadcast", () => {
     let now = 11_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -518,6 +610,29 @@ describe("agent event handler", () => {
     expect(nodeCalls).toHaveLength(1);
     const nodePayload = nodeCalls[0]?.[2] as { runId?: string };
     expect(nodePayload.runId).toBe("run-fallback-client");
+  });
+
+  it("suppresses chat and node session events for non-control-UI-visible runs", () => {
+    const { broadcast, nodeSendToSession, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-hidden",
+    });
+    registerAgentRunContext("run-hidden", {
+      sessionKey: "session-hidden",
+      isControlUiVisible: false,
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-hidden",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Reply from imessage" },
+    });
+    emitLifecycleEnd(handler, "run-hidden", 2);
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(nodeSendToSession).not.toHaveBeenCalled();
   });
 
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {
