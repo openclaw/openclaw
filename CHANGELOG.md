@@ -198,6 +198,7 @@ Docs: https://docs.openclaw.ai
 - Mattermost/interactive button callbacks: allow external callback base URLs and stop requiring loopback-origin requests so button clicks work when Mattermost reaches the gateway over Tailscale, LAN, or a reverse proxy. (#37543) thanks @mukhtharcm.
 - Telegram/Discord media upload caps: make outbound uploads honor channel `mediaMaxMb` config, raise Telegram's default media cap to 100MB, and remove MIME fallback limits that kept some Telegram uploads at 16MB. Thanks @vincentkoc.
 - Skills/nano-banana-pro resolution override: respect explicit `--resolution` values during image editing and only auto-detect output size from input images when the flag is omitted. (#36880) Thanks @shuofengzhang and @vincentkoc.
+- Skills/openai-image-gen CLI validation: validate `--background` and `--style` inputs early, normalize supported values, and warn when those flags are ignored for incompatible models. (#36762) Thanks @shuofengzhang and @vincentkoc.
 
 ## 2026.3.2
 
