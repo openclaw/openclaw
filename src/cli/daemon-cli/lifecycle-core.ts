@@ -1,5 +1,10 @@
 import type { Writable } from "node:stream";
+import path from "node:path";
+import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
+import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
+import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { loadConfig } from "../../config/config.js";
+import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -29,6 +34,73 @@ type RestartPostCheckContext = {
   warnings: string[];
   fail: (message: string, hints?: string[]) => void;
 };
+
+function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
+  const first = programArguments?.[0];
+  if (first) {
+    const base = path.basename(first).toLowerCase();
+    if (base === "bun" || base === "bun.exe") {
+      return "bun";
+    }
+    if (base === "node" || base === "node.exe") {
+      return "node";
+    }
+  }
+  return DEFAULT_GATEWAY_DAEMON_RUNTIME;
+}
+
+function parseGatewayPortFromArgs(programArguments: string[] | undefined): number | null {
+  if (!programArguments) {
+    return null;
+  }
+  for (let i = 0; i < programArguments.length; i++) {
+    const current = programArguments[i];
+    if (current !== "--port") {
+      continue;
+    }
+    const next = Number.parseInt(programArguments[i + 1] ?? "", 10);
+    return Number.isFinite(next) && next > 0 ? next : null;
+  }
+  return null;
+}
+
+async function refreshLaunchAgentServiceEnv(params: {
+  service: GatewayService;
+  stdout: Writable;
+}): Promise<boolean> {
+  if (params.service.label !== "LaunchAgent") {
+    return false;
+  }
+
+  const cfg = loadConfig();
+  const command = await params.service.readCommand(process.env).catch(() => null);
+  const port =
+    parseGatewayPortFromArgs(command?.programArguments) ?? resolveGatewayPort(cfg, process.env);
+  const tokenResolution = await resolveGatewayInstallToken({
+    config: cfg,
+    env: process.env,
+    autoGenerateWhenMissing: false,
+    persistGeneratedToken: false,
+  });
+  const token = tokenResolution.token ?? command?.environment?.OPENCLAW_GATEWAY_TOKEN;
+  const runtime = detectGatewayRuntime(command?.programArguments);
+  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
+    env: process.env,
+    port,
+    runtime,
+    token,
+    config: cfg,
+  });
+
+  await params.service.install({
+    env: process.env,
+    stdout: params.stdout,
+    programArguments,
+    workingDirectory,
+    environment,
+  });
+  return true;
+}
 
 async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
   if (process.platform !== "linux") {
@@ -315,7 +387,13 @@ export async function runServiceRestart(params: {
   }
 
   try {
-    await params.service.restart({ env: process.env, stdout });
+    const restartedViaInstall = await refreshLaunchAgentServiceEnv({
+      service: params.service,
+      stdout,
+    });
+    if (!restartedViaInstall) {
+      await params.service.restart({ env: process.env, stdout });
+    }
     if (params.postRestartCheck) {
       await params.postRestartCheck({ json, stdout, warnings, fail });
     }

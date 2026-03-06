@@ -1,11 +1,18 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const buildGatewayInstallPlan = vi.fn();
 const loadConfig = vi.fn(() => ({
   gateway: {
     auth: {
       token: "config-token",
     },
   },
+}));
+const resolveGatewayPort = vi.fn(() => 18789);
+const resolveGatewayInstallToken = vi.fn(async () => ({
+  token: "config-token",
+  warnings: [],
+  unavailableReason: null,
 }));
 
 const runtimeLogs: string[] = [];
@@ -34,6 +41,24 @@ vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
 }));
 
+vi.mock("../../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/paths.js")>(
+    "../../config/paths.js",
+  );
+  return {
+    ...actual,
+    resolveGatewayPort: (...args: unknown[]) => resolveGatewayPort(...args),
+  };
+});
+
+vi.mock("../../commands/daemon-install-helpers.js", () => ({
+  buildGatewayInstallPlan: (...args: unknown[]) => buildGatewayInstallPlan(...args),
+}));
+
+vi.mock("../../commands/gateway-install-token.js", () => ({
+  resolveGatewayInstallToken: (...args: unknown[]) => resolveGatewayInstallToken(...args),
+}));
+
 vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
@@ -47,7 +72,10 @@ describe("runServiceRestart token drift", () => {
 
   beforeEach(() => {
     runtimeLogs.length = 0;
+    buildGatewayInstallPlan.mockReset();
     loadConfig.mockReset();
+    resolveGatewayPort.mockReset();
+    resolveGatewayInstallToken.mockReset();
     loadConfig.mockReturnValue({
       gateway: {
         auth: {
@@ -55,12 +83,25 @@ describe("runServiceRestart token drift", () => {
         },
       },
     });
+    resolveGatewayPort.mockReturnValue(18789);
+    resolveGatewayInstallToken.mockResolvedValue({
+      token: "config-token",
+      warnings: [],
+      unavailableReason: null,
+    });
     service.isLoaded.mockClear();
+    service.install.mockClear();
     service.readCommand.mockClear();
     service.restart.mockClear();
     service.isLoaded.mockResolvedValue(true);
     service.readCommand.mockResolvedValue({
+      programArguments: ["node", "dist/entry.js", "gateway", "--port", "18789"],
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
+    });
+    buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: ["node", "dist/entry.js", "gateway", "--port", "18789"],
+      workingDirectory: "/tmp/openclaw",
+      environment: { MAIL_API_KEY: "updated-key", OPENCLAW_GATEWAY_TOKEN: "config-token" },
     });
     service.restart.mockResolvedValue(undefined);
     vi.unstubAllEnvs();
@@ -122,5 +163,35 @@ describe("runServiceRestart token drift", () => {
     const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
     const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
     expect(payload.warnings).toBeUndefined();
+  });
+
+  it("refreshes LaunchAgent service env from current config before restart", async () => {
+    service.label = "LaunchAgent";
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
+    expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
+    expect(service.install).toHaveBeenCalledTimes(1);
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("falls back to service restart for non-LaunchAgent services", async () => {
+    service.label = "systemd";
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).toHaveBeenCalledTimes(1);
   });
 });
