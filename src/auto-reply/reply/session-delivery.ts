@@ -30,14 +30,6 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
   return normalizeMessageChannel(head);
 }
 
-function isMainSessionKey(sessionKey?: string): boolean {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return (sessionKey ?? "").trim().toLowerCase() === "main";
-  }
-  return parsed.rest.trim().toLowerCase() === "main";
-}
-
 function isExternalRoutingChannel(channel?: string): channel is string {
   return Boolean(
     channel && channel !== INTERNAL_MESSAGE_CHANNEL && isDeliverableMessageChannel(channel),
@@ -50,7 +42,12 @@ export function resolveLastChannelRaw(params: {
   sessionKey?: string;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
-  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL && isMainSessionKey(params.sessionKey)) {
+  // Internal gateway-originated messages (heartbeat, cron, exec-event) should
+  // always use their originating channel (webchat) rather than inheriting a
+  // stale persistedLastChannel from previous external sessions. This prevents
+  // incorrect cross-channel delivery (e.g., heartbeat replies routed to feishu).
+  // See: https://github.com/openclaw/openclaw/issues/35300
+  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL) {
     return params.originatingChannelRaw;
   }
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
@@ -77,7 +74,10 @@ export function resolveLastToRaw(params: {
   sessionKey?: string;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
-  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL && isMainSessionKey(params.sessionKey)) {
+  // Internal gateway-originated messages (heartbeat, cron, exec-event) should
+  // use their originating destination rather than inheriting stale persisted
+  // values from previous external sessions. See: #35300
+  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL) {
     return params.originatingToRaw || params.toRaw;
   }
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
