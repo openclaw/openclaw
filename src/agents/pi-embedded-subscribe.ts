@@ -78,6 +78,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
+    lastProviderProgressAtMs: undefined,
+    lastProviderProgressPhase: undefined,
   };
   const usageTotals = {
     input: 0,

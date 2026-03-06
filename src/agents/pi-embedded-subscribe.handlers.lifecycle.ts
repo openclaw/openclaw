@@ -2,6 +2,10 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { formatAssistantErrorText } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import {
+  maybeWarnProviderStall,
+  noteProviderProgress,
+} from "./pi-embedded-subscribe.provider-stall.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
 export {
@@ -10,6 +14,7 @@ export {
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
+  noteProviderProgress(ctx, "agent_start");
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
   emitAgentEvent({
     runId: ctx.params.runId,
@@ -26,6 +31,7 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
 }
 
 export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
+  maybeWarnProviderStall(ctx, { phase: "before_agent_end" });
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
 
