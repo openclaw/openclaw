@@ -11,14 +11,18 @@ export type InspectedSlackAccount = {
   accountId: string;
   enabled: boolean;
   name?: string;
+  mode?: SlackAccountConfig["mode"];
   botToken?: string;
   appToken?: string;
+  signingSecret?: string;
   userToken?: string;
   botTokenSource: SlackTokenSource;
   appTokenSource: SlackTokenSource;
+  signingSecretSource?: SlackTokenSource;
   userTokenSource: SlackTokenSource;
   botTokenStatus: SlackCredentialStatus;
   appTokenStatus: SlackCredentialStatus;
+  signingSecretStatus?: SlackCredentialStatus;
   userTokenStatus: SlackCredentialStatus;
   configured: boolean;
   config: SlackAccountConfig;
@@ -88,9 +92,12 @@ export function inspectSlackAccount(params: {
   const merged = mergeSlackAccountConfig(params.cfg, accountId);
   const enabled = params.cfg.channels?.slack?.enabled !== false && merged.enabled !== false;
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
+  const mode = merged.mode ?? "socket";
+  const isHttpMode = mode === "http";
 
   const configBot = inspectSlackToken(merged.botToken);
   const configApp = inspectSlackToken(merged.appToken);
+  const configSigningSecret = inspectSlackToken(merged.signingSecret);
   const configUser = inspectSlackToken(merged.userToken);
 
   const envBot = allowEnv
@@ -105,6 +112,7 @@ export function inspectSlackAccount(params: {
 
   const botToken = configBot.token ?? envBot;
   const appToken = configApp.token ?? envApp;
+  const signingSecret = configSigningSecret.token;
   const userToken = configUser.token ?? envUser;
   const botTokenSource: SlackTokenSource = configBot.token
     ? "config"
@@ -120,6 +128,11 @@ export function inspectSlackAccount(params: {
       : envApp
         ? "env"
         : "none";
+  const signingSecretSource: SlackTokenSource = configSigningSecret.token
+    ? "config"
+    : configSigningSecret.status === "configured_unavailable"
+      ? "config"
+      : "none";
   const userTokenSource: SlackTokenSource = configUser.token
     ? "config"
     : configUser.status === "configured_unavailable"
@@ -132,11 +145,14 @@ export function inspectSlackAccount(params: {
     accountId,
     enabled,
     name: merged.name?.trim() || undefined,
+    mode,
     botToken,
     appToken,
+    ...(isHttpMode ? { signingSecret } : {}),
     userToken,
     botTokenSource,
     appTokenSource,
+    ...(isHttpMode ? { signingSecretSource } : {}),
     userTokenSource,
     botTokenStatus: configBot.token
       ? "available"
@@ -152,6 +168,15 @@ export function inspectSlackAccount(params: {
         : envApp
           ? "available"
           : "missing",
+    ...(isHttpMode
+      ? {
+          signingSecretStatus: configSigningSecret.token
+            ? "available"
+            : configSigningSecret.status === "configured_unavailable"
+              ? "configured_unavailable"
+              : "missing",
+        }
+      : {}),
     userTokenStatus: configUser.token
       ? "available"
       : configUser.status === "configured_unavailable"
@@ -159,9 +184,11 @@ export function inspectSlackAccount(params: {
         : envUser
           ? "available"
           : "missing",
-    configured:
-      (configBot.status !== "missing" || Boolean(envBot)) &&
-      (configApp.status !== "missing" || Boolean(envApp)),
+    configured: isHttpMode
+      ? (configBot.status !== "missing" || Boolean(envBot)) &&
+        configSigningSecret.status !== "missing"
+      : (configBot.status !== "missing" || Boolean(envBot)) &&
+        (configApp.status !== "missing" || Boolean(envApp)),
     config: merged,
     groupPolicy: merged.groupPolicy,
     textChunkLimit: merged.textChunkLimit,

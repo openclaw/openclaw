@@ -122,6 +122,47 @@ function makeResolvedTokenPluginWithoutInspectAccount(): ChannelPlugin {
   };
 }
 
+function makeUnavailableHttpSlackPlugin(): ChannelPlugin {
+  return {
+    id: "slack",
+    meta: {
+      id: "slack",
+      label: "Slack",
+      selectionLabel: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["primary"],
+      defaultAccountId: () => "primary",
+      inspectAccount: () => ({
+        accountId: "primary",
+        name: "Primary",
+        enabled: true,
+        configured: true,
+        mode: "http",
+        botToken: "resolved-bot",
+        botTokenSource: "config",
+        botTokenStatus: "available",
+        signingSecret: "",
+        signingSecretSource: "config",
+        signingSecretStatus: "configured_unavailable",
+      }),
+      resolveAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        configured: true,
+      }),
+      isConfigured: () => true,
+      isEnabled: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
 describe("config-only channels status output", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
@@ -203,5 +244,28 @@ describe("config-only channels status output", () => {
     expect(joined).toContain("configured");
     expect(joined).toContain("token:config");
     expect(joined).not.toContain("secret unavailable in this command path");
+  });
+
+  it("renders Slack HTTP signing-secret availability in config-only status", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: makeUnavailableHttpSlackPlugin(),
+        },
+      ]),
+    );
+
+    const lines = await formatConfigChannelsStatusLines({ channels: {} } as never, {
+      mode: "local",
+    });
+
+    const joined = lines.join("\n");
+    expect(joined).toContain("Slack");
+    expect(joined).toContain("configured, secret unavailable in this command path");
+    expect(joined).toContain("mode:http");
+    expect(joined).toContain("bot:config");
+    expect(joined).toContain("signing:config (unavailable)");
   });
 });

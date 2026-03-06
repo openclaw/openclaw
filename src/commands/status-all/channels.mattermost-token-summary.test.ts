@@ -213,6 +213,54 @@ function makeSourceUnavailableResolvedAvailablePlugin(): ChannelPlugin {
   };
 }
 
+function makeHttpSlackUnavailablePlugin(): ChannelPlugin {
+  return {
+    id: "slack",
+    meta: {
+      id: "slack",
+      label: "Slack",
+      selectionLabel: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["primary"],
+      defaultAccountId: () => "primary",
+      inspectAccount: () => ({
+        accountId: "primary",
+        name: "Primary",
+        enabled: true,
+        configured: true,
+        mode: "http",
+        botToken: "xoxb-http",
+        signingSecret: "",
+        botTokenSource: "config",
+        signingSecretSource: "config",
+        botTokenStatus: "available",
+        signingSecretStatus: "configured_unavailable",
+      }),
+      resolveAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        configured: true,
+        mode: "http",
+        botToken: "xoxb-http",
+        signingSecret: "",
+        botTokenSource: "config",
+        signingSecretSource: "config",
+        botTokenStatus: "available",
+        signingSecretStatus: "configured_unavailable",
+      }),
+      isConfigured: () => true,
+      isEnabled: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
 function makeTokenPlugin(): ChannelPlugin {
   return {
     id: "token-only",
@@ -327,6 +375,29 @@ describe("buildChannelsTable - mattermost token summary", () => {
         Account: "primary (Primary)",
         Notes: "token:config",
         Status: "OK",
+      },
+    ]);
+  });
+
+  it("treats Slack HTTP signing-secret availability as required config", async () => {
+    vi.mocked(listChannelPlugins).mockReturnValue([makeHttpSlackUnavailablePlugin()]);
+
+    const table = await buildChannelsTable({ channels: {} } as never, {
+      showSecrets: false,
+    });
+
+    const slackRow = table.rows.find((row) => row.id === "slack");
+    expect(slackRow).toBeDefined();
+    expect(slackRow?.state).toBe("warn");
+    expect(slackRow?.detail).toContain("configured http credentials unavailable");
+
+    const slackDetails = table.details.find((detail) => detail.title === "Slack accounts");
+    expect(slackDetails).toBeDefined();
+    expect(slackDetails?.rows).toEqual([
+      {
+        Account: "primary (Primary)",
+        Notes: "bot:config · signing:config · secret unavailable in this command path",
+        Status: "WARN",
       },
     ]);
   });

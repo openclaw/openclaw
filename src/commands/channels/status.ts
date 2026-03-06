@@ -70,6 +70,7 @@ function appendTokenSourceBits(bits: string[], account: Record<string, unknown>)
   appendSourceBit("token", "tokenSource", "tokenStatus");
   appendSourceBit("bot", "botTokenSource", "botTokenStatus");
   appendSourceBit("app", "appTokenSource", "appTokenStatus");
+  appendSourceBit("signing", "signingSecretSource", "signingSecretStatus");
 }
 
 function appendBaseUrlBit(bits: string[], account: Record<string, unknown>) {
@@ -257,7 +258,8 @@ export async function formatConfigChannelsStatusLines(
       snapshots.push(
         sourceSnapshot &&
           hasConfiguredUnavailableCredentialStatus(sourceSnapshot) &&
-          !hasResolvedCredentialValue(resolvedSnapshot)
+          (!hasResolvedCredentialValue(resolvedSnapshot) ||
+            (sourceSnapshot.configured === true && resolvedSnapshot.configured === false))
           ? sourceSnapshot
           : resolvedSnapshot,
       );

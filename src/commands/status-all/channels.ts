@@ -120,7 +120,8 @@ async function resolveChannelAccountRow(
   const useSourceUnavailableAccount = Boolean(
     sourceInspectedAccount &&
     hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
-    !hasResolvedCredentialValue(resolvedAccount),
+    (!hasResolvedCredentialValue(resolvedAccount) ||
+      (sourceInspection?.configured === true && resolvedInspection?.configured === false)),
   );
   const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
   const selectedInspection = useSourceUnavailableAccount ? sourceInspection : resolvedInspection;
@@ -175,6 +176,9 @@ const buildAccountNotes = (params: {
   }
   if (snapshot.appTokenSource && snapshot.appTokenSource !== "none") {
     notes.push(`app:${snapshot.appTokenSource}`);
+  }
+  if (snapshot.signingSecretSource && snapshot.signingSecretSource !== "none") {
+    notes.push(`signing:${snapshot.signingSecretSource}`);
   }
   if (hasConfiguredUnavailableCredentialStatus(entry.account)) {
     notes.push("secret unavailable in this command path");
@@ -260,10 +264,86 @@ function summarizeTokenConfig(params: {
   const accountRecs = enabled.map((a) => asRecord(a.account));
   const hasBotTokenField = accountRecs.some((r) => "botToken" in r);
   const hasAppTokenField = accountRecs.some((r) => "appToken" in r);
+  const hasSigningSecretField = accountRecs.some(
+    (r) => "signingSecret" in r || "signingSecretSource" in r || "signingSecretStatus" in r,
+  );
   const hasTokenField = accountRecs.some((r) => "token" in r);
 
-  if (!hasBotTokenField && !hasAppTokenField && !hasTokenField) {
+  if (!hasBotTokenField && !hasAppTokenField && !hasSigningSecretField && !hasTokenField) {
     return { state: null, detail: null };
+  }
+
+  const accountIsHttpMode = (rec: Record<string, unknown>) =>
+    typeof rec.mode === "string" && rec.mode.trim() === "http";
+  const hasCredentialAvailable = (
+    rec: Record<string, unknown>,
+    valueKey: string,
+    statusKey: string,
+  ) => {
+    const value = rec[valueKey];
+    if (typeof value === "string" && value.trim()) {
+      return true;
+    }
+    return rec[statusKey] === "available";
+  };
+
+  if (
+    hasBotTokenField &&
+    hasSigningSecretField &&
+    enabled.every((a) => accountIsHttpMode(asRecord(a.account)))
+  ) {
+    const unavailable = enabled.filter((a) => hasConfiguredUnavailableCredentialStatus(a.account));
+    const ready = enabled.filter((a) => {
+      const rec = asRecord(a.account);
+      return (
+        hasCredentialAvailable(rec, "botToken", "botTokenStatus") &&
+        hasCredentialAvailable(rec, "signingSecret", "signingSecretStatus")
+      );
+    });
+    const partial = enabled.filter((a) => {
+      const rec = asRecord(a.account);
+      const hasBot = hasCredentialAvailable(rec, "botToken", "botTokenStatus");
+      const hasSigning = hasCredentialAvailable(rec, "signingSecret", "signingSecretStatus");
+      return (hasBot && !hasSigning) || (!hasBot && hasSigning);
+    });
+
+    if (unavailable.length > 0) {
+      return {
+        state: "warn",
+        detail: `configured http credentials unavailable in this command path · accounts ${unavailable.length}`,
+      };
+    }
+
+    if (partial.length > 0) {
+      return {
+        state: "warn",
+        detail: `partial credentials (need bot+signing) · accounts ${partial.length}`,
+      };
+    }
+
+    if (ready.length === 0) {
+      return { state: "setup", detail: "no credentials (need bot+signing)" };
+    }
+
+    const botSources = summarizeSources(ready.map((a) => a.snapshot.botTokenSource ?? "none"));
+    const signingSources = summarizeSources(
+      ready.map((a) => a.snapshot.signingSecretSource ?? "none"),
+    );
+    const sample = ready[0]?.account ? asRecord(ready[0].account) : {};
+    const botToken = typeof sample.botToken === "string" ? sample.botToken : "";
+    const signingSecret = typeof sample.signingSecret === "string" ? sample.signingSecret : "";
+    const botHint = botToken.trim()
+      ? formatTokenHint(botToken, { showSecrets: params.showSecrets })
+      : "";
+    const signingHint = signingSecret.trim()
+      ? formatTokenHint(signingSecret, { showSecrets: params.showSecrets })
+      : "";
+    const hint =
+      botHint || signingHint ? ` (bot ${botHint || "?"}, signing ${signingHint || "?"})` : "";
+    return {
+      state: "ok",
+      detail: `credentials ok (bot ${botSources.label}, signing ${signingSources.label})${hint} · accounts ${ready.length}/${enabled.length || 1}`,
+    };
   }
 
   if (hasBotTokenField && hasAppTokenField) {

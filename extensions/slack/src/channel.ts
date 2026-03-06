@@ -432,11 +432,17 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       return await getSlackRuntime().channel.slack.probeSlack(token, timeoutMs);
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => {
+      const mode = account.config.mode ?? "socket";
       const configured =
-        resolveConfiguredFromRequiredCredentialStatuses(account, [
-          "botTokenStatus",
-          "appTokenStatus",
-        ]) ?? isSlackAccountConfigured(account);
+        (mode === "http"
+          ? resolveConfiguredFromRequiredCredentialStatuses(account, [
+              "botTokenStatus",
+              "signingSecretStatus",
+            ])
+          : resolveConfiguredFromRequiredCredentialStatuses(account, [
+              "botTokenStatus",
+              "appTokenStatus",
+            ])) ?? isSlackAccountConfigured(account);
       return {
         accountId: account.accountId,
         name: account.name,

@@ -197,7 +197,7 @@ async function scanStatusJsonFast(opts: {
     includeRegistry: true,
   });
   const agentStatusPromise = getAgentLocalStatuses();
-  const summaryPromise = getStatusSummary({ config: cfg });
+  const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
 
   const tailscaleDnsPromise =
     tailscaleMode === "off"
@@ -308,7 +308,9 @@ export async function scanStatus(
         }),
       );
       const agentStatusPromise = deferResult(getAgentLocalStatuses());
-      const summaryPromise = deferResult(getStatusSummary({ config: cfg }));
+      const summaryPromise = deferResult(
+        getStatusSummary({ config: cfg, sourceConfig: loadedRaw }),
+      );
       progress.tick();
 
       progress.setLabel("Checking Tailscale…");

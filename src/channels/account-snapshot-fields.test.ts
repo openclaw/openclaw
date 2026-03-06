@@ -7,6 +7,8 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       name: "Primary",
       tokenSource: "config",
       tokenStatus: "configured_unavailable",
+      signingSecretSource: "config",
+      signingSecretStatus: "configured_unavailable",
       webhookUrl: "https://example.com/webhook",
       webhookPath: "/webhook",
       audienceType: "project-number",
@@ -18,6 +20,8 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       name: "Primary",
       tokenSource: "config",
       tokenStatus: "configured_unavailable",
+      signingSecretSource: "config",
+      signingSecretStatus: "configured_unavailable",
     });
   });
 });

@@ -200,6 +200,7 @@ Recommended `inspectAccount(...)` behavior:
   - `tokenSource`, `tokenStatus`
   - `botTokenSource`, `botTokenStatus`
   - `appTokenSource`, `appTokenStatus`
+  - `signingSecretSource`, `signingSecretStatus`
 - You do not need to return raw token values just to report read-only
   availability. Returning `tokenStatus: "available"` (and the matching source
   field) is enough for status-style commands.

@@ -8,6 +8,7 @@ const CREDENTIAL_STATUS_KEYS = [
   "tokenStatus",
   "botTokenStatus",
   "appTokenStatus",
+  "signingSecretStatus",
   "userTokenStatus",
 ] as const;
 
@@ -114,7 +115,7 @@ export function hasResolvedCredentialValue(account: unknown): boolean {
     return false;
   }
   return (
-    ["token", "botToken", "appToken", "userToken"].some((key) => {
+    ["token", "botToken", "appToken", "signingSecret", "userToken"].some((key) => {
       const value = record[key];
       return typeof value === "string" && value.trim().length > 0;
     }) || CREDENTIAL_STATUS_KEYS.some((key) => readCredentialStatus(record, key) === "available")
@@ -128,9 +129,11 @@ export function projectCredentialSnapshotFields(
   | "tokenSource"
   | "botTokenSource"
   | "appTokenSource"
+  | "signingSecretSource"
   | "tokenStatus"
   | "botTokenStatus"
   | "appTokenStatus"
+  | "signingSecretStatus"
   | "userTokenStatus"
 > {
   const record = asRecord(account);
@@ -148,6 +151,9 @@ export function projectCredentialSnapshotFields(
     ...(readTrimmedString(record, "appTokenSource")
       ? { appTokenSource: readTrimmedString(record, "appTokenSource") }
       : {}),
+    ...(readTrimmedString(record, "signingSecretSource")
+      ? { signingSecretSource: readTrimmedString(record, "signingSecretSource") }
+      : {}),
     ...(readCredentialStatus(record, "tokenStatus")
       ? { tokenStatus: readCredentialStatus(record, "tokenStatus") }
       : {}),
@@ -156,6 +162,9 @@ export function projectCredentialSnapshotFields(
       : {}),
     ...(readCredentialStatus(record, "appTokenStatus")
       ? { appTokenStatus: readCredentialStatus(record, "appTokenStatus") }
+      : {}),
+    ...(readCredentialStatus(record, "signingSecretStatus")
+      ? { signingSecretStatus: readCredentialStatus(record, "signingSecretStatus") }
       : {}),
     ...(readCredentialStatus(record, "userTokenStatus")
       ? { userTokenStatus: readCredentialStatus(record, "userTokenStatus") }
