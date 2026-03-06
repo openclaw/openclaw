@@ -57,13 +57,13 @@ export function registerSlackMessageEvents(params: {
     await handleIncomingMessageEvent({ event, body });
   });
 
-  ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
-    try {
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
+      ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
+        try {
+          if (ctx.shouldDropMismatchedSlackEvent(body)) {
+            return;
+          }
 
-      const mention = event as SlackAppMentionEvent;
+          const mention = event as SlackAppMentionEvent;
 
       // Skip app_mention for DMs - they're already handled by message.im event
       // This prevents duplicate processing when both message and app_mention fire for DMs
@@ -72,12 +72,12 @@ export function registerSlackMessageEvents(params: {
         return;
       }
 
-      await handleSlackMessage(mention as unknown as SlackMessageEvent, {
-        source: "app_mention",
-        wasMentioned: true,
+          await handleSlackMessage(mention as unknown as SlackMessageEvent, {
+            source: "app_mention",
+            wasMentioned: true,
+          });
+        } catch (err) {
+          ctx.runtime.error?.(danger(`slack mention handler failed: ${String(err)}`));
+        }
       });
-    } catch (err) {
-      ctx.runtime.error?.(danger(`slack mention handler failed: ${String(err)}`));
-    }
-  });
 }
