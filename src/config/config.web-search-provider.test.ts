@@ -48,6 +48,31 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts parallel provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "parallel",
+        providerConfig: {
+          apiKey: "test-key",
+          baseUrl: "https://api.parallel.ai",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts parallel provider with no extra config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "parallel",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("web search provider auto-detection", () => {
@@ -61,8 +86,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.XAI_API_KEY;
-    delete process.env.KIMI_API_KEY;
-    delete process.env.MOONSHOT_API_KEY;
+    delete process.env.PARALLEL_API_KEY;
   });
 
   afterEach(() => {
@@ -120,6 +144,11 @@ describe("web search provider auto-detection", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key";
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key";
     expect(resolveSearchProvider({})).toBe("gemini");
+  });
+
+  it("auto-detects parallel when only PARALLEL_API_KEY is set", () => {
+    process.env.PARALLEL_API_KEY = "test-parallel-key";
+    expect(resolveSearchProvider({})).toBe("parallel");
   });
 
   it("explicit provider always wins regardless of keys", () => {

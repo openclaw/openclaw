@@ -263,6 +263,7 @@ describe("runOnboardingWizard", () => {
           installDaemon: false,
           skipProviders: true,
           skipSkills: true,
+          skipWeb: true,
           skipHealth: true,
           skipUi: true,
         },
@@ -291,6 +292,7 @@ describe("runOnboardingWizard", () => {
         installDaemon: false,
         skipProviders: true,
         skipSkills: true,
+        skipWeb: true,
         skipHealth: true,
         skipUi: true,
       },
@@ -335,6 +337,7 @@ describe("runOnboardingWizard", () => {
         authChoice: "skip",
         skipProviders: true,
         skipSkills: true,
+        skipWeb: true,
         skipHealth: true,
         installDaemon: false,
       },
@@ -360,7 +363,9 @@ describe("runOnboardingWizard", () => {
 
   it("shows the web search hint at the end of onboarding", async () => {
     const prevBraveKey = process.env.BRAVE_API_KEY;
+    const prevParallelKey = process.env.PARALLEL_API_KEY;
     delete process.env.BRAVE_API_KEY;
+    delete process.env.PARALLEL_API_KEY;
 
     try {
       const note: WizardPrompter["note"] = vi.fn(async () => {});
@@ -375,6 +380,7 @@ describe("runOnboardingWizard", () => {
           installDaemon: false,
           skipProviders: true,
           skipSkills: true,
+          skipWeb: true,
           skipHealth: true,
           skipUi: true,
         },
@@ -390,6 +396,11 @@ describe("runOnboardingWizard", () => {
         delete process.env.BRAVE_API_KEY;
       } else {
         process.env.BRAVE_API_KEY = prevBraveKey;
+      }
+      if (prevParallelKey === undefined) {
+        delete process.env.PARALLEL_API_KEY;
+      } else {
+        process.env.PARALLEL_API_KEY = prevParallelKey;
       }
     }
   });
@@ -440,6 +451,7 @@ describe("runOnboardingWizard", () => {
           installDaemon: false,
           skipProviders: true,
           skipSkills: true,
+          skipWeb: true,
           skipHealth: true,
           skipUi: true,
         },
@@ -476,6 +488,7 @@ describe("runOnboardingWizard", () => {
         installDaemon: false,
         skipProviders: true,
         skipSkills: true,
+        skipWeb: true,
         skipHealth: true,
         skipUi: true,
         secretInputMode: "ref",

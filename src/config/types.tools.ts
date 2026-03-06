@@ -441,8 +441,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
-      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+      /** Search provider ("brave", "perplexity", "grok", "gemini", "kimi", or "parallel"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "parallel";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -485,6 +485,13 @@ export type ToolsConfig = {
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
       };
+      /** Parallel-specific configuration (used when provider="parallel"). */
+      parallel?: {
+        /** Parallel API key (defaults to PARALLEL_API_KEY env var). */
+        apiKey?: string;
+        /** Base URL for API requests (defaults to "https://api.parallel.ai"). */
+        baseUrl?: string;
+      };
     };
     fetch?: {
       /** Enable web fetch tool (default: true). */
@@ -515,6 +522,17 @@ export type ToolsConfig = {
         /** Max age (ms) for cached Firecrawl content. */
         maxAgeMs?: number;
         /** Timeout in seconds for Firecrawl requests. */
+        timeoutSeconds?: number;
+      };
+      /** Parallel extract fallback configuration. */
+      parallel?: {
+        /** Enable Parallel extract (default: false; opt-in). */
+        enabled?: boolean;
+        /** Parallel API key (defaults to PARALLEL_API_KEY env var). */
+        apiKey?: string;
+        /** Base URL for API requests (defaults to "https://api.parallel.ai"). */
+        baseUrl?: string;
+        /** Timeout in seconds for Parallel extract requests. */
         timeoutSeconds?: number;
       };
     };

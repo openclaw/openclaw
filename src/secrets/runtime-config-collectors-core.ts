@@ -290,6 +290,7 @@ function collectToolsWebSearchAssignments(params: {
     rawProvider === "gemini" ||
     rawProvider === "grok" ||
     rawProvider === "kimi" ||
+    rawProvider === "parallel" ||
     rawProvider === "perplexity"
       ? rawProvider
       : undefined;
@@ -298,6 +299,7 @@ function collectToolsWebSearchAssignments(params: {
     "gemini.apiKey",
     "grok.apiKey",
     "kimi.apiKey",
+    "parallel.apiKey",
     "perplexity.apiKey",
   ] as const;
   for (const path of paths) {

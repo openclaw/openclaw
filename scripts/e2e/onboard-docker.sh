@@ -12,7 +12,7 @@ docker run --rm -t "$IMAGE_NAME" bash -lc '
   set -euo pipefail
 	  trap "" PIPE
 	  export TERM=xterm-256color
-	  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui"
+	  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-web --skip-daemon --skip-ui"
 	  # tsdown may emit dist/index.js or dist/index.mjs depending on runtime/bundler.
 	  if [ -f dist/index.mjs ]; then
 	    OPENCLAW_ENTRY="dist/index.mjs"
@@ -301,6 +301,7 @@ TRASH
       --mode local \
       --skip-channels \
       --skip-skills \
+      --skip-web \
       --skip-daemon \
       --skip-ui \
       --skip-health
@@ -431,6 +432,7 @@ JSON
       --reset \
       --skip-channels \
       --skip-skills \
+      --skip-web \
       --skip-daemon \
       --skip-ui \
       --skip-health
@@ -546,6 +548,82 @@ if (errors.length > 0) {
 NODE
   }
 
+  select_skip_web() {
+    # Web search provider: select "Skip" (default/initialValue).
+    wait_for_log "Search provider" 30 true || true
+    send $'"'"'\r'"'"' 0.6
+  }
+
+  select_web_provider_brave() {
+    # Web search provider: select "Brave Search" (first option).
+    # initialValue is "skip" (last). Down once wraps to first = brave.
+    wait_for_log "Search provider" 30 true || true
+    send $'"'"'\e[B\r'"'"' 0.6
+    # API key prompt: enter a dummy key.
+    wait_for_log "API key" 15 true || true
+    send $'"'"'BSA-test-dummy-key\r'"'"' 0.6
+  }
+
+  send_web_search_flow() {
+    # Risk acknowledgement.
+    wait_for_log "Continue?" 60
+    send $'"'"'y\r'"'"' 0.6
+    # Select Brave as search provider and enter a dummy key.
+    select_web_provider_brave
+    # Skip hooks.
+    select_skip_hooks
+  }
+
+  run_case_web_search() {
+    local home_dir
+    home_dir="$(make_home web-search)"
+
+    # Use ONBOARD_FLAGS but remove --skip-web so the picker appears.
+    local web_flags
+    web_flags="$(echo "$ONBOARD_FLAGS" | sed 's/--skip-web//')"
+
+    run_wizard_cmd web-search "$home_dir" "node \"$OPENCLAW_ENTRY\" onboard $web_flags" send_web_search_flow true
+
+    config_path="$OPENCLAW_CONFIG_PATH"
+    assert_file "$config_path"
+
+    CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
+import fs from "node:fs";
+import JSON5 from "json5";
+
+const cfg = JSON5.parse(fs.readFileSync(process.env.CONFIG_PATH, "utf-8"));
+const errors = [];
+
+if (cfg?.tools?.web?.search?.provider !== "brave") {
+  errors.push(
+    `tools.web.search.provider mismatch (got ${cfg?.tools?.web?.search?.provider ?? "unset"})`,
+  );
+}
+if (cfg?.tools?.web?.search?.enabled !== true) {
+  errors.push(
+    `tools.web.search.enabled mismatch (got ${cfg?.tools?.web?.search?.enabled ?? "unset"})`,
+  );
+}
+if (cfg?.tools?.web?.search?.apiKey !== "BSA-test-dummy-key") {
+  errors.push(
+    `tools.web.search.apiKey mismatch (got ${cfg?.tools?.web?.search?.apiKey ?? "unset"})`,
+  );
+}
+const alsoAllow = cfg?.tools?.alsoAllow ?? [];
+if (!alsoAllow.includes("web_search")) {
+  errors.push(`tools.alsoAllow missing web_search (got ${JSON.stringify(alsoAllow)})`);
+}
+if (!alsoAllow.includes("web_fetch")) {
+  errors.push(`tools.alsoAllow missing web_fetch (got ${JSON.stringify(alsoAllow)})`);
+}
+
+if (errors.length > 0) {
+  console.error(errors.join("\n"));
+  process.exit(1);
+}
+NODE
+  }
+
   assert_log_not_contains() {
     local file_path="$1"
     local needle="$2"
@@ -565,6 +643,7 @@ NODE
   run_case_reset
   run_case_channels
   run_case_skills
+  run_case_web_search
 '
 
 echo "E2E complete."

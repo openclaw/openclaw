@@ -7,6 +7,7 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { DEFAULT_PARALLEL_BASE_URL, PARALLEL_BETA_HEADER } from "./parallel-shared.js";
 import {
   extractReadableContent,
   htmlToMarkdown,
@@ -14,7 +15,7 @@ import {
   truncateText,
   type ExtractMode,
 } from "./web-fetch-utils.js";
-import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
+import { fetchWithWebToolsNetworkGuard, withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -187,6 +188,218 @@ function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): nu
     return resolved;
   }
   return DEFAULT_FIRECRAWL_MAX_AGE_MS;
+}
+
+type ParallelExtractConfig =
+  | {
+      enabled?: boolean;
+      apiKey?: string;
+      baseUrl?: string;
+      timeoutSeconds?: number;
+    }
+  | undefined;
+
+function resolveParallelExtractConfig(fetch?: WebFetchConfig): ParallelExtractConfig {
+  if (!fetch || typeof fetch !== "object") {
+    return undefined;
+  }
+  const parallel = "parallel" in fetch ? fetch.parallel : undefined;
+  if (!parallel || typeof parallel !== "object") {
+    return undefined;
+  }
+  return parallel as ParallelExtractConfig;
+}
+
+function resolveParallelExtractApiKey(parallel?: ParallelExtractConfig): string | undefined {
+  const fromConfig =
+    parallel && "apiKey" in parallel && typeof parallel.apiKey === "string"
+      ? normalizeSecretInput(parallel.apiKey)
+      : "";
+  const fromEnv = normalizeSecretInput(process.env.PARALLEL_API_KEY);
+  return fromConfig || fromEnv || undefined;
+}
+
+function resolveParallelExtractEnabled(params: {
+  parallel?: ParallelExtractConfig;
+  apiKey?: string;
+}): boolean {
+  if (typeof params.parallel?.enabled === "boolean") {
+    return params.parallel.enabled;
+  }
+  // Parallel extract is opt-in (default false), unlike Firecrawl
+  return false;
+}
+
+function resolveParallelExtractBaseUrl(parallel?: ParallelExtractConfig): string {
+  const raw =
+    parallel && "baseUrl" in parallel && typeof parallel.baseUrl === "string"
+      ? parallel.baseUrl.trim()
+      : "";
+  return raw || DEFAULT_PARALLEL_BASE_URL;
+}
+
+async function fetchParallelContent(params: {
+  url: string;
+  apiKey: string;
+  baseUrl: string;
+  timeoutSeconds: number;
+}): Promise<{ text: string; title?: string } | null> {
+  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
+  const endpoint = `${baseUrl}/v1beta/extract`;
+
+  return withTrustedWebToolsEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": params.apiKey,
+          "parallel-beta": PARALLEL_BETA_HEADER,
+        },
+        body: JSON.stringify({
+          urls: [params.url],
+          full_content: true,
+        }),
+      },
+    },
+    async ({ response: res }) => {
+      if (!res.ok) {
+        const detail = await readResponseText(res, { maxBytes: 64_000 });
+        throw new Error(
+          `Parallel extract failed (${res.status}): ${detail.text || res.statusText}`.trim(),
+        );
+      }
+
+      const payload = (await res.json()) as {
+        results?: Array<{
+          url?: string;
+          title?: string;
+          full_content?: string;
+          excerpts?: string[];
+        }>;
+        errors?: Array<{ url?: string; message?: string }>;
+      };
+
+      const result = payload.results?.[0];
+      if (!result) {
+        return null;
+      }
+
+      const text = result.full_content || (result.excerpts ?? []).join("\n\n");
+      if (!text) {
+        return null;
+      }
+
+      return { text, title: result.title };
+    },
+  );
+}
+
+async function tryParallelFallback(params: {
+  url: string;
+  apiKey?: string;
+  baseUrl: string;
+  timeoutSeconds: number;
+  enabled: boolean;
+}): Promise<{ text: string; title?: string } | null> {
+  if (!params.enabled || !params.apiKey) {
+    return null;
+  }
+  try {
+    return await fetchParallelContent({
+      url: params.url,
+      apiKey: params.apiKey,
+      baseUrl: params.baseUrl,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+  } catch {
+    return null;
+  }
+}
+
+type ParallelExtractRuntimeParams = {
+  parallelExtractEnabled: boolean;
+  parallelExtractApiKey?: string;
+  parallelExtractBaseUrl: string;
+  parallelExtractTimeoutSeconds: number;
+};
+
+function buildParallelWebFetchPayload(params: {
+  parallel: { text: string; title?: string };
+  rawUrl: string;
+  finalUrlFallback: string;
+  statusFallback: number;
+  extractMode: ExtractMode;
+  maxChars: number;
+  tookMs: number;
+}): Record<string, unknown> {
+  const text =
+    params.extractMode === "text" ? markdownToText(params.parallel.text) : params.parallel.text;
+  const wrapped = wrapWebFetchContent(text, params.maxChars);
+  const wrappedTitle = params.parallel.title ? wrapWebFetchField(params.parallel.title) : undefined;
+  return {
+    url: params.rawUrl,
+    finalUrl: params.finalUrlFallback,
+    status: params.statusFallback,
+    contentType: "text/markdown",
+    title: wrappedTitle,
+    extractMode: params.extractMode,
+    extractor: "parallel",
+    externalContent: {
+      untrusted: true,
+      source: "web_fetch",
+      wrapped: true,
+    },
+    truncated: wrapped.truncated,
+    length: wrapped.wrappedLength,
+    rawLength: wrapped.rawLength,
+    wrappedLength: wrapped.wrappedLength,
+    fetchedAt: new Date().toISOString(),
+    tookMs: params.tookMs,
+    text: wrapped.text,
+  };
+}
+
+async function maybeFetchParallelWebFetchPayload(
+  params: WebFetchRuntimeParams & {
+    urlToFetch: string;
+    finalUrlFallback: string;
+    statusFallback: number;
+    cacheKey: string;
+    tookMs: number;
+  },
+): Promise<Record<string, unknown> | null> {
+  if (!params.parallelExtractEnabled || !params.parallelExtractApiKey) {
+    return null;
+  }
+
+  try {
+    const result = await fetchParallelContent({
+      url: params.urlToFetch,
+      apiKey: params.parallelExtractApiKey,
+      baseUrl: params.parallelExtractBaseUrl,
+      timeoutSeconds: params.parallelExtractTimeoutSeconds,
+    });
+    if (!result) {
+      return null;
+    }
+
+    const payload = buildParallelWebFetchPayload({
+      parallel: result,
+      rawUrl: params.url,
+      finalUrlFallback: params.finalUrlFallback,
+      statusFallback: params.statusFallback,
+      extractMode: params.extractMode,
+      maxChars: params.maxChars,
+      tookMs: params.tookMs,
+    });
+    writeCache(FETCH_CACHE, params.cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  } catch {
+    return null;
+  }
 }
 
 function resolveMaxChars(value: unknown, fallback: number, cap: number): number {
@@ -436,17 +649,18 @@ type FirecrawlRuntimeParams = {
   firecrawlTimeoutSeconds: number;
 };
 
-type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
-  url: string;
-  extractMode: ExtractMode;
-  maxChars: number;
-  maxResponseBytes: number;
-  maxRedirects: number;
-  timeoutSeconds: number;
-  cacheTtlMs: number;
-  userAgent: string;
-  readabilityEnabled: boolean;
-};
+type WebFetchRuntimeParams = FirecrawlRuntimeParams &
+  ParallelExtractRuntimeParams & {
+    url: string;
+    extractMode: ExtractMode;
+    maxChars: number;
+    maxResponseBytes: number;
+    maxRedirects: number;
+    timeoutSeconds: number;
+    cacheTtlMs: number;
+    userAgent: string;
+    readabilityEnabled: boolean;
+  };
 
 function toFirecrawlContentParams(
   params: FirecrawlRuntimeParams & { url: string; extractMode: ExtractMode },
@@ -550,6 +764,18 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     if (error instanceof SsrFBlockedError) {
       throw error;
     }
+    // Try Parallel extract first, then Firecrawl
+    const parallelPayload = await maybeFetchParallelWebFetchPayload({
+      ...params,
+      urlToFetch: finalUrl,
+      finalUrlFallback: finalUrl,
+      statusFallback: 200,
+      cacheKey,
+      tookMs: Date.now() - start,
+    });
+    if (parallelPayload) {
+      return parallelPayload;
+    }
     const payload = await maybeFetchFirecrawlWebFetchPayload({
       ...params,
       urlToFetch: finalUrl,
@@ -566,9 +792,22 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
 
   try {
     if (!res.ok) {
+      // Try Parallel extract first, then Firecrawl (use finalUrl so
+      // redirect-resolved targets are sent to the fallback provider).
+      const parallelPayload = await maybeFetchParallelWebFetchPayload({
+        ...params,
+        urlToFetch: finalUrl,
+        finalUrlFallback: finalUrl,
+        statusFallback: res.status,
+        cacheKey,
+        tookMs: Date.now() - start,
+      });
+      if (parallelPayload) {
+        return parallelPayload;
+      }
       const payload = await maybeFetchFirecrawlWebFetchPayload({
         ...params,
-        urlToFetch: params.url,
+        urlToFetch: finalUrl,
         finalUrlFallback: finalUrl,
         statusFallback: res.status,
         cacheKey,
@@ -606,7 +845,19 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         text = markdownToText(body);
       }
     } else if (contentType.includes("text/html")) {
-      if (params.readabilityEnabled) {
+      // Try Parallel extract first when enabled (better extraction quality).
+      const parallel = await tryParallelFallback({
+        url: finalUrl,
+        apiKey: params.parallelExtractApiKey,
+        baseUrl: params.parallelExtractBaseUrl,
+        timeoutSeconds: params.parallelExtractTimeoutSeconds,
+        enabled: params.parallelExtractEnabled,
+      });
+      if (parallel) {
+        text = params.extractMode === "text" ? markdownToText(parallel.text) : parallel.text;
+        title = parallel.title;
+        extractor = "parallel";
+      } else if (params.readabilityEnabled) {
         const readable = await extractReadableContent({
           html: body,
           url: finalUrl,
@@ -623,15 +874,34 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
             title = firecrawl.title;
             extractor = "firecrawl";
           } else {
-            throw new Error(
-              "Web fetch extraction failed: Readability and Firecrawl returned no content.",
-            );
+            const tried = [
+              params.parallelExtractEnabled && "Parallel",
+              "Readability",
+              params.firecrawlEnabled && "Firecrawl",
+            ]
+              .filter(Boolean)
+              .join(", ");
+            throw new Error(`Web fetch extraction failed: ${tried} returned no content.`);
           }
         }
       } else {
-        throw new Error(
-          "Web fetch extraction failed: Readability disabled and Firecrawl unavailable.",
-        );
+        // Readability disabled — try Firecrawl as last resort.
+        const firecrawl = await tryFirecrawlFallback({ ...params, url: finalUrl });
+        if (firecrawl) {
+          text = firecrawl.text;
+          title = firecrawl.title;
+          extractor = "firecrawl";
+        } else {
+          const tried = [
+            params.parallelExtractEnabled && "Parallel",
+            params.firecrawlEnabled && "Firecrawl",
+          ]
+            .filter(Boolean)
+            .join(", ");
+          throw new Error(
+            `Web fetch extraction failed: Readability disabled${tried ? `, ${tried} returned no content` : ""}.`,
+          );
+        }
       }
     } else if (contentType.includes("application/json")) {
       try {
@@ -728,6 +998,17 @@ export function createWebFetchTool(options?: {
     firecrawl?.timeoutSeconds ?? fetch?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
+  const parallelExtract = resolveParallelExtractConfig(fetch);
+  const parallelExtractApiKey = resolveParallelExtractApiKey(parallelExtract);
+  const parallelExtractEnabled = resolveParallelExtractEnabled({
+    parallel: parallelExtract,
+    apiKey: parallelExtractApiKey,
+  });
+  const parallelExtractBaseUrl = resolveParallelExtractBaseUrl(parallelExtract);
+  const parallelExtractTimeoutSeconds = resolveTimeoutSeconds(
+    parallelExtract?.timeoutSeconds ?? fetch?.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS,
+  );
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
@@ -766,6 +1047,10 @@ export function createWebFetchTool(options?: {
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
+        parallelExtractEnabled,
+        parallelExtractApiKey,
+        parallelExtractBaseUrl,
+        parallelExtractTimeoutSeconds,
       });
       return jsonResult(result);
     },

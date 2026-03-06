@@ -12,6 +12,13 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
+import {
+  applyParallelExtractToggle,
+  PROVIDER_PLACEHOLDERS,
+  SEARCH_PROVIDER_OPTIONS,
+  type SearchProviderValue,
+  providerEnvHint,
+} from "../config/search-providers.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -19,6 +26,123 @@ import { resolveUserPath } from "../utils.js";
 import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+
+const ONBOARDING_PROVIDER_OPTIONS = [
+  ...SEARCH_PROVIDER_OPTIONS,
+  { value: "skip" as const, label: "Skip", hint: "Configure later" },
+];
+
+type OnboardingProviderValue = SearchProviderValue | "skip";
+
+async function promptSearchProviderOnboarding(
+  config: OpenClawConfig,
+  prompter: WizardPrompter,
+  _opts: { flow: WizardFlow },
+): Promise<OpenClawConfig> {
+  await prompter.note(
+    [
+      "Web search lets your agent look things up online.",
+      "Pick a provider and paste an API key, or skip for now.",
+      "Docs: https://docs.openclaw.ai/tools/web",
+    ].join("\n"),
+    "Web search (optional)",
+  );
+
+  const provider = await prompter.select<OnboardingProviderValue>({
+    message: "Search provider",
+    options: [...ONBOARDING_PROVIDER_OPTIONS],
+    initialValue: "skip",
+  });
+
+  if (provider === "skip") {
+    return config;
+  }
+
+  const envHint = providerEnvHint(provider);
+  const placeholder = PROVIDER_PLACEHOLDERS[provider];
+
+  const keyInput = await prompter.text({
+    message: `${provider} API key (leave blank to use ${envHint})`,
+    placeholder,
+  });
+  const key = (keyInput ?? "").trim();
+
+  const search: Record<string, unknown> = {
+    ...config.tools?.web?.search,
+    enabled: true,
+    provider,
+  };
+
+  // Clean up stale keys from the previous provider to avoid orphaned credentials
+  // (mirrors the same cleanup in configure.wizard.ts).
+  const oldProvider = (config.tools?.web?.search as Record<string, unknown> | undefined)?.provider;
+  if (oldProvider && typeof oldProvider === "string" && oldProvider !== provider) {
+    if (oldProvider === "brave") {
+      delete search.apiKey;
+    } else {
+      delete search[oldProvider];
+    }
+  }
+
+  if (key) {
+    if (provider === "brave") {
+      search.apiKey = key;
+    } else {
+      search[provider] = {
+        ...(config.tools?.web?.search as Record<string, Record<string, unknown>> | undefined)?.[
+          provider
+        ],
+        apiKey: key,
+      };
+    }
+  }
+
+  // Ensure web_search and web_fetch are allowed. If the user already has
+  // tools.allow, merge into that list (the schema rejects allow + alsoAllow
+  // together). Otherwise append to tools.alsoAllow.
+  const toolsAllow = config.tools?.allow;
+  const hasExplicitAllow = Array.isArray(toolsAllow);
+  // When promoting to tools.allow, merge any existing alsoAllow entries so we
+  // can drop alsoAllow and avoid the schema conflict (allow + alsoAllow).
+  const baseList: string[] = hasExplicitAllow
+    ? [...toolsAllow, ...(config.tools?.alsoAllow ?? [])]
+    : [...(config.tools?.alsoAllow ?? [])];
+  for (const tool of ["web_search", "web_fetch"]) {
+    if (!baseList.includes(tool)) {
+      baseList.push(tool);
+    }
+  }
+
+  // When the user picks Parallel as the search provider, also enable Parallel
+  // extract as the default web_fetch extractor (same API key, better extraction).
+  // When switching away, disable it so it doesn't linger.
+  // Fall back to the existing search config key so Parallel extract inherits
+  // the search API key even when the user leaves the prompt blank.
+  const existingSearchKey =
+    provider === "brave"
+      ? undefined
+      : ((config.tools?.web?.search as Record<string, Record<string, unknown>> | undefined)?.[
+          provider
+        ]?.apiKey as string | undefined);
+  const fetch = applyParallelExtractToggle(
+    config.tools?.web?.fetch as Record<string, unknown> | undefined,
+    provider,
+    key || existingSearchKey || undefined,
+  );
+
+  return {
+    ...config,
+    tools: {
+      ...config.tools,
+      ...(hasExplicitAllow ? { allow: baseList, alsoAllow: undefined } : { alsoAllow: baseList }),
+      web: {
+        ...config.tools?.web,
+        search,
+        fetch,
+      },
+    },
+  };
+}
 
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
@@ -517,6 +641,12 @@ export async function runOnboardingWizard(
   } else {
     const { setupSkills } = await import("../commands/onboard-skills.js");
     nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
+  }
+
+  if (opts.skipWeb) {
+    await prompter.note("Skipping web search setup.", "Web search");
+  } else {
+    nextConfig = await promptSearchProviderOnboarding(nextConfig, prompter, { flow });
   }
 
   // Setup hooks (session memory on /new)
