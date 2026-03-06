@@ -241,43 +241,49 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
   return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.posix.delimiter);
 }
 
-export function buildServiceEnvironment(params: {
-  env: Record<string, string | undefined>;
-  port: number;
-  token?: string;
-  launchdLabel?: string;
-  platform?: NodeJS.Platform;
-}): Record<string, string | undefined> {
-  const { env, port, token, launchdLabel } = params;
-  const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
-  const profile = env.OPENCLAW_PROFILE;
-  const resolvedLaunchdLabel =
-    launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
-  const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
-  return {
-    ...buildCommonServiceEnvironment(env, sharedEnv),
-    OPENCLAW_PROFILE: profile,
-    OPENCLAW_GATEWAY_PORT: String(port),
-    OPENCLAW_GATEWAY_TOKEN: token,
-    OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
-    OPENCLAW_SYSTEMD_UNIT: systemdUnit,
-    OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
-    OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
-    OPENCLAW_SERVICE_VERSION: VERSION,
-  };
-}
-
-export function buildNodeServiceEnvironment(params: {
-  env: Record<string, string | undefined>;
-  platform?: NodeJS.Platform;
-}): Record<string, string | undefined> {
-  const { env } = params;
-  const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
-  const gatewayToken =
-    env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
-  return {
+    export function buildServiceEnvironment(params: {
+      env: Record<string, string | undefined>;
+      port: number;
+      token?: string;
+      launchdLabel?: string;
+      platform?: NodeJS.Platform;
+    }): Record<string, string | undefined> {
+      const { env, port, token, launchdLabel } = params;
+      const platform = params.platform ?? process.platform;
+      const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
+      const profile = env.OPENCLAW_PROFILE;
+      const resolvedLaunchdLabel =
+        launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
+      const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
+      return {
+        ...buildCommonServiceEnvironment(env, sharedEnv),
+        OPENCLAW_PROFILE: profile,
+        OPENCLAW_GATEWAY_PORT: String(port),
+        OPENCLAW_GATEWAY_TOKEN: token,
+        OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
+        OPENCLAW_SYSTEMD_UNIT: systemdUnit,
+        OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
+        OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
+        OPENCLAW_SERVICE_VERSION: VERSION,
+        NODE_USE_SYSTEM_CA: env.NODE_USE_SYSTEM_CA ?? (platform === 'darwin' ? '1' : undefined),
+      };
+    }
+    
+    export function buildNodeServiceEnvironment(params: {
+      env: Record<string, string | undefined>;
+      platform?: NodeJS.Platform;
+    }): Record<string, string | undefined> {
+      const { env } = params;
+      const platform = params.platform ?? process.platform;
+      const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
+      const gatewayToken =
+        env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
+      return {
+        ...sharedEnv,
+        OPENCLAW_GATEWAY_TOKEN: gatewayToken,
+        NODE_USE_SYSTEM_CA: env.NODE_USE_SYSTEM_CA ?? (platform === 'darwin' ? '1' : undefined),
+      };
+    }
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
