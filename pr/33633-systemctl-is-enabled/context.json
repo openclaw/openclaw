@@ -1,0 +1,12 @@
+{
+  "issue_number": 33633,
+  "title": "openclaw gateway install fails: systemctl is-enabled unavailable (unit not-found exit 4)",
+  "complexity": "simple",
+  "confidence": 0.95,
+  "estimated_files": 1,
+  "mode": "fast",
+  "agents_plan": 1,
+  "agents_review": 0,
+  "cache_key": "sha256-systemctl-is-enabled",
+  "created_at": "2026-03-04T12:00:00Z"
+}

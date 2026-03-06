@@ -659,7 +659,8 @@ export async function compactEmbeddedPiSessionDirect(
         }
 
         const diagEnabled = log.isEnabled("debug");
-        const preMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
+        // Always compute metrics (not just for diagnostics) so they are available for event notifications
+        const preMetrics = summarizeCompactionMessages(session.messages);
         if (diagEnabled && preMetrics) {
           log.debug(
             `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
@@ -711,7 +712,7 @@ export async function compactEmbeddedPiSessionDirect(
             });
         }
 
-        const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
+        const postMetrics = summarizeCompactionMessages(session.messages);
         if (diagEnabled && preMetrics && postMetrics) {
           log.debug(
             `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +

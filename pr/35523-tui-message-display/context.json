@@ -1,0 +1,36 @@
+{
+  "issue_number": 35523,
+  "title": "[Bug]: TUI doesn't display assistant messages until restart",
+  "complexity": "medium",
+  "confidence": 0.85,
+  "estimated_files": 2,
+  "mode": "standard",
+  "agents_plan": 2,
+  "agents_review": 2,
+  "cache_key": "tui-message-display-issue-35523",
+  "created_at": "2026-03-05T14:35:00Z",
+  "updated_at": "2026-03-05T14:35:00Z",
+  "issue_details": {
+    "bug_type": "Regression (worked before, now fails)",
+    "summary": "TUI doesn't display assistant messages until restart",
+    "environment": {
+      "os": "macOS26.3",
+      "openclaw_version": "2026.3.2 (85377a2)",
+      "terminal": "macOS Terminal"
+    },
+    "steps_to_reproduce": [
+      "Run openclaw tui",
+      "Send a message",
+      "Assistant replies but message is not visible on screen",
+      "Must Ctrl+C exit and restart TUI to see the reply"
+    ],
+    "expected_behavior": "Messages should appear immediately",
+    "actual_behavior": "Messages only visible after restarting TUI",
+    "labels": ["bug", "regression"]
+  },
+  "relevant_files": [
+    "src/tui/gateway-chat.ts",
+    "src/tui/components/chat-log.ts",
+    "src/tui/components/assistant-message.ts"
+  ]
+}

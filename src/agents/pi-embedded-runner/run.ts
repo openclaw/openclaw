@@ -956,6 +956,13 @@ export async function runEmbeddedPiAgent(
                 diagId: overflowDiagId,
                 attempt: overflowCompactionAttempts,
                 maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                onEvent: params.onAgentEvent
+                  ? (event) =>
+                      params.onAgentEvent!({
+                        stream: "compacted",
+                        data: event as Record<string, unknown>,
+                      })
+                  : undefined,
               });
               if (compactResult.compacted) {
                 autoCompactionCount += 1;

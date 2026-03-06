@@ -1,0 +1,12 @@
+{
+  "issue_number": 35195,
+  "title": "Cron backup mechanism issue: jobs.json.bak is identical to jobs.json after modification",
+  "complexity": "simple",
+  "confidence": 0.95,
+  "estimated_files": 1,
+  "mode": "fast",
+  "agents_plan": 1,
+  "agents_review": 0,
+  "cache_key": "sha256_of_cron_backup_issue",
+  "created_at": "2026-03-05T10:30:00Z"
+}
