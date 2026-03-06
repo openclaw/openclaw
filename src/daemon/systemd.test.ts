@@ -43,7 +43,7 @@ describe("systemd availability", () => {
   });
 
   it("treats unavailable systemd user bus as service not enabled", async () => {
-    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
       const err = new Error("Failed to connect to bus") as Error & {
         stderr?: string;
         code?: number;
@@ -54,7 +54,7 @@ describe("systemd availability", () => {
     });
 
     await expect(isSystemdServiceEnabled({ env: {} })).resolves.toBe(false);
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(execFileMock).toHaveBeenCalled();
   });
 
   it("falls back to machine user scope when --user bus is unavailable", async () => {
@@ -99,10 +99,15 @@ describe("isSystemdServiceEnabled", () => {
 
   it("calls systemctl is-enabled when systemctl is present", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
-    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
-      expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
-      cb(null, "enabled", "");
-    });
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+        cb(null, "enabled", "");
+      });
     const result = await isSystemdServiceEnabled({ env: {} });
     expect(result).toBe(true);
   });
@@ -122,15 +127,11 @@ describe("isSystemdServiceEnabled", () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
-        const err = new Error("Failed to connect to bus") as Error & { code?: number };
-        err.code = 1;
-        cb(err, "", "Failed to connect to bus");
+        expect(args).toEqual(["--user", "status"]);
+        cb(null, "", "");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args[0]).toBe("--machine");
-        expect(String(args[1])).toMatch(/^[^@]+@$/);
-        expect(args.slice(2)).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+        expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
         const err = new Error("permission denied") as Error & { code?: number };
         err.code = 1;
         cb(err, "", "permission denied");
@@ -149,12 +150,10 @@ describe("isSystemdServiceEnabled", () => {
         "Command failed: systemctl --user is-enabled openclaw-gateway.service",
       ) as Error & { code?: number };
       err.code = 4;
-      cb(err, "not-found
-", "");
+      cb(err, "not-found\n", "");
     });
     const result = await isSystemdServiceEnabled({ env: {} });
     expect(result).toBe(false);
-  });
   });
 });
 
