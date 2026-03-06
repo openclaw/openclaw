@@ -593,10 +593,12 @@ export function createSlackThreadBindingManager(
       // For Slack, conversationId = thread_ts, parentConversationId = channelId
       const channelId = ref.parentConversationId?.trim() || "";
       const threadId = ref.conversationId.trim();
-      if (!channelId || !threadId) {
+      if (!threadId) {
         return null;
       }
-      const binding = getByChannelThread(channelId, threadId);
+      const binding = channelId
+        ? getByChannelThread(channelId, threadId)
+        : manager.getByThreadId(threadId);
       return binding ? toSessionBindingRecord(binding, { idleTimeoutMs, maxAgeMs }) : null;
     },
     touch: (bindingId, at) => {

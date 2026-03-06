@@ -254,6 +254,62 @@ describe("slack thread-bindings manager", () => {
     expect(found!.conversation.channel).toBe("slack");
   });
 
+  it("resolves binding by thread_ts when parent channel is unavailable", async () => {
+    const manager = createSlackThreadBindingManager({
+      accountId: "test",
+      token: "xoxb-test",
+      persist: false,
+      enableSweeper: false,
+    });
+    await manager.bindTarget({
+      threadId: "1234567890.123456",
+      channelId: "C123",
+      targetKind: "acp",
+      targetSessionKey: "agent:test:acp:session1",
+      agentId: "test",
+    });
+
+    const service = getSessionBindingService();
+    const found = service.resolveByConversation({
+      channel: "slack",
+      accountId: "test",
+      conversationId: "1234567890.123456",
+    });
+    expect(found).not.toBeNull();
+    expect(found!.targetSessionKey).toBe("agent:test:acp:session1");
+    expect(found!.conversation.parentConversationId).toBe("C123");
+  });
+
+  it("returns null without parent channel when thread_ts is ambiguous", async () => {
+    const manager = createSlackThreadBindingManager({
+      accountId: "test",
+      token: "xoxb-test",
+      persist: false,
+      enableSweeper: false,
+    });
+    const threadTs = "1234567890.123456";
+    await manager.bindTarget({
+      threadId: threadTs,
+      channelId: "C111",
+      targetKind: "acp",
+      targetSessionKey: "agent:test:acp:session1",
+    });
+    await manager.bindTarget({
+      threadId: threadTs,
+      channelId: "C222",
+      targetKind: "acp",
+      targetSessionKey: "agent:test:acp:session2",
+    });
+
+    const service = getSessionBindingService();
+    const found = service.resolveByConversation({
+      channel: "slack",
+      accountId: "test",
+      conversationId: threadTs,
+    });
+    expect(found).toBeNull();
+  });
+
   it("lists bindings by session via service", async () => {
     const manager = createSlackThreadBindingManager({
       accountId: "test",
