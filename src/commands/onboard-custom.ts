@@ -19,6 +19,7 @@ import type { SecretInputMode } from "./onboard-types.js";
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 const DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_HARD_MIN_TOKENS;
 const DEFAULT_MAX_TOKENS = 4096;
+const DEFAULT_AZURE_API_VERSION = "2024-10-21";
 const VERIFY_TIMEOUT_MS = 30_000;
 
 function normalizeContextWindowForCustomModel(value: unknown): number {
@@ -28,15 +29,20 @@ function normalizeContextWindowForCustomModel(value: unknown): number {
 
 /**
  * Detects if a URL is from Azure AI Foundry or Azure OpenAI.
- * Matches both:
+ * Matches:
  * - https://*.services.ai.azure.com (Azure AI Foundry)
  * - https://*.openai.azure.com (classic Azure OpenAI)
+ * - https://*.cognitiveservices.azure.com (Azure Cognitive Services OpenAI)
  */
 function isAzureUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
     const host = url.hostname.toLowerCase();
-    return host.endsWith(".services.ai.azure.com") || host.endsWith(".openai.azure.com");
+    return (
+      host.endsWith(".services.ai.azure.com") ||
+      host.endsWith(".openai.azure.com") ||
+      host.endsWith(".cognitiveservices.azure.com")
+    );
   } catch {
     return false;
   }
@@ -76,6 +82,7 @@ export type ApplyCustomApiConfigParams = {
   modelId: string;
   compatibility: CustomApiCompatibility;
   apiKey?: SecretInput;
+  apiVersion?: string;
   providerId?: string;
   alias?: string;
 };
@@ -85,6 +92,7 @@ export type ParseNonInteractiveCustomApiFlagsParams = {
   modelId?: string;
   compatibility?: string;
   apiKey?: string;
+  apiVersion?: string;
   providerId?: string;
 };
 
@@ -93,6 +101,7 @@ export type ParsedNonInteractiveCustomApiFlags = {
   modelId: string;
   compatibility: CustomApiCompatibility;
   apiKey?: string;
+  apiVersion?: string;
   providerId?: string;
 };
 
@@ -277,6 +286,7 @@ function resolveVerificationEndpoint(params: {
   baseUrl: string;
   modelId: string;
   endpointPath: "chat/completions" | "messages";
+  apiVersion?: string;
 }) {
   const resolvedUrl = isAzureUrl(params.baseUrl)
     ? transformAzureUrl(params.baseUrl, params.modelId)
@@ -286,7 +296,8 @@ function resolveVerificationEndpoint(params: {
     resolvedUrl.endsWith("/") ? resolvedUrl : `${resolvedUrl}/`,
   );
   if (isAzureUrl(params.baseUrl)) {
-    endpointUrl.searchParams.set("api-version", "2024-10-21");
+    const version = params.apiVersion?.trim() || DEFAULT_AZURE_API_VERSION;
+    endpointUrl.searchParams.set("api-version", version);
   }
   return endpointUrl.href;
 }
@@ -319,11 +330,13 @@ async function requestOpenAiVerification(params: {
   baseUrl: string;
   apiKey: string;
   modelId: string;
+  apiVersion?: string;
 }): Promise<VerificationResult> {
   const endpoint = resolveVerificationEndpoint({
     baseUrl: params.baseUrl,
     modelId: params.modelId,
     endpointPath: "chat/completions",
+    apiVersion: params.apiVersion,
   });
   const isBaseUrlAzureUrl = isAzureUrl(params.baseUrl);
   const headers = isBaseUrlAzureUrl
@@ -386,7 +399,13 @@ async function promptBaseUrlAndKey(params: {
   config: OpenClawConfig;
   secretInputMode?: SecretInputMode;
   initialBaseUrl?: string;
-}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string }> {
+  initialApiVersion?: string;
+}): Promise<{
+  baseUrl: string;
+  apiKey?: SecretInput;
+  resolvedApiKey: string;
+  apiVersion?: string;
+}> {
   const baseUrlInput = await params.prompter.text({
     message: "API Base URL",
     initialValue: params.initialBaseUrl ?? DEFAULT_OLLAMA_BASE_URL,
@@ -401,6 +420,17 @@ async function promptBaseUrlAndKey(params: {
     },
   });
   const baseUrl = baseUrlInput.trim();
+  let apiVersion: string | undefined;
+  if (isAzureUrl(baseUrl)) {
+    const apiVersionInput = await params.prompter.text({
+      message: "API Version (optional)",
+      initialValue: params.initialApiVersion ?? DEFAULT_AZURE_API_VERSION,
+      placeholder: "2025-01-01-preview",
+      validate: () => undefined,
+    });
+    const trimmedVersion = apiVersionInput.trim();
+    apiVersion = trimmedVersion || params.initialApiVersion || DEFAULT_AZURE_API_VERSION;
+  }
   const providerHint = buildEndpointIdFromUrl(baseUrl) || "custom";
   let apiKeyInput: SecretInput | undefined;
   const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
@@ -420,6 +450,7 @@ async function promptBaseUrlAndKey(params: {
     baseUrl,
     apiKey: normalizeOptionalProviderApiKey(apiKeyInput),
     resolvedApiKey: normalizeSecretInput(resolvedApiKey),
+    apiVersion,
   };
 }
 
@@ -451,24 +482,38 @@ async function applyCustomApiRetryChoice(params: {
   config: OpenClawConfig;
   secretInputMode?: SecretInputMode;
   retryChoice: CustomApiRetryChoice;
-  current: { baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string };
-}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string }> {
-  let { baseUrl, apiKey, resolvedApiKey, modelId } = params.current;
+  current: {
+    baseUrl: string;
+    apiKey?: SecretInput;
+    resolvedApiKey: string;
+    modelId: string;
+    apiVersion?: string;
+  };
+}): Promise<{
+  baseUrl: string;
+  apiKey?: SecretInput;
+  resolvedApiKey: string;
+  modelId: string;
+  apiVersion?: string;
+}> {
+  let { baseUrl, apiKey, resolvedApiKey, modelId, apiVersion } = params.current;
   if (params.retryChoice === "baseUrl" || params.retryChoice === "both") {
     const retryInput = await promptBaseUrlAndKey({
       prompter: params.prompter,
       config: params.config,
       secretInputMode: params.secretInputMode,
       initialBaseUrl: baseUrl,
+      initialApiVersion: apiVersion,
     });
     baseUrl = retryInput.baseUrl;
     apiKey = retryInput.apiKey;
     resolvedApiKey = retryInput.resolvedApiKey;
+    apiVersion = retryInput.apiVersion;
   }
   if (params.retryChoice === "model" || params.retryChoice === "both") {
     modelId = await promptCustomApiModelId(params.prompter);
   }
-  return { baseUrl, apiKey, resolvedApiKey, modelId };
+  return { baseUrl, apiKey, resolvedApiKey, modelId, apiVersion };
 }
 
 function resolveProviderApi(
@@ -536,6 +581,7 @@ export function parseNonInteractiveCustomApiFlags(
   }
 
   const apiKey = params.apiKey?.trim();
+  const apiVersion = params.apiVersion?.trim();
   const providerId = params.providerId?.trim();
   if (providerId && !normalizeEndpointId(providerId)) {
     throw new CustomApiError(
@@ -548,6 +594,7 @@ export function parseNonInteractiveCustomApiFlags(
     modelId,
     compatibility: parseCustomApiCompatibility(params.compatibility),
     ...(apiKey ? { apiKey } : {}),
+    ...(apiVersion ? { apiVersion } : {}),
     ...(providerId ? { providerId } : {}),
   };
 }
@@ -620,6 +667,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const normalizedApiKey =
     normalizeOptionalProviderApiKey(params.apiKey) ??
     normalizeOptionalProviderApiKey(existingApiKey);
+  const normalizedApiVersion = params.apiVersion?.trim() || undefined;
 
   let config: OpenClawConfig = {
     ...params.config,
@@ -633,6 +681,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
           baseUrl: resolvedBaseUrl,
           api: resolveProviderApi(params.compatibility),
           ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+          ...(normalizedApiVersion ? { apiVersion: normalizedApiVersion } : {}),
           models: mergedModels.length > 0 ? mergedModels : [nextModel],
         },
       },
@@ -685,6 +734,7 @@ export async function promptCustomApiConfig(params: {
   let baseUrl = baseInput.baseUrl;
   let apiKey = baseInput.apiKey;
   let resolvedApiKey = baseInput.resolvedApiKey;
+  let apiVersion = baseInput.apiVersion;
 
   const compatibilityChoice = await prompter.select({
     message: "Endpoint compatibility",
@@ -708,6 +758,7 @@ export async function promptCustomApiConfig(params: {
         baseUrl,
         apiKey: resolvedApiKey,
         modelId,
+        apiVersion,
       });
       if (openaiProbe.ok) {
         probeSpinner.stop("Detected OpenAI-compatible endpoint.");
@@ -735,7 +786,7 @@ export async function promptCustomApiConfig(params: {
             config,
             secretInputMode: params.secretInputMode,
             retryChoice,
-            current: { baseUrl, apiKey, resolvedApiKey, modelId },
+            current: { baseUrl, apiKey, resolvedApiKey, modelId, apiVersion },
           }));
           continue;
         }
@@ -750,7 +801,12 @@ export async function promptCustomApiConfig(params: {
     const result =
       compatibility === "anthropic"
         ? await requestAnthropicVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
-        : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
+        : await requestOpenAiVerification({
+            baseUrl,
+            apiKey: resolvedApiKey,
+            modelId,
+            apiVersion,
+          });
     if (result.ok) {
       verifySpinner.stop("Verification successful.");
       break;
@@ -761,12 +817,12 @@ export async function promptCustomApiConfig(params: {
       verifySpinner.stop(`Verification failed: ${formatVerificationError(result.error)}`);
     }
     const retryChoice = await promptCustomApiRetryChoice(prompter);
-    ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
+    ({ baseUrl, apiKey, resolvedApiKey, modelId, apiVersion } = await applyCustomApiRetryChoice({
       prompter,
       config,
       secretInputMode: params.secretInputMode,
       retryChoice,
-      current: { baseUrl, apiKey, resolvedApiKey, modelId },
+      current: { baseUrl, apiKey, resolvedApiKey, modelId, apiVersion },
     }));
     if (compatibilityChoice === "unknown") {
       compatibility = null;
@@ -809,6 +865,7 @@ export async function promptCustomApiConfig(params: {
     modelId,
     compatibility: resolvedCompatibility,
     apiKey,
+    apiVersion,
     providerId: providerIdInput,
     alias: aliasInput,
   });

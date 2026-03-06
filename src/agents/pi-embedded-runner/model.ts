@@ -17,6 +17,7 @@ type InlineModelEntry = ModelDefinitionConfig & {
 };
 type InlineProviderConfig = {
   baseUrl?: string;
+  apiVersion?: string;
   api?: ModelDefinitionConfig["api"];
   models?: ModelDefinitionConfig[];
   headers?: Record<string, string>;
@@ -52,15 +53,18 @@ function applyConfiguredProviderOverrides(params: {
   if (
     !configuredModel &&
     !providerConfig.baseUrl &&
+    !providerConfig.apiVersion &&
     !providerConfig.api &&
     !providerConfig.headers
   ) {
     return discoveredModel;
   }
+  const resolvedApi = configuredModel?.api ?? providerConfig.api ?? discoveredModel.api;
+  const resolvedBaseUrl = providerConfig.baseUrl ?? discoveredModel.baseUrl;
   return {
     ...discoveredModel,
-    api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
-    baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
+    api: resolvedApi,
+    baseUrl: resolvedBaseUrl,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
     input: configuredModel?.input ?? discoveredModel.input,
     cost: configuredModel?.cost ?? discoveredModel.cost,
@@ -126,7 +130,17 @@ export function resolveModelWithRegistry(params: {
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
   if (inlineMatch) {
-    return normalizeModelCompat(inlineMatch as Model<Api>);
+    const baseUrlSource = inlineMatch.baseUrl ?? providerConfig?.baseUrl;
+    if (!baseUrlSource) {
+      return undefined;
+    }
+    const api = inlineMatch.api ?? providerConfig?.api ?? "openai-responses";
+    const baseUrl = baseUrlSource;
+    return normalizeModelCompat({
+      ...(inlineMatch as Model<Api>),
+      api,
+      baseUrl,
+    });
   }
 
   // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
@@ -162,12 +176,18 @@ export function resolveModelWithRegistry(params: {
 
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
   if (providerConfig || modelId.startsWith("mock-")) {
+    const resolvedApi = providerConfig?.api ?? "openai-responses";
+    const providerBaseUrl = providerConfig?.baseUrl ?? "";
+    if (!providerBaseUrl && !modelId.startsWith("mock-")) {
+      return undefined;
+    }
+    const resolvedBaseUrl = providerBaseUrl;
     return normalizeModelCompat({
       id: modelId,
       name: modelId,
-      api: providerConfig?.api ?? "openai-responses",
+      api: resolvedApi,
       provider,
-      baseUrl: providerConfig?.baseUrl,
+      baseUrl: resolvedBaseUrl,
       reasoning: configuredModel?.reasoning ?? false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

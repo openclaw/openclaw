@@ -137,6 +137,7 @@ export type OnboardOptions = {
   qianfanApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
+  customApiVersion?: string;
   customModelId?: string;
   customProviderId?: string;
   customCompatibility?: "openai" | "anthropic";

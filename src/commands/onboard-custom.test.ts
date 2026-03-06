@@ -174,6 +174,7 @@ describe("promptCustomApiConfig", () => {
     const prompter = createTestPrompter({
       text: [
         "https://my-resource.openai.azure.com",
+        "2025-01-01-preview",
         "azure-test-key",
         "gpt-4.1",
         "custom",
@@ -196,7 +197,7 @@ describe("promptCustomApiConfig", () => {
     const parsedBody = JSON.parse(firstInit?.body ?? "{}");
 
     expect(firstUrl).toContain("/openai/deployments/gpt-4.1/chat/completions");
-    expect(firstUrl).toContain("api-version=2024-10-21");
+    expect(firstUrl).toContain("api-version=2025-01-01-preview");
     expect(firstInit?.headers?.["api-key"]).toBe("azure-test-key");
     expect(firstInit?.headers?.Authorization).toBeUndefined();
     expect(firstInit?.body).toBeDefined();
