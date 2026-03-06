@@ -634,6 +634,11 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-incremental");
     releaseWsSession("sess-full");
     releaseWsSession("sess-tools");
+    releaseWsSession("sess-drop");
+    releaseWsSession("sess-drop-ws");
+    releaseWsSession("sess-drop-after-delta");
+    releaseWsSession("sess-502");
+    releaseWsSession("sess-stale-ref");
   });
 
   it("connects to the WebSocket on first call", async () => {
@@ -828,6 +833,82 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(inputTypes).toHaveLength(1);
   });
 
+  it("falls back to HTTP when a stale OpenAI response item error is raised before output starts", async () => {
+    const sessionId = "sess-stale-ref";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+    const ctx1 = {
+      systemPrompt: "You are helpful.",
+      messages: [userMsg("Run ls")] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream1 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx1 as Parameters<typeof streamFn>[1],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp_turn1", "OK"),
+          });
+          for await (const _ of await resolveStream(stream1)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    const manager = MockManager.lastInstance!;
+    manager.setPreviousResponseId("resp_turn1");
+    const callsBefore = streamSimpleCalls.length;
+    const stream2 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      {
+        systemPrompt: "You are helpful.",
+        messages: [
+          userMsg("Run ls"),
+          assistantMsg([], [{ id: "call_1", name: "exec", args: { cmd: "ls" } }]),
+          toolResultMsg("call_1", "file.txt"),
+        ] as Parameters<typeof convertMessagesToInputItems>[0],
+        tools: [],
+      } as Parameters<typeof streamFn>[1],
+    );
+
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          manager.simulateEvent({
+            type: "response.failed",
+            response: {
+              ...makeResponseObject("resp_failed"),
+              error: {
+                code: "not_found",
+                message: "HTTP 404: Item with id 'rs_stale' not found",
+              },
+            },
+          });
+          for await (const _ of await resolveStream(stream2)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    expect(streamSimpleCalls.length).toBe(callsBefore + 1);
+    expect(hasWsSession(sessionId)).toBe(false);
+  });
+
   it("sends instructions (system prompt) in each request", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-tools");
     const ctx = {
@@ -1000,32 +1081,126 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.tool_choice).toBe("auto");
   });
 
-  it("rejects promise when WebSocket drops mid-request", async () => {
+  it("falls back to HTTP when WebSocket drops mid-request in auto mode", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-drop");
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
       contextStub as Parameters<typeof streamFn>[1],
       {} as Parameters<typeof streamFn>[2],
     );
-    // Let the send go through, then simulate connection drop before response.completed
+    const callsBefore = streamSimpleCalls.length;
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateClose(1006, "connection lost");
+          for await (const ev of await resolveStream(stream)) {
+            void ev;
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    expect(streamSimpleCalls.length).toBe(callsBefore + 1);
+    expect(hasWsSession("sess-drop")).toBe(false);
+  });
+
+  it("surfaces mid-request WebSocket drops in forced websocket mode", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-drop-ws");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "websocket" } as Parameters<typeof streamFn>[2],
+    );
     await new Promise<void>((resolve) => {
       queueMicrotask(async () => {
         try {
           await new Promise((r) => setImmediate(r));
-          // Simulate a connection drop instead of sending response.completed
           MockManager.lastInstance!.simulateClose(1006, "connection lost");
           const events: unknown[] = [];
           for await (const ev of await resolveStream(stream)) {
             events.push(ev);
           }
-          // Should have gotten an error event, not hung forever
           const hasError = events.some(
             (e) => typeof e === "object" && e !== null && (e as { type: string }).type === "error",
           );
           expect(hasError).toBe(true);
           resolve();
         } catch {
-          // The error propagation is also acceptable — promise rejected
+          resolve();
+        }
+      });
+    });
+  });
+
+  it("falls back to HTTP on transient 502 response failures before output starts", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-502");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      {} as Parameters<typeof streamFn>[2],
+    );
+    const callsBefore = streamSimpleCalls.length;
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.failed",
+            response: {
+              ...makeResponseObject("resp_502"),
+              error: {
+                code: "server_error",
+                message: "HTTP 502 Bad Gateway",
+              },
+            },
+          });
+          for await (const ev of await resolveStream(stream)) {
+            void ev;
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    expect(streamSimpleCalls.length).toBe(callsBefore + 1);
+    expect(hasWsSession("sess-502")).toBe(false);
+  });
+
+  it("does not fall back to HTTP after text deltas have already streamed", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-drop-after-delta");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      {} as Parameters<typeof streamFn>[2],
+    );
+    const callsBefore = streamSimpleCalls.length;
+    await new Promise<void>((resolve) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.output_text.delta",
+            item_id: "msg_1",
+            output_index: 0,
+            content_index: 0,
+            delta: "Hello",
+          });
+          MockManager.lastInstance!.simulateClose(1006, "connection lost");
+          const events: unknown[] = [];
+          for await (const ev of await resolveStream(stream)) {
+            events.push(ev);
+          }
+          const hasError = events.some(
+            (e) => typeof e === "object" && e !== null && (e as { type: string }).type === "error",
+          );
+          expect(hasError).toBe(true);
+          expect(streamSimpleCalls.length).toBe(callsBefore);
+          resolve();
+        } catch {
           resolve();
         }
       });

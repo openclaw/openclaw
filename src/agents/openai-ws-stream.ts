@@ -346,6 +346,10 @@ export interface OpenAIWebSocketStreamOptions {
 
 type WsTransport = "sse" | "websocket" | "auto";
 const WARM_UP_TIMEOUT_MS = 8_000;
+const TRANSIENT_OPENAI_WS_FAILURE_RE =
+  /\b(?:502|503|504)\b|bad gateway|gateway timeout|stream closed/i;
+const STALE_OPENAI_RESPONSE_ITEM_RE =
+  /\b404\b.*\brs_[\w-]+\b|\bItem with id ['"]rs_[^'"]+['"] not found\b/i;
 
 function resolveWsTransport(options: Parameters<StreamFn>[2]): WsTransport {
   const transport = (options as { transport?: unknown } | undefined)?.transport;
@@ -359,6 +363,31 @@ type WsOptions = Parameters<StreamFn>[2] & { openaiWsWarmup?: unknown; signal?: 
 function resolveWsWarmup(options: Parameters<StreamFn>[2]): boolean {
   const warmup = (options as WsOptions | undefined)?.openaiWsWarmup;
   return warmup === true;
+}
+
+function resetWsSession(sessionId: string, session: WsSession): void {
+  try {
+    session.manager.close();
+  } catch {
+    /* ignore */
+  }
+  wsRegistry.delete(sessionId);
+}
+
+function shouldFallbackAfterMidRequestError(params: {
+  error: Error;
+  sawTextDelta: boolean;
+  transport: WsTransport;
+}): boolean {
+  if (params.transport !== "auto" || params.sawTextDelta) {
+    return false;
+  }
+  const message = params.error.message;
+  return (
+    message.includes("WebSocket closed mid-request") ||
+    STALE_OPENAI_RESPONSE_ITEM_RE.test(message) ||
+    TRANSIENT_OPENAI_WS_FAILURE_RE.test(message)
+  );
 }
 
 async function runWarmUp(params: {
@@ -491,12 +520,7 @@ export function createOpenAIWebSocketStreamFn(
         log.warn(`[ws-stream] session=${sessionId} broken/disconnected; falling back to HTTP`);
         // Clean up stale session to prevent next turn from using stale
         // previousResponseId / lastContextLength after a mid-request drop.
-        try {
-          session.manager.close();
-        } catch {
-          /* ignore */
-        }
-        wsRegistry.delete(sessionId);
+        resetWsSession(sessionId, session);
         return fallbackToHttp(model, context, options, eventStream, opts.signal);
       }
 
@@ -632,72 +656,87 @@ export function createOpenAIWebSocketStreamFn(
 
       // ── 5. Wait for response.completed ───────────────────────────────────
       const capturedContextLength = context.messages.length;
-
-      await new Promise<void>((resolve, reject) => {
-        // Honour abort signal
-        const abortHandler = () => {
-          cleanup();
-          reject(new Error("aborted"));
-        };
-        if (signal?.aborted) {
-          reject(new Error("aborted"));
-          return;
-        }
-        signal?.addEventListener("abort", abortHandler, { once: true });
-
-        // If the WebSocket drops mid-request, reject so we don't hang forever.
-        const closeHandler = (code: number, reason: string) => {
-          cleanup();
-          reject(
-            new Error(`WebSocket closed mid-request (code=${code}, reason=${reason || "unknown"})`),
-          );
-        };
-        session.manager.on("close", closeHandler);
-
-        const cleanup = () => {
-          signal?.removeEventListener("abort", abortHandler);
-          session.manager.off("close", closeHandler);
-          unsubscribe();
-        };
-
-        const unsubscribe = session.manager.onMessage((event) => {
-          if (event.type === "response.completed") {
+      let sawTextDelta = false;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          // Honour abort signal
+          const abortHandler = () => {
             cleanup();
-            // Update session state
-            session.lastContextLength = capturedContextLength;
-            // Build and emit the assistant message
-            const assistantMsg = buildAssistantMessageFromResponse(event.response, {
-              api: model.api,
-              provider: model.provider,
-              id: model.id,
-            });
-            const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
-              assistantMsg.stopReason === "toolUse" ? "toolUse" : "stop";
-            eventStream.push({ type: "done", reason, message: assistantMsg });
-            resolve();
-          } else if (event.type === "response.failed") {
-            cleanup();
-            const errMsg = event.response?.error?.message ?? "Response failed";
-            reject(new Error(`OpenAI WebSocket response failed: ${errMsg}`));
-          } else if (event.type === "error") {
-            cleanup();
-            reject(new Error(`OpenAI WebSocket error: ${event.message} (code=${event.code})`));
-          } else if (event.type === "response.output_text.delta") {
-            // Stream partial text updates for responsive UI
-            const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
-              model,
-              content: [{ type: "text", text: event.delta }],
-              stopReason: "stop",
-            });
-            eventStream.push({
-              type: "text_delta",
-              contentIndex: 0,
-              delta: event.delta,
-              partial: partialMsg,
-            });
+            reject(new Error("aborted"));
+          };
+          if (signal?.aborted) {
+            reject(new Error("aborted"));
+            return;
           }
+          signal?.addEventListener("abort", abortHandler, { once: true });
+
+          // If the WebSocket drops mid-request, reject so we don't hang forever.
+          const closeHandler = (code: number, reason: string) => {
+            cleanup();
+            reject(
+              new Error(
+                `WebSocket closed mid-request (code=${code}, reason=${reason || "unknown"})`,
+              ),
+            );
+          };
+          session.manager.on("close", closeHandler);
+
+          const cleanup = () => {
+            signal?.removeEventListener("abort", abortHandler);
+            session.manager.off("close", closeHandler);
+            unsubscribe();
+          };
+
+          const unsubscribe = session.manager.onMessage((event) => {
+            if (event.type === "response.completed") {
+              cleanup();
+              // Update session state
+              session.lastContextLength = capturedContextLength;
+              // Build and emit the assistant message
+              const assistantMsg = buildAssistantMessageFromResponse(event.response, {
+                api: model.api,
+                provider: model.provider,
+                id: model.id,
+              });
+              const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
+                assistantMsg.stopReason === "toolUse" ? "toolUse" : "stop";
+              eventStream.push({ type: "done", reason, message: assistantMsg });
+              resolve();
+            } else if (event.type === "response.failed") {
+              cleanup();
+              const errMsg = event.response?.error?.message ?? "Response failed";
+              reject(new Error(`OpenAI WebSocket response failed: ${errMsg}`));
+            } else if (event.type === "error") {
+              cleanup();
+              reject(new Error(`OpenAI WebSocket error: ${event.message} (code=${event.code})`));
+            } else if (event.type === "response.output_text.delta") {
+              sawTextDelta = true;
+              // Stream partial text updates for responsive UI
+              const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
+                model,
+                content: [{ type: "text", text: event.delta }],
+                stopReason: "stop",
+              });
+              eventStream.push({
+                type: "text_delta",
+                contentIndex: 0,
+                delta: event.delta,
+                partial: partialMsg,
+              });
+            }
+          });
         });
-      });
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        if (shouldFallbackAfterMidRequestError({ error, sawTextDelta, transport })) {
+          log.warn(
+            `[ws-stream] mid-request failure for session=${sessionId}; falling back to HTTP. error=${error.message}`,
+          );
+          resetWsSession(sessionId, session);
+          return fallbackToHttp(model, context, options, eventStream, signal, { skipStart: true });
+        }
+        throw error;
+      }
     };
 
     queueMicrotask(() =>
@@ -739,10 +778,14 @@ async function fallbackToHttp(
   options: Parameters<StreamFn>[2],
   eventStream: ReturnType<typeof createAssistantMessageEventStream>,
   signal?: AbortSignal,
+  opts: { skipStart?: boolean } = {},
 ): Promise<void> {
   const mergedOptions = signal ? { ...options, signal } : options;
   const httpStream = streamSimple(model, context, mergedOptions);
   for await (const event of httpStream) {
+    if (opts.skipStart && event.type === "start") {
+      continue;
+    }
     eventStream.push(event);
   }
 }
