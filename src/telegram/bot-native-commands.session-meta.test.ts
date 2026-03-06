@@ -423,4 +423,3 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 });
-
