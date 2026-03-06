@@ -1,4 +1,5 @@
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
+import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
@@ -43,6 +44,14 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
    * - "extensive": Agent can react liberally
    */
   reactionLevel?: SignalReactionLevel;
+  /** Heartbeat visibility settings for this channel. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
+  /** Extract link preview metadata into UntrustedContext (default: true). */
+  injectLinkPreviews?: boolean;
+  /** Apply Signal text styles (bold/italic/monospace/strikethrough/spoiler) to message text (default: true). */
+  preserveTextStyles?: boolean;
 };
 
 export type SignalConfig = {
