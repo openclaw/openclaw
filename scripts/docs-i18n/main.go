@@ -57,6 +57,7 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	policyHash := translationPolicyHash(*sourceLang, *targetLang, glossary)
 
 	translator, err := NewPiTranslator(*sourceLang, *targetLang, glossary, *thinking)
 	if err != nil {
@@ -76,7 +77,7 @@ func main() {
 	totalFiles := len(ordered)
 	preSkipped := 0
 	if *mode == "doc" && !*overwrite {
-		filtered, skipped, err := filterDocQueue(resolvedDocsRoot, *targetLang, ordered)
+		filtered, skipped, err := filterDocQueue(resolvedDocsRoot, *targetLang, ordered, policyHash)
 		if err != nil {
 			fatal(err)
 		}
@@ -100,14 +101,14 @@ func main() {
 	switch *mode {
 	case "doc":
 		if *parallel > 1 {
-			proc, skip, err := runDocParallel(context.Background(), ordered, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite, *parallel, glossary, *thinking)
+			proc, skip, err := runDocParallel(context.Background(), ordered, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite, *parallel, glossary, *thinking, policyHash)
 			if err != nil {
 				fatal(err)
 			}
 			processed += proc
 			skipped += skip
 		} else {
-			proc, skip, err := runDocSequential(context.Background(), ordered, translator, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite)
+			proc, skip, err := runDocSequential(context.Background(), ordered, translator, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite, policyHash)
 			if err != nil {
 				fatal(err)
 			}
@@ -134,14 +135,14 @@ func main() {
 	log.Printf("docs-i18n: completed processed=%d skipped=%d elapsed=%s", processed, skipped, elapsed)
 }
 
-func runDocSequential(ctx context.Context, ordered []string, translator *PiTranslator, docsRoot, srcLang, tgtLang string, overwrite bool) (int, int, error) {
+func runDocSequential(ctx context.Context, ordered []string, translator *PiTranslator, docsRoot, srcLang, tgtLang string, overwrite bool, policyHash string) (int, int, error) {
 	processed := 0
 	skipped := 0
 	for index, file := range ordered {
 		relPath := resolveRelPath(docsRoot, file)
 		log.Printf("docs-i18n: [%d/%d] start %s", index+1, len(ordered), relPath)
 		start := time.Now()
-		skip, err := processFileDoc(ctx, translator, docsRoot, file, srcLang, tgtLang, overwrite)
+		skip, err := processFileDoc(ctx, translator, docsRoot, file, srcLang, tgtLang, overwrite, policyHash)
 		if err != nil {
 			return processed, skipped, err
 		}
@@ -156,7 +157,7 @@ func runDocSequential(ctx context.Context, ordered []string, translator *PiTrans
 	return processed, skipped, nil
 }
 
-func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tgtLang string, overwrite bool, parallel int, glossary []GlossaryEntry, thinking string) (int, int, error) {
+func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tgtLang string, overwrite bool, parallel int, glossary []GlossaryEntry, thinking string, policyHash string) (int, int, error) {
 	jobs := make(chan docJob)
 	results := make(chan docResult, len(ordered))
 	ctx, cancel := context.WithCancel(ctx)
@@ -179,7 +180,7 @@ func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tg
 				}
 				log.Printf("docs-i18n: [w%d %d/%d] start %s", workerID, job.index, len(ordered), job.rel)
 				start := time.Now()
-				skip, err := processFileDoc(ctx, translator, docsRoot, job.path, srcLang, tgtLang, overwrite)
+				skip, err := processFileDoc(ctx, translator, docsRoot, job.path, srcLang, tgtLang, overwrite, policyHash)
 				results <- docResult{
 					index:    job.index,
 					rel:      job.rel,
@@ -245,7 +246,7 @@ func resolveRelPath(docsRoot, file string) string {
 	return relPath
 }
 
-func filterDocQueue(docsRoot, targetLang string, ordered []string) ([]string, int, error) {
+func filterDocQueue(docsRoot, targetLang string, ordered []string, policyHash string) ([]string, int, error) {
 	pending := make([]string, 0, len(ordered))
 	skipped := 0
 	for _, file := range ordered {
@@ -259,7 +260,7 @@ func filterDocQueue(docsRoot, targetLang string, ordered []string) ([]string, in
 		}
 		sourceHash := hashBytes(content)
 		outputPath := filepath.Join(docsRoot, targetLang, relPath)
-		skip, err := shouldSkipDoc(outputPath, sourceHash)
+		skip, err := shouldSkipDoc(outputPath, sourceHash, policyHash)
 		if err != nil {
 			return nil, skipped, err
 		}

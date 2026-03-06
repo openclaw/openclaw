@@ -17,7 +17,7 @@ const (
 	bodyTagEnd          = "</body>"
 )
 
-func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, filePath, srcLang, tgtLang string, overwrite bool) (bool, error) {
+func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, filePath, srcLang, tgtLang string, overwrite bool, policyHash string) (bool, error) {
 	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
 	if err != nil {
 		return false, err
@@ -31,7 +31,7 @@ func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, fil
 
 	outputPath := filepath.Join(docsRoot, tgtLang, relPath)
 	if !overwrite {
-		skip, err := shouldSkipDoc(outputPath, currentHash)
+		skip, err := shouldSkipDoc(outputPath, currentHash, policyHash)
 		if err != nil {
 			return false, err
 		}
@@ -66,7 +66,7 @@ func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, fil
 		return false, fmt.Errorf("frontmatter translation failed for %s: %w", relPath, err)
 	}
 
-	updatedFront, err := encodeFrontMatter(frontData, relPath, content)
+	updatedFront, err := encodeFrontMatter(frontData, relPath, content, policyHash)
 	if err != nil {
 		return false, err
 	}
@@ -218,7 +218,7 @@ func setReadWhenValue(existing any, index int, value string) []any {
 	return readWhen
 }
 
-func shouldSkipDoc(outputPath string, sourceHash string) (bool, error) {
+func shouldSkipDoc(outputPath string, sourceHash string, policyHash string) (bool, error) {
 	data, err := os.ReadFile(outputPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -238,7 +238,18 @@ func shouldSkipDoc(outputPath string, sourceHash string) (bool, error) {
 	if storedHash == "" {
 		return false, nil
 	}
-	return strings.EqualFold(storedHash, sourceHash), nil
+	if !strings.EqualFold(storedHash, sourceHash) {
+		return false, nil
+	}
+	trimmedPolicy := strings.TrimSpace(policyHash)
+	if trimmedPolicy == "" {
+		return true, nil
+	}
+	storedPolicy := extractPolicyHash(frontData)
+	if storedPolicy == "" {
+		return false, nil
+	}
+	return strings.EqualFold(storedPolicy, trimmedPolicy), nil
 }
 
 func extractSourceHash(frontData map[string]any) string {
@@ -247,6 +258,18 @@ func extractSourceHash(frontData map[string]any) string {
 		return ""
 	}
 	value, ok := xi["source_hash"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func extractPolicyHash(frontData map[string]any) string {
+	xi, ok := frontData["x-i18n"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	value, ok := xi["policy_hash"].(string)
 	if !ok {
 		return ""
 	}

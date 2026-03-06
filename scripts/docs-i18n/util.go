@@ -19,6 +19,12 @@ func cacheNamespace() string {
 	return fmt.Sprintf("wf=%d|provider=%s|model=%s", workflowVersion, providerName, modelVersion)
 }
 
+func translationPolicyHash(srcLang, tgtLang string, glossary []GlossaryEntry) string {
+	prompt := translationPrompt(srcLang, tgtLang, glossary)
+	raw := fmt.Sprintf("%s|prompt=%s", cacheNamespace(), prompt)
+	return hashBytes([]byte(raw))
+}
+
 func cacheKey(namespace, srcLang, tgtLang, segmentID, textHash string) string {
 	raw := fmt.Sprintf("%s|%s|%s|%s|%s", namespace, srcLang, tgtLang, segmentID, textHash)
 	hash := sha256.Sum256([]byte(raw))

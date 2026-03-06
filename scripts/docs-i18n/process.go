@@ -74,7 +74,7 @@ func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationM
 	}
 
 	translatedBody := applyTranslations(body, segments)
-	updatedFront, err := encodeFrontMatter(frontData, relPath, content)
+	updatedFront, err := encodeFrontMatter(frontData, relPath, content, "")
 	if err != nil {
 		return false, err
 	}
@@ -114,11 +114,11 @@ func splitFrontMatter(content string) (string, string) {
 	return front, body
 }
 
-func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) (string, error) {
+func encodeFrontMatter(frontData map[string]any, relPath string, source []byte, policyHash string) (string, error) {
 	if frontData == nil {
 		frontData = map[string]any{}
 	}
-	frontData["x-i18n"] = map[string]any{
+	xi := map[string]any{
 		"source_path":  relPath,
 		"source_hash":  hashBytes(source),
 		"provider":     providerName,
@@ -126,6 +126,10 @@ func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) 
 		"workflow":     workflowVersion,
 		"generated_at": time.Now().UTC().Format(time.RFC3339),
 	}
+	if strings.TrimSpace(policyHash) != "" {
+		xi["policy_hash"] = policyHash
+	}
+	frontData["x-i18n"] = xi
 	encoded, err := yaml.Marshal(frontData)
 	if err != nil {
 		return "", err
