@@ -73,9 +73,6 @@ struct OpenClawChatComposer: View {
             #endif
         }
         #if os(macOS)
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-            self.handleDrop(providers)
-        }
         .onAppear {
             self.shouldFocusTextView = true
         }
@@ -239,7 +236,13 @@ struct OpenClawChatComposer: View {
             }
 
             #if os(macOS)
-            ChatComposerTextView(text: self.$viewModel.input, shouldFocus: self.$shouldFocusTextView) {
+            ChatComposerTextView(
+                text: self.$viewModel.input,
+                shouldFocus: self.$shouldFocusTextView,
+                onFileDrop: { urls in
+                    self.viewModel.addAttachments(urls: urls)
+                })
+            {
                 self.viewModel.send()
             }
             .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
@@ -357,22 +360,6 @@ struct OpenClawChatComposer: View {
             self.viewModel.addAttachments(urls: panel.urls)
         }
     }
-
-    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
-        guard !fileProviders.isEmpty else { return false }
-        for item in fileProviders {
-            item.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                guard let data = item as? Data,
-                      let url = URL(dataRepresentation: data, relativeTo: nil)
-                else { return }
-                Task { @MainActor in
-                    self.viewModel.addAttachments(urls: [url])
-                }
-            }
-        }
-        return true
-    }
     #else
     private func loadPhotosPickerItems(_ items: [PhotosPickerItem]) async {
         for item in items {
@@ -399,12 +386,13 @@ import UniformTypeIdentifiers
 private struct ChatComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var shouldFocus: Bool
+    var onFileDrop: ([URL]) -> Void
     var onSend: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = ChatComposerNSTextView()
+        let textView = ChatComposerNSTextView(frame: .zero)
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = false
@@ -417,6 +405,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainerInset = NSSize(width: 2, height: 4)
         textView.focusRingType = .none
+        textView.onFileDrop = self.onFileDrop
 
         textView.minSize = .zero
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -480,8 +469,65 @@ private struct ChatComposerTextView: NSViewRepresentable {
     }
 }
 
-private final class ChatComposerNSTextView: NSTextView {
+enum ChatComposerFileDrop {
+    static let pasteboardTypes: [NSPasteboard.PasteboardType] = [.fileURL]
+
+    static func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true,
+        ]
+        return (pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL]) ?? []
+    }
+}
+
+final class ChatComposerNSTextView: NSTextView {
     var onSend: (() -> Void)?
+    var onFileDrop: (([URL]) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        self.configureFileDropRegistration()
+    }
+
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+        self.configureFileDropRegistration()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func configureFileDropRegistration() {
+        // Keep file drop handling inside AppKit so native drag-selection stays with NSTextView.
+        self.registerForDraggedTypes(ChatComposerFileDrop.pasteboardTypes)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let urls = ChatComposerFileDrop.fileURLs(from: sender.draggingPasteboard)
+        if !urls.isEmpty {
+            return .copy
+        }
+        return super.draggingEntered(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = ChatComposerFileDrop.fileURLs(from: sender.draggingPasteboard)
+        if !urls.isEmpty {
+            return true
+        }
+        return super.prepareForDragOperation(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = ChatComposerFileDrop.fileURLs(from: sender.draggingPasteboard)
+        if !urls.isEmpty {
+            self.onFileDrop?(urls)
+            return true
+        }
+        return super.performDragOperation(sender)
+    }
 
     override func keyDown(with event: NSEvent) {
         let isReturn = event.keyCode == 36
