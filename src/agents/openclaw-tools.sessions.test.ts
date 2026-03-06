@@ -707,7 +707,13 @@ describe("sessions tools", () => {
     const replyByRunId = new Map<string, string>();
     const requesterKey = "discord:group:req";
     const targetKey = "discord:group:target";
-    let sendParams: { to?: string; channel?: string; message?: string } = {};
+    let sendParams: {
+      to?: string;
+      channel?: string;
+      message?: string;
+      sessionKey?: string;
+      agentId?: string;
+    } = {};
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
@@ -754,12 +760,20 @@ describe("sessions tools", () => {
       }
       if (request.method === "send") {
         const params = request.params as
-          | { to?: string; channel?: string; message?: string }
+          | {
+              to?: string;
+              channel?: string;
+              message?: string;
+              sessionKey?: string;
+              agentId?: string;
+            }
           | undefined;
         sendParams = {
           to: params?.to,
           channel: params?.channel,
           message: params?.message,
+          sessionKey: params?.sessionKey,
+          agentId: params?.agentId,
         };
         return { messageId: "m-announce" };
       }
@@ -814,6 +828,8 @@ describe("sessions tools", () => {
       to: "channel:target",
       channel: "discord",
       message: "announce now",
+      sessionKey: requesterKey,
+      agentId: "main",
     });
   });
 
