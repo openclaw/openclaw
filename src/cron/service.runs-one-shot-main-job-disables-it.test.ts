@@ -1,5 +1,6 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import { createDeferred, createNoopLogger, installCronTestHooks } from "./service.test-harness.js";
@@ -351,12 +352,15 @@ async function runIsolatedAnnounceScenario(params: {
 
 async function addWakeModeNowMainSystemEventJob(
   cron: CronService,
-  options?: { name?: string; agentId?: string; sessionKey?: string },
+  options?: { name?: string; agentId?: string; sessionKey?: string; deleteAfterRun?: boolean },
 ) {
   return cron.add({
     name: options?.name ?? "wakeMode now",
     ...(options?.agentId ? { agentId: options.agentId } : {}),
     ...(options?.sessionKey ? { sessionKey: options.sessionKey } : {}),
+    ...(typeof options?.deleteAfterRun === "boolean"
+      ? { deleteAfterRun: options.deleteAfterRun }
+      : {}),
     enabled: true,
     schedule: { kind: "at", at: new Date(1).toISOString() },
     sessionTarget: "main",
@@ -527,20 +531,39 @@ describe("CronService", () => {
       return now;
     };
 
-    const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 123 }));
+    const heartbeatStarted = createDeferred<void>();
+    let resolveHeartbeat: ((res: HeartbeatRunResult) => void) | null = null;
+    const runHeartbeatOnce = vi.fn(async () => {
+      heartbeatStarted.resolve();
+      return await new Promise<HeartbeatRunResult>((resolve) => {
+        resolveHeartbeat = resolve;
+      });
+    });
 
     const { store, cron, enqueueSystemEvent, requestHeartbeatNow } =
       await createWakeModeNowMainHarness({
         runHeartbeatOnce,
         nowMs,
       });
-    const job = await addWakeModeNowMainSystemEventJob(cron, { name: "wakeMode now waits" });
+    const job = await addWakeModeNowMainSystemEventJob(cron, {
+      name: "wakeMode now waits",
+      deleteAfterRun: false,
+    });
 
-    await cron.run(job.id, "force");
+    const runPromise = cron.run(job.id, "force");
+    await heartbeatStarted.promise;
 
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
     expectMainSystemEventPosted(enqueueSystemEvent, "hello");
+
+    (resolveHeartbeat as (res: HeartbeatRunResult) => void)({ status: "ran", durationMs: 123 });
+    await runPromise;
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const refreshed = jobs.find((j) => j.id === job.id);
+    expect(refreshed?.state.lastStatus).toBe("ok");
+    expect(refreshed?.state.lastDurationMs).toBeGreaterThan(0);
 
     await stopCronAndCleanup(cron, store);
   });
