@@ -167,6 +167,52 @@ function makeSourceAwareUnavailablePlugin(): ChannelPlugin {
   };
 }
 
+function makeSourceUnavailableResolvedAvailablePlugin(): ChannelPlugin {
+  return {
+    id: "discord",
+    meta: {
+      id: "discord",
+      label: "Discord",
+      selectionLabel: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["primary"],
+      defaultAccountId: () => "primary",
+      inspectAccount: (cfg) =>
+        (cfg as { marker?: string }).marker === "source"
+          ? {
+              name: "Primary",
+              enabled: true,
+              configured: true,
+              tokenSource: "config",
+              tokenStatus: "configured_unavailable",
+            }
+          : {
+              name: "Primary",
+              enabled: true,
+              configured: true,
+              tokenSource: "config",
+              tokenStatus: "available",
+            },
+      resolveAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        configured: true,
+        tokenSource: "config",
+        tokenStatus: "available",
+      }),
+      isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      isEnabled: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
 function makeTokenPlugin(): ChannelPlugin {
   return {
     id: "token-only",
@@ -249,6 +295,40 @@ describe("buildChannelsTable - mattermost token summary", () => {
     expect(slackRow).toBeDefined();
     expect(slackRow?.state).toBe("warn");
     expect(slackRow?.detail).toContain("unavailable in this command path");
+
+    const slackDetails = table.details.find((detail) => detail.title === "Slack accounts");
+    expect(slackDetails).toBeDefined();
+    expect(slackDetails?.rows).toEqual([
+      {
+        Account: "primary (Primary)",
+        Notes: "bot:config · app:config · secret unavailable in this command path",
+        Status: "WARN",
+      },
+    ]);
+  });
+
+  it("treats status-only available credentials as resolved", async () => {
+    vi.mocked(listChannelPlugins).mockReturnValue([makeSourceUnavailableResolvedAvailablePlugin()]);
+
+    const table = await buildChannelsTable({ marker: "resolved", channels: {} } as never, {
+      showSecrets: false,
+      sourceConfig: { marker: "source", channels: {} } as never,
+    });
+
+    const discordRow = table.rows.find((row) => row.id === "discord");
+    expect(discordRow).toBeDefined();
+    expect(discordRow?.state).toBe("ok");
+    expect(discordRow?.detail).toBe("configured");
+
+    const discordDetails = table.details.find((detail) => detail.title === "Discord accounts");
+    expect(discordDetails).toBeDefined();
+    expect(discordDetails?.rows).toEqual([
+      {
+        Account: "primary (Primary)",
+        Notes: "token:config",
+        Status: "OK",
+      },
+    ]);
   });
 
   it("still reports single-token channels as ok", async () => {

@@ -108,6 +108,19 @@ export function hasConfiguredUnavailableCredentialStatus(account: unknown): bool
   );
 }
 
+export function hasResolvedCredentialValue(account: unknown): boolean {
+  const record = asRecord(account);
+  if (!record) {
+    return false;
+  }
+  return (
+    ["token", "botToken", "appToken", "userToken"].some((key) => {
+      const value = record[key];
+      return typeof value === "string" && value.trim().length > 0;
+    }) || CREDENTIAL_STATUS_KEYS.some((key) => readCredentialStatus(record, key) === "available")
+  );
+}
+
 export function projectCredentialSnapshotFields(
   account: unknown,
 ): Pick<

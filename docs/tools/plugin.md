@@ -200,6 +200,9 @@ Recommended `inspectAccount(...)` behavior:
   - `tokenSource`, `tokenStatus`
   - `botTokenSource`, `botTokenStatus`
   - `appTokenSource`, `appTokenStatus`
+- You do not need to return raw token values just to report read-only
+  availability. Returning `tokenStatus: "available"` (and the matching source
+  field) is enough for status-style commands.
 - Use `configured_unavailable` when a credential is configured via SecretRef but
   unavailable in the current command path.
 

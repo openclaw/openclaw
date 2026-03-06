@@ -1,4 +1,7 @@
-import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
+import {
+  hasConfiguredUnavailableCredentialStatus,
+  hasResolvedCredentialValue,
+} from "../../channels/account-snapshot-fields.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   buildChannelAccountSnapshot,
@@ -27,22 +30,6 @@ export type ChannelsStatusOptions = {
   probe?: boolean;
   timeout?: string;
 };
-
-function hasResolvedCredentialValue(account: unknown): boolean {
-  if (!account || typeof account !== "object" || Array.isArray(account)) {
-    return false;
-  }
-  const record = account as Record<string, unknown>;
-  return (
-    ["token", "botToken", "appToken", "userToken"].some((key) => {
-      const value = record[key];
-      return typeof value === "string" && value.trim().length > 0;
-    }) ||
-    ["tokenStatus", "botTokenStatus", "appTokenStatus", "userTokenStatus"].some(
-      (key) => record[key] === "available",
-    )
-  );
-}
 
 function appendEnabledConfiguredLinkedBits(bits: string[], account: Record<string, unknown>) {
   if (typeof account.enabled === "boolean") {

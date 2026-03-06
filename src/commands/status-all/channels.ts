@@ -1,5 +1,8 @@
 import fs from "node:fs";
-import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
+import {
+  hasConfiguredUnavailableCredentialStatus,
+  hasResolvedCredentialValue,
+} from "../../channels/account-snapshot-fields.js";
 import {
   buildChannelAccountSnapshot,
   formatChannelAllowFrom,
@@ -43,14 +46,6 @@ type ResolvedChannelAccountRowParams = {
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-
-function hasResolvedCredentialValue(account: unknown): boolean {
-  const rec = asRecord(account);
-  return ["token", "botToken", "appToken", "userToken"].some((key) => {
-    const value = rec[key];
-    return typeof value === "string" && value.trim().length > 0;
-  });
-}
 
 function summarizeSources(sources: Array<string | undefined>): {
   label: string;
@@ -113,21 +108,26 @@ async function resolveChannelAccountRow(
   const { plugin, cfg, sourceConfig, accountId } = params;
   const sourceInspectedAccount = inspectChannelAccount(plugin, sourceConfig, accountId);
   const resolvedInspectedAccount = inspectChannelAccount(plugin, cfg, accountId);
-  const inspectedAccount = resolvedInspectedAccount as {
+  const resolvedInspection = resolvedInspectedAccount as {
+    enabled?: boolean;
+    configured?: boolean;
+  } | null;
+  const sourceInspection = sourceInspectedAccount as {
     enabled?: boolean;
     configured?: boolean;
   } | null;
   const resolvedAccount = resolvedInspectedAccount ?? plugin.config.resolveAccount(cfg, accountId);
-  const account =
+  const useSourceUnavailableAccount = Boolean(
     sourceInspectedAccount &&
     hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
-    !hasResolvedCredentialValue(resolvedAccount)
-      ? sourceInspectedAccount
-      : resolvedAccount;
+    !hasResolvedCredentialValue(resolvedAccount),
+  );
+  const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
+  const selectedInspection = useSourceUnavailableAccount ? sourceInspection : resolvedInspection;
   const enabled =
-    inspectedAccount?.enabled ?? resolveChannelAccountEnabled({ plugin, account, cfg });
+    selectedInspection?.enabled ?? resolveChannelAccountEnabled({ plugin, account, cfg });
   const configured =
-    inspectedAccount?.configured ??
+    selectedInspection?.configured ??
     (await resolveChannelAccountConfigured({
       plugin,
       account,
