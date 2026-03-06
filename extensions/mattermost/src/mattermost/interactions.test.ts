@@ -5,6 +5,7 @@ import { resolveMattermostAccount } from "./accounts.js";
 import type { MattermostClient } from "./client.js";
 import {
   buildButtonAttachments,
+  computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
   generateInteractionToken,
   getInteractionCallbackUrl,
@@ -136,12 +137,22 @@ describe("callback URL registry", () => {
 
 describe("resolveInteractionCallbackUrl", () => {
   afterEach(() => {
-    setInteractionCallbackUrl("resolve-test", "");
+    for (const accountId of ["cached", "default", "acct", "myaccount"]) {
+      setInteractionCallbackUrl(accountId, "");
+    }
   });
 
   it("prefers cached URL from registry", () => {
     setInteractionCallbackUrl("cached", "http://cached:1234/path");
     expect(resolveInteractionCallbackUrl("cached")).toBe("http://cached:1234/path");
+  });
+
+  it("recomputes from config when bypassing the cache explicitly", () => {
+    setInteractionCallbackUrl("acct", "http://cached:1234/path");
+    const url = computeInteractionCallbackUrl("acct", {
+      gateway: { port: 9999, customBindHost: "gateway.internal" },
+    });
+    expect(url).toBe("http://gateway.internal:9999/mattermost/interactions/acct");
   });
 
   it("uses interactions.callbackBaseUrl when configured", () => {

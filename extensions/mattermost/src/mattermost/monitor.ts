@@ -44,8 +44,8 @@ import {
   type MattermostUser,
 } from "./client.js";
 import {
+  computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
-  resolveInteractionCallbackUrl,
   resolveInteractionCallbackPath,
   setInteractionCallbackUrl,
   setInteractionSecret,
@@ -456,7 +456,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   // Register HTTP callback endpoint for interactive button clicks.
   // Mattermost POSTs to this URL when a user clicks a button action.
   const interactionPath = resolveInteractionCallbackPath(account.accountId);
-  const callbackUrl = resolveInteractionCallbackUrl(account.accountId, {
+  // Recompute from config on each monitor start so reconnects or config reloads can refresh the
+  // cached callback URL for downstream callers such as `message action=send`.
+  const callbackUrl = computeInteractionCallbackUrl(account.accountId, {
     gateway: cfg.gateway,
     interactions: account.config.interactions,
   });

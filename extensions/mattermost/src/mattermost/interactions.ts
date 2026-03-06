@@ -67,17 +67,12 @@ function normalizeCallbackBaseUrl(baseUrl: string): string {
 
 /**
  * Resolve the interaction callback URL for an account.
- * Prefers the in-memory registered URL (set by the gateway monitor).
  * Falls back to computing it from interactions.callbackBaseUrl or gateway host config.
  */
-export function resolveInteractionCallbackUrl(
+export function computeInteractionCallbackUrl(
   accountId: string,
   cfg?: InteractionCallbackConfig,
 ): string {
-  const cached = callbackUrls.get(accountId);
-  if (cached) {
-    return cached;
-  }
   const path = resolveInteractionCallbackPath(accountId);
   // Prefer merged per-account config when available, but keep the top-level path for
   // callers/tests that still pass the root Mattermost config shape directly.
@@ -99,6 +94,22 @@ export function resolveInteractionCallbackUrl(
   }
 
   return `http://${host}:${port}${path}`;
+}
+
+/**
+ * Resolve the interaction callback URL for an account.
+ * Prefers the in-memory registered URL (set by the gateway monitor) so callers outside the
+ * monitor lifecycle can reuse the runtime-validated callback destination.
+ */
+export function resolveInteractionCallbackUrl(
+  accountId: string,
+  cfg?: InteractionCallbackConfig,
+): string {
+  const cached = callbackUrls.get(accountId);
+  if (cached) {
+    return cached;
+  }
+  return computeInteractionCallbackUrl(accountId, cfg);
 }
 
 // ── HMAC token management ──────────────────────────────────────────────
