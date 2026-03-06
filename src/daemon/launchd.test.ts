@@ -226,11 +226,12 @@ describe("launchd install", () => {
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`);
   });
 
-  it("restarts LaunchAgent with kickstart-first when service is healthy", async () => {
+  it("restarts LaunchAgent with kickstart-only when fast mode is enabled", async () => {
     const env = createDefaultLaunchdEnv();
     await restartLaunchAgent({
       env,
       stdout: new PassThrough(),
+      fast: true,
     });
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
@@ -243,11 +244,51 @@ describe("launchd install", () => {
     );
   });
 
-  it("falls back to bootout-bootstrap-kickstart when initial kickstart fails", async () => {
+  it("errors in fast mode when kickstart fails", async () => {
     const env = createDefaultLaunchdEnv();
-    state.printOutput = ["state = running", "pid = 4242"].join("\n");
     state.kickstartFailuresRemaining = 1;
     state.kickstartError = "Could not find service";
+
+    await expect(
+      restartLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        fast: true,
+      }),
+    ).rejects.toThrow(
+      "Fast restart failed — service may not be loaded. Run `openclaw gateway restart` (without --fast) to do a full reload.",
+    );
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const label = "ai.openclaw.gateway";
+    expect(state.launchctlCalls).toContainEqual(["kickstart", "-k", `${domain}/${label}`]);
+    expect(state.launchctlCalls.some((c) => c[0] === "bootout" || c[0] === "bootstrap")).toBe(
+      false,
+    );
+  });
+
+  it("errors in fast mode when service remains unhealthy after kickstart", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.printCode = 1;
+
+    await expect(
+      restartLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        fast: true,
+      }),
+    ).rejects.toThrow(
+      "Fast restart failed — service may not be loaded. Run `openclaw gateway restart` (without --fast) to do a full reload.",
+    );
+
+    expect(state.launchctlCalls.some((c) => c[0] === "bootout" || c[0] === "bootstrap")).toBe(
+      false,
+    );
+  });
+
+  it("uses bootout-bootstrap-kickstart flow by default", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.printOutput = ["state = running", "pid = 4242"].join("\n");
     const killSpy = vi.spyOn(process, "kill");
     killSpy
       .mockImplementationOnce(() => true)
@@ -265,57 +306,28 @@ describe("launchd install", () => {
       });
       await vi.advanceTimersByTimeAsync(250);
       await restartPromise;
+
       expect(killSpy).toHaveBeenCalledWith(4242, 0);
       const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
       const label = "ai.openclaw.gateway";
       const plistPath = resolveLaunchAgentPlistPath(env);
-      const firstKickstartIndex = state.launchctlCalls.findIndex(
-        (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === `${domain}/${label}`,
-      );
       const bootoutIndex = state.launchctlCalls.findIndex(
         (c) => c[0] === "bootout" && c[1] === `${domain}/${label}`,
       );
       const bootstrapIndex = state.launchctlCalls.findIndex(
         (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
       );
-      const secondKickstartIndex = state.launchctlCalls.findLastIndex(
+      const kickstartIndex = state.launchctlCalls.findIndex(
         (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === `${domain}/${label}`,
       );
-      expect(firstKickstartIndex).toBeGreaterThanOrEqual(0);
-      expect(bootoutIndex).toBeGreaterThan(firstKickstartIndex);
+
+      expect(bootoutIndex).toBeGreaterThanOrEqual(0);
       expect(bootstrapIndex).toBeGreaterThan(bootoutIndex);
-      expect(secondKickstartIndex).toBeGreaterThan(bootstrapIndex);
+      expect(kickstartIndex).toBeGreaterThan(bootstrapIndex);
     } finally {
       vi.useRealTimers();
       killSpy.mockRestore();
     }
-  });
-
-  it("falls back when kickstart succeeds but service remains unloaded", async () => {
-    const env = createDefaultLaunchdEnv();
-    state.printCode = 1;
-
-    await restartLaunchAgent({
-      env,
-      stdout: new PassThrough(),
-    });
-
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const label = "ai.openclaw.gateway";
-    const plistPath = resolveLaunchAgentPlistPath(env);
-    const kickstartIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === `${domain}/${label}`,
-    );
-    const bootoutIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "bootout" && c[1] === `${domain}/${label}`,
-    );
-    const bootstrapIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
-    );
-
-    expect(kickstartIndex).toBeGreaterThanOrEqual(0);
-    expect(bootoutIndex).toBeGreaterThan(kickstartIndex);
-    expect(bootstrapIndex).toBeGreaterThan(bootoutIndex);
   });
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {

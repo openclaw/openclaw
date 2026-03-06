@@ -778,6 +778,7 @@ Notes:
 - `gateway status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans). Profile-named OpenClaw services are treated as first-class and aren't flagged as "extra".
 - `gateway status` prints which config path the CLI uses vs which config the service likely uses (service env), plus the resolved probe target URL.
 - `gateway install|uninstall|start|stop|restart` support `--json` for scripting (default output stays human-friendly).
+- `gateway restart --fast` (launchd only) performs a kickstart-only restart without reloading plist config; use plain `gateway restart` for a full reload.
 - `gateway install` defaults to Node runtime; bun is **not recommended** (WhatsApp/Telegram bugs).
 - `gateway install` options: `--port`, `--runtime`, `--token`, `--force`, `--json`.
 
