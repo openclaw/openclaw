@@ -540,11 +540,6 @@ export function renderDeleteAgentModal(props: DeleteAgentModalProps) {
   const inputMatches = props.confirmInput.trim() === props.displayName;
   return html`
     <div class="agent-delete-overlay" role="dialog" aria-modal="true" aria-labelledby="agent-delete-title" aria-live="polite" tabindex="-1"
-      ${ref((el) => {
-        if (el instanceof HTMLElement) {
-          el.focus();
-        }
-      })}
       @keydown=${(e: KeyboardEvent) => {
         if (e.key === "Escape" && !props.busy) {
           props.onClose();
@@ -566,6 +561,12 @@ export function renderDeleteAgentModal(props: DeleteAgentModalProps) {
             placeholder=${props.displayName}
             ?disabled=${props.busy}
             @input=${(e: Event) => props.onInputChange((e.target as HTMLInputElement).value)}
+            ${ref((el) => {
+              if (el instanceof HTMLInputElement && !el.dataset.focused) {
+                el.dataset.focused = "1";
+                el.focus();
+              }
+            })}
           />
         </label>
         <div class="agent-delete-actions">
