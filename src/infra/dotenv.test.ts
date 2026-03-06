@@ -152,9 +152,12 @@ describe("loadDotEnv", () => {
         delete process.env.FALLBACK_OK;
 
         const configSpy = vi.spyOn(dotenv, "configDotenv");
-        configSpy.mockImplementation((options) => {
+        configSpy.mockImplementation((options): ReturnType<typeof dotenv.configDotenv> => {
           if (typeof options?.path === "string" && options.path === path.join(cwdDir, ".env")) {
-            return { parsed: {}, error: new Error("boom") };
+            return {
+              parsed: {},
+              error: Object.assign(new Error("boom"), { code: "MISSING_DATA" as const }),
+            };
           }
           return { parsed: { FALLBACK_OK: "from-global" } };
         });
