@@ -12,6 +12,36 @@ type Subscriber = (locale: Locale) => void;
 
 export { SUPPORTED_LOCALES, isSupportedLocale };
 
+type LocaleStorage = Pick<Storage, "getItem" | "setItem">;
+
+function resolveLocaleStorage(): LocaleStorage | null {
+  if (typeof localStorage !== "undefined") {
+    const storage = localStorage as Partial<Storage>;
+    if (typeof storage.getItem === "function" && typeof storage.setItem === "function") {
+      return storage as LocaleStorage;
+    }
+  }
+
+  if (typeof window !== "undefined" && window.localStorage) {
+    const storage = window.localStorage;
+    if (typeof storage.getItem === "function" && typeof storage.setItem === "function") {
+      return storage;
+    }
+  }
+
+  return null;
+}
+
+function resolveNavigatorLanguage(): string {
+  if (typeof navigator !== "undefined" && typeof navigator.language === "string") {
+    return navigator.language;
+  }
+  if (typeof window !== "undefined" && typeof window.navigator?.language === "string") {
+    return window.navigator.language;
+  }
+  return DEFAULT_LOCALE;
+}
+
 class I18nManager {
   private locale: Locale = DEFAULT_LOCALE;
   private translations: Partial<Record<Locale, TranslationMap>> = { [DEFAULT_LOCALE]: en };
@@ -22,11 +52,11 @@ class I18nManager {
   }
 
   private resolveInitialLocale(): Locale {
-    const saved = localStorage.getItem("openclaw.i18n.locale");
+    const saved = resolveLocaleStorage()?.getItem("openclaw.i18n.locale");
     if (isSupportedLocale(saved)) {
       return saved;
     }
-    return resolveNavigatorLocale(navigator.language);
+    return resolveNavigatorLocale(resolveNavigatorLanguage());
   }
 
   private loadLocale() {
@@ -64,7 +94,7 @@ class I18nManager {
     }
 
     this.locale = locale;
-    localStorage.setItem("openclaw.i18n.locale", locale);
+    resolveLocaleStorage()?.setItem("openclaw.i18n.locale", locale);
     this.notify();
   }
 
