@@ -31,6 +31,12 @@
           - "src/imessage/**"
           - "extensions/imessage/**"
           - "docs/channels/imessage.md"
+"channel: kudosity-sms":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/kudosity-sms/**"
+          - "docs/channels/kudosity-sms.md"
+
 "channel: line":
   - changed-files:
       - any-glob-to-any-file:

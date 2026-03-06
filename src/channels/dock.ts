@@ -547,6 +547,12 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
         buildIMessageThreadToolContext({ context, hasRepliedRef }),
     },
   },
+  "kudosity-sms": {
+    id: "kudosity-sms",
+    capabilities: {
+      chatTypes: ["direct"],
+    },
+  },
 };
 
 function buildDockFromPlugin(plugin: ChannelPlugin): ChannelDock {

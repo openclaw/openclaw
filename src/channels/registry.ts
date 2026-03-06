@@ -13,6 +13,7 @@ export const CHAT_CHANNEL_ORDER = [
   "slack",
   "signal",
   "imessage",
+  "kudosity-sms",
 ] as const;
 
 export type ChatChannelId = (typeof CHAT_CHANNEL_ORDER)[number];
@@ -107,6 +108,17 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     blurb: "this is still a work in progress.",
     systemImage: "message.fill",
   },
+  "kudosity-sms": {
+    id: "kudosity-sms",
+    label: "SMS Kudosity",
+    selectionLabel: "SMS Kudosity",
+    detailLabel: "SMS Kudosity",
+    docsPath: "/channels/kudosity-sms",
+    docsLabel: "kudosity-sms",
+    blurb:
+      "cloud SMS via the Kudosity API — works on any phone, no app needed. https://developers.kudosity.com",
+    systemImage: "phone.badge.waveform",
+  },
 };
 
 export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
@@ -114,6 +126,8 @@ export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
   "internet-relay-chat": "irc",
   "google-chat": "googlechat",
   gchat: "googlechat",
+  kudosity: "kudosity-sms",
+  sms: "kudosity-sms",
 };
 
 const normalizeChannelKey = (raw?: string | null): string | undefined => {

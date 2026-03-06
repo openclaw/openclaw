@@ -1,0 +1,25 @@
+{
+  "name": "@openclaw/kudosity-sms",
+  "version": "2026.3.2",
+  "private": true,
+  "description": "Kudosity SMS channel plugin for OpenClaw — cloud SMS powered by the Kudosity API",
+  "keywords": [
+    "channel",
+    "kudosity",
+    "messaging",
+    "openclaw",
+    "sms"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "index.ts",
+  "dependencies": {},
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

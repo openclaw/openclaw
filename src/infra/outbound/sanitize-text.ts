@@ -20,6 +20,7 @@ const PLAIN_TEXT_SURFACES = new Set([
   "telegram",
   "imessage",
   "googlechat",
+  "kudosity-sms",
 ]);
 
 /** Returns `true` when the channel cannot render raw HTML. */
