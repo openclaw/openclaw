@@ -840,15 +840,19 @@ export async function updateLastRoute(params: {
           groupResolution: params.groupResolution,
         })
       : null;
+    // Route updates must not refresh activity timestamps — session freshness
+    // (daily/idle reset) is evaluated against the last actual agent turn, not
+    // the last inbound delivery route update.  Using mergeSessionEntryPreserveActivity
+    // mirrors the same policy already applied in recordSessionMetaFromInbound.
+    // See: https://github.com/openclaw/openclaw/issues/38262
     const basePatch: Partial<SessionEntry> = {
-      updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       deliveryContext: normalized.deliveryContext,
       lastChannel: normalized.lastChannel,
       lastTo: normalized.lastTo,
       lastAccountId: normalized.lastAccountId,
       lastThreadId: normalized.lastThreadId,
     };
-    const next = mergeSessionEntry(
+    const next = mergeSessionEntryPreserveActivity(
       existing,
       metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
     );
