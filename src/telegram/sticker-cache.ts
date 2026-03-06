@@ -210,15 +210,19 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
     return preferred ?? entries[0];
   };
 
+  // 1. Try the agent's default model directly (works for custom/proxy providers too)
   let resolved = null as { provider: string; model?: string } | null;
-  if (
-    activeModel &&
-    VISION_PROVIDERS.includes(activeModel.provider as (typeof VISION_PROVIDERS)[number]) &&
-    (await hasProviderKey(activeModel.provider))
-  ) {
+  if (activeModel && (await hasProviderKey(activeModel.provider))) {
     resolved = activeModel;
   }
 
+  // 2. If default model isn't in the catalog but has a key, assume vision support
+  //    (custom providers like OpenAI-compatible proxies typically support vision)
+  if (!resolved && !activeModel && (await hasProviderKey(defaultModel.provider))) {
+    resolved = { provider: defaultModel.provider, model: defaultModel.model };
+  }
+
+  // 3. Fall back to well-known vision providers
   if (!resolved) {
     for (const provider of VISION_PROVIDERS) {
       if (!(await hasProviderKey(provider))) {
@@ -232,6 +236,7 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
     }
   }
 
+  // 4. Last resort: auto-resolve from image model registry
   if (!resolved) {
     resolved = await resolveAutoImageModel({
       cfg,
