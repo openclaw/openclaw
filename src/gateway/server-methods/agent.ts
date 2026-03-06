@@ -3,14 +3,13 @@ import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
+import { resolveSessionKeyForRequest } from "../../commands/agent/session.js";
 import { loadConfig } from "../../config/config.js";
 import {
-  loadSessionStore,
   mergeSessionEntry,
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
   resolveAgentMainSessionKey,
-  resolveStorePath,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -487,13 +486,12 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     if (!resolvedSessionKey && resolvedSessionId) {
       const effectiveCfg = cfgForAgent ?? cfg;
-      const storePath = resolveStorePath(effectiveCfg.session?.store);
-      const store = loadSessionStore(storePath);
-      const foundStoreKey = Object.entries(store).find(
-        ([, entry]) => entry?.sessionId === resolvedSessionId,
-      )?.[0];
-      if (foundStoreKey) {
-        resolvedSessionKey = foundStoreKey;
+      const sessionResolution = resolveSessionKeyForRequest({
+        cfg: effectiveCfg,
+        sessionId: resolvedSessionId,
+      });
+      if (sessionResolution.sessionKey) {
+        resolvedSessionKey = sessionResolution.sessionKey;
       }
     }
 

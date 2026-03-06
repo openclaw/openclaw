@@ -814,6 +814,35 @@ describe("strict model resolution", () => {
     });
   });
 
+  it("does not treat allowlist model refs as configured providers in strict mode", () => {
+    const cfg = {
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "foo/bar",
+          },
+          models: {
+            "foo/bar": { alias: "bar" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [],
+    });
+
+    expect(state.status).toBe("blocked");
+    if (state.status === "blocked") {
+      expect(state.code).toBe("provider_missing");
+    }
+  });
+
   it("keeps resolution isolated across multiple agents", () => {
     const cfg = {
       models: {

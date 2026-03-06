@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   sessionsResetHandler: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
   resolveGatewayAgentModelState: vi.fn(),
+  listAgentIds: vi.fn(() => ["main", "ops"]),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -56,7 +57,7 @@ vi.mock("../../config/config.js", async () => {
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentIds: () => ["main"],
+  listAgentIds: () => mocks.listAgentIds(),
   resolveAgentEffectiveModelPrimary: () => undefined,
 }));
 
@@ -289,6 +290,7 @@ describe("gateway agent handler", () => {
     vi.clearAllMocks();
     mocks.loadConfigReturn = {};
     mocks.loadSessionStore.mockReturnValue({});
+    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
     mocks.resolveGatewayAgentModelState.mockReset();
     mocks.resolveGatewayAgentModelState.mockResolvedValue({
       status: "ready",
@@ -490,6 +492,38 @@ describe("gateway agent handler", () => {
         idempotencyKey: "ops-session-idem-1",
       },
       { reqId: "ops-session-remap-1" },
+    );
+
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string } | undefined;
+    expect(call?.sessionKey).toBe("agent:ops:main");
+    expect(mocks.resolveGatewayAgentModelState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+      }),
+    );
+  });
+
+  it("resolves sessionId across agent stores before strict blocking", async () => {
+    mocks.loadSessionStore.mockImplementation((storePath: string) => {
+      if (storePath.includes("ops")) {
+        return {
+          "agent:ops:main": { sessionId: "ops-session-id", updatedAt: 1 },
+        };
+      }
+      return {};
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "resume across stores",
+        sessionId: "ops-session-id",
+        idempotencyKey: "ops-cross-store-idem-1",
+      },
+      { reqId: "ops-cross-store-1" },
     );
 
     const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string } | undefined;
