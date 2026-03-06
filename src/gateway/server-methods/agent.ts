@@ -12,6 +12,8 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
@@ -669,6 +671,19 @@ export const agentHandlers: GatewayRequestHandlers = {
         // Send a second res frame (same id) so TS clients with expectFinal can wait.
         // Swift clients will typically treat the first res as the result and ignore this.
         respond(true, payload, undefined, { runId });
+        fireAndForgetHook(
+          triggerInternalHook(
+            createInternalHookEvent("session", "end", resolvedSessionKey ?? "", {
+              sessionId: resolvedSessionId ?? "",
+              agentId: agentId ?? resolveAgentIdFromSessionKey(resolvedSessionKey ?? ""),
+              status: "ok",
+              trigger: "webhook",
+              durationMs: Date.now() - accepted.acceptedAt,
+              runId,
+            }),
+          ),
+          "session:end hook (webhook ok)",
+        );
       })
       .catch((err) => {
         const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
@@ -691,6 +706,20 @@ export const agentHandlers: GatewayRequestHandlers = {
           runId,
           error: formatForLog(err),
         });
+        fireAndForgetHook(
+          triggerInternalHook(
+            createInternalHookEvent("session", "end", resolvedSessionKey ?? "", {
+              sessionId: resolvedSessionId ?? "",
+              agentId: agentId ?? resolveAgentIdFromSessionKey(resolvedSessionKey ?? ""),
+              status: "error",
+              error: String(err),
+              trigger: "webhook",
+              durationMs: Date.now() - accepted.acceptedAt,
+              runId,
+            }),
+          ),
+          "session:end hook (webhook error)",
+        );
       });
   },
   "agent.identity.get": ({ params, respond }) => {
