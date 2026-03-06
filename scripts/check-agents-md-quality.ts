@@ -63,7 +63,7 @@ function checkSecrets(lines: string[]): Finding[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     // Skip comment lines
-    if (line.trim().startsWith("//") || line.trim().startsWith("#")) continue;
+    if (line.trim().startsWith("//")) continue;
     for (const { name, pattern } of SECRET_PATTERNS) {
       if (pattern.test(line)) {
         findings.push({
