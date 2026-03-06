@@ -10,6 +10,11 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+const SecretRefSchema = z
+  .union([z.string(), z.object({ secretRef: z.string() })])
+  .optional()
+  .register(sensitive);
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -248,13 +253,13 @@ export const ToolsWebSearchSchema = z
         z.literal("kimi"),
       ])
       .optional(),
-    apiKey: z.string().optional().register(sensitive),
+    apiKey: SecretRefSchema,
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     perplexity: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretRefSchema,
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -262,7 +267,7 @@ export const ToolsWebSearchSchema = z
       .optional(),
     grok: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretRefSchema,
         model: z.string().optional(),
         inlineCitations: z.boolean().optional(),
       })
@@ -270,14 +275,14 @@ export const ToolsWebSearchSchema = z
       .optional(),
     gemini: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretRefSchema,
         model: z.string().optional(),
       })
       .strict()
       .optional(),
     kimi: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretRefSchema,
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
