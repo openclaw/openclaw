@@ -44,7 +44,11 @@ export function getInteractionCallbackUrl(accountId: string): string | undefined
   return callbackUrls.get(accountId);
 }
 
-type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels">;
+type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels"> & {
+  interactions?: {
+    callbackBaseUrl?: string;
+  };
+};
 
 export function resolveInteractionCallbackPath(accountId: string): string {
   return `/mattermost/interactions/${accountId}`;
@@ -75,7 +79,11 @@ export function resolveInteractionCallbackUrl(
     return cached;
   }
   const path = resolveInteractionCallbackPath(accountId);
-  const callbackBaseUrl = cfg?.channels?.mattermost?.interactions?.callbackBaseUrl?.trim();
+  // Prefer merged per-account config when available, but keep the top-level path for
+  // callers/tests that still pass the root Mattermost config shape directly.
+  const callbackBaseUrl =
+    cfg?.interactions?.callbackBaseUrl?.trim() ??
+    cfg?.channels?.mattermost?.interactions?.callbackBaseUrl?.trim();
   if (callbackBaseUrl) {
     return `${normalizeCallbackBaseUrl(callbackBaseUrl)}${path}`;
   }

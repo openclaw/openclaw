@@ -1,6 +1,7 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { setMattermostRuntime } from "../runtime.js";
+import { resolveMattermostAccount } from "./accounts.js";
 import type { MattermostClient } from "./client.js";
 import {
   buildButtonAttachments,
@@ -165,6 +166,35 @@ describe("resolveInteractionCallbackUrl", () => {
           },
         },
       },
+    });
+    expect(url).toBe("https://gateway.example.com/root/mattermost/interactions/acct");
+  });
+
+  it("uses merged per-account interactions.callbackBaseUrl", () => {
+    const cfg = {
+      gateway: { port: 9999 },
+      channels: {
+        mattermost: {
+          accounts: {
+            acct: {
+              botToken: "bot-token",
+              baseUrl: "https://chat.example.com",
+              interactions: {
+                callbackBaseUrl: "https://gateway.example.com/root",
+              },
+            },
+          },
+        },
+      },
+    };
+    const account = resolveMattermostAccount({
+      cfg,
+      accountId: "acct",
+      allowUnresolvedSecretRef: true,
+    });
+    const url = resolveInteractionCallbackUrl(account.accountId, {
+      gateway: cfg.gateway,
+      interactions: account.config.interactions,
     });
     expect(url).toBe("https://gateway.example.com/root/mattermost/interactions/acct");
   });

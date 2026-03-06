@@ -224,6 +224,8 @@ Config:
 - `channels.mattermost.interactions.callbackBaseUrl`: optional external base URL for button
   callbacks (for example `https://gateway.example.com`). Use this when Mattermost cannot
   reach the gateway at its bind host directly.
+- In multi-account setups, you can also set the same field under
+  `channels.mattermost.accounts.<id>.interactions.callbackBaseUrl`.
 - If `interactions.callbackBaseUrl` is omitted, OpenClaw derives the callback URL from
   `gateway.customBindHost` + `gateway.port`, then falls back to `http://localhost:<port>`.
 - Reachability rule: the button callback URL must be reachable from the Mattermost server.

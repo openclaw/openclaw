@@ -456,7 +456,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   // Register HTTP callback endpoint for interactive button clicks.
   // Mattermost POSTs to this URL when a user clicks a button action.
   const interactionPath = resolveInteractionCallbackPath(account.accountId);
-  const callbackUrl = resolveInteractionCallbackUrl(account.accountId, cfg);
+  const callbackUrl = resolveInteractionCallbackUrl(account.accountId, {
+    gateway: cfg.gateway,
+    interactions: account.config.interactions,
+  });
   setInteractionCallbackUrl(account.accountId, callbackUrl);
 
   try {
