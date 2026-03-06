@@ -319,7 +319,7 @@ export function applyChutesProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   // but init.sh uses 'chutes/' + m.id.
 
   // Add aliases from init.sh
-  models["chutes-fast"] = { alias: "chutes/zai-org/GLM-4.7-Flash" };
+  models["chutes-fast"] = { alias: "chutes/zai-org/GLM-4.7-FP8" };
   models["chutes-vision"] = { alias: "chutes/chutesai/Mistral-Small-3.2-24B-Instruct-2506" };
   models["chutes-pro"] = { alias: "chutes/deepseek-ai/DeepSeek-V3.2-TEE" };
 

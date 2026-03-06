@@ -92,7 +92,34 @@ describe("chutes-models", () => {
       return Promise.resolve({
         ok: true,
         json: async () => ({
-          data: CHUTES_MODEL_CATALOG.slice(0, 3),
+          data: [
+            {
+              id: "Qwen/Qwen3-32B",
+              name: "Qwen/Qwen3-32B",
+              supported_features: ["reasoning"],
+              input_modalities: ["text"],
+              context_length: 40960,
+              max_output_length: 40960,
+              pricing: { prompt: 0.08, completion: 0.24 },
+            },
+            {
+              id: "unsloth/Mistral-Nemo-Instruct-2407",
+              name: "unsloth/Mistral-Nemo-Instruct-2407",
+              input_modalities: ["text"],
+              context_length: 131072,
+              max_output_length: 131072,
+              pricing: { prompt: 0.02, completion: 0.04 },
+            },
+            {
+              id: "deepseek-ai/DeepSeek-V3-0324-TEE",
+              name: "deepseek-ai/DeepSeek-V3-0324-TEE",
+              supported_features: ["reasoning"],
+              input_modalities: ["text"],
+              context_length: 131072,
+              max_output_length: 65536,
+              pricing: { prompt: 0.28, completion: 0.42 },
+            },
+          ],
         }),
       });
     });
