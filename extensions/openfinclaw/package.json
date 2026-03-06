@@ -1,6 +1,6 @@
 {
   "name": "@openfinclaw/openfinclaw",
-  "version": "2026.3.6",
+  "version": "0.0.2",
   "description": "OpenFinClaw - Complete financial tools suite for OpenClaw (strategy builder, backtest, market data, trading)",
   "keywords": [
     "backtest",
@@ -21,27 +21,20 @@
   "files": [
     "skills",
     "openclaw.plugin.json",
-    "README.md"
+    "README.md",
+    "index.ts"
   ],
   "type": "module",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org"
   },
-  "dependencies": {
-    "@openfinclaw/fin-backtest-remote": "workspace:*",
-    "@openfinclaw/fin-core": "workspace:*",
-    "@openfinclaw/fin-market-data": "workspace:*",
-    "@openfinclaw/fin-shared-types": "workspace:*",
-    "@openfinclaw/fin-strategy-engine": "workspace:*"
-  },
-  "devDependencies": {
-    "openfinclaw": "workspace:*"
-  },
   "peerDependencies": {
     "openfinclaw": ">=2026.2.0"
   },
   "openclaw": {
-    "extensions": []
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }

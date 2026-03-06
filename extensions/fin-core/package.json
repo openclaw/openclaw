@@ -1,6 +1,6 @@
 {
   "name": "@openfinclaw/fin-core",
-  "version": "2026.3.6",
+  "version": "0.0.1",
   "description": "OpenFinClaw core financial infrastructure — types, exchange registry, risk controller",
   "keywords": [
     "crypto",

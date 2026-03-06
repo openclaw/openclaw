@@ -1,6 +1,6 @@
 {
   "name": "@openfinclaw/fin-backtest-remote",
-  "version": "2026.3.6",
+  "version": "0.0.1",
   "description": "OpenFinClaw remote backtest agent — submit, poll, and fetch reports via Findoo Backtest API",
   "keywords": [
     "backtest",

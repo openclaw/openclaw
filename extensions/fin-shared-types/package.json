@@ -1,6 +1,6 @@
 {
   "name": "@openfinclaw/fin-shared-types",
-  "version": "2026.3.6",
+  "version": "0.0.1",
   "description": "Shared types, interfaces, and pure functions used across fin-* extensions",
   "keywords": [
     "financial",
