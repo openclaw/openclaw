@@ -488,10 +488,12 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
           input: hasVision ? ["text", "image"] : ["text"],
           cost: VENICE_DEFAULT_COST,
           contextWindow: apiModel.model_spec.availableContextTokens || 128000,
-          maxTokens: 8192,
+          maxTokens: 4096, // See: https://github.com/openclaw/openclaw/issues/38168
           // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
           compat: {
             supportsUsageInStreaming: false,
+            supportsFunctionCalling:
+              apiModel.model_spec.capabilities.supportsFunctionCalling ?? false,
           },
         });
       }
