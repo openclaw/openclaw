@@ -224,6 +224,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.gemini.model": "Gemini Search Model",
   "tools.web.search.grok.apiKey": "Grok Search API Key",
   "tools.web.search.grok.model": "Grok Search Model",
+  "tools.web.search.brave.mode": "Brave Search Mode",
   "tools.web.search.kimi.apiKey": "Kimi Search API Key",
   "tools.web.search.kimi.baseUrl": "Kimi Search Base URL",
   "tools.web.search.kimi.model": "Kimi Search Model",
