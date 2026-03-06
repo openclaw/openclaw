@@ -194,14 +194,19 @@ function resolveConfigRestartRequest(params: unknown): {
 } {
   const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
 
-  // Extract threadId from the session key (reliable — derived from key, not store).
   // For deliveryContext, prefer the live context passed by the client over
   // extractDeliveryInfo(), which reads the persisted session store. Heartbeat
   // runs overwrite the store to { channel: "webchat", to: "heartbeat" }, so
   // reading it here would produce stale routing data. See #18612.
-  const { deliveryContext: extractedDeliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+  //
+  // For threadId, also prefer the client-forwarded value when present. The
+  // session-key-derived threadId is empty for Slack sessions where replies are
+  // threaded (replyToMode="all") but the session key is not :thread:-scoped.
+  const { deliveryContext: extractedDeliveryContext, threadId: extractedThreadId } =
+    extractDeliveryInfo(sessionKey);
   const paramsDeliveryContext = parseDeliveryContextFromParams(params);
   const deliveryContext = paramsDeliveryContext ?? extractedDeliveryContext;
+  const threadId = paramsDeliveryContext?.threadId ?? extractedThreadId;
 
   return {
     sessionKey,

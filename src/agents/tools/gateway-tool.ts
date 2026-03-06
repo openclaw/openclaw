@@ -119,11 +119,20 @@ export function createGatewayTool(opts?: {
         const isTargetingOtherSession =
           explicitSessionKey != null &&
           explicitSessionKey !== (opts?.agentSessionKey?.trim() || undefined);
+        // Only forward live context when both channel and to are present.
+        // Forwarding a partial context (channel without to) causes the server
+        // to write a sentinel without `to`, and scheduleRestartSentinelWake
+        // bails on `if (!channel || !to)`, silently degrading to a system
+        // event with no delivery/resume. See #18612.
         const liveContext =
-          !isTargetingOtherSession && opts?.agentChannel != null && String(opts.agentChannel).trim()
+          !isTargetingOtherSession &&
+          opts?.agentChannel != null &&
+          String(opts.agentChannel).trim() &&
+          opts?.agentTo != null &&
+          String(opts.agentTo).trim()
             ? {
                 channel: String(opts.agentChannel).trim(),
-                to: opts?.agentTo ?? undefined,
+                to: String(opts.agentTo).trim(),
                 accountId: opts?.agentAccountId ?? undefined,
               }
             : undefined;
@@ -179,12 +188,25 @@ export function createGatewayTool(opts?: {
       // parseSessionThreadInfo), which encodes it as :thread:N or :topic:N.
       // That parsing is not subject to heartbeat contamination, so there is
       // no need to forward it through the RPC params.
+      // Only forward live context when both channel and to are present.
+      // Forwarding a partial context (channel without to) causes the server
+      // to prefer an incomplete deliveryContext over extractDeliveryInfo(),
+      // writing a sentinel without `to` that scheduleRestartSentinelWake
+      // rejects, silently degrading to a system event. See #18612.
+      //
+      // threadId is included so the server can use it for sessions where the
+      // session key is not :thread:-scoped (e.g. Slack replyToMode="all"), in
+      // which case the session-key-derived threadId would be empty.
       const liveDeliveryContextForRpc =
-        opts?.agentChannel != null && String(opts.agentChannel).trim()
+        opts?.agentChannel != null &&
+        String(opts.agentChannel).trim() &&
+        opts?.agentTo != null &&
+        String(opts.agentTo).trim()
           ? {
               channel: String(opts.agentChannel).trim(),
-              to: opts?.agentTo ?? undefined,
+              to: String(opts.agentTo).trim(),
               accountId: opts?.agentAccountId ?? undefined,
+              threadId: opts?.agentThreadId != null ? String(opts.agentThreadId) : undefined,
             }
           : undefined;
 

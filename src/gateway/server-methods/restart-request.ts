@@ -8,7 +8,7 @@
  */
 export function parseDeliveryContextFromParams(
   params: unknown,
-): { channel?: string; to?: string; accountId?: string } | undefined {
+): { channel?: string; to?: string; accountId?: string; threadId?: string } | undefined {
   const raw = (params as { deliveryContext?: unknown }).deliveryContext;
   if (!raw || typeof raw !== "object") {
     return undefined;
@@ -25,10 +25,16 @@ export function parseDeliveryContextFromParams(
     typeof (raw as { accountId?: unknown }).accountId === "string"
       ? (raw as { accountId: string }).accountId.trim() || undefined
       : undefined;
-  if (!channel && !to) {
+  const threadId =
+    typeof (raw as { threadId?: unknown }).threadId === "string"
+      ? (raw as { threadId: string }).threadId.trim() || undefined
+      : undefined;
+  // Require both channel and to — a partial context can overwrite a complete
+  // extracted route and produce a non-routable sentinel. See #18612.
+  if (!channel || !to) {
     return undefined;
   }
-  return { channel, to, accountId };
+  return { channel, to, accountId, threadId };
 }
 
 export function parseRestartRequestParams(params: unknown): {
