@@ -893,7 +893,9 @@ extension TalkModeRuntime {
             let ui = snap.config?["ui"]?.dictionaryValue
             let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             await MainActor.run {
-                AppStateStore.shared.seamColorHex = rawSeam.isEmpty ? nil : rawSeam
+                let seamColorHex = rawSeam.isEmpty ? nil : rawSeam
+                AppStateStore.shared.seamColorHex = seamColorHex
+                TalkOverlayController.shared.updateSeamColor(seamColorHex)
             }
             let voice = activeConfig?["voiceId"]?.stringValue
             let rawAliases = activeConfig?["voiceAliases"]?.dictionaryValue

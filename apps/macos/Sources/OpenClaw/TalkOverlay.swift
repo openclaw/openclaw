@@ -19,6 +19,7 @@ final class TalkOverlayController {
         var phase: TalkModePhase = .idle
         var isPaused: Bool = false
         var level: Double = 0
+        var seamColorHex: String?
     }
 
     var model = Model()
@@ -28,6 +29,7 @@ final class TalkOverlayController {
 
     func present() {
         self.ensureWindow()
+        self.model.seamColorHex = AppStateStore.shared.seamColorHex
         self.hostingView?.rootView = TalkOverlayView(controller: self)
         let target = self.targetFrame()
         OverlayPanelFactory.present(
@@ -69,6 +71,11 @@ final class TalkOverlayController {
     func updateLevel(_ level: Double) {
         guard self.model.isVisible else { return }
         self.model.level = max(0, min(1, level))
+    }
+
+    func updateSeamColor(_ seamColorHex: String?) {
+        guard self.model.seamColorHex != seamColorHex else { return }
+        self.model.seamColorHex = seamColorHex
     }
 
     func currentWindowOrigin() -> CGPoint? {
