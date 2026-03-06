@@ -447,6 +447,38 @@ describe("subagent registry steer restarts", () => {
     );
   });
 
+  it("recovers announce cleanup when completion arrives after a kill marker", async () => {
+    const childSessionKey = "agent:main:subagent:kill-race";
+    registerRun({
+      runId: "run-kill-race",
+      childSessionKey,
+      task: "race test",
+    });
+
+    expect(mod.markSubagentRunTerminated({ runId: "run-kill-race", reason: "manual kill" })).toBe(
+      1,
+    );
+    expect(listMainRuns()[0]?.suppressAnnounceReason).toBe("killed");
+    expect(listMainRuns()[0]?.cleanupHandled).toBe(true);
+    expect(typeof listMainRuns()[0]?.cleanupCompletedAt).toBe("number");
+
+    emitLifecycleEnd("run-kill-race");
+    await flushAnnounce();
+    await flushAnnounce();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
+    expect(announce.childRunId).toBe("run-kill-race");
+
+    const run = listMainRuns()[0];
+    expect(run?.endedReason).toBe("subagent-complete");
+    expect(run?.outcome?.status).not.toBe("error");
+    expect(run?.suppressAnnounceReason).toBeUndefined();
+    expect(run?.cleanupHandled).toBe(true);
+    expect(typeof run?.cleanupCompletedAt).toBe("number");
+    expect(runSubagentEndedHookMock).toHaveBeenCalledTimes(1);
+  });
+
   it("retries deferred parent cleanup after a descendant announces", async () => {
     let parentAttempts = 0;
     announceSpy.mockImplementation(async (params: unknown) => {
