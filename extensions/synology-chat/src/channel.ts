@@ -44,8 +44,7 @@ export function createSynologyChatPlugin() {
     cfg: any,
     accountId?: string,
   ): Promise<ResolvedSynologyChatAccount> => {
-    const rt = getSynologyRuntime();
-    const effectiveCfg = cfg ?? (await rt.config.loadConfig());
+    const effectiveCfg = cfg ?? (await getSynologyRuntime().config.loadConfig());
     return resolveAccount(effectiveCfg ?? {}, accountId);
   };
 
