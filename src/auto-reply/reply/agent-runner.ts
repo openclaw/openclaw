@@ -15,6 +15,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -495,16 +496,75 @@ export async function runReplyAgent(params: {
         to: sessionCtx.To,
       }),
       accountId: sessionCtx.AccountId,
+      // Apply errorPolicy only to non-direct (group) chats
+      errorPolicy:
+        sessionCtx.ChatType === "direct" ? undefined : cfg.channels?.defaults?.errorPolicy,
     });
-    const { replyPayloads } = payloadResult;
+    const { replyPayloads, errorReactionRequested } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
-    if (replyPayloads.length === 0) {
+    // Handle react-only mode: send ⚠️ emoji reaction instead of error text
+    // Skip for slash commands and component interactions - their MessageSid is interaction id, not message id
+    let reactionFailed = false;
+    if (
+      errorReactionRequested &&
+      sessionCtx.MessageSid &&
+      sessionCtx.OriginatingChannel === "discord" &&
+      sessionCtx.CommandSource !== "native" &&
+      !sessionCtx.MessageSid.startsWith("interaction_") // Component interactions
+    ) {
+      try {
+        const { reactMessageDiscord } = await import("../../discord/send.js");
+        const { resolveDiscordChannelId } = await import("../../discord/targets.js");
+        // Prefer OriginatingTo over To for reaction target (To may be "slash:<user>" for native commands)
+        const rawChannelId = sessionCtx.OriginatingTo || sessionCtx.To;
+        if (rawChannelId) {
+          // Strip routing prefix (e.g., "channel:123456" -> "123456")
+          const channelId = resolveDiscordChannelId(rawChannelId);
+          await reactMessageDiscord(channelId, sessionCtx.MessageSid, "⚠️");
+        }
+      } catch (error: unknown) {
+        // Reaction failed (permissions/emoji/message deleted)
+        // Log and mark for fallback to text reply
+        logVerbose(`Failed to send error reaction: ${String(error)}`);
+        reactionFailed = true;
+      }
+    }
+
+    // If reaction failed in react-only mode, rebuild payloads without error filtering
+    // to restore the original error messages as fallback
+    const finalReplyPayloads =
+      reactionFailed && cfg.channels?.defaults?.errorPolicy === "react-only"
+        ? buildReplyPayloads({
+            payloads: payloadArray,
+            isHeartbeat,
+            didLogHeartbeatStrip,
+            blockStreamingEnabled,
+            blockReplyPipeline,
+            directlySentBlockKeys,
+            replyToMode,
+            replyToChannel,
+            currentMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+            messageProvider: followupRun.run.messageProvider,
+            messagingToolSentTexts: runResult.messagingToolSentTexts,
+            messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+            messagingToolSentTargets: runResult.messagingToolSentTargets,
+            originatingChannel: sessionCtx.OriginatingChannel,
+            originatingTo: resolveOriginMessageTo({
+              originatingTo: sessionCtx.OriginatingTo,
+              to: sessionCtx.To,
+            }),
+            accountId: sessionCtx.AccountId,
+            errorPolicy: undefined, // Disable filtering to restore errors
+          }).replyPayloads
+        : replyPayloads;
+
+    if (finalReplyPayloads.length === 0) {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
     const successfulCronAdds = runResult.successfulCronAdds ?? 0;
-    const hasReminderCommitment = replyPayloads.some(
+    const hasReminderCommitment = finalReplyPayloads.some(
       (payload) =>
         !payload.isError &&
         typeof payload.text === "string" &&
@@ -521,8 +581,8 @@ export async function runReplyAgent(params: {
         : false;
     const guardedReplyPayloads =
       hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
-        ? appendUnscheduledReminderNote(replyPayloads)
-        : replyPayloads;
+        ? appendUnscheduledReminderNote(finalReplyPayloads)
+        : finalReplyPayloads;
 
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 

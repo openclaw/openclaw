@@ -1,3 +1,4 @@
+import type { ErrorPolicy } from "../../config/types.channels.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -40,11 +41,62 @@ export function buildReplyPayloads(params: {
   originatingChannel?: OriginatingChannelType;
   originatingTo?: string;
   accountId?: string;
-}): { replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean } {
+  /** How to handle error payloads (reply | silent | react-only). */
+  errorPolicy?: ErrorPolicy;
+}): {
+  replyPayloads: ReplyPayload[];
+  didLogHeartbeatStrip: boolean;
+  errorReactionRequested?: boolean;
+} {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
+  let errorReactionRequested = false;
+
+  // Helper: check if error is transient (rate limit, overloaded, timeout)
+  // vs actionable recovery messages (context overflow, session reset)
+  const isTransientApiError = (payload: ReplyPayload): boolean => {
+    if (!payload.isError) {
+      return false;
+    }
+    const text = payload.text?.toLowerCase() || "";
+    // Transient errors that should be suppressed
+    return (
+      text.includes("rate limit") ||
+      text.includes("overloaded") ||
+      text.includes("timeout") ||
+      text.includes("api error") ||
+      text.includes("429") ||
+      text.includes("503") ||
+      text.includes("socket connection was closed") // Bun transport failure
+    );
+  };
+
+  // Apply errorPolicy filtering (skip for heartbeat to preserve alerts)
+  // For react-only on non-Discord channels, fall back to silent (no reaction support)
+  // Only filter transient API errors, not actionable recovery messages
+  const supportsReaction = params.originatingChannel === "discord";
+  const effectiveErrorPolicy =
+    params.errorPolicy === "react-only" && !supportsReaction ? "silent" : params.errorPolicy;
+
+  const errorFilteredPayloads =
+    params.isHeartbeat || !effectiveErrorPolicy
+      ? params.payloads
+      : effectiveErrorPolicy === "silent"
+        ? params.payloads.filter((payload) => !isTransientApiError(payload))
+        : effectiveErrorPolicy === "react-only"
+          ? params.payloads
+              .map((payload) => {
+                if (isTransientApiError(payload)) {
+                  errorReactionRequested = true;
+                  return null;
+                }
+                return payload;
+              })
+              .filter((p): p is ReplyPayload => p !== null)
+          : params.payloads;
+
   const sanitizedPayloads = params.isHeartbeat
-    ? params.payloads
-    : params.payloads.flatMap((payload) => {
+    ? errorFilteredPayloads
+    : errorFilteredPayloads.flatMap((payload) => {
         let text = payload.text;
 
         if (payload.isError && text && isBunFetchSocketError(text)) {
@@ -139,5 +191,6 @@ export function buildReplyPayloads(params: {
   return {
     replyPayloads,
     didLogHeartbeatStrip,
+    errorReactionRequested,
   };
 }

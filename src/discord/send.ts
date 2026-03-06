@@ -38,6 +38,12 @@ export {
   unpinMessageDiscord,
 } from "./send.messages.js";
 export {
+  fetchReactionsDiscord,
+  reactMessageDiscord,
+  removeReactionDiscord,
+  removeOwnReactionsDiscord,
+} from "./send.reactions.js";
+export {
   sendMessageDiscord,
   sendPollDiscord,
   sendStickerDiscord,
@@ -51,12 +57,6 @@ export {
   hasAnyGuildPermissionDiscord,
   fetchMemberGuildPermissionsDiscord,
 } from "./send.permissions.js";
-export {
-  fetchReactionsDiscord,
-  reactMessageDiscord,
-  removeOwnReactionsDiscord,
-  removeReactionDiscord,
-} from "./send.reactions.js";
 export type {
   DiscordChannelCreate,
   DiscordChannelEdit,
