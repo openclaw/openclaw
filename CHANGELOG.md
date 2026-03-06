@@ -4,6 +4,18 @@ Docs: https://docs.openclaw.ai
 
 ---
 
+## [Operator1] 2026.3.6
+
+> Fork-specific changes. Upstream sync base: `v2026.3.2`.
+
+### Changes
+
+- **feat(docs)**: 12 Operator1 documentation pages — architecture, agent hierarchy, delegation, gateway patterns, configuration, agent configs, memory system, RPC, deployment, channels, spawning, and index overview.
+- **feat(ui)**: embedded docs viewer at `/docs` with sidebar navigation, category grouping, search filter, breadcrumbs, and markdown rendering via `import.meta.glob` build-time bundling.
+- **feat(docs)**: Operator1 tab added to Mintlify docs navigation (docs.json).
+
+---
+
 ## [Operator1] 2026.3.5
 
 > Fork-specific changes. Upstream sync base: `v2026.3.2`.

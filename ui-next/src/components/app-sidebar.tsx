@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  BookOpen,
   Brain,
   Bug,
   Eye,
@@ -118,6 +119,14 @@ const navData = {
       subtitle: "Paired devices",
     },
   ],
+  docs: [
+    {
+      title: "Docs",
+      url: "/docs",
+      icon: BookOpen,
+      subtitle: "Operator1 documentation",
+    },
+  ],
   settings: [
     {
       title: "Config",
@@ -164,6 +173,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <NavMain label="Chat" items={navData.chat} />
         <NavMain label="Control" items={navData.control} defaultOpen />
         <NavMain label="Agent" items={navData.agent} />
+        <NavMain label="Docs" items={navData.docs} />
         <NavMain label="Settings" items={navData.settings} />
       </SidebarContent>
       <SidebarFooter>

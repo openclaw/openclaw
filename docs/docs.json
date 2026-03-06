@@ -1407,6 +1407,41 @@
                 "pages": ["start/hubs", "start/docs-directory"]
               }
             ]
+          },
+          {
+            "tab": "Operator1",
+            "groups": [
+              {
+                "group": "Overview",
+                "pages": ["operator1/index"]
+              },
+              {
+                "group": "Architecture",
+                "pages": [
+                  "operator1/architecture",
+                  "operator1/agent-hierarchy",
+                  "operator1/delegation",
+                  "operator1/gateway-patterns"
+                ]
+              },
+              {
+                "group": "Configuration",
+                "pages": [
+                  "operator1/configuration",
+                  "operator1/agent-configs",
+                  "operator1/memory-system"
+                ]
+              },
+              {
+                "group": "Operations",
+                "pages": [
+                  "operator1/rpc",
+                  "operator1/deployment",
+                  "operator1/channels",
+                  "operator1/spawning"
+                ]
+              }
+            ]
           }
         ]
       },

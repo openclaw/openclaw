@@ -34,6 +34,7 @@ const UsagePage = lazy(() => import("@/pages/usage").then((m) => ({ default: m.U
 const VisualizePage = lazy(() =>
   import("@/pages/visualize").then((m) => ({ default: m.VisualizePage })),
 );
+const DocsPage = lazy(() => import("@/pages/docs").then((m) => ({ default: m.DocsPage })));
 
 export function App() {
   return (
@@ -167,6 +168,22 @@ export function App() {
               element={
                 <Suspense fallback={<PageLoader />}>
                   <LogsPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/docs"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <DocsPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/docs/:slug"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <DocsPage />
                 </Suspense>
               }
             />
