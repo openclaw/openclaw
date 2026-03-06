@@ -1,6 +1,10 @@
 import { completeSimple, type Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { isTruthyEnvValue } from "../infra/env.js";
+import {
+  createSingleUserPromptMessage,
+  extractNonEmptyAssistantText,
+} from "./live-test-helpers.js";
 
 const MOONSHOT_KEY = process.env.MOONSHOT_API_KEY ?? "";
 const MOONSHOT_BASE_URL = process.env.MOONSHOT_BASE_URL?.trim() || "https://api.moonshot.ai/v1";
@@ -27,21 +31,12 @@ describeLive("moonshot live", () => {
     const res = await completeSimple(
       model,
       {
-        messages: [
-          {
-            role: "user",
-            content: "Reply with the word ok.",
-            timestamp: Date.now(),
-          },
-        ],
+        messages: createSingleUserPromptMessage(),
       },
       { apiKey: MOONSHOT_KEY, maxTokens: 64 },
     );
 
-    const text = res.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text.trim())
-      .join(" ");
+    const text = extractNonEmptyAssistantText(res.content);
     expect(text.length).toBeGreaterThan(0);
   }, 30000);
 });
