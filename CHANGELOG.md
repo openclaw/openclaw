@@ -714,6 +714,7 @@ Docs: https://docs.openclaw.ai
 - Slack/Disabled channel startup: skip Slack monitor socket startup entirely when `channels.slack.enabled=false` (including configs that still contain valid tokens), preventing disabled accounts from opening websocket connections. (#30586) Thanks @liuxiaopai-ai.
 - Onboarding/Custom providers: use Azure OpenAI-specific verification auth/payload shape (`api-key`, deployment-path chat completions payload) when probing Azure endpoints so valid Azure custom-provider setup no longer fails preflight. (#29421) Thanks @kunalk16.
 - Feishu/Docx editing tools: add `feishu_doc` positional insert, table row/column operations, table-cell merge, and color-text updates; switch markdown write/append/insert to Descendant API insertion with large-document batching; and harden image uploads for data URI/base64/local-path inputs with strict validation and routing-safe upload metadata. (#29411) Thanks @Elarwei001.
+- Commands/Owner-only tools: treat identified direct-chat senders as owners when no owner allowlist is configured, while preserving internal `operator.admin` owner sessions. (#26331) thanks @widingmarcus-cyber
 
 ## 2026.2.26
 
