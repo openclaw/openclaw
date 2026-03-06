@@ -383,6 +383,74 @@ describe("resolveReactionSyntheticEvent", () => {
   });
 });
 
+describe("monitorSingleAccount recalled event logging", () => {
+  it("logs recalled event metadata for per-account attribution", async () => {
+    handlers = {};
+    vi.clearAllMocks();
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        channel: {
+          debounce: {
+            createInboundDebouncer,
+            resolveInboundDebounceMs,
+          },
+          text: {
+            hasControlCommand,
+          },
+        },
+      }),
+    );
+    const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
+      handlers = registered;
+    });
+    createEventDispatcherMock.mockReturnValue({ register });
+    const log = vi.fn();
+    const error = vi.fn();
+
+    await monitorSingleAccount({
+      cfg,
+      account: buildDebounceAccount(),
+      runtime: {
+        log,
+        error,
+        exit: vi.fn(),
+      } as RuntimeEnv,
+      botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
+    });
+
+    const onRecalled = handlers["im.message.recalled_v1"];
+    if (!onRecalled) {
+      throw new Error("missing im.message.recalled_v1 handler");
+    }
+
+    await onRecalled({
+      message: {
+        message_id: "om_recalled_nested",
+        chat_id: "oc_group_nested",
+        sender: {
+          id: { open_id: "ou_sender_nested" },
+        },
+        root_id: "om_root_nested",
+        thread_id: "omt_thread_nested",
+      },
+      action_time: "1741175699887",
+      user_id: { open_id: "ou_operator_nested" },
+    });
+
+    const recalledLogLine = log.mock.calls
+      .map((call) => call[0])
+      .find((value) => typeof value === "string" && value.includes("message recalled"));
+    expect(recalledLogLine).toBe(
+      "feishu[default]: message recalled chat=oc_group_nested message=om_recalled_nested " +
+        "operator=ou_operator_nested sender=ou_sender_nested root=om_root_nested " +
+        "thread=omt_thread_nested recall_time=1741175699887",
+    );
+    expect(error).not.toHaveBeenCalledWith(
+      expect.stringContaining("error handling message recalled event"),
+    );
+  });
+});
+
 describe("Feishu inbound debounce regressions", () => {
   beforeEach(() => {
     vi.useFakeTimers();

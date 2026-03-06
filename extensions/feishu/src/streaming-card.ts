@@ -94,8 +94,24 @@ function truncateSummary(text: string, max = 50): string {
   if (!text) {
     return "";
   }
-  const clean = text.replace(/\n/g, " ").trim();
+  const clean = stripHtmlTagsToText(text).replace(/\s+/g, " ").trim();
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
+}
+
+function stripHtmlTagsToText(text: string): string {
+  if (!text) {
+    return "";
+  }
+  return text
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
 }
 
 export function mergeStreamingText(

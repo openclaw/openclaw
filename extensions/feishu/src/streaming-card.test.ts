@@ -162,4 +162,54 @@ describe("FeishuStreamingSession.close", () => {
     expect(updateCardContentSpy).toHaveBeenCalledWith("第一段\n第二段");
     expect((session as any).state.currentText).toBe("第一段\n第二段");
   });
+
+  it("respects pending replace updates when final text is omitted", async () => {
+    const { client } = createClientMock();
+    const session = new FeishuStreamingSession(client, {
+      appId: "app",
+      appSecret: "secret",
+    });
+    (session as any).state = {
+      cardId: "card-id",
+      messageId: "message-id",
+      sequence: 1,
+      currentText: "💭 思考中...",
+    };
+    (session as any).pendingUpdate = { text: "🔧 正在使用Read工具...", mode: "replace" };
+    const updateCardContentSpy = vi
+      .spyOn(session as any, "updateCardContent")
+      .mockResolvedValue(undefined);
+
+    await session.close();
+
+    expect(updateCardContentSpy).toHaveBeenCalledWith("🔧 正在使用Read工具...");
+    expect((session as any).state.currentText).toBe("🔧 正在使用Read工具...");
+  });
+
+  it("strips html tags when writing summary content on close", async () => {
+    const { client, cardSettings } = createClientMock();
+    const session = new FeishuStreamingSession(client, {
+      appId: "app",
+      appSecret: "secret",
+    });
+    (session as any).state = {
+      cardId: "card-id",
+      messageId: "message-id",
+      sequence: 1,
+      currentText: "",
+    };
+
+    await session.close(
+      '<at user_id="ou_user_1">Lukin</at> 已完成 <b>发布</b><br/>请查看 <a href="https://example.com">链接</a>',
+    );
+
+    expect(cardSettings).toHaveBeenCalled();
+    const cardSettingsArg = cardSettings.mock.calls[0]?.[0] as {
+      data?: { settings?: string };
+    };
+    const settingsPayload = JSON.parse(cardSettingsArg.data?.settings ?? "{}") as {
+      config?: { summary?: { content?: string } };
+    };
+    expect(settingsPayload.config?.summary?.content).toBe("Lukin 已完成 发布 请查看 链接");
+  });
 });
