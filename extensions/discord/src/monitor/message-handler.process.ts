@@ -30,6 +30,7 @@ import {
 } from "openclaw/plugin-sdk/config-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-hooks";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
@@ -762,6 +763,48 @@ export async function processDiscordMessage(
     createReplyDispatcherWithTyping({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+      typingCallbacks,
+      beforeDeliver: async (payload) => {
+        if (payload.isReasoning) {
+          return payload;
+        }
+        if (isProcessAborted(abortSignal)) {
+          return payload;
+        }
+        const hookRunner = getGlobalHookRunner();
+        if (!hookRunner?.hasHooks("message_sending")) {
+          return payload;
+        }
+        try {
+          const result = await hookRunner.runMessageSending(
+            {
+              to: deliverTarget,
+              content: payload.text ?? "",
+              metadata: {
+                channel: "discord",
+                accountId,
+                mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+              },
+            },
+            { channelId: "discord", accountId },
+          );
+          if (result?.cancel) {
+            return null;
+          }
+          if (result?.content != null) {
+            const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+            if (result.content.trim() === "") {
+              if (hasMedia) {
+                return { ...payload, text: "" };
+              }
+              return null;
+            }
+            return { ...payload, text: result.content };
+          }
+        } catch {
+        }
+        return payload;
+      },
       deliver: async (payload: ReplyPayload, info) => {
         if (isProcessAborted(abortSignal)) {
           return;
