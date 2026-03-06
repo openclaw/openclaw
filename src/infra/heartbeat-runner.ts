@@ -100,6 +100,10 @@ export type HeartbeatSummary = {
 const DEFAULT_HEARTBEAT_TARGET = "none";
 export { isCronSystemEvent };
 
+// Node.js setTimeout coerces delay to a signed 32-bit integer; values above
+// this limit wrap to ~1 ms and cause a tight re-arm loop.
+const MAX_SAFE_TIMEOUT_MS = 2_147_483_647; // 2^31 - 1
+
 type HeartbeatAgentState = {
   agentId: string;
   heartbeat?: HeartbeatConfig;
@@ -233,6 +237,9 @@ export function resolveHeartbeatIntervalMs(
   }
   if (ms <= 0) {
     return null;
+  }
+  if (ms > MAX_SAFE_TIMEOUT_MS) {
+    return MAX_SAFE_TIMEOUT_MS;
   }
   return ms;
 }
@@ -1052,7 +1059,9 @@ export function startHeartbeatRunner(opts: {
     if (!Number.isFinite(nextDue)) {
       return;
     }
-    const delay = Math.max(0, nextDue - now);
+    // Clamp to signed 32-bit max: Node.js coerces larger values to ~1 ms,
+    // causing an infinite tight re-arm loop.
+    const delay = Math.min(Math.max(0, nextDue - now), MAX_SAFE_TIMEOUT_MS);
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
@@ -1073,6 +1082,23 @@ export function startHeartbeatRunner(opts: {
       const intervalMs = resolveHeartbeatIntervalMs(cfg, undefined, agent.heartbeat);
       if (!intervalMs) {
         continue;
+      }
+      // Warn once per config update when the interval was clamped due to 32-bit overflow.
+      // The check is done here rather than in resolveHeartbeatIntervalMs to avoid log spam
+      // from health/status polling paths that also call the resolver.
+      if (intervalMs === MAX_SAFE_TIMEOUT_MS) {
+        const raw =
+          agent.heartbeat?.every ??
+          cfg.agents?.defaults?.heartbeat?.every ??
+          DEFAULT_HEARTBEAT_EVERY;
+        const rawMs = raw ? parseDurationMs(String(raw).trim(), { defaultUnit: "m" }) : 0;
+        if (rawMs > MAX_SAFE_TIMEOUT_MS) {
+          log.warn("heartbeat: interval exceeds 32-bit timeout limit; clamping to ~24.8 days", {
+            agentId: agent.agentId,
+            requestedMs: rawMs,
+            clampedMs: MAX_SAFE_TIMEOUT_MS,
+          });
+        }
       }
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);

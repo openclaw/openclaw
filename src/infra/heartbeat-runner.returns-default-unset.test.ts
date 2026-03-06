@@ -164,6 +164,24 @@ describe("resolveHeartbeatIntervalMs", () => {
       ),
     ).toBe(5 * 60_000);
   });
+
+  it("clamps intervals exceeding the 32-bit setTimeout limit (~24.8 days)", () => {
+    // 999h = 3,596,400,000 ms > 2^31-1; Node.js wraps overflow to ~1 ms causing
+    // an infinite re-arm loop — must be clamped to MAX_SAFE_TIMEOUT_MS.
+    const MAX_SAFE_TIMEOUT_MS = 2_147_483_647;
+    expect(
+      resolveHeartbeatIntervalMs({
+        agents: { defaults: { heartbeat: { every: "999h" } } },
+      }),
+    ).toBe(MAX_SAFE_TIMEOUT_MS);
+
+    // Exactly at the boundary: should NOT be clamped
+    expect(
+      resolveHeartbeatIntervalMs({
+        agents: { defaults: { heartbeat: { every: "35791m" } } },
+      }),
+    ).toBe(35791 * 60_000); // 2,147,460,000 ms < MAX_SAFE_TIMEOUT_MS
+  });
 });
 
 describe("resolveHeartbeatPrompt", () => {

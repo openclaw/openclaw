@@ -165,6 +165,28 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("does not tight-loop when configured interval exceeds 32-bit setTimeout limit", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    // 999h overflows Node.js signed 32-bit setTimeout; without the clamp it
+    // would wrap to ~1 ms and cause an infinite re-arm loop.
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "999h" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // Advance a full day — must NOT fire (clamped delay ~24.8 days still pending)
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+    expect(runSpy).not.toHaveBeenCalled();
+
+    runner.stop();
+  });
+
   it("routes targeted wake requests to the requested agent/session", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
