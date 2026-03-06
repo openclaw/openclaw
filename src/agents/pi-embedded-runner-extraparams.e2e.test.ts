@@ -262,4 +262,61 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payload.store).toBe(false);
   });
+
+  it("clamps Venice llama-3.3-70b maxTokens to hard cap 4096", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "venice", "llama-3.3-70b");
+
+    const model = {
+      api: "openai-completions",
+      provider: "venice",
+      id: "llama-3.3-70b",
+      maxTokens: 8192,
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, { maxTokens: 8192 });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.maxTokens).toBe(4096);
+  });
+
+  it("injects Venice hard cap maxTokens when caller omits maxTokens", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "venice", "llama-3.3-70b");
+
+    const model = {
+      api: "openai-completions",
+      provider: "venice",
+      id: "llama-3.3-70b",
+      maxTokens: 8192,
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.maxTokens).toBe(4096);
+  });
+
+  it("clamps requested maxTokens to model maxTokens for generic models", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "openrouter", "some-model");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "some-model",
+      maxTokens: 1024,
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, { maxTokens: 2048 });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.maxTokens).toBe(1024);
+  });
 });

@@ -14,6 +14,9 @@ const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as cons
 // Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai"]);
+const MODEL_HARD_MAX_TOKENS: Record<string, number> = {
+  "venice/llama-3.3-70b": 4096,
+};
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -279,6 +282,53 @@ function createZaiToolStreamWrapper(
   };
 }
 
+function toPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : undefined;
+}
+
+function resolveModelHardCap(model: { provider?: unknown; id?: unknown }): number | undefined {
+  if (typeof model.provider !== "string" || typeof model.id !== "string") {
+    return undefined;
+  }
+  const key = `${model.provider.trim().toLowerCase()}/${model.id.trim().toLowerCase()}`;
+  return toPositiveInteger(MODEL_HARD_MAX_TOKENS[key]);
+}
+
+function createMaxTokensClampWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const hardCap = resolveModelHardCap(model);
+    const modelCap = toPositiveInteger((model as { maxTokens?: unknown }).maxTokens);
+    const requested = toPositiveInteger(options?.maxTokens);
+
+    // Always enforce explicit hard caps, even when caller didn't set maxTokens.
+    if (hardCap) {
+      const nextMaxTokens = requested ? Math.min(requested, hardCap) : hardCap;
+      if (options?.maxTokens === nextMaxTokens) {
+        return underlying(model, context, options);
+      }
+      return underlying(model, context, {
+        ...options,
+        maxTokens: nextMaxTokens,
+      });
+    }
+
+    // Best-effort generic clamp: don't exceed model-declared maxTokens when caller requests more.
+    if (modelCap && requested && requested > modelCap) {
+      return underlying(model, context, {
+        ...options,
+        maxTokens: modelCap,
+      });
+    }
+
+    return underlying(model, context, options);
+  };
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -338,4 +388,8 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
   // server-side conversation state is preserved.
   agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
+
+  // Last-step guardrail for provider/model token limits.
+  // Prevents stale model metadata or custom overrides from exceeding known limits.
+  agent.streamFn = createMaxTokensClampWrapper(agent.streamFn);
 }
