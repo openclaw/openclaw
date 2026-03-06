@@ -35,7 +35,7 @@ describe("telegram bot message processor", () => {
     resolveGroupRequireMention: () => false,
     resolveTelegramGroupConfig: () => ({}),
     runtime: {},
-    replyToMode: "auto",
+    replyToMode: "first",
     streamMode: "partial",
     textLimit: 4096,
     opts: {},
@@ -64,6 +64,22 @@ describe("telegram bot message processor", () => {
     await processSampleMessage(processMessage);
 
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+    const args = dispatchTelegramMessage.mock.calls[0]?.[0] as { replyToMode?: string };
+    expect(args.replyToMode).toBe("off");
+  });
+
+  it("enables reply threading on rapid consecutive messages", async () => {
+    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await processSampleMessage(processMessage);
+    await processSampleMessage(processMessage);
+
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(2);
+    const first = dispatchTelegramMessage.mock.calls[0]?.[0] as { replyToMode?: string };
+    const second = dispatchTelegramMessage.mock.calls[1]?.[0] as { replyToMode?: string };
+    expect(first.replyToMode).toBe("off");
+    expect(second.replyToMode).toBe("first");
   });
 
   it("skips dispatch when no context is produced", async () => {
