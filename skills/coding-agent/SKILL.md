@@ -253,15 +253,18 @@ If you run OpenClaw with a fleet of named agents, Codex multi-agent is a differe
 
 | Layer | What it does | Example |
 |-------|-------------|---------|
-| **OpenClaw fleet** | Routes tasks to the right agent (dev, research, deploy) | "İbo handles code, Öz handles research" |
+| **OpenClaw fleet** | Routes tasks to the right agent (dev, research, deploy) | "Agent A handles code, Agent B handles research" |
 | **Codex multi-agent** | Parallelizes work within a single Codex session | "3 sub-agents audit 3 files simultaneously" |
 
-They compose well. Your OpenClaw orchestrator spawns a Codex agent for a coding task, and that Codex session internally fans out sub-agents for parallel work:
+They compose well. Your OpenClaw orchestrator spawns a Codex agent for a coding task, and that Codex session internally fans out sub-agents for parallel work.
+
+**Prerequisite:** Run `codex features enable multi_agent` once before using these patterns. The feature must be enabled before Codex can spawn sub-agents.
 
 ```bash
 # OpenClaw spawns one Codex session for a big audit
+# (multi_agent must already be enabled in ~/.codex/config.toml)
 bash pty:true workdir:~/project background:true command:"codex exec --full-auto '
-Enable multi-agent. Spawn 3 parallel reviewers:
+Spawn 3 parallel reviewers:
 1. Explorer: map all API routes and list them
 2. Reviewer: check auth middleware on each route
 3. Worker: fix any missing auth guards and commit
