@@ -118,6 +118,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     cfg,
     accountId,
     requesterSenderId,
+    senderIsOwner,
     toolContext,
     mediaLocalRoots,
   }) => {
@@ -127,6 +128,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       cfg,
       accountId,
       requesterSenderId,
+      senderIsOwner,
       toolContext,
       mediaLocalRoots,
     });

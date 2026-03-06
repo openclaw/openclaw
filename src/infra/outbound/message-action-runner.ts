@@ -101,6 +101,8 @@ export type RunMessageActionParams = {
   sandboxRoot?: string;
   dryRun?: boolean;
   abortSignal?: AbortSignal;
+  /** Whether the sender is the bot owner (used for privileged action gating). */
+  senderIsOwner?: boolean;
 };
 
 export type MessageActionRunResult =
@@ -678,6 +680,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     gateway,
     toolContext: input.toolContext,
     dryRun,
+    senderIsOwner: input.senderIsOwner,
   });
   if (!handled) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
