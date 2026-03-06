@@ -742,7 +742,6 @@ async function sendSubagentAnnounceDirectly(params: {
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   requesterIsSubagent: boolean;
-  announceType?: SubagentAnnounceType;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
@@ -945,7 +944,6 @@ async function deliverSubagentAnnouncement(params: {
   announceType?: SubagentAnnounceType;
   directIdempotencyKey: string;
   currentRunId?: string;
-  announceType?: SubagentAnnounceType;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   return await runSubagentAnnounceDispatch({
@@ -977,7 +975,6 @@ async function deliverSubagentAnnouncement(params: {
         directOrigin: params.directOrigin,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
-        announceType: params.announceType,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
       }),
@@ -1437,7 +1434,6 @@ export async function runSubagentAnnounceFlow(params: {
       announceType,
       directIdempotencyKey,
       currentRunId: params.childRunId,
-      announceType,
       signal: params.signal,
     });
     // Cron delivery state should only be marked as delivered when we have a
