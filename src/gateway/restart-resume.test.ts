@@ -78,6 +78,51 @@ describe("restart resume", () => {
     expect(store.runs[runId]?.resumeCount).toBe(1);
   });
 
+  it("resumes inflight agent runs when restart sentinel kind=config-patch", async () => {
+    const dir = await makeTempStateDir("openclaw-restart-resume-patch-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+
+    await writeRestartSentinel(
+      {
+        kind: "config-patch",
+        status: "ok",
+        ts: Date.now(),
+        message: "config patch restart",
+      },
+      env,
+    );
+
+    const runId = "run-resume-patch-1";
+    const opts: AgentCommandIngressOpts = {
+      message: "original",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      deliver: false,
+      senderIsOwner: true,
+      runId,
+    };
+    await addInflightAgentRun({ runId, acceptedAt: Date.now(), opts }, env);
+
+    const runAgentMock = vi.fn(async (_o: AgentCommandIngressOpts) => undefined);
+    const cfg: OpenClawConfig = {
+      gateway: { restartRecovery: { resumeInflightAgentRuns: true } },
+    };
+
+    const result = await maybeResumeInflightAgentRunsAfterRestart({
+      cfg,
+      deps: {} as unknown as CliDeps,
+      runtime: defaultRuntime,
+      env,
+      getActiveRunCount: () => 0,
+      runAgent: runAgentMock as unknown as AgentCommandFromIngress,
+    });
+
+    expect(result.skipped).toBe(false);
+    expect(result.considered).toBe(1);
+    expect(result.resumed).toBe(1);
+    expect(runAgentMock).toHaveBeenCalledTimes(1);
+  });
+
   it("skips resuming runs that exceeded the max resume attempts", async () => {
     const dir = await makeTempStateDir("openclaw-restart-resume-cap-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };

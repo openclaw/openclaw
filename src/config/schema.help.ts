@@ -115,9 +115,9 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.reload":
     "Live config-reload policy for how edits are applied and when full restarts are triggered. Keep hybrid behavior for safest operational updates unless debugging reload internals.",
   "gateway.restartRecovery":
-    "Restart-time recovery behavior. These settings only apply to gateway restarts that write a restart sentinel (for example `gateway restart`).",
+    "Restart-time recovery behavior. These settings apply when gateway startup observes a restart sentinel (for example `gateway restart`, `config patch`, or `config apply`).",
   "gateway.restartRecovery.resumeInflightAgentRuns":
-    "When the gateway restarts via `gateway restart`, attempt to resume in-flight agent runs that were accepted before restart. Disable if you prefer runs to fail-fast and be re-triggered manually.",
+    "When gateway startup sees a restart sentinel, attempt to resume in-flight agent runs that were accepted before restart. Disable if you prefer runs to fail-fast and be re-triggered manually.",
   "gateway.tls":
     "TLS certificate and key settings for terminating HTTPS directly in the gateway process. Use explicit certificates in production and avoid plaintext exposure on untrusted networks.",
   "gateway.tls.enabled":

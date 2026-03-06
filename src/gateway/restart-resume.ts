@@ -43,8 +43,8 @@ export async function maybeResumeInflightAgentRunsAfterRestart(params: {
   }
 
   const sentinel = params.sentinel ?? (await readRestartSentinel(env).catch(() => null));
-  if (!sentinel || sentinel.payload?.kind !== "restart") {
-    // Best-effort: if the gateway started without an explicit restart sentinel,
+  if (!sentinel || !sentinel.payload) {
+    // Best-effort: if the gateway started without a valid restart sentinel,
     // clear any leftover inflight records (e.g. after a hard crash) so they do
     // not get resumed on a future unrelated restart.
     await clearInflightAgentRuns(env).catch(() => {});
