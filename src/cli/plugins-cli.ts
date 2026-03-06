@@ -744,9 +744,17 @@ export function registerPluginsCli(program: Command) {
         const lastAt = id.lastIndexOf("@");
         if (lastAt > 0) {
           const maybeName = id.slice(0, lastAt);
+          const version = id.slice(lastAt + 1);
           if (maybeName in installs) {
             pluginId = maybeName;
-            specOverrides = { [maybeName]: id };
+            const record = installs[maybeName];
+            // Build override from the recorded spec base + user-specified version
+            // so scoped packages like @openclaw/matrix resolve correctly.
+            const base = record?.spec ?? maybeName;
+            // Strip any existing version from the base spec
+            const baseLastAt = base.lastIndexOf("@");
+            const baseName = baseLastAt > 0 ? base.slice(0, baseLastAt) : base;
+            specOverrides = { [maybeName]: `${baseName}@${version}` };
           }
         }
       }

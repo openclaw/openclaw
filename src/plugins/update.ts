@@ -365,7 +365,7 @@ export async function updateNpmInstalledPlugins(params: {
     next = recordPluginInstall(next, {
       pluginId,
       source: "npm",
-      spec,
+      spec: record.spec,
       installPath: result.targetDir,
       version: nextVersion,
       ...buildNpmResolutionInstallFields(result.npmResolution),
