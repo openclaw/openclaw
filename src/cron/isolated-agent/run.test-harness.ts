@@ -33,12 +33,14 @@ export const resolveAllowedModelRefMock = createMock();
 export const resolveConfiguredModelRefMock = createMock();
 export const resolveHooksGmailModelMock = createMock();
 export const resolveThinkingDefaultMock = createMock();
+export const resolveCronDeliveryPlanMock = createMock();
 export const runWithModelFallbackMock = createMock();
 export const runEmbeddedPiAgentMock = createMock();
 export const runCliAgentMock = createMock();
 export const getCliSessionIdMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
+export const resolveDeliveryTargetMock = createMock();
 export const logWarnMock = createMock();
 export const countActiveDescendantRunsMock = createMock();
 export const listDescendantRunsForRequesterMock = createMock();
@@ -177,16 +179,11 @@ vi.mock("../../security/external-content.js", () => ({
 }));
 
 vi.mock("../delivery.js", () => ({
-  resolveCronDeliveryPlan: vi.fn().mockReturnValue({ requested: false }),
+  resolveCronDeliveryPlan: resolveCronDeliveryPlanMock,
 }));
 
 vi.mock("./delivery-target.js", () => ({
-  resolveDeliveryTarget: vi.fn().mockResolvedValue({
-    channel: "discord",
-    to: undefined,
-    accountId: undefined,
-    error: undefined,
-  }),
+  resolveDeliveryTarget: resolveDeliveryTargetMock,
 }));
 
 vi.mock("./helpers.js", () => ({
@@ -265,6 +262,19 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   resolveThinkingDefaultMock.mockReturnValue(undefined);
   getModelRefStatusMock.mockReturnValue({ allowed: false });
   isCliProviderMock.mockReturnValue(false);
+
+  resolveCronDeliveryPlanMock.mockReset();
+  resolveCronDeliveryPlanMock.mockReturnValue({ mode: "none", requested: false });
+  resolveDeliveryTargetMock.mockReset();
+  resolveDeliveryTargetMock.mockResolvedValue({
+    ok: false,
+    mode: "implicit",
+    channel: undefined,
+    to: undefined,
+    accountId: undefined,
+    threadId: undefined,
+    error: new Error("delivery not requested"),
+  });
 
   runWithModelFallbackMock.mockReset();
   runWithModelFallbackMock.mockResolvedValue(makeDefaultModelFallbackResult());
