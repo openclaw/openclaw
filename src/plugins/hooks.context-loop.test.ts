@@ -36,6 +36,7 @@ describe("context_assembled hook", () => {
     imageCount: 0,
     iteration: 1,
     attemptIndex: 0,
+    runId: "test-run-1",
   };
 
   it("fires handler with correct event shape", async () => {
