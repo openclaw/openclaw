@@ -79,7 +79,7 @@ function getToolResultText(messages: AgentMessage[]): string {
 describe("installSessionToolResultGuard", () => {
   it("inserts synthetic toolResult before non-tool message when pending", () => {
     const sm = SessionManager.inMemory();
-    installSessionToolResultGuard(sm);
+    installSessionToolResultGuard(sm, { pendingToolResultGraceMs: 0 });
 
     sm.appendMessage(toolCallMessage);
     sm.appendMessage(
@@ -115,6 +115,7 @@ describe("installSessionToolResultGuard", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm, {
       allowSyntheticToolResults: false,
+      pendingToolResultGraceMs: 0,
     });
 
     sm.appendMessage(toolCallMessage);
@@ -171,7 +172,7 @@ describe("installSessionToolResultGuard", () => {
 
   it("preserves ordering with multiple tool calls and partial results", () => {
     const sm = SessionManager.inMemory();
-    const guard = installSessionToolResultGuard(sm);
+    const guard = installSessionToolResultGuard(sm, { pendingToolResultGraceMs: 0 });
 
     sm.appendMessage(
       asAppendMessage({
@@ -209,7 +210,7 @@ describe("installSessionToolResultGuard", () => {
 
   it("flushes pending on guard when no toolResult arrived", () => {
     const sm = SessionManager.inMemory();
-    const guard = installSessionToolResultGuard(sm);
+    const guard = installSessionToolResultGuard(sm, { pendingToolResultGraceMs: 0 });
 
     sm.appendMessage(toolCallMessage);
     sm.appendMessage(

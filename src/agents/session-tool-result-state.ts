@@ -8,6 +8,8 @@ type PendingToolCallMeta = {
 export type PendingToolCallState = {
   size: () => number;
   entries: () => IterableIterator<[string, PendingToolCallMeta]>;
+  snapshot: () => Array<{ id: string; name?: string; createdAtMs: number }>;
+  restore: (items: Array<{ id: string; name?: string; createdAtMs: number }>) => void;
   getToolName: (id: string) => string | undefined;
   getCreatedAtMs: (id: string) => number | undefined;
   delete: (id: string) => void;
@@ -31,6 +33,16 @@ export function createPendingToolCallState(): PendingToolCallState {
   return {
     size: () => pending.size,
     entries: () => pending.entries(),
+    snapshot: () => Array.from(pending.entries()).map(([id, meta]) => ({ id, ...meta })),
+    restore: (items: Array<{ id: string; name?: string; createdAtMs: number }>) => {
+      pending.clear();
+      for (const item of items) {
+        if (!item?.id || typeof item.createdAtMs !== "number") {
+          continue;
+        }
+        pending.set(item.id, { name: item.name, createdAtMs: item.createdAtMs });
+      }
+    },
     getToolName: (id: string) => pending.get(id)?.name,
     getCreatedAtMs: (id: string) => pending.get(id)?.createdAtMs,
     delete: (id: string) => {

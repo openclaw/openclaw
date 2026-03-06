@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
@@ -27,6 +30,29 @@ describe("session tool-result guard TTL behavior", () => {
       .map((e) => (e as { message: { role: string } }).message.role);
 
     expect(roles).toEqual(["assistant", "assistant"]);
+  });
+
+  it("restores pending tool calls from disk across session-manager reopen", () => {
+    const root = mkdtempSync(join(tmpdir(), "oc-pending-"));
+    const sessionFile = join(root, "session.jsonl");
+
+    const sm1 = SessionManager.open(sessionFile);
+    installSessionToolResultGuard(sm1, { pendingToolResultGraceMs: 30_000 });
+
+    sm1.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_disk_1", name: "read", arguments: {} }],
+      }),
+    );
+
+    const pendingFile = `${sessionFile}.pending-tool-calls.json`;
+    expect(existsSync(pendingFile)).toBe(true);
+
+    const sm2 = SessionManager.open(sessionFile);
+    const guard2 = installSessionToolResultGuard(sm2, { pendingToolResultGraceMs: 30_000 });
+
+    expect(guard2.getPendingIds()).toContain("call_disk_1");
   });
 
   it("inserts synthetic toolResult after TTL expires", () => {

@@ -1,3 +1,5 @@
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type {
@@ -16,6 +18,14 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
 const GUARD_TRUNCATION_SUFFIX =
   "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
   "Use offset/limit parameters or request specific sections for large content.]";
+
+type PendingToolCallRecord = { id: string; name?: string; createdAtMs: number };
+
+type PendingToolCallFile = {
+  version: 1;
+  updatedAtMs: number;
+  items: PendingToolCallRecord[];
+};
 
 /**
  * Truncate oversized text content blocks in a tool result message.
@@ -113,6 +123,52 @@ export function installSessionToolResultGuard(
 } {
   const originalAppend = sessionManager.appendMessage.bind(sessionManager);
   const pendingState = createPendingToolCallState();
+
+  const sessionFile = (
+    sessionManager as { getSessionFile?: () => string | null }
+  ).getSessionFile?.();
+  const pendingFile = sessionFile ? `${sessionFile}.pending-tool-calls.json` : null;
+
+  const loadPendingState = () => {
+    if (!pendingFile) {
+      return;
+    }
+    try {
+      const raw = readFileSync(pendingFile, "utf8");
+      const parsed = JSON.parse(raw) as PendingToolCallFile;
+      if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.items)) {
+        return;
+      }
+      pendingState.restore(parsed.items);
+    } catch {
+      // best-effort only
+    }
+  };
+
+  const savePendingState = () => {
+    if (!pendingFile) {
+      return;
+    }
+    const items = pendingState.snapshot();
+    try {
+      if (items.length === 0) {
+        rmSync(pendingFile, { force: true });
+        return;
+      }
+      mkdirSync(dirname(pendingFile), { recursive: true });
+      const payload: PendingToolCallFile = {
+        version: 1,
+        updatedAtMs: Date.now(),
+        items,
+      };
+      writeFileSync(pendingFile, `${JSON.stringify(payload)}\n`, "utf8");
+    } catch {
+      // best-effort only
+    }
+  };
+
+  loadPendingState();
+
   const persistMessage = (message: AgentMessage) => {
     const transformer = opts?.transformMessageForPersistence;
     return transformer ? transformer(message) : message;
@@ -195,6 +251,7 @@ export function installSessionToolResultGuard(
         pendingState.delete(id);
       }
     }
+    savePendingState();
   };
 
   const guardedAppend = (message: AgentMessage) => {
@@ -219,6 +276,7 @@ export function installSessionToolResultGuard(
       const toolName = id ? pendingState.getToolName(id) : undefined;
       if (id) {
         pendingState.delete(id);
+        savePendingState();
       }
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
@@ -288,6 +346,7 @@ export function installSessionToolResultGuard(
 
     if (toolCalls.length > 0) {
       pendingState.trackToolCalls(toolCalls);
+      savePendingState();
     }
 
     return result;
