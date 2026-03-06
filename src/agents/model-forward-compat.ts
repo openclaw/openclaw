@@ -7,6 +7,9 @@ import { normalizeProviderId } from "./model-selection.js";
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
+const OPENAI_GPT_54_PREFIX = "gpt-5.4";
+const OPENAI_GPT_54_TEMPLATE_IDS = ["gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5"] as const;
+
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
@@ -242,6 +245,42 @@ function resolveZaiGlm5ForwardCompatModel(
   } as Model<Api>);
 }
 
+// OpenAI's gpt-5.4 (released 2026-03-05) may not be present in pi-ai's built-in
+// model catalog yet. Clone the nearest gpt-5.x template so users don't get
+// "Unknown model" errors when OpenAI releases new minor versions.
+function resolveOpenAIGpt54ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  if (normalizeProviderId(provider) !== "openai") {
+    return undefined;
+  }
+  const trimmed = modelId.trim();
+  const lower = trimmed.toLowerCase();
+  if (!lower.startsWith(OPENAI_GPT_54_PREFIX)) {
+    return undefined;
+  }
+
+  return cloneFirstTemplateModel({
+    normalizedProvider: "openai",
+    trimmedModelId: trimmed,
+    templateIds: [...OPENAI_GPT_54_TEMPLATE_IDS],
+    modelRegistry,
+    patch: { reasoning: true },
+  }) ?? normalizeModelCompat({
+    id: trimmed,
+    name: trimmed,
+    api: "openai-completions",
+    provider: "openai",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: DEFAULT_CONTEXT_TOKENS,
+    maxTokens: DEFAULT_CONTEXT_TOKENS,
+  } as Model<Api>);
+}
+
 export function resolveForwardCompatModel(
   provider: string,
   modelId: string,
@@ -249,6 +288,7 @@ export function resolveForwardCompatModel(
 ): Model<Api> | undefined {
   return (
     resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
+    resolveOpenAIGpt54ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
