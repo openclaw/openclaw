@@ -86,6 +86,14 @@ async function listNodes(client: Lark.Client, spaceId: string, parentNodeToken?:
     pageToken = res.data?.page_token;
     pageCount++;
     
+    // Safety limit: stop at 100 pages (5000 nodes)
+    if (pageCount >= maxPages && hasMore) {
+      console.warn(
+        `[feishu_wiki] Reached pagination limit (${maxPages} pages, ${allNodes.length} nodes). ` +
+        `Space may have more nodes. space_id=${spaceId}, parent=${parentNodeToken || 'root'}`
+      );
+    }
+    
     // Continue fetching if there are more pages and we haven't hit the safety limit
     if (!hasMore || !pageToken || pageCount >= maxPages) {
       break;
