@@ -16,11 +16,45 @@ if [[ "${1:-}" == "--dry-run" ]]; then
   DRY_RUN=1
 fi
 
+PATCH_NOTIFY_CHANNEL="${OPENCLAW_PATCH_NOTIFY_CHANNEL:-}"
+PATCH_NOTIFY_TARGET="${OPENCLAW_PATCH_NOTIFY_TARGET:-}"
+PATCH_NOTIFY_REPLY_TO="${OPENCLAW_PATCH_NOTIFY_REPLY_TO:-}"
+PATCH_NOTIFY_ACCOUNT="${OPENCLAW_PATCH_NOTIFY_ACCOUNT:-}"
+PATCH_RESTART_WARNING_TEXT="${OPENCLAW_PATCH_RESTART_WARNING_TEXT:-}"
+
 run() {
   if [[ "$DRY_RUN" == "1" ]]; then
     printf '[dry-run] %s\n' "$*"
   else
     eval "$@"
+  fi
+}
+
+send_patch_notification() {
+  local text="${1:-}"
+  if [[ -z "$text" ]]; then
+    return 0
+  fi
+  if [[ -z "$PATCH_NOTIFY_CHANNEL" || -z "$PATCH_NOTIFY_TARGET" ]]; then
+    echo "warning: skipping patch notification (missing OPENCLAW_PATCH_NOTIFY_CHANNEL or OPENCLAW_PATCH_NOTIFY_TARGET)"
+    return 0
+  fi
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '[dry-run] openclaw message send --channel %q --target %q --message %q\n' \
+      "$PATCH_NOTIFY_CHANNEL" "$PATCH_NOTIFY_TARGET" "$text"
+    return 0
+  fi
+
+  local cmd=(openclaw message send --channel "$PATCH_NOTIFY_CHANNEL" --target "$PATCH_NOTIFY_TARGET" --message "$text")
+  if [[ -n "$PATCH_NOTIFY_REPLY_TO" ]]; then
+    cmd+=(--reply-to "$PATCH_NOTIFY_REPLY_TO")
+  fi
+  if [[ -n "$PATCH_NOTIFY_ACCOUNT" ]]; then
+    cmd+=(--account "$PATCH_NOTIFY_ACCOUNT")
+  fi
+
+  if ! "${cmd[@]}" >/dev/null 2>&1; then
+    echo "warning: failed to send patch notification"
   fi
 }
 
@@ -146,6 +180,7 @@ GATEWAY_SERVICE_LOADED="$(printf '%s' "$GATEWAY_STATUS_JSON" | parse_gateway_ser
 if [[ "$GATEWAY_SERVICE_LOADED" == "1" ]] || has_systemd_gateway_service; then
   echo "info: gateway service is loaded; refreshing service command path + restart"
   run "openclaw gateway install --force"
+  send_patch_notification "$PATCH_RESTART_WARNING_TEXT"
   run "openclaw gateway restart"
 fi
 
