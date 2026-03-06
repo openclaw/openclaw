@@ -15,6 +15,9 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveExaApiKey,
+  resolveExaNumResults,
+  resolveExaHighlightsMaxChars,
 } = __testing;
 
 describe("web_search brave language param normalization", () => {
@@ -269,5 +272,58 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("web_search exa config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveExaApiKey({ apiKey: "exa-test-key" })).toBe("exa-test-key");
+  });
+
+  it("falls back to EXA_API_KEY env var", () => {
+    withEnv({ EXA_API_KEY: "exa-env-key" }, () => {
+      expect(resolveExaApiKey({})).toBe("exa-env-key");
+    });
+  });
+
+  it("returns undefined when no apiKey is available", () => {
+    withEnv({ EXA_API_KEY: undefined }, () => {
+      expect(resolveExaApiKey({})).toBeUndefined();
+      expect(resolveExaApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("uses default numResults when not specified", () => {
+    expect(resolveExaNumResults({})).toBe(5);
+    expect(resolveExaNumResults(undefined)).toBe(5);
+  });
+
+  it("uses config numResults when provided", () => {
+    expect(resolveExaNumResults({ numResults: 10 })).toBe(10);
+  });
+
+  it("rejects invalid numResults values", () => {
+    expect(resolveExaNumResults({ numResults: 0 })).toBe(5);
+    expect(resolveExaNumResults({ numResults: -1 })).toBe(5);
+  });
+
+  it("uses default highlightsMaxChars when not specified", () => {
+    expect(resolveExaHighlightsMaxChars({})).toBe(8000);
+    expect(resolveExaHighlightsMaxChars(undefined)).toBe(8000);
+  });
+
+  it("uses config highlightsMaxChars when provided", () => {
+    expect(resolveExaHighlightsMaxChars({ highlightsMaxChars: 3000 })).toBe(3000);
+  });
+
+  it("rejects invalid highlightsMaxChars values", () => {
+    expect(resolveExaHighlightsMaxChars({ highlightsMaxChars: 0 })).toBe(8000);
+    expect(resolveExaHighlightsMaxChars({ highlightsMaxChars: -1 })).toBe(8000);
+    expect(resolveExaHighlightsMaxChars({ highlightsMaxChars: Infinity })).toBe(8000);
+    expect(resolveExaHighlightsMaxChars({ highlightsMaxChars: NaN })).toBe(8000);
+  });
+
+  it("floors non-integer highlightsMaxChars", () => {
+    expect(resolveExaHighlightsMaxChars({ highlightsMaxChars: 2500.7 })).toBe(2500);
   });
 });
