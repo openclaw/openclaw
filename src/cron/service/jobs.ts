@@ -131,10 +131,10 @@ function resolveEveryAnchorMs(params: {
 }
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
-  if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
+  if (job.sessionTarget === "main" && job.payload?.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
+  if (job.sessionTarget === "isolated" && job.payload?.kind !== "agentTurn") {
     throw new Error('isolated cron jobs require payload.kind="agentTurn"');
   }
 }
@@ -608,7 +608,7 @@ export function applyJobPatch(
     if (
       legacyDeliveryPatch &&
       job.sessionTarget === "isolated" &&
-      job.payload.kind === "agentTurn"
+      job.payload?.kind === "agentTurn"
     ) {
       job.delivery = mergeCronDelivery(job.delivery, legacyDeliveryPatch);
     }
@@ -646,7 +646,11 @@ export function applyJobPatch(
   assertFailureDestinationSupport(job);
 }
 
-function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
+function mergeCronPayload(existing: CronPayload | undefined, patch: CronPayloadPatch): CronPayload {
+  if (!existing || typeof existing !== "object" || typeof existing.kind !== "string") {
+    return buildPayloadFromPatch(patch);
+  }
+
   if (patch.kind !== existing.kind) {
     return buildPayloadFromPatch(patch);
   }
@@ -891,7 +895,7 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
 }
 
 export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {
-  if (job.payload.kind !== "systemEvent") {
+  if (job.payload?.kind !== "systemEvent") {
     return undefined;
   }
   const text = normalizePayloadToSystemText(job.payload);
