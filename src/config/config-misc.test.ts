@@ -354,6 +354,10 @@ describe("config paths", () => {
     expect(parseConfigPath('foo["bar').ok).toBe(false);
     expect(parseConfigPath("foo[]").ok).toBe(false);
     expect(parseConfigPath(".foo").ok).toBe(false);
+    expect(parseConfigPath("agents.list[10001].id")).toEqual({
+      ok: false,
+      error: "Invalid path. Array index is too large.",
+    });
   });
 
   it("sets, gets, and unsets nested values", () => {

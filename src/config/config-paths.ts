@@ -5,6 +5,7 @@ type PathNode = Record<string, unknown>;
 type PathSegment = string | number;
 type Path = PathSegment[];
 type PathContainer = PathNode | unknown[];
+export const MAX_CONFIG_ARRAY_INDEX = 10_000;
 
 function isPathContainer(value: unknown): value is PathContainer {
   return isPlainObject(value) || Array.isArray(value);
@@ -123,7 +124,11 @@ export function parseConfigPath(raw: string): {
       if (char === "]") {
         const bracketSegment = currentSegment.trim();
         if (/^\d+$/.test(bracketSegment)) {
-          parts.push(Number.parseInt(bracketSegment, 10));
+          const index = Number.parseInt(bracketSegment, 10);
+          if (index > MAX_CONFIG_ARRAY_INDEX) {
+            return { ok: false, error: "Invalid path. Array index is too large." };
+          }
+          parts.push(index);
         } else {
           parts.push(bracketSegment);
         }

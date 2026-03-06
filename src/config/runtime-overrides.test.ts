@@ -95,6 +95,21 @@ describe("runtime overrides", () => {
     expect(next.agents?.list?.[1]).toMatchObject({ id: "helper" });
   });
 
+  it("ignores numeric object keys that exceed the array index limit", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main" }, { id: "helper" }],
+      },
+    } as OpenClawConfig;
+
+    setConfigOverride("agents.list", {
+      10001: { id: "patched-out-of-range" },
+    });
+
+    const next = applyConfigOverrides(cfg);
+    expect(next.agents?.list).toEqual([{ id: "main" }, { id: "helper" }]);
+  });
+
   it("merges numeric object keys into array indexes", () => {
     const cfg = {
       agents: {
@@ -160,6 +175,14 @@ describe("runtime overrides", () => {
       expect(result.ok).toBe(false);
       expect(Object.keys(getConfigOverrides()).length).toBe(0);
     }
+  });
+
+  it("rejects bracket index overrides that exceed the array index limit", () => {
+    const result = setConfigOverride("agents.list[10001].id", "patched-out-of-range");
+    expect(result).toEqual({
+      ok: false,
+      error: "Invalid path. Array index is too large.",
+    });
   });
 
   it("blocks __proto__ keys inside override object values", () => {

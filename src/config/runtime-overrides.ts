@@ -1,5 +1,10 @@
 import { isPlainObject } from "../utils.js";
-import { parseConfigPath, setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
+import {
+  MAX_CONFIG_ARRAY_INDEX,
+  parseConfigPath,
+  setConfigValueAtPath,
+  unsetConfigValueAtPath,
+} from "./config-paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -11,7 +16,11 @@ function parseArrayIndexKey(key: string): number | undefined {
   if (!/^\d+$/.test(key)) {
     return undefined;
   }
-  return Number.parseInt(key, 10);
+  const index = Number.parseInt(key, 10);
+  if (index > MAX_CONFIG_ARRAY_INDEX) {
+    return undefined;
+  }
+  return index;
 }
 
 function sanitizeOverrideValue(value: unknown, seen = new WeakSet<object>()): unknown {
