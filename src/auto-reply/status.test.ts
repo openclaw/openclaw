@@ -294,6 +294,33 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Reasoning: on");
   });
 
+  it("uses bundled catalog reasoning defaults on the sync status path", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {},
+        },
+      } as OpenClawConfig,
+      agent: {
+        model: "openai-codex/gpt-5.4",
+      },
+      sessionEntry: { sessionId: "reasoning-catalog-only", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      resolvedThink: "medium",
+      queue: { mode: "collect", depth: 0 },
+      catalog: [
+        {
+          provider: "openai-codex",
+          id: "gpt-5.4",
+          reasoning: true,
+        },
+      ],
+    });
+
+    expect(normalizeTestText(text)).toContain("Reasoning: on");
+  });
+
   it("includes media understanding decisions when present", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-5" },
