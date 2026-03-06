@@ -7,7 +7,7 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { resolveConfiguredModelRef, resolveReasoningDefault } from "../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import {
@@ -380,7 +380,9 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   const thinkLevel = args.resolvedThink ?? args.agent?.thinkingDefault ?? "off";
   const verboseLevel = args.resolvedVerbose ?? args.agent?.verboseDefault ?? "off";
-  const reasoningLevel = args.resolvedReasoning ?? "off";
+  const reasoningLevel =
+    args.resolvedReasoning ??
+    (args.config ? resolveReasoningDefault({ cfg: args.config, provider, model }) : "off");
   const elevatedLevel =
     args.resolvedElevated ??
     args.sessionEntry?.elevatedLevel ??

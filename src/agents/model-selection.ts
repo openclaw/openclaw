@@ -419,6 +419,25 @@ export function resolveThinkingDefault(params: {
   return "off";
 }
 
+export function resolveReasoningDefault(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  model: string;
+  catalog?: ModelCatalogEntry[];
+}): "on" | "off" {
+  const candidate = params.catalog?.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
+  if (candidate?.reasoning === true) {
+    return "on";
+  }
+  const configured =
+    params.cfg?.models?.providers?.[params.provider]?.models?.find(
+      (entry) => entry.id === params.model,
+    )?.reasoning ?? false;
+  return configured ? "on" : "off";
+}
+
 /**
  * Resolve the model configured for Gmail hook processing.
  * Returns null if hooks.gmail.model is not set.

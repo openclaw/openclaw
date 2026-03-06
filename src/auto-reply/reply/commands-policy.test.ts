@@ -86,6 +86,7 @@ function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Pa
     resolvedVerboseLevel: "off" as const,
     resolvedReasoningLevel: "off" as const,
     resolveDefaultThinkingLevel: async () => undefined,
+    resolveDefaultReasoningLevel: async () => "off" as const,
     provider: "telegram",
     model: "test-model",
     contextTokens: 0,
