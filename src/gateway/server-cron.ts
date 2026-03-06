@@ -19,7 +19,8 @@ import {
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
-import { triggerInternalHook } from "../hooks/internal-hooks.js";
+import { fireAndForgetHook } from "../hooks/fire-and-forget.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -360,30 +361,28 @@ export function buildGatewayCronService(params: {
       params.broadcast("cron", evt, { dropIfSlow: true });
 
       // Trigger internal hook for cron events
-      void triggerInternalHook({
-        type: "cron",
-        action: evt.action,
-        sessionKey: evt.sessionKey ?? "",
-        context: {
-          jobId: evt.jobId,
-          status: evt.status,
-          error: evt.error,
-          summary: evt.summary,
-          nextRunAtMs: evt.nextRunAtMs,
-          runAtMs: evt.runAtMs,
-          durationMs: evt.durationMs,
-          delivered: evt.delivered,
-          deliveryStatus: evt.deliveryStatus,
-          deliveryError: evt.deliveryError,
-          sessionId: evt.sessionId,
-          sessionKey: evt.sessionKey,
-          model: evt.model,
-          provider: evt.provider,
-          usage: evt.usage,
-        },
-        timestamp: new Date(),
-        messages: [],
-      });
+      fireAndForgetHook(
+        triggerInternalHook(
+          createInternalHookEvent("cron", evt.action, evt.sessionKey ?? `cron:${evt.jobId}`, {
+            jobId: evt.jobId,
+            status: evt.status,
+            error: evt.error,
+            summary: evt.summary,
+            nextRunAtMs: evt.nextRunAtMs,
+            runAtMs: evt.runAtMs,
+            durationMs: evt.durationMs,
+            delivered: evt.delivered,
+            deliveryStatus: evt.deliveryStatus,
+            deliveryError: evt.deliveryError,
+            sessionId: evt.sessionId,
+            sessionKey: evt.sessionKey,
+            model: evt.model,
+            provider: evt.provider,
+            usage: evt.usage,
+          }),
+        ),
+        "server-cron: cron internal hook failed",
+      );
 
       if (evt.action === "finished") {
         const webhookToken = trimToOptionalString(params.cfg.cron?.webhookToken);
