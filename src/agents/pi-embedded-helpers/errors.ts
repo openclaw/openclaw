@@ -900,14 +900,21 @@ function isContentPolicyErrorMessage(raw: string): boolean {
   //   may also bubble up as generic error text.
   // "policy violation" by itself is too broad — some auth failures (401/403) use that wording.
   // Only treat it as a content-policy signal when paired with stronger safety/content keywords.
-  const hasPolicyViolation = lower.includes("policy violation");
+  // Use a regex instead of bare string match to avoid false positives on
+  // unrelated messages (e.g. "no policy violations found").
+  const hasPolicyViolation = /policy[\s_]violation/i.test(lower);
   if (hasPolicyViolation) {
+    // Org/account policy denials (e.g. "org policy violation", "account policy
+    // violation") are access-control errors, not content-filter events — exclude
+    // them here so they fall through to auth/cooldown handling.
     const looksLikeAuth =
       /\b(401|403)\b/.test(lower) ||
       lower.includes("unauthorized") ||
       lower.includes("forbidden") ||
       lower.includes("authentication") ||
-      lower.includes("auth");
+      lower.includes("auth") ||
+      lower.includes("org policy") ||
+      lower.includes("account policy");
     const hasSafetyContext =
       lower.includes("content") ||
       lower.includes("safety") ||
@@ -934,8 +941,10 @@ function isContentPolicyErrorMessage(raw: string): boolean {
 
   // JSON-ish Anthropic error payload fragments.
   // e.g. {"error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}
-  // Require explicit content/safety filtering keywords — do NOT match on "policy" alone,
-  // which would swallow org/account policy denials that belong to auth cooldown handling.
+  // We require explicit content/safety filtering keywords alongside invalid_request_error.
+  // Matching on "policy" alone would swallow org/account policy denials (e.g. "Your
+  // organization's policy does not allow this request") — those indicate access-control
+  // restrictions, not Anthropic content filtering, and must reach auth/cooldown handling.
   if (
     lower.includes("invalid_request_error") &&
     (lower.includes("content filtering") ||
@@ -970,7 +979,6 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
     lower.includes("conversation id not found")
   );
 }
-
 
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
