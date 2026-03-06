@@ -182,7 +182,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("uses image upload timeout override for image media", async () => {
+  it("configures the media client timeout override for image media", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -190,9 +190,14 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "photo.png",
     });
 
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpTimeoutMs: 120_000,
+      }),
+    );
     expect(imageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        timeout: 120_000,
+        data: expect.objectContaining({ image_type: "message" }),
       }),
     );
     expect(messageCreateMock).toHaveBeenCalledWith(
@@ -317,10 +322,14 @@ describe("sendMediaFeishu msg_type routing", () => {
       imageKey,
     });
 
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpTimeoutMs: 120_000,
+      }),
+    );
     expect(imageGetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { image_key: imageKey },
-        timeout: 120_000,
       }),
     );
     expect(result.buffer).toEqual(Buffer.from("image-data"));
@@ -508,11 +517,15 @@ describe("downloadMessageResourceFeishu", () => {
       type: "file",
     });
 
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpTimeoutMs: 120_000,
+      }),
+    );
     expect(messageResourceGetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_audio_msg", file_key: "file_key_audio" },
         params: { type: "file" },
-        timeout: 120_000,
       }),
     );
     expect(result.buffer).toBeInstanceOf(Buffer);
@@ -528,11 +541,15 @@ describe("downloadMessageResourceFeishu", () => {
       type: "image",
     });
 
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpTimeoutMs: 120_000,
+      }),
+    );
     expect(messageResourceGetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_img_msg", file_key: "img_key_1" },
         params: { type: "image" },
-        timeout: 120_000,
       }),
     );
     expect(result.buffer).toBeInstanceOf(Buffer);
