@@ -42,19 +42,9 @@ export async function runDiscordGatewayLifecycle(params: {
     runtime: params.runtime,
   });
   let lifecycleStopping = false;
-  let forceStopHandler: ((err: unknown) => void) | undefined;
-  let queuedForceStopError: unknown;
 
   const pushStatus = (patch: Parameters<DiscordMonitorStatusSink>[0]) => {
     params.statusSink?.(patch);
-  };
-
-  const triggerForceStop = (err: unknown) => {
-    if (forceStopHandler) {
-      forceStopHandler(err);
-      return;
-    }
-    queuedForceStopError = err;
   };
 
   const reconnectStallWatchdog = createArmableStallWatchdog({
@@ -81,10 +71,12 @@ export async function runDiscordGatewayLifecycle(params: {
       });
       params.runtime.error?.(
         danger(
-          `discord: reconnect watchdog timeout after ${RECONNECT_STALL_TIMEOUT_MS}ms; force-stopping monitor task`,
+          `discord: reconnect watchdog timeout after ${RECONNECT_STALL_TIMEOUT_MS}ms; attempting channel-level reconnect`,
         ),
       );
-      triggerForceStop(error);
+      clearResumeState();
+      gateway?.disconnect();
+      gateway?.connect(false);
     },
   });
 
@@ -313,14 +305,6 @@ export async function runDiscordGatewayLifecycle(params: {
       abortSignal: params.abortSignal,
       onGatewayError: logGatewayError,
       shouldStopOnError: shouldStopOnGatewayError,
-      registerForceStop: (forceStop) => {
-        forceStopHandler = forceStop;
-        if (queuedForceStopError !== undefined) {
-          const queued = queuedForceStopError;
-          queuedForceStopError = undefined;
-          forceStop(queued);
-        }
-      },
     });
   } catch (err) {
     if (!sawDisallowedIntents && !params.isDisallowedIntentsError(err)) {
