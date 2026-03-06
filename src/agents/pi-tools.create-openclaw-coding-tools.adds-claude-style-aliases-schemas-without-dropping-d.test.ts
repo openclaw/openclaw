@@ -90,4 +90,21 @@ describe("createOpenClawCodingTools", () => {
     expect(tools.some((tool) => tool.name === "write")).toBe(false);
     expect(tools.some((tool) => tool.name === "edit")).toBe(false);
   });
+
+  it("keeps write/edit available when workspaceAccess is none", () => {
+    const sandboxDir = path.join(os.tmpdir(), "moltbot-sandbox");
+    const sandbox = createPiToolsSandboxContext({
+      workspaceDir: sandboxDir,
+      agentWorkspaceDir: path.join(os.tmpdir(), "moltbot-workspace"),
+      workspaceAccess: "none" as const,
+      fsBridge: createHostSandboxFsBridge(sandboxDir),
+      tools: {
+        allow: ["read", "write", "edit"],
+        deny: [],
+      },
+    });
+    const tools = createOpenClawCodingTools({ sandbox });
+    expect(tools.some((tool) => tool.name === "write")).toBe(true);
+    expect(tools.some((tool) => tool.name === "edit")).toBe(true);
+  });
 });

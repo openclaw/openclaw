@@ -244,6 +244,17 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(scripts.some((script) => script.includes('mv -f -- "$1" "$2"'))).toBe(true);
   });
 
+  it("allows writes in the isolated sandbox workspace when workspaceAccess is none", async () => {
+    const bridge = createSandboxFsBridge({
+      sandbox: createSandbox({ workspaceAccess: "none" }),
+    });
+
+    await expect(bridge.writeFile({ filePath: "b.txt", data: "hello" })).resolves.toBeUndefined();
+
+    const scripts = getScriptsFromCalls();
+    expect(scripts.some((script) => script.includes('mv -f -- "$1" "$2"'))).toBe(true);
+  });
+
   it("re-validates target before final rename and cleans temp file on failure", async () => {
     mockedOpenBoundaryFile
       .mockImplementationOnce(async () => ({ ok: false, reason: "path" }))
