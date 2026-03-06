@@ -175,6 +175,33 @@ Classify every non-meeting email into exactly one category:
 
 ---
 
+## Step 4b — Auto-reply to new inbound emails (if enabled)
+
+If `EMAIL_AUTOREPLY_ENABLED=true`, invoke the `email-autorespond` skill with the emails categorised as **New Leads**, **Customer Replies**, and **Follow-ups Needed** from Step 4.
+
+```
+Run the email-autorespond skill for the following email IDs:
+  - <id1> from <sender1> — "<subject1>"
+  - <id2> from <sender2> — "<subject2>"
+  ...
+These are new inbound emails that need an acknowledgement reply.
+```
+
+**Pass to the skill:**
+- `messageId`, `threadId`, `from`, `replyTo`, `subject` for each eligible email
+
+**Skip auto-reply for:**
+- ❌ Internal email (same company domain)
+- ❌ Noise / Auto / newsletters
+- ❌ Threads already replied to this session
+
+Include a one-line status in the digest output:
+```
+📨 Auto-replies sent: {N} (leads: {N}, customers: {N}, follow-ups: {N})
+```
+
+---
+
 ## Step 5 — Generate the digest
 
 Format in clean mobile-friendly markdown. One line per email item.

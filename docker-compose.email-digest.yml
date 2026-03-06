@@ -44,6 +44,13 @@ services:
       DIGEST_WHATSAPP_NUMBER: ${DIGEST_WHATSAPP_NUMBER:-}
       DIGEST_TELEGRAM_CHAT: ${DIGEST_TELEGRAM_CHAT:-}
 
+      # ── Slack Bot Token (for direct Slack API notifications) ─────────────────
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+
+      # ── Email auto-reply settings ────────────────────────────────────────────
+      EMAIL_AUTOREPLY_ENABLED: ${EMAIL_AUTOREPLY_ENABLED:-false}
+      EMAIL_AUTOREPLY_FROM: ${EMAIL_AUTOREPLY_FROM:-}
+
     volumes:
       # OpenClaw config + sessions (persistent)
       - ${OPENCLAW_CONFIG_DIR:-~/.openclaw}:/home/node/.openclaw

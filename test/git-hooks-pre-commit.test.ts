@@ -1,9 +1,29 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+
+function resolveBashCommand(): string {
+  if (process.platform !== "win32") {
+    return "bash";
+  }
+
+  // Prefer Git Bash over WSL's bash.exe shim (which can fail in non-WSL contexts).
+  const probe = spawnSync("where.exe", ["bash"], { encoding: "utf8" });
+  const candidates = (probe.stdout ?? "")
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const gitBash = candidates.find((p) => /\\Git\\usr\\bin\\bash\.exe$/i.test(p));
+  if (gitBash) {
+    return gitBash;
+  }
+  const nonWsl = candidates.find((p) => !/\\Windows\\System32\\bash\.exe$/i.test(p));
+  return nonWsl ?? "bash";
+}
 
 const run = (cwd: string, cmd: string, args: string[] = []) => {
   return execFileSync(cmd, args, { cwd, encoding: "utf8" }).trim();
@@ -40,7 +60,7 @@ describe("git-hooks/pre-commit (integration)", () => {
     run(dir, "git", ["add", "--", "--all"]);
 
     // Run the hook directly (same logic as when installed via core.hooksPath).
-    run(dir, "bash", ["git-hooks/pre-commit"]);
+    run(dir, resolveBashCommand(), ["git-hooks/pre-commit"]);
 
     const staged = run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n").filter(Boolean);
     expect(staged).toEqual(["--all"]);

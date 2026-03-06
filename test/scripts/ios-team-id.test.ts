@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -12,6 +12,42 @@ async function writeExecutable(filePath: string, body: string): Promise<void> {
   chmodSync(filePath, 0o755);
 }
 
+function resolveBashCommand(): string {
+  if (process.platform !== "win32") {
+    return "bash";
+  }
+
+  // Prefer Git Bash over WSL's bash.exe shim (which can fail in non-WSL contexts).
+  const probe = spawnSync("where.exe", ["bash"], { encoding: "utf8" });
+  const candidates = (probe.stdout ?? "")
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const gitBash = candidates.find((p) => /\\Git\\usr\\bin\\bash\.exe$/i.test(p));
+  if (gitBash) {
+    return gitBash;
+  }
+  const nonWsl = candidates.find((p) => !/\\Windows\\System32\\bash\.exe$/i.test(p));
+  return nonWsl ?? "bash";
+}
+
+function bashQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function toBashPath(nativePath: string): string {
+  if (process.platform !== "win32") {
+    return nativePath;
+  }
+  const normalized = nativePath.replace(/\\/g, "/");
+  const driveMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
+  if (driveMatch) {
+    return `/${driveMatch[1]!.toLowerCase()}/${driveMatch[2]}`;
+  }
+  return normalized;
+}
+
 function runScript(
   homeDir: string,
   extraEnv: Record<string, string> = {},
@@ -21,14 +57,19 @@ function runScript(
   stderr: string;
 } {
   const binDir = path.join(homeDir, "bin");
+  const bash = resolveBashCommand();
   const env = {
     ...process.env,
-    HOME: homeDir,
-    PATH: `${binDir}:${process.env.PATH ?? ""}`,
     ...extraEnv,
   };
   try {
-    const stdout = execFileSync("bash", [SCRIPT], {
+    const cmd = [
+      `export HOME=${bashQuote(toBashPath(homeDir))}`,
+      `export PATH=${bashQuote(toBashPath(binDir))}:$PATH`,
+      `"$BASH" ${bashQuote(toBashPath(SCRIPT))}`,
+    ].join("; ");
+
+    const stdout = execFileSync(bash, ["-lc", cmd], {
       env,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
