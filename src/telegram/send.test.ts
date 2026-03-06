@@ -683,6 +683,17 @@ describe("sendMessageTelegram", () => {
           reply_to_message_id: 999,
         },
       },
+      {
+        text: "Ignore invalid reply id",
+        options: {
+          // @ts-expect-error - runtime can receive cross-surface non-numeric ids.
+          replyToMessageId: "not-a-number",
+        },
+        expectedVideoNote: {},
+        expectedMessage: {
+          parse_mode: "HTML",
+        },
+      },
     ];
 
     for (const testCase of cases) {

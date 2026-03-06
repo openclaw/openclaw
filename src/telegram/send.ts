@@ -278,14 +278,20 @@ function buildTelegramThreadReplyParams(params: {
   const threadParams: Record<string, unknown> = threadIdParams ? { ...threadIdParams } : {};
 
   if (params.replyToMessageId != null) {
-    const replyToMessageId = Math.trunc(params.replyToMessageId);
-    if (params.quoteText?.trim()) {
-      threadParams.reply_parameters = {
-        message_id: replyToMessageId,
-        quote: params.quoteText.trim(),
-      };
-    } else {
-      threadParams.reply_to_message_id = replyToMessageId;
+    const rawReplyToMessageId = params.replyToMessageId;
+    const replyToMessageId = Math.trunc(rawReplyToMessageId);
+
+    // Cross-surface routing can leak non-Telegram reply ids.
+    // Telegram requires a finite positive integer message id.
+    if (Number.isFinite(rawReplyToMessageId) && replyToMessageId > 0) {
+      if (params.quoteText?.trim()) {
+        threadParams.reply_parameters = {
+          message_id: replyToMessageId,
+          quote: params.quoteText.trim(),
+        };
+      } else {
+        threadParams.reply_to_message_id = replyToMessageId;
+      }
     }
   }
   return threadParams;
