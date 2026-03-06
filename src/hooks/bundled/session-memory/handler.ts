@@ -61,6 +61,13 @@ const saveSessionToMemory: HookHandler = async (event) => {
     log.debug("Hook triggered for reset/new command", { action: event.action });
 
     const context = event.context || {};
+
+    // Check if another hook (e.g., security plugin) blocked the save.
+    if (context.blockSessionSave === true) {
+      log.debug("Session save blocked by upstream hook");
+      return;
+    }
+
     const cfg = context.cfg as OpenClawConfig | undefined;
     const contextWorkspaceDir =
       typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
@@ -133,8 +140,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     let slug: string | null = null;
     let sessionContent: string | null = null;
+    const hasCustomContent = typeof context.sessionSaveContent === "string";
 
-    if (sessionFile) {
+    if (sessionFile && !hasCustomContent) {
       // Get recent conversation content, with fallback to rotated reset transcript.
       sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
       log.debug("Session content loaded", {
@@ -195,7 +203,11 @@ const saveSessionToMemory: HookHandler = async (event) => {
       entryParts.push("## Conversation Summary", "", sessionContent, "");
     }
 
-    const entry = entryParts.join("\n");
+    // Use custom content from upstream hook if available, otherwise use built entry.
+    // An empty string is a valid redaction signal — hooks may intentionally
+    // set it to persist a blank marker while avoiding transcript retention.
+    const customContent = context.sessionSaveContent;
+    const entry = typeof customContent === "string" ? customContent : entryParts.join("\n");
 
     // Write under memory root with alias-safe file validation.
     await writeFileWithinRoot({
