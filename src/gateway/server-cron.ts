@@ -29,6 +29,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { triggerInternalHook } from "../hooks/internal-hooks.js";
 
 export type GatewayCronState = {
   cron: CronService;
@@ -357,6 +358,33 @@ export function buildGatewayCronService(params: {
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {
       params.broadcast("cron", evt, { dropIfSlow: true });
+      
+      // Trigger internal hook for cron events
+      triggerInternalHook({
+        type: "cron",
+        action: evt.action,
+        sessionKey: evt.sessionKey ?? "",
+        context: {
+          jobId: evt.jobId,
+          status: evt.status,
+          error: evt.error,
+          summary: evt.summary,
+          nextRunAtMs: evt.nextRunAtMs,
+          runAtMs: evt.runAtMs,
+          durationMs: evt.durationMs,
+          delivered: evt.delivered,
+          deliveryStatus: evt.deliveryStatus,
+          deliveryError: evt.deliveryError,
+          sessionId: evt.sessionId,
+          sessionKey: evt.sessionKey,
+          model: evt.model,
+          provider: evt.provider,
+          usage: evt.usage,
+        },
+        timestamp: new Date(),
+        messages: [],
+      });
+      
       if (evt.action === "finished") {
         const webhookToken = trimToOptionalString(params.cfg.cron?.webhookToken);
         const legacyWebhook = trimToOptionalString(params.cfg.cron?.webhook);
