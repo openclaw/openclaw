@@ -329,8 +329,8 @@ function Main {
 # Detect piped execution (iwr ... | iex) and pause before exit so
 # the user can read any errors. Without this, the PowerShell window
 # closes immediately on failure and the user never sees the message.
-$isPiped = $MyInvocation.CommandOrigin -eq "Internal" -or
-           [Console]::IsInputRedirected
+$isPiped = $MyInvocation.CommandOrigin -eq "Internal" -and
+           -not [Console]::IsInputRedirected
 
 try {
     Main
