@@ -261,7 +261,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\npartial answer\n```");
   });
 
-  it("delivers distinct final payloads after streaming close", async () => {
+  it("delivers subsequent final payloads as standalone cards after streaming close", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -273,13 +273,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "```md\n完整回复第一段\n```" }, { kind: "final" });
     await options.deliver({ text: "```md\n完整回复第一段 + 第二段\n```" }, { kind: "final" });
 
-    expect(streamingInstances).toHaveLength(2);
+    // Only one streaming card should be created; the second final payload
+    // should be delivered as a standalone card to avoid duplicate streaming cards.
+    expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n完整回复第一段\n```");
-    expect(streamingInstances[1].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[1].close).toHaveBeenCalledWith("```md\n完整回复第一段 + 第二段\n```");
+    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("skips exact duplicate final text after streaming close", async () => {
