@@ -68,6 +68,8 @@ export type GatewayConnectionDetails = {
   message: string;
 };
 
+const LOCAL_GATEWAY_STARTUP_RETRY_DELAYS_MS = [150, 300, 600] as const;
+
 export type ExplicitGatewayAuth = {
   token?: string;
   password?: string;
@@ -307,6 +309,33 @@ function formatGatewayTimeoutError(
   return `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
 }
 
+function isLoopbackGatewayUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function isRetryableLocalGatewayStartupError(
+  err: unknown,
+  connectionDetails: GatewayConnectionDetails,
+): boolean {
+  if (!isLoopbackGatewayUrl(connectionDetails.url)) {
+    return false;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes("gateway closed (1006") ||
+    /ECONNREFUSED|ECONNRESET|socket hang up|connect failed/i.test(message)
+  );
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function executeGatewayRequestWithScopes<T>(params: {
   opts: CallGatewayBaseOptions;
   scopes: OperatorScope[];
@@ -390,7 +419,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
   scopes: OperatorScope[],
 ): Promise<T> {
-  const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(opts.timeoutMs);
+  const { timeoutMs } = resolveGatewayCallTimeout(opts.timeoutMs);
   const context = resolveGatewayCallContext(opts);
   ensureExplicitGatewayAuth({
     urlOverride: context.urlOverride,
@@ -407,17 +436,35 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const { token, password } = resolveGatewayCredentials(context);
-  return await executeGatewayRequestWithScopes<T>({
-    opts,
-    scopes,
-    url,
-    token,
-    password,
-    tlsFingerprint,
-    timeoutMs,
-    safeTimerTimeoutMs,
-    connectionDetails,
-  });
+  const startedAtMs = Date.now();
+
+  for (let attempt = 0; ; attempt += 1) {
+    const elapsedMs = Date.now() - startedAtMs;
+    const remainingMs = Math.max(1, timeoutMs - elapsedMs);
+    try {
+      return await executeGatewayRequestWithScopes<T>({
+        opts,
+        scopes,
+        url,
+        token,
+        password,
+        tlsFingerprint,
+        timeoutMs: remainingMs,
+        safeTimerTimeoutMs: Math.min(remainingMs, 0x7fffffff),
+        connectionDetails,
+      });
+    } catch (err) {
+      const delayMs = LOCAL_GATEWAY_STARTUP_RETRY_DELAYS_MS[attempt];
+      if (
+        delayMs === undefined ||
+        !isRetryableLocalGatewayStartupError(err, connectionDetails) ||
+        remainingMs <= delayMs + 50
+      ) {
+        throw err;
+      }
+      await sleep(delayMs);
+    }
+  }
 }
 
 export async function callGatewayScoped<T = Record<string, unknown>>(

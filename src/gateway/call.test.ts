@@ -16,6 +16,8 @@ let lastClientOptions: {
 } | null = null;
 type StartMode = "hello" | "close" | "silent";
 let startMode: StartMode = "hello";
+let startSequence: StartMode[] = [];
+let startCount = 0;
 let closeCode = 1006;
 let closeReason = "";
 
@@ -65,9 +67,11 @@ vi.mock("./client.js", () => ({
       return { ok: true };
     }
     start() {
-      if (startMode === "hello") {
+      startCount += 1;
+      const mode = startSequence.shift() ?? startMode;
+      if (mode === "hello") {
         void lastClientOptions?.onHelloOk?.();
-      } else if (startMode === "close") {
+      } else if (mode === "close") {
         lastClientOptions?.onClose?.(closeCode, closeReason);
       }
     }
@@ -85,6 +89,8 @@ function resetGatewayCallMocks() {
   pickPrimaryLanIPv4.mockReset();
   lastClientOptions = null;
   startMode = "hello";
+  startSequence = [];
+  startCount = 0;
   closeCode = 1006;
   closeReason = "";
 }
@@ -362,12 +368,13 @@ describe("callGateway error details", () => {
     closeReason = "";
     setLocalLoopbackGatewayConfig();
 
+    vi.useFakeTimers();
     let err: Error | null = null;
-    try {
-      await callGateway({ method: "health" });
-    } catch (caught) {
+    const promise = callGateway({ method: "health", timeoutMs: 2_000 }).catch((caught) => {
       err = caught as Error;
-    }
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await promise;
 
     expect(err?.message).toContain("gateway closed (1006");
     expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18789");
@@ -407,10 +414,24 @@ describe("callGateway error details", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(errMessage).toBe("");
 
-    lastClientOptions?.onClose?.(1006, "");
+    lastClientOptions?.onClose?.(1000, "");
     await promise;
 
-    expect(errMessage).toContain("gateway closed (1006");
+    expect(errMessage).toContain("gateway closed (1000");
+  });
+
+  it("retries transient 1006 close during local gateway warm-up", async () => {
+    startSequence = ["close", "hello"];
+    closeCode = 1006;
+    closeReason = "";
+    setLocalLoopbackGatewayConfig();
+
+    vi.useFakeTimers();
+    const promise = callGateway({ method: "health", timeoutMs: 2_000 });
+    await vi.advanceTimersByTimeAsync(200);
+
+    await expect(promise).resolves.toEqual({ ok: true });
+    expect(startCount).toBe(2);
   });
 
   it("fails fast when remote mode is missing remote url", async () => {
