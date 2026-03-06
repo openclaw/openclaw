@@ -160,17 +160,6 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
   return lookup.fallbackDefaultAgentId;
 }
 
-function matchesChannel(
-  match: { channel?: string | undefined } | undefined,
-  channel: string,
-): boolean {
-  const key = normalizeToken(match?.channel);
-  if (!key) {
-    return false;
-  }
-  return key === channel;
-}
-
 type NormalizedPeerConstraint =
   | { state: "none" }
   | { state: "invalid" }
@@ -196,10 +185,43 @@ type BindingScope = {
   memberRoleIds: Set<string>;
 };
 
+/**
+ * Pre-group bindings by normalized channel name for O(1) channel lookup.
+ * This turns O(n) per-message scans into O(m) where m is the number of
+ * bindings for the target channel. (#36915)
+ */
+function groupBindingsByChannel(bindings: RawBindingEntry[]): Map<string, RawBindingEntry[]> {
+  const map = new Map<string, RawBindingEntry[]>();
+  for (const binding of bindings) {
+    if (!binding || typeof binding !== "object") {
+      continue;
+    }
+    const ch = normalizeToken(binding.match?.channel);
+    if (!ch) {
+      continue;
+    }
+    const list = map.get(ch);
+    if (list) {
+      list.push(binding);
+    } else {
+      map.set(ch, [binding]);
+    }
+  }
+  return map;
+}
+
+type RawBindingEntry = ReturnType<typeof listBindings>[number];
+
 type EvaluatedBindingsCache = {
   bindingsRef: OpenClawConfig["bindings"];
   byChannelAccount: Map<string, EvaluatedBinding[]>;
   byChannelAccountIndex: Map<string, EvaluatedBindingsIndex>;
+  /**
+   * Pre-grouped raw bindings by normalized channel name.
+   * Avoids O(n) full scan of all bindings when resolving a specific channel.
+   * (#36915)
+   */
+  byChannelRaw: Map<string, RawBindingEntry[]>;
 };
 
 const evaluatedBindingsCacheByCfg = new WeakMap<OpenClawConfig, EvaluatedBindingsCache>();
@@ -333,6 +355,7 @@ function getEvaluatedBindingsForChannelAccount(
           bindingsRef,
           byChannelAccount: new Map<string, EvaluatedBinding[]>(),
           byChannelAccountIndex: new Map<string, EvaluatedBindingsIndex>(),
+          byChannelRaw: groupBindingsByChannel(listBindings(cfg)),
         };
   if (cache !== existing) {
     evaluatedBindingsCacheByCfg.set(cfg, cache);
@@ -344,18 +367,14 @@ function getEvaluatedBindingsForChannelAccount(
     return hit;
   }
 
-  const evaluated: EvaluatedBinding[] = listBindings(cfg).flatMap((binding) => {
-    if (!binding || typeof binding !== "object") {
-      return [];
-    }
-    if (!matchesChannel(binding.match, channel)) {
-      return [];
-    }
+  const channelBindings = cache.byChannelRaw.get(channel) ?? [];
+  const evaluated: EvaluatedBinding[] = [];
+  for (const binding of channelBindings) {
     if (!matchesAccountId(binding.match?.accountId, accountId)) {
-      return [];
+      continue;
     }
-    return [{ binding, match: normalizeBindingMatch(binding.match) }];
-  });
+    evaluated.push({ binding, match: normalizeBindingMatch(binding.match) });
+  }
 
   cache.byChannelAccount.set(cacheKey, evaluated);
   cache.byChannelAccountIndex.set(cacheKey, buildEvaluatedBindingsIndex(evaluated));
