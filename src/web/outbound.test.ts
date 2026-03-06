@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { setActiveWebListener } from "./active-listener.js";
@@ -34,6 +35,7 @@ describe("web outbound", () => {
     resetLogger();
     setLoggerOverride(null);
     setActiveWebListener(null);
+    setActiveWebListener("work", null);
   });
 
   it("sends message via active listener", async () => {
@@ -137,6 +139,46 @@ describe("web outbound", () => {
     });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
       fileName: "file.pdf",
+    });
+  });
+
+  it("uses account-aware WhatsApp media caps for outbound uploads", async () => {
+    setActiveWebListener("work", {
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("img"),
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          mediaMaxMb: 25,
+          accounts: {
+            work: {
+              mediaMaxMb: 100,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      accountId: "work",
+      cfg,
+      mediaUrl: "/tmp/pic.jpg",
+      mediaLocalRoots: ["/tmp/workspace"],
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith("/tmp/pic.jpg", {
+      maxBytes: 100 * 1024 * 1024,
+      localRoots: ["/tmp/workspace"],
     });
   });
 

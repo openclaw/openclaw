@@ -308,7 +308,8 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
 
   <Accordion title="Media size limits and fallback behavior">
     - inbound media save cap: `channels.whatsapp.mediaMaxMb` (default `50`)
-    - outbound media cap for auto-replies: `agents.defaults.mediaMaxMb` (default `5MB`)
+    - outbound media send cap: `channels.whatsapp.mediaMaxMb` (default `50`)
+    - per-account overrides use `channels.whatsapp.accounts.<accountId>.mediaMaxMb`
     - images are auto-optimized (resize/quality sweep) to fit limits
     - on media send failure, first-item fallback sends text warning instead of dropping the response silently
   </Accordion>
