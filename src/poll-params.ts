@@ -36,6 +36,13 @@ export const TELEGRAM_POLL_CREATION_PARAM_NAMES = Object.keys(
   TELEGRAM_POLL_CREATION_PARAM_DEFS,
 ) as TelegramPollCreationParamName[];
 
+export function toSnakeCaseKey(key: string): string {
+  return key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
+
 function readPollParamRaw(params: Record<string, unknown>, key: string): unknown {
   return readSnakeCaseParamRaw(params, key);
 }

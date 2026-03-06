@@ -170,17 +170,28 @@ async function executeSend(params: {
   action: Record<string, unknown>;
   toolOptions?: Partial<Parameters<typeof createMessageTool>[0]>;
 }) {
+  return executeAction({
+    toolOptions: params.toolOptions,
+    action: {
+      action: "send",
+      ...params.action,
+    },
+  });
+}
+
+async function executeAction(params: {
+  action: Record<string, unknown>;
+  toolOptions?: Partial<Parameters<typeof createMessageTool>[0]>;
+}) {
   const tool = createMessageTool({
     config: {} as never,
     runMessageAction: mocks.runMessageAction as never,
     ...params.toolOptions,
   });
-  await tool.execute("1", {
-    action: "send",
-    ...params.action,
-  });
+  await tool.execute("1", params.action);
   return mocks.runMessageAction.mock.calls[0]?.[0] as
     | {
+        action?: string;
         params?: Record<string, unknown>;
         sandboxRoot?: string;
         requesterSenderId?: string;
@@ -321,7 +332,107 @@ describe("message tool path passthrough", () => {
     });
 
     expect(call?.params?.[field]).toBe(value);
+    expect(call?.params?.message).toBe("");
     expect(call?.params?.media).toBeUndefined();
+  });
+
+  it("preserves empty emoji values for react cleanup semantics", async () => {
+    mockSendResult({ to: "telegram:123" });
+
+    const call = await executeAction({
+      action: {
+        action: "react",
+        target: "telegram:123",
+        emoji: "",
+      },
+    });
+
+    expect(call?.action).toBe("react");
+    expect(call?.params?.emoji).toBe("");
+  });
+
+  it("preserves empty button arrays for edit semantics", async () => {
+    mockSendResult({ to: "telegram:123" });
+
+    const call = await executeAction({
+      action: {
+        action: "edit",
+        target: "telegram:123",
+        buttons: [],
+      },
+    });
+
+    expect(call?.action).toBe("edit");
+    expect(call?.params?.buttons).toEqual([]);
+  });
+
+  it("strips empty legacy target placeholders before send normalization", async () => {
+    mockSendResult({ to: "channel:C123" });
+
+    const call = await executeSend({
+      action: {
+        channel: "slack",
+        target: "channel:C123",
+        to: "",
+        channelId: "",
+        targets: [],
+        message: "hi",
+      },
+    });
+
+    expect(call?.params?.target).toBe("channel:C123");
+    expect(call?.params?.to).toBeUndefined();
+    expect(call?.params?.channelId).toBeUndefined();
+    expect(call?.params?.targets).toBeUndefined();
+  });
+
+  it("keeps explicit zero-valued poll durations while stripping inert poll defaults", async () => {
+    mockSendResult({ to: "channel:C123" });
+
+    const call = await executeSend({
+      action: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "hi",
+        pollDurationHours: 0,
+        poll_duration_seconds: "0 ",
+        pollAnonymous: false,
+        poll_public: " false ",
+        pollMulti: false,
+        pollOption: [],
+        poll_option: ["", "   "],
+        poll_question: "",
+      },
+    });
+
+    expect(call?.params?.pollDurationHours).toBe(0);
+    expect(call?.params?.poll_duration_seconds).toBe("0 ");
+    expect(call?.params?.pollAnonymous).toBeUndefined();
+    expect(call?.params?.poll_public).toBeUndefined();
+    expect(call?.params?.pollMulti).toBeUndefined();
+    expect(call?.params?.pollOption).toBeUndefined();
+    expect(call?.params?.poll_option).toBeUndefined();
+    expect(call?.params?.poll_question).toBeUndefined();
+  });
+
+  it("keeps poll params when action trims to poll", async () => {
+    mockSendResult({ to: "channel:C123" });
+
+    const call = await executeAction({
+      action: {
+        action: "poll ",
+        channel: "slack",
+        target: "channel:C123",
+        pollDurationSeconds: 60,
+        poll_public: "false",
+        pollOption: ["Yes", "No"],
+      },
+    });
+
+    expect(call?.action).toBe("poll");
+    expect(call?.params?.pollDurationSeconds).toBe(60);
+    expect(call?.params?.poll_public).toBe("false");
+    expect(call?.params?.pollOption).toEqual(["Yes", "No"]);
   });
 });
 

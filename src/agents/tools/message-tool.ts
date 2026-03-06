@@ -18,7 +18,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
+import {
+  POLL_CREATION_PARAM_DEFS,
+  SHARED_POLL_CREATION_PARAM_NAMES,
+  toSnakeCaseKey,
+  POLL_CREATION_PARAM_NAMES,
+} from "../../poll-params.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -43,6 +48,80 @@ const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
   return EXPLICIT_TARGET_ACTIONS.has(action);
 }
+
+const LEGACY_TARGET_PLACEHOLDER_FIELDS = ["to", "channelId", "targets"] as const;
+
+function isBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length === 0;
+}
+
+function isEmptyArray(value: unknown): value is unknown[] {
+  return Array.isArray(value) && value.length === 0;
+}
+
+function stripLegacyTargetPlaceholders(params: Record<string, unknown>): void {
+  for (const key of LEGACY_TARGET_PLACEHOLDER_FIELDS) {
+    const value = params[key];
+    if (isBlankString(value) || isEmptyArray(value)) {
+      delete params[key];
+    }
+  }
+}
+
+function isInertPollParamValue(key: string, value: unknown): boolean {
+  const def = POLL_CREATION_PARAM_DEFS[key];
+  if (!def) {
+    return false;
+  }
+  switch (def.kind) {
+    case "string":
+      return isBlankString(value);
+    case "stringArray":
+      if (typeof value === "string") {
+        return value.trim().length === 0;
+      }
+      return Array.isArray(value)
+        ? !value.some((entry) => typeof entry === "string" && entry.trim().length > 0)
+        : false;
+    case "number":
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        return trimmed.length === 0;
+      }
+      return false;
+    case "boolean":
+      if (typeof value === "boolean") {
+        return !value;
+      }
+      if (typeof value === "string") {
+        const trimmed = value.trim().toLowerCase();
+        return trimmed.length === 0 || trimmed === "false";
+      }
+      return false;
+  }
+}
+
+function stripInertPollDefaults(
+  params: Record<string, unknown>,
+  normalizedAction: string | undefined,
+): void {
+  if (!normalizedAction || normalizedAction === "poll") {
+    return;
+  }
+  for (const key of POLL_CREATION_PARAM_NAMES) {
+    const value = params[key];
+    const snakeKey = toSnakeCaseKey(key);
+    const snakeValue = params[snakeKey];
+
+    if (isInertPollParamValue(key, value)) {
+      delete params[key];
+    }
+    if (snakeKey !== key && isInertPollParamValue(key, snakeValue)) {
+      delete params[snakeKey];
+    }
+  }
+}
+
 function buildRoutingSchema() {
   return {
     channel: Type.Optional(Type.String()),
@@ -684,6 +763,19 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
+
+      // Some tool bridges populate legacy target placeholders with empty defaults.
+      // That breaks target normalization because fields like `to` or `channelId`
+      // appear present even when effectively unset, triggering:
+      // "Use `target` instead of `to`/`channelId`."
+      stripLegacyTargetPlaceholders(params);
+
+      // Poll fields are exposed in the shared schema, and some tool bridges fill
+      // them with default zero/false values even for plain sends. Strip those
+      // inert defaults for non-poll actions so send/edit/etc. are not rejected as
+      // accidental poll creation.
+      const normalizedAction = typeof params.action === "string" ? params.action.trim() : undefined;
+      stripInertPollDefaults(params, normalizedAction);
 
       // Strip reasoning tags from text fields — models may include <think>…</think>
       // in tool arguments, and the messaging tool send path has no other tag filtering.
