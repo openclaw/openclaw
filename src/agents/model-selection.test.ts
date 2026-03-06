@@ -4,6 +4,7 @@ import {
   parseModelRef,
   resolveModelRefFromString,
   resolveConfiguredModelRef,
+  resolveReasoningDefault,
   buildModelAliasIndex,
   normalizeProviderId,
   modelKey,
@@ -146,6 +147,40 @@ describe("model-selection", () => {
         defaultModel: "gpt-4",
       });
       expect(result).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+  });
+
+  describe("resolveReasoningDefault", () => {
+    it("uses explicit config reasoning false before catalog reasoning true", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        models: {
+          providers: {
+            "openai-codex": {
+              models: [
+                {
+                  id: "gpt-5.4",
+                  reasoning: false,
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      const result = resolveReasoningDefault({
+        cfg: cfg as OpenClawConfig,
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        catalog: [
+          {
+            provider: "openai-codex",
+            id: "gpt-5.4",
+            reasoning: true,
+          },
+        ],
+      });
+
+      expect(result).toBe("off");
     });
   });
 });
