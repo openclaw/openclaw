@@ -380,4 +380,81 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       delete raw.identity;
     },
   },
+  {
+    id: "acp.stream-v2026.3.2-keys",
+    describe:
+      "Strip/rename acp.stream keys removed or renamed between v2026.3.2 and v2026.3.3: " +
+      "maxTurnChars→maxOutputChars, maxToolSummaryChars→maxSessionUpdateChars, " +
+      "maxStatusChars/maxMetaEventsPerTurn/metaMode/showUsage removed",
+    apply: (raw, changes) => {
+      const acp = getRecord(raw.acp);
+      if (!acp) {
+        return;
+      }
+      const stream = getRecord(acp.stream);
+      if (!stream) {
+        return;
+      }
+
+      // Renamed: maxTurnChars → maxOutputChars
+      if (stream.maxTurnChars !== undefined) {
+        if (stream.maxOutputChars === undefined) {
+          stream.maxOutputChars = stream.maxTurnChars;
+          changes.push("Moved acp.stream.maxTurnChars → acp.stream.maxOutputChars.");
+        } else {
+          changes.push("Removed acp.stream.maxTurnChars (acp.stream.maxOutputChars already set).");
+        }
+        delete stream.maxTurnChars;
+      }
+
+      // Renamed: maxToolSummaryChars → maxSessionUpdateChars
+      if (stream.maxToolSummaryChars !== undefined) {
+        if (stream.maxSessionUpdateChars === undefined) {
+          stream.maxSessionUpdateChars = stream.maxToolSummaryChars;
+          changes.push("Moved acp.stream.maxToolSummaryChars → acp.stream.maxSessionUpdateChars.");
+        } else {
+          changes.push(
+            "Removed acp.stream.maxToolSummaryChars (acp.stream.maxSessionUpdateChars already set).",
+          );
+        }
+        delete stream.maxToolSummaryChars;
+      }
+
+      // Removed: maxStatusChars (no replacement)
+      if (stream.maxStatusChars !== undefined) {
+        changes.push("Removed acp.stream.maxStatusChars (no replacement in v2026.3.3).");
+        delete stream.maxStatusChars;
+      }
+
+      // Removed: maxMetaEventsPerTurn (no replacement)
+      if (stream.maxMetaEventsPerTurn !== undefined) {
+        changes.push("Removed acp.stream.maxMetaEventsPerTurn (no replacement in v2026.3.3).");
+        delete stream.maxMetaEventsPerTurn;
+      }
+
+      // Removed: metaMode (no replacement)
+      if (stream.metaMode !== undefined) {
+        changes.push("Removed acp.stream.metaMode (no replacement in v2026.3.3).");
+        delete stream.metaMode;
+      }
+
+      // Removed: showUsage (replaced conceptually by repeatSuppression, but not a direct mapping)
+      if (stream.showUsage !== undefined) {
+        changes.push("Removed acp.stream.showUsage (no replacement in v2026.3.3).");
+        delete stream.showUsage;
+      }
+
+      if (Object.keys(stream).length === 0) {
+        delete acp.stream;
+      } else {
+        acp.stream = stream;
+      }
+
+      if (Object.keys(acp).length === 0) {
+        delete raw.acp;
+      } else {
+        raw.acp = acp;
+      }
+    },
+  },
 ];

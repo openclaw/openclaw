@@ -209,4 +209,34 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     message:
       "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
   },
+  {
+    path: ["acp", "stream", "maxTurnChars"],
+    message:
+      "acp.stream.maxTurnChars was renamed to acp.stream.maxOutputChars in v2026.3.3 (auto-migrated on load).",
+  },
+  {
+    path: ["acp", "stream", "maxToolSummaryChars"],
+    message:
+      "acp.stream.maxToolSummaryChars was renamed to acp.stream.maxSessionUpdateChars in v2026.3.3 (auto-migrated on load).",
+  },
+  {
+    path: ["acp", "stream", "maxStatusChars"],
+    message:
+      "acp.stream.maxStatusChars was removed in v2026.3.3 with no replacement (auto-migrated on load).",
+  },
+  {
+    path: ["acp", "stream", "maxMetaEventsPerTurn"],
+    message:
+      "acp.stream.maxMetaEventsPerTurn was removed in v2026.3.3 with no replacement (auto-migrated on load).",
+  },
+  {
+    path: ["acp", "stream", "metaMode"],
+    message:
+      "acp.stream.metaMode was removed in v2026.3.3 with no replacement (auto-migrated on load).",
+  },
+  {
+    path: ["acp", "stream", "showUsage"],
+    message:
+      "acp.stream.showUsage was removed in v2026.3.3 with no replacement (auto-migrated on load).",
+  },
 ];
