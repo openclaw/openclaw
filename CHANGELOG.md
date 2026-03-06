@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Routing/binding lookup scalability: pre-index route bindings by channel/account and avoid full binding-list rescans on channel-account cache rollover, preventing multi-second `resolveAgentRoute` stalls in large binding configurations. (#36915) Thanks @songchenghao.
 - Browser/session cleanup: track browser tabs opened by session-scoped browser tool runs and close tracked tabs during `sessions.reset`/`sessions.delete` runtime cleanup, preventing orphaned tabs and unbounded browser memory growth after session teardown. (#36666) Thanks @Harnoor6693.
 - Slack/local file upload allowlist parity: propagate `mediaLocalRoots` through the Slack send action pipeline so workspace-rooted attachments pass `assertLocalMediaAllowed` checks while non-allowlisted paths remain blocked. (synthesis: #36656; overlap considered from #36516, #36496, #36493, #36484, #32648, #30888) Thanks @2233admin.
 - Agents/compaction safeguard pre-check: skip embedded compaction before entering the Pi SDK when a session has no real conversation messages, avoiding unnecessary LLM API calls on idle sessions. (#36451) thanks @Sid-Qin.
