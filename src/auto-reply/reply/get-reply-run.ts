@@ -290,7 +290,9 @@ export async function runPreparedReply(
   const isBareSessionReset =
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
-  const baseBodyFinal = isBareSessionReset ? buildBareSessionResetPrompt(cfg, undefined, workspaceDir) : baseBody;
+  const baseBodyFinal = isBareSessionReset
+    ? buildBareSessionResetPrompt(cfg, undefined, workspaceDir)
+    : baseBody;
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
       ? {
