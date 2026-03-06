@@ -3,7 +3,12 @@ import path from "node:path";
 import { saveJsonFile } from "../../infra/json-file.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { AUTH_PROFILE_FILENAME, AUTH_STORE_VERSION, LEGACY_AUTH_FILENAME } from "./constants.js";
+import {
+  AUTH_PROFILE_FILENAME,
+  AUTH_PROFILE_PROVISIONED_FILENAME,
+  AUTH_STORE_VERSION,
+  LEGACY_AUTH_FILENAME,
+} from "./constants.js";
 import type { AuthProfileStore } from "./types.js";
 
 export function resolveAuthStorePath(agentDir?: string): string {
@@ -14,6 +19,11 @@ export function resolveAuthStorePath(agentDir?: string): string {
 export function resolveLegacyAuthStorePath(agentDir?: string): string {
   const resolved = resolveUserPath(agentDir ?? resolveOpenClawAgentDir());
   return path.join(resolved, LEGACY_AUTH_FILENAME);
+}
+
+export function resolveProvisionedAuthStorePath(agentDir?: string): string {
+  const resolved = resolveUserPath(agentDir ?? resolveOpenClawAgentDir());
+  return path.join(resolved, AUTH_PROFILE_PROVISIONED_FILENAME);
 }
 
 export function resolveAuthStorePathForDisplay(agentDir?: string): string {

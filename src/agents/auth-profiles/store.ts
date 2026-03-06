@@ -5,7 +5,12 @@ import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
-import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
+import {
+  ensureAuthStoreFile,
+  resolveAuthStorePath,
+  resolveLegacyAuthStorePath,
+  resolveProvisionedAuthStorePath,
+} from "./paths.js";
 import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 type LegacyAuthStore = Record<string, AuthProfileCredential>;
@@ -483,6 +488,13 @@ export function ensureAuthProfileStore(
 
 export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
   const authPath = resolveAuthStorePath(agentDir);
+  saveJsonFile(authPath, buildPersistedAuthStorePayload(store, { includeRuntimeState: true }));
+}
+
+function buildPersistedAuthStorePayload(
+  store: AuthProfileStore,
+  opts: { includeRuntimeState: boolean },
+): AuthProfileStore {
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).map(([profileId, credential]) => {
       if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
@@ -498,12 +510,30 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
       return [profileId, credential];
     }),
   ) as AuthProfileStore["profiles"];
-  const payload = {
+  return {
     version: AUTH_STORE_VERSION,
     profiles,
     order: store.order ?? undefined,
-    lastGood: store.lastGood ?? undefined,
-    usageStats: store.usageStats ?? undefined,
+    ...(opts.includeRuntimeState
+      ? {
+          lastGood: store.lastGood ?? undefined,
+          usageStats: store.usageStats ?? undefined,
+        }
+      : {}),
   } satisfies AuthProfileStore;
-  saveJsonFile(authPath, payload);
+}
+
+export function saveProvisionedAuthProfileStore(
+  store: AuthProfileStore,
+  agentDir?: string,
+): boolean {
+  const provisionedPath = resolveProvisionedAuthStorePath(agentDir);
+  if (!fs.existsSync(provisionedPath)) {
+    return false;
+  }
+  saveJsonFile(
+    provisionedPath,
+    buildPersistedAuthStorePayload(store, { includeRuntimeState: false }),
+  );
+  return true;
 }

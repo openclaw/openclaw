@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   setByteplusApiKey,
@@ -48,6 +50,9 @@ describe("onboard auth credentials secret refs", () => {
     }>(agentDir);
     return parsed.profiles?.[profileId];
   }
+
+  const provisionedAuthProfilePathFor = (agentDir: string) =>
+    path.join(agentDir, "auth-profiles.provisioned.json");
 
   async function expectStoredAuthKey(params: {
     prefix: string;
@@ -182,6 +187,30 @@ describe("onboard auth credentials secret refs", () => {
       },
       absent: ["key"],
     });
+  });
+
+  it("mirrors canonical api-key updates into the provisioned auth store when present", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-provisioned-");
+    lifecycle.setStateDir(env.stateDir);
+    await fs.writeFile(
+      provisionedAuthProfilePathFor(env.agentDir),
+      JSON.stringify({
+        version: 1,
+        profiles: {},
+        usageStats: { stale: { lastUsed: 1 } },
+      }),
+    );
+
+    await setOpenaiApiKey("sk-openai-provisioned", env.agentDir);
+
+    const parsed = JSON.parse(
+      await fs.readFile(provisionedAuthProfilePathFor(env.agentDir), "utf8"),
+    ) as {
+      profiles?: Record<string, { key?: string }>;
+      usageStats?: Record<string, unknown>;
+    };
+    expect(parsed.profiles?.["openai:default"]?.key).toBe("sk-openai-provisioned");
+    expect(parsed.usageStats).toBeUndefined();
   });
 
   it("stores env-backed volcengine and byteplus keys as keyRef in ref mode", async () => {
