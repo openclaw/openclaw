@@ -535,6 +535,7 @@ export async function runCronIsolatedAgentTurn(params: {
             requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
             disableMessageTool: deliveryRequested || deliveryPlan.mode === "none",
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+            disableEscalation: true,
             abortSignal,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
