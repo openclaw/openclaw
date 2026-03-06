@@ -602,6 +602,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       to: requesterIsSubagent ? undefined : origin?.to,
       threadId: requesterIsSubagent ? undefined : threadId,
       deliver: !requesterIsSubagent,
+      bestEffortDeliver: !requesterIsSubagent,
       internalEvents: item.internalEvents,
       inputProvenance: {
         kind: "inter_session",
@@ -781,6 +782,11 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
       };
     }
+    // Decouple session injection from channel delivery: when delivering externally,
+    // force bestEffortDeliver so channel failures (e.g. Telegram unreachable) don't
+    // prevent the announce event from being injected into the parent session.
+    // The agent turn (session injection) always completes; delivery is best-effort.
+    const effectiveBestEffortDeliver = shouldDeliverExternally || params.bestEffortDeliver;
     await runAnnounceDeliveryWithRetry({
       operation: params.expectsCompletionMessage
         ? "completion direct announce agent call"
@@ -793,7 +799,7 @@ async function sendSubagentAnnounceDirectly(params: {
             sessionKey: canonicalRequesterSessionKey,
             message: params.triggerMessage,
             deliver: shouldDeliverExternally,
-            bestEffortDeliver: params.bestEffortDeliver,
+            bestEffortDeliver: effectiveBestEffortDeliver,
             internalEvents: params.internalEvents,
             channel: shouldDeliverExternally ? directChannel : undefined,
             accountId: shouldDeliverExternally ? effectiveDirectOrigin?.accountId : undefined,
