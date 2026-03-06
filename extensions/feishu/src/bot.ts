@@ -467,9 +467,11 @@ function checkBotMentioned(
       // open_id is the stable identifier and should be the source of truth.
       if (m.id.open_id === botOpenId) return true;
 
-      // Backward-compatible fallback: if Feishu omits open_id in a mention payload,
-      // allow matching by exact bot name to avoid false negatives.
-      if (!m.id.open_id && botName && m.name && m.name === botName) return true;
+      // Backward-compatible fallback: only use name match when mention payload has no IDs at all.
+      // If user_id/union_id exists, it's likely a real user mention and should not be misclassified.
+      if (!m.id.open_id && !m.id.user_id && !m.id.union_id && botName && m.name === botName) {
+        return true;
+      }
 
       return false;
     });

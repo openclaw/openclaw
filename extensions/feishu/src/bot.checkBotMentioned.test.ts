@@ -4,7 +4,11 @@ import { parseFeishuMessageEvent } from "./bot.js";
 // Helper to build a minimal FeishuMessageEvent for testing
 function makeEvent(
   chatType: "p2p" | "group" | "private",
-  mentions?: Array<{ key: string; name: string; id: { open_id?: string } }>,
+  mentions?: Array<{
+    key: string;
+    name: string;
+    id: { open_id?: string; user_id?: string; union_id?: string };
+  }>,
   text = "hello",
 ) {
   return {
@@ -98,6 +102,20 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     ]);
     const ctx = parseFeishuMessageEvent(event as any, "");
     expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("does not treat name-only fallback as bot mention when user_id is present", () => {
+    const event = makeEvent("group", [
+      { key: "@_user_1", name: "Claw", id: { user_id: "u_real_user" } },
+    ]);
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID, "Claw");
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("allows name fallback only when all mention IDs are missing", () => {
+    const event = makeEvent("group", [{ key: "@_user_1", name: "Claw", id: {} }]);
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID, "Claw");
+    expect(ctx.mentionedBot).toBe(true);
   });
 
   it("treats mention.name regex metacharacters as literals when stripping", () => {
