@@ -17,6 +17,27 @@ const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 const PARALLEL_TOOL_CALLS_APIS = new Set(["openai-completions", "openai-responses"]);
 
+function mergeExtraParamsWithAliasPrecedence(
+  lowerPriority: Record<string, unknown> | undefined,
+  higherPriority: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!lowerPriority && !higherPriority) {
+    return undefined;
+  }
+
+  const merged = Object.assign({}, lowerPriority, higherPriority);
+  const parallelToolCallsRaw =
+    higherPriority?.parallel_tool_calls ??
+    higherPriority?.parallelToolCalls ??
+    lowerPriority?.parallel_tool_calls ??
+    lowerPriority?.parallelToolCalls;
+  if (parallelToolCallsRaw !== undefined) {
+    merged.parallel_tool_calls = parallelToolCallsRaw;
+    delete merged.parallelToolCalls;
+  }
+  return merged;
+}
+
 /**
  * Resolve provider-specific extra params from model config.
  * Used to pass through stream params like temperature/maxTokens.
@@ -41,7 +62,7 @@ export function resolveExtraParams(params: {
     return undefined;
   }
 
-  return Object.assign({}, globalParams, agentParams);
+  return mergeExtraParamsWithAliasPrecedence(globalParams, agentParams);
 }
 
 type CacheRetention = "none" | "short" | "long";
@@ -1105,7 +1126,7 @@ export function applyExtraParamsToAgent(
           Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
         )
       : undefined;
-  const merged = Object.assign({}, extraParams, override);
+  const merged = mergeExtraParamsWithAliasPrecedence(extraParams, override);
   const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
 
   if (wrappedStreamFn) {

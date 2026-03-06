@@ -116,6 +116,40 @@ describe("resolveExtraParams", () => {
     });
   });
 
+  it("preserves per-agent precedence across parallel tool call aliases", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5": {
+                params: {
+                  parallel_tool_calls: true,
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "risk-reviewer",
+              params: {
+                parallelToolCalls: false,
+              },
+            },
+          ],
+        },
+      },
+      provider: "openai",
+      modelId: "gpt-5",
+      agentId: "risk-reviewer",
+    });
+
+    expect(result).toMatchObject({
+      parallel_tool_calls: false,
+    });
+    expect(result).not.toHaveProperty("parallelToolCalls");
+  });
+
   it("ignores per-agent params when agentId does not match", () => {
     const result = resolveExtraParams({
       cfg: {
@@ -195,6 +229,7 @@ describe("applyExtraParamsToAgent", () => {
     applyModelId: string;
     model: Model<"openai-responses"> | Model<"openai-completions"> | Model<"anthropic-messages">;
     cfg?: Record<string, unknown>;
+    extraParamsOverride?: Record<string, unknown>;
   }) {
     const payload: Record<string, unknown> = {};
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -207,6 +242,7 @@ describe("applyExtraParamsToAgent", () => {
       params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
       params.applyProvider,
       params.applyModelId,
+      params.extraParamsOverride,
     );
     const context: Context = { messages: [] };
     void agent.streamFn?.(params.model, context, {});
@@ -1631,6 +1667,36 @@ describe("applyExtraParamsToAgent", () => {
       } as unknown as Model<"openai-responses">,
     });
     expect(payload.parallel_tool_calls).toBe(true);
+  });
+
+  it("lets extra param overrides win across parallel tool call aliases", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5": {
+                params: {
+                  parallel_tool_calls: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      extraParamsOverride: {
+        parallelToolCalls: false,
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://proxy.example.com/v1",
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload.parallel_tool_calls).toBe(false);
   });
 
   it("does not inject parallel_tool_calls for non OpenAI-compatible APIs", () => {
