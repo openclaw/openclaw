@@ -34,6 +34,7 @@ import type {
 
 const log = createSubsystemLogger("memory/session-sanitization");
 const warnedUnavailableAgents = new Set<string>();
+const warnedSandboxSkipPassthrough = new Set<string>();
 
 type HelperDeps = {
   runner?: SanitizationRunner;
@@ -758,12 +759,15 @@ export async function processMcpToolResult(params: {
         1,
       );
     }
-    log.warn(
-      "mcp sanitization: sandbox unavailable and blockOnSandboxUnavailable=false, passing through",
-      { agentId: params.agentId, server: params.server },
-    );
+    if (!warnedSandboxSkipPassthrough.has(params.agentId)) {
+      warnedSandboxSkipPassthrough.add(params.agentId);
+      log.warn(
+        "MCP sanitization sandbox unavailable — returning raw tool result as trusted pass-through (blockOnSandboxUnavailable=false). Raw MCP output will not be inspected. Ensure this deployment is intentional.",
+        { agentId: params.agentId, server: params.server },
+      );
+    }
     return {
-      trusted: false,
+      trusted: true,
       safe: true,
       structuredResult:
         params.rawResult !== null && typeof params.rawResult === "object"

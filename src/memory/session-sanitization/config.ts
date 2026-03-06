@@ -98,26 +98,56 @@ export function isMcpServerTrusted(params: {
 
 export const UNKNOWN_MCP_SERVER = "unknown";
 
+const warnedAmbiguousTools = new Set<string>();
+
 /**
  * Resolve the server name for a given tool by scanning `cfg.mcpServers`.
- * Returns the server identifier if a server claims the tool, or
- * `UNKNOWN_MCP_SERVER` ("unknown") when no server claims it.
+ * Returns the server identifier if a server claims the tool (by exact name or
+ * prefix), or `UNKNOWN_MCP_SERVER` ("unknown") when no server claims it.
  *
- * Lookup is by exact tool-name match.  The first server whose `tools` list
- * contains the tool name wins (iteration order = config declaration order).
+ * Uses longest-match prefix resolution: when multiple servers have prefixes
+ * that match the tool name, the most specific (longest) prefix wins. When two
+ * or more servers have equal-length matching prefixes the result is ambiguous —
+ * `UNKNOWN_MCP_SERVER` is returned, routing through full sanitization.
  */
 export function resolveToolServer(cfg: OpenClawConfig | undefined, toolName: string): string {
   const registry = cfg?.mcpServers;
   if (!registry || typeof registry !== "object") {
     return UNKNOWN_MCP_SERVER;
   }
+
+  let bestLength = -1;
+  let bestServers: string[] = [];
+
   for (const [serverName, entry] of Object.entries(registry)) {
-    if (
-      Array.isArray(entry?.tools) &&
-      entry.tools.some((t) => typeof t === "string" && (t === toolName || toolName.startsWith(t)))
-    ) {
-      return serverName;
+    if (!Array.isArray(entry?.tools)) continue;
+    for (const t of entry.tools) {
+      if (typeof t !== "string") continue;
+      if (t === toolName || toolName.startsWith(t)) {
+        const matchLength = t.length;
+        if (matchLength > bestLength) {
+          bestLength = matchLength;
+          bestServers = [serverName];
+        } else if (matchLength === bestLength && !bestServers.includes(serverName)) {
+          bestServers.push(serverName);
+        }
+      }
     }
   }
-  return UNKNOWN_MCP_SERVER;
+
+  if (bestServers.length === 0) {
+    return UNKNOWN_MCP_SERVER;
+  }
+
+  if (bestServers.length > 1) {
+    if (!warnedAmbiguousTools.has(toolName)) {
+      warnedAmbiguousTools.add(toolName);
+      log.warn(
+        `Ambiguous MCP tool prefix overlap detected for tool '${toolName}': servers [${bestServers.join(", ")}] have equal-length matching prefixes. Routing through full sanitization. To resolve, use exact tool names or ensure prefixes are unambiguous.`,
+      );
+    }
+    return UNKNOWN_MCP_SERVER;
+  }
+
+  return bestServers[0]!;
 }
