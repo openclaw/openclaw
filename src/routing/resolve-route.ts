@@ -196,10 +196,18 @@ type BindingScope = {
   memberRoleIds: Set<string>;
 };
 
+/**
+ * Pre-grouped index: channel → accountKey → EvaluatedBinding[]
+ * Built once per config, enables O(1) lookup instead of O(n) linear scan.
+ * accountKey: "" = default-only, "*" = wildcard, otherwise normalized accountId.
+ */
+type ChannelAccountIndex = Map<string, Map<string, EvaluatedBinding[]>>;
+
 type EvaluatedBindingsCache = {
   bindingsRef: OpenClawConfig["bindings"];
   byChannelAccount: Map<string, EvaluatedBinding[]>;
   byChannelAccountIndex: Map<string, EvaluatedBindingsIndex>;
+  channelAccountIndex: ChannelAccountIndex | null;
 };
 
 const evaluatedBindingsCacheByCfg = new WeakMap<OpenClawConfig, EvaluatedBindingsCache>();
@@ -319,6 +327,45 @@ function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBin
   };
 }
 
+function resolveBindingAccountKey(rawAccountId: string | undefined): string {
+  const trimmed = (rawAccountId ?? "").trim();
+  if (!trimmed) {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  if (trimmed === "*") {
+    return "*";
+  }
+  return normalizeAccountId(trimmed);
+}
+
+function buildChannelAccountIndex(cfg: OpenClawConfig): ChannelAccountIndex {
+  const index: ChannelAccountIndex = new Map();
+  for (const binding of listBindings(cfg)) {
+    if (!binding || typeof binding !== "object") {
+      continue;
+    }
+    const ch = normalizeToken(binding.match?.channel);
+    if (!ch) {
+      continue;
+    }
+    const accountKey = resolveBindingAccountKey(binding.match?.accountId as string | undefined);
+
+    let byAccount = index.get(ch);
+    if (!byAccount) {
+      byAccount = new Map();
+      index.set(ch, byAccount);
+    }
+    const evaluated: EvaluatedBinding = { binding, match: normalizeBindingMatch(binding.match) };
+    const existing = byAccount.get(accountKey);
+    if (existing) {
+      existing.push(evaluated);
+    } else {
+      byAccount.set(accountKey, [evaluated]);
+    }
+  }
+  return index;
+}
+
 function getEvaluatedBindingsForChannelAccount(
   cfg: OpenClawConfig,
   channel: string,
@@ -333,6 +380,7 @@ function getEvaluatedBindingsForChannelAccount(
           bindingsRef,
           byChannelAccount: new Map<string, EvaluatedBinding[]>(),
           byChannelAccountIndex: new Map<string, EvaluatedBindingsIndex>(),
+          channelAccountIndex: null as ChannelAccountIndex | null,
         };
   if (cache !== existing) {
     evaluatedBindingsCacheByCfg.set(cfg, cache);
@@ -344,18 +392,22 @@ function getEvaluatedBindingsForChannelAccount(
     return hit;
   }
 
-  const evaluated: EvaluatedBinding[] = listBindings(cfg).flatMap((binding) => {
-    if (!binding || typeof binding !== "object") {
-      return [];
+  if (!cache.channelAccountIndex) {
+    cache.channelAccountIndex = buildChannelAccountIndex(cfg);
+  }
+  const byAccount = cache.channelAccountIndex.get(channel);
+  const wildcard = byAccount?.get("*") ?? [];
+  const exact = byAccount?.get(accountId) ?? [];
+
+  const merged = new Map<unknown, EvaluatedBinding>();
+  for (const list of [exact, wildcard]) {
+    for (const b of list) {
+      if (!merged.has(b.binding)) {
+        merged.set(b.binding, b);
+      }
     }
-    if (!matchesChannel(binding.match, channel)) {
-      return [];
-    }
-    if (!matchesAccountId(binding.match?.accountId, accountId)) {
-      return [];
-    }
-    return [{ binding, match: normalizeBindingMatch(binding.match) }];
-  });
+  }
+  const evaluated = [...merged.values()];
 
   cache.byChannelAccount.set(cacheKey, evaluated);
   cache.byChannelAccountIndex.set(cacheKey, buildEvaluatedBindingsIndex(evaluated));

@@ -767,4 +767,41 @@ describe("role-based agent routing", () => {
       expectedMatchedBy: "binding.guild+roles",
     });
   });
+
+  test("scales to large binding counts without linear scan per lookup", () => {
+    const BINDING_COUNT = 10_000;
+    const bindings = Array.from({ length: BINDING_COUNT }, (_, i) => ({
+      agentId: `agent-${i}`,
+      match: {
+        channel: "dingtalk",
+        accountId: "default",
+        peer: { kind: "direct" as const, id: `user-${i}` },
+      },
+    }));
+    const cfg: OpenClawConfig = { bindings };
+
+    const start = performance.now();
+    const LOOKUPS = 200;
+    for (let i = 0; i < LOOKUPS; i++) {
+      const peerId = `user-${i % BINDING_COUNT}`;
+      resolveAgentRoute({
+        cfg,
+        channel: "dingtalk",
+        accountId: "default",
+        peer: { kind: "direct", id: peerId },
+      });
+    }
+    const elapsed = performance.now() - start;
+
+    expect(elapsed).toBeLessThan(3000);
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "dingtalk",
+      accountId: "default",
+      peer: { kind: "direct", id: "user-42" },
+    });
+    expect(route.agentId).toBe("agent-42");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
 });
