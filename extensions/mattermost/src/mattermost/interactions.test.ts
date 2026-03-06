@@ -448,7 +448,7 @@ describe("createMattermostInteractionHandler", () => {
   }
 
   it("accepts non-localhost requests when the interaction token is valid", async () => {
-    const context = { action_id: "approve" };
+    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
     const token = generateInteractionToken(context, "acct");
     const requestLog: Array<{ path: string; method?: string }> = [];
     const handler = createMattermostInteractionHandler({
@@ -459,6 +459,7 @@ describe("createMattermostInteractionHandler", () => {
             return { id: "post-1" };
           }
           return {
+            channel_id: "chan-1",
             message: "Choose",
             props: {
               attachments: [{ actions: [{ id: "approve", name: "Approve" }] }],
@@ -515,5 +516,98 @@ describe("createMattermostInteractionHandler", () => {
 
     expect(res.statusCode).toBe(403);
     expect(res.body).toContain("Invalid token");
+  });
+
+  it("rejects requests when the signed channel does not match the callback payload", async () => {
+    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
+    const token = generateInteractionToken(context, "acct");
+    const handler = createMattermostInteractionHandler({
+      client: {
+        request: async () => ({ message: "unused" }),
+      } as unknown as MattermostClient,
+      botUserId: "bot",
+      accountId: "acct",
+    });
+
+    const req = createReq({
+      body: {
+        user_id: "user-1",
+        channel_id: "chan-2",
+        post_id: "post-1",
+        context: { ...context, _token: token },
+      },
+    });
+    const res = createRes();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toContain("Channel mismatch");
+  });
+
+  it("rejects requests when the fetched post does not belong to the callback channel", async () => {
+    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
+    const token = generateInteractionToken(context, "acct");
+    const handler = createMattermostInteractionHandler({
+      client: {
+        request: async () => ({
+          channel_id: "chan-9",
+          message: "Choose",
+          props: {
+            attachments: [{ actions: [{ id: "approve", name: "Approve" }] }],
+          },
+        }),
+      } as unknown as MattermostClient,
+      botUserId: "bot",
+      accountId: "acct",
+    });
+
+    const req = createReq({
+      body: {
+        user_id: "user-1",
+        channel_id: "chan-1",
+        post_id: "post-1",
+        context: { ...context, _token: token },
+      },
+    });
+    const res = createRes();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toContain("Post/channel mismatch");
+  });
+
+  it("rejects requests when the action is not present on the fetched post", async () => {
+    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
+    const token = generateInteractionToken(context, "acct");
+    const handler = createMattermostInteractionHandler({
+      client: {
+        request: async () => ({
+          channel_id: "chan-1",
+          message: "Choose",
+          props: {
+            attachments: [{ actions: [{ id: "reject", name: "Reject" }] }],
+          },
+        }),
+      } as unknown as MattermostClient,
+      botUserId: "bot",
+      accountId: "acct",
+    });
+
+    const req = createReq({
+      body: {
+        user_id: "user-1",
+        channel_id: "chan-1",
+        post_id: "post-1",
+        context: { ...context, _token: token },
+      },
+    });
+    const res = createRes();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toContain("Unknown action");
   });
 });

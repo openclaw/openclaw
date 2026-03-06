@@ -6,6 +6,7 @@ import { updateMattermostPost, type MattermostClient } from "./client.js";
 
 const INTERACTION_MAX_BODY_BYTES = 64 * 1024;
 const INTERACTION_BODY_TIMEOUT_MS = 10_000;
+const SIGNED_CHANNEL_ID_CONTEXT_KEY = "__openclaw_channel_id";
 
 /**
  * Mattermost interactive message callback payload.
@@ -363,6 +364,69 @@ export function createMattermostInteractionHandler(params: {
       return;
     }
 
+    const signedChannelId =
+      typeof contextWithoutToken[SIGNED_CHANNEL_ID_CONTEXT_KEY] === "string"
+        ? contextWithoutToken[SIGNED_CHANNEL_ID_CONTEXT_KEY].trim()
+        : "";
+    if (signedChannelId && signedChannelId !== payload.channel_id) {
+      log?.(
+        `mattermost interaction: signed channel mismatch payload=${payload.channel_id} signed=${signedChannelId}`,
+      );
+      res.statusCode = 403;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "Channel mismatch" }));
+      return;
+    }
+
+    const userName = payload.user_name ?? payload.user_id;
+    let originalMessage = "";
+    let clickedButtonName = actionId;
+    try {
+      const originalPost = await client.request<{
+        channel_id?: string | null;
+        message?: string;
+        props?: Record<string, unknown>;
+      }>(`/posts/${payload.post_id}`);
+      const postChannelId = originalPost.channel_id?.trim();
+      if (!postChannelId || postChannelId !== payload.channel_id) {
+        log?.(
+          `mattermost interaction: post channel mismatch payload=${payload.channel_id} post=${postChannelId ?? "<missing>"}`,
+        );
+        res.statusCode = 403;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Post/channel mismatch" }));
+        return;
+      }
+      originalMessage = originalPost.message ?? "";
+
+      // Ensure the callback can only target an action that exists on the original post.
+      const postAttachments = Array.isArray(originalPost?.props?.attachments)
+        ? (originalPost.props.attachments as Array<{
+            actions?: Array<{ id?: string; name?: string }>;
+          }>)
+        : [];
+      for (const att of postAttachments) {
+        const match = att.actions?.find((a) => a.id === actionId);
+        if (match?.name) {
+          clickedButtonName = match.name;
+          break;
+        }
+      }
+      if (clickedButtonName === actionId) {
+        log?.(`mattermost interaction: action ${actionId} not found in post ${payload.post_id}`);
+        res.statusCode = 403;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Unknown action" }));
+        return;
+      }
+    } catch (err) {
+      log?.(`mattermost interaction: failed to validate post ${payload.post_id}: ${String(err)}`);
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "Failed to validate interaction" }));
+      return;
+    }
+
     log?.(
       `mattermost interaction: action=${actionId} user=${payload.user_name ?? payload.user_id} ` +
         `post=${payload.post_id} channel=${payload.channel_id}`,
@@ -387,34 +451,6 @@ export function createMattermostInteractionHandler(params: {
       });
     } catch (err) {
       log?.(`mattermost interaction: system event dispatch failed: ${String(err)}`);
-    }
-
-    // Fetch the original post to preserve its message and find the clicked button name.
-    const userName = payload.user_name ?? payload.user_id;
-    let originalMessage = "";
-    let clickedButtonName = actionId; // fallback to action ID if we can't find the name
-    try {
-      const originalPost = await client.request<{
-        message?: string;
-        props?: Record<string, unknown>;
-      }>(`/posts/${payload.post_id}`);
-      originalMessage = originalPost?.message ?? "";
-
-      // Find the clicked button's display name from the original attachments
-      const postAttachments = Array.isArray(originalPost?.props?.attachments)
-        ? (originalPost.props.attachments as Array<{
-            actions?: Array<{ id?: string; name?: string }>;
-          }>)
-        : [];
-      for (const att of postAttachments) {
-        const match = att.actions?.find((a) => a.id === actionId);
-        if (match?.name) {
-          clickedButtonName = match.name;
-          break;
-        }
-      }
-    } catch (err) {
-      log?.(`mattermost interaction: failed to fetch post ${payload.post_id}: ${String(err)}`);
     }
 
     // Update the post via API to replace buttons with a completion indicator.
