@@ -327,18 +327,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     // QMD collections are persisted inside the index database and must be created
     // via the CLI. Prefer listing existing collections when supported, otherwise
     // fall back to best-effort idempotent `qmd collection add`.
-    const existing = new Map<string, ListedCollection>();
-    try {
-      const result = await this.runQmd(["collection", "list", "--json"], {
-        timeoutMs: this.qmd.update.commandTimeoutMs,
-      });
-      const parsed = this.parseListedCollections(result.stdout);
-      for (const [name, details] of parsed) {
-        existing.set(name, details);
-      }
-    } catch {
-      // ignore; older qmd versions might not support list --json.
-    }
+    const existing = await this.listCollectionsBestEffort();
 
     await this.migrateLegacyUnscopedCollections(existing);
 
@@ -360,13 +349,117 @@ export class QmdMemoryManager implements MemorySearchManager {
       try {
         await this.ensureCollectionPath(collection);
         await this.addCollection(collection.path, collection.name, collection.pattern);
+        existing.set(collection.name, {
+          path: collection.path,
+          pattern: collection.pattern,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (this.isCollectionAlreadyExistsError(message)) {
+          const rebound = await this.tryRebindConflictingCollection({
+            collection,
+            existing,
+            addErrorMessage: message,
+          });
+          if (!rebound) {
+            log.warn(`qmd collection add skipped for ${collection.name}: ${message}`);
+          }
           continue;
         }
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
+    }
+  }
+
+  private async listCollectionsBestEffort(): Promise<Map<string, ListedCollection>> {
+    const existing = new Map<string, ListedCollection>();
+    try {
+      const result = await this.runQmd(["collection", "list", "--json"], {
+        timeoutMs: this.qmd.update.commandTimeoutMs,
+      });
+      const parsed = this.parseListedCollections(result.stdout);
+      for (const [name, details] of parsed) {
+        existing.set(name, details);
+      }
+    } catch {
+      // ignore; older qmd versions might not support list --json.
+    }
+    return existing;
+  }
+
+  private findCollectionByPathPattern(
+    collection: ManagedCollection,
+    listed: Map<string, ListedCollection>,
+  ): string | null {
+    for (const [name, details] of listed) {
+      if (!details.path || typeof details.pattern !== "string") {
+        continue;
+      }
+      if (!this.pathsMatch(details.path, collection.path)) {
+        continue;
+      }
+      if (details.pattern !== collection.pattern) {
+        continue;
+      }
+      return name;
+    }
+    return null;
+  }
+
+  private async tryRebindConflictingCollection(params: {
+    collection: ManagedCollection;
+    existing: Map<string, ListedCollection>;
+    addErrorMessage: string;
+  }): Promise<boolean> {
+    const { collection, existing, addErrorMessage } = params;
+    let conflictName = this.findCollectionByPathPattern(collection, existing);
+    if (!conflictName) {
+      const refreshed = await this.listCollectionsBestEffort();
+      existing.clear();
+      for (const [name, details] of refreshed) {
+        existing.set(name, details);
+      }
+      conflictName = this.findCollectionByPathPattern(collection, existing);
+    }
+
+    if (!conflictName) {
+      return false;
+    }
+    if (conflictName === collection.name) {
+      existing.set(collection.name, {
+        path: collection.path,
+        pattern: collection.pattern,
+      });
+      return true;
+    }
+
+    log.warn(
+      `qmd collection add conflict for ${collection.name}: path+pattern already bound by ${conflictName}; rebinding`,
+    );
+    try {
+      await this.removeCollection(conflictName);
+      existing.delete(conflictName);
+    } catch (removeErr) {
+      const removeMessage = removeErr instanceof Error ? removeErr.message : String(removeErr);
+      if (!this.isCollectionMissingError(removeMessage)) {
+        log.warn(`qmd collection remove failed for ${conflictName}: ${removeMessage}`);
+      }
+      return false;
+    }
+
+    try {
+      await this.addCollection(collection.path, collection.name, collection.pattern);
+      existing.set(collection.name, {
+        path: collection.path,
+        pattern: collection.pattern,
+      });
+      return true;
+    } catch (retryErr) {
+      const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      log.warn(
+        `qmd collection add failed for ${collection.name} after rebinding ${conflictName}: ${retryMessage} (initial: ${addErrorMessage})`,
+      );
+      return false;
     }
   }
 
@@ -780,10 +873,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const results: MemorySearchResult[] = [];
     for (const entry of parsed) {
-      const doc = await this.resolveDocLocation(entry.docid, {
+      const docHints = this.normalizeDocHints({
         preferredCollection: entry.collection,
         preferredFile: entry.file,
       });
+      const doc = await this.resolveDocLocation(entry.docid, docHints);
       if (!doc) {
         continue;
       }
@@ -1521,14 +1615,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     docid?: string,
     hints?: { preferredCollection?: string; preferredFile?: string },
   ): Promise<{ rel: string; abs: string; source: MemorySource } | null> {
+    const normalizedHints = this.normalizeDocHints(hints);
     if (!docid) {
-      return null;
+      return this.resolveDocLocationFromHints(normalizedHints);
     }
     const normalized = docid.startsWith("#") ? docid.slice(1) : docid;
     if (!normalized) {
       return null;
     }
-    const cacheKey = `${hints?.preferredCollection ?? "*"}:${normalized}`;
+    const cacheKey = `${normalizedHints.preferredCollection ?? "*"}:${normalized}`;
     const cached = this.docPathCache.get(cacheKey);
     if (cached) {
       return cached;
@@ -1554,12 +1649,92 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (rows.length === 0) {
       return null;
     }
-    const location = this.pickDocLocation(rows, hints);
+    const location = this.pickDocLocation(rows, normalizedHints);
     if (!location) {
       return null;
     }
     this.docPathCache.set(cacheKey, location);
     return location;
+  }
+
+  private resolveDocLocationFromHints(hints: {
+    preferredCollection?: string;
+    preferredFile?: string;
+  }): { rel: string; abs: string; source: MemorySource } | null {
+    if (!hints.preferredCollection || !hints.preferredFile) {
+      return null;
+    }
+    const collectionRelativePath = this.toCollectionRelativePath(
+      hints.preferredCollection,
+      hints.preferredFile,
+    );
+    if (!collectionRelativePath) {
+      return null;
+    }
+    return this.toDocLocation(hints.preferredCollection, collectionRelativePath);
+  }
+
+  private normalizeDocHints(hints?: { preferredCollection?: string; preferredFile?: string }): {
+    preferredCollection?: string;
+    preferredFile?: string;
+  } {
+    const preferredCollection = hints?.preferredCollection?.trim();
+    const preferredFile = hints?.preferredFile?.trim();
+    if (!preferredFile) {
+      return preferredCollection ? { preferredCollection } : {};
+    }
+
+    const parsedQmdFile = this.parseQmdFileUri(preferredFile);
+    return {
+      preferredCollection: parsedQmdFile?.collection ?? preferredCollection,
+      preferredFile: parsedQmdFile?.collectionRelativePath ?? preferredFile,
+    };
+  }
+
+  private parseQmdFileUri(fileRef: string): {
+    collection?: string;
+    collectionRelativePath?: string;
+  } | null {
+    if (!fileRef.toLowerCase().startsWith("qmd://")) {
+      return null;
+    }
+    try {
+      const parsed = new URL(fileRef);
+      const collection = decodeURIComponent(parsed.hostname).trim();
+      const pathname = decodeURIComponent(parsed.pathname).replace(/^\/+/, "").trim();
+      if (!collection && !pathname) {
+        return null;
+      }
+      return {
+        collection: collection || undefined,
+        collectionRelativePath: pathname || undefined,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private toCollectionRelativePath(collection: string, filePath: string): string | null {
+    const root = this.collectionRoots.get(collection);
+    if (!root) {
+      return null;
+    }
+    const trimmedFilePath = filePath.trim();
+    if (!trimmedFilePath) {
+      return null;
+    }
+    const normalizedInput = path.normalize(trimmedFilePath);
+    const absolutePath = path.isAbsolute(normalizedInput)
+      ? normalizedInput
+      : path.resolve(root.path, normalizedInput);
+    if (!this.isWithinRoot(root.path, absolutePath)) {
+      return null;
+    }
+    const relative = path.relative(root.path, absolutePath);
+    if (!relative || relative === ".") {
+      return null;
+    }
+    return relative.replace(/\\/g, "/");
   }
 
   private pickDocLocation(
@@ -1889,37 +2064,64 @@ export class QmdMemoryManager implements MemorySearchManager {
     log.debug(
       `qmd ${command} multi-collection workaround active (${collectionNames.length} collections)`,
     );
-    const bestByDocId = new Map<string, QmdQueryResult>();
+    const bestByResultKey = new Map<string, QmdQueryResult>();
     for (const collectionName of collectionNames) {
       const args = this.buildSearchArgs(command, query, limit);
       args.push("-c", collectionName);
       const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
       const parsed = parseQmdQueryJson(result.stdout, result.stderr);
       for (const entry of parsed) {
+        const normalizedHints = this.normalizeDocHints({
+          preferredCollection: entry.collection ?? collectionName,
+          preferredFile: entry.file,
+        });
         const normalizedDocId =
           typeof entry.docid === "string" && entry.docid.trim().length > 0
             ? entry.docid
             : undefined;
-        if (!normalizedDocId) {
-          continue;
-        }
         const withCollection = {
           ...entry,
           docid: normalizedDocId,
-          collection: entry.collection ?? collectionName,
+          collection: normalizedHints.preferredCollection ?? entry.collection ?? collectionName,
+          file: normalizedHints.preferredFile ?? entry.file,
         } satisfies QmdQueryResult;
-        const prev = bestByDocId.get(normalizedDocId);
+        const resultKey = this.buildQmdResultKey(withCollection);
+        if (!resultKey) {
+          continue;
+        }
+        const prev = bestByResultKey.get(resultKey);
         const prevScore = typeof prev?.score === "number" ? prev.score : Number.NEGATIVE_INFINITY;
         const nextScore =
           typeof withCollection.score === "number"
             ? withCollection.score
             : Number.NEGATIVE_INFINITY;
         if (!prev || nextScore > prevScore) {
-          bestByDocId.set(normalizedDocId, withCollection);
+          bestByResultKey.set(resultKey, withCollection);
         }
       }
     }
-    return [...bestByDocId.values()].toSorted((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    return [...bestByResultKey.values()].toSorted((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  }
+
+  private buildQmdResultKey(entry: QmdQueryResult): string | null {
+    if (typeof entry.docid === "string" && entry.docid.trim().length > 0) {
+      return `docid:${entry.docid}`;
+    }
+    const hints = this.normalizeDocHints({
+      preferredCollection: entry.collection,
+      preferredFile: entry.file,
+    });
+    if (!hints.preferredCollection || !hints.preferredFile) {
+      return null;
+    }
+    const collectionRelativePath = this.toCollectionRelativePath(
+      hints.preferredCollection,
+      hints.preferredFile,
+    );
+    if (!collectionRelativePath) {
+      return null;
+    }
+    return `file:${hints.preferredCollection}:${collectionRelativePath}`;
   }
 
   private async runMcporterAcrossCollections(params: {

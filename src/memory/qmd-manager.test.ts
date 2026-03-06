@@ -490,6 +490,116 @@ describe("QmdMemoryManager", () => {
     expect(legacyCollections.has("memory-dir")).toBe(false);
   });
 
+  it("rebinds conflicting collection name when path+pattern slot is already occupied", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    const listedCollections = new Map<
+      string,
+      {
+        path: string;
+        mask: string;
+      }
+    >([["memory-root-sonnet", { path: workspaceDir, mask: "MEMORY.md" }]]);
+    const removeCalls: string[] = [];
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify(
+            [...listedCollections.entries()].map(([name, info]) => ({
+              name,
+              path: info.path,
+              mask: info.mask,
+            })),
+          ),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        const name = args[2] ?? "";
+        removeCalls.push(name);
+        listedCollections.delete(name);
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        const pathArg = args[2] ?? "";
+        const name = args[args.indexOf("--name") + 1] ?? "";
+        const mask = args[args.indexOf("--mask") + 1] ?? "";
+        const hasConflict = [...listedCollections.entries()].some(
+          ([existingName, info]) =>
+            existingName !== name && info.path === pathArg && info.mask === mask,
+        );
+        if (hasConflict) {
+          emitAndClose(child, "stderr", "A collection already exists for this path and pattern", 1);
+          return child;
+        }
+        listedCollections.set(name, { path: pathArg, mask });
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    expect(removeCalls).toContain("memory-root-sonnet");
+    expect(listedCollections.has("memory-root-main")).toBe(true);
+    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("rebinding"));
+  });
+
+  it("warns instead of silently succeeding when add conflict metadata is unavailable", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        // Name-only rows do not expose path/mask metadata.
+        emitAndClose(child, "stdout", JSON.stringify(["workspace-legacy"]));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stderr", "collection already exists", 1);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("qmd collection add skipped for workspace-main"),
+    );
+  });
+
   it("migrates unscoped legacy collections from plain-text collection list output", async () => {
     cfg = {
       ...cfg,
@@ -2276,6 +2386,132 @@ describe("QmdMemoryManager", () => {
         endLine: 3,
         score: 0.9,
         snippet: "@@ -3,1\nworkspace hit",
+        source: "memory",
+      },
+    ]);
+    await manager.close();
+  });
+
+  it("resolves search hits when qmd returns qmd:// file URIs without docid", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              file: "qmd://workspace-main/notes/welcome.md",
+              score: 0.71,
+              snippet: "@@ -4,1\ntoken unlock",
+            },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    const results = await manager.search("token unlock", {
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+    expect(results).toEqual([
+      {
+        path: "notes/welcome.md",
+        startLine: 4,
+        endLine: 4,
+        score: 0.71,
+        snippet: "@@ -4,1\ntoken unlock",
+        source: "memory",
+      },
+    ]);
+    await manager.close();
+  });
+
+  it("preserves multi-collection qmd search hits when results only include file URIs", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search" && args.includes("workspace-main")) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              file: "qmd://workspace-main/memory/facts.md",
+              score: 0.8,
+              snippet: "@@ -2,1\nworkspace fact",
+            },
+          ]),
+        );
+        return child;
+      }
+      if (args[0] === "search" && args.includes("notes-main")) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              file: "qmd://notes-main/guide.md",
+              score: 0.7,
+              snippet: "@@ -1,1\nnotes guide",
+            },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    const results = await manager.search("fact", {
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+    expect(results).toEqual([
+      {
+        path: "memory/facts.md",
+        startLine: 2,
+        endLine: 2,
+        score: 0.8,
+        snippet: "@@ -2,1\nworkspace fact",
+        source: "memory",
+      },
+      {
+        path: "notes/guide.md",
+        startLine: 1,
+        endLine: 1,
+        score: 0.7,
+        snippet: "@@ -1,1\nnotes guide",
         source: "memory",
       },
     ]);
