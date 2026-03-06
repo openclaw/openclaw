@@ -45,6 +45,8 @@ import {
 } from "./client.js";
 import {
   createMattermostInteractionHandler,
+  resolveInteractionCallbackUrl,
+  resolveInteractionCallbackPath,
   setInteractionCallbackUrl,
   setInteractionSecret,
 } from "./interactions.js";
@@ -99,6 +101,10 @@ const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
 
 const recentInboundMessages = createDedupeCache({
   ttlMs: RECENT_MATTERMOST_MESSAGE_TTL_MS,
@@ -333,9 +339,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         gatewayHost: cfg.gateway?.customBindHost ?? undefined,
       });
 
-      const isLoopbackHost = (hostname: string) =>
-        hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-
       try {
         const mmHost = new URL(baseUrl).hostname;
         const callbackHost = new URL(slashCallbackUrl).hostname;
@@ -452,10 +455,22 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
   // Register HTTP callback endpoint for interactive button clicks.
   // Mattermost POSTs to this URL when a user clicks a button action.
-  const gatewayPort = typeof cfg.gateway?.port === "number" ? cfg.gateway.port : 18789;
-  const interactionPath = `/mattermost/interactions/${account.accountId}`;
-  const callbackUrl = `http://localhost:${gatewayPort}${interactionPath}`;
+  const interactionPath = resolveInteractionCallbackPath(account.accountId);
+  const callbackUrl = resolveInteractionCallbackUrl(account.accountId, cfg);
   setInteractionCallbackUrl(account.accountId, callbackUrl);
+
+  try {
+    const mmHost = new URL(baseUrl).hostname;
+    const callbackHost = new URL(callbackUrl).hostname;
+    if (isLoopbackHost(callbackHost) && !isLoopbackHost(mmHost)) {
+      runtime.error?.(
+        `mattermost: interactions callbackUrl resolved to ${callbackUrl} (loopback) while baseUrl is ${baseUrl}. This MAY be unreachable depending on your deployment. If button clicks don't work, set channels.mattermost.interactions.callbackBaseUrl to a URL reachable from the Mattermost server (e.g. your public reverse proxy URL).`,
+      );
+    }
+  } catch {
+    // URL parse failed; ignore and continue (we will fail naturally if callbacks cannot be delivered).
+  }
+
   const unregisterInteractions = registerPluginHttpRoute({
     path: interactionPath,
     fallbackPath: "/mattermost/interactions/default",
@@ -464,7 +479,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       client,
       botUserId,
       accountId: account.accountId,
-      callbackUrl,
       resolveSessionKey: async (channelId: string, userId: string) => {
         const channelInfo = await resolveChannelInfo(channelId);
         const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
