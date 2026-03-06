@@ -1159,9 +1159,9 @@ If your AI does something bad:
 ## Secret Scanning (detect-secrets)
 
 CI runs the `detect-secrets` pre-commit hook in the `secrets` job.
-It checks changed files when a base commit is available, and falls back to an
-all-files scan otherwise. If it fails, there are new candidates not yet in the
-baseline.
+Pushes to `main` always run an all-files scan. Pull requests use a changed-file
+fast path when a base commit is available, and fall back to an all-files scan
+otherwise. If it fails, there are new candidates not yet in the baseline.
 
 ### If CI fails
 
