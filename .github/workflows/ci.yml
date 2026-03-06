@@ -303,13 +303,33 @@ jobs:
       - name: Install pre-commit
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pre-commit detect-secrets==1.5.0
+          python -m pip install pre-commit
 
       - name: Detect secrets
         run: |
-          if ! detect-secrets scan --baseline .secrets.baseline; then
-            echo "::error::Secret scanning failed. See docs/gateway/security.md#secret-scanning-detect-secrets"
-            exit 1
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
+          else
+            BASE="${{ github.event.pull_request.base.sha }}"
+          fi
+
+          changed_files=()
+          if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
+            while IFS= read -r path; do
+              [ -n "$path" ] || continue
+              [ -f "$path" ] || continue
+              changed_files+=("$path")
+            done < <(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
+          fi
+
+          if [ "${#changed_files[@]}" -gt 0 ]; then
+            echo "Running detect-secrets on ${#changed_files[@]} changed file(s)."
+            pre-commit run detect-secrets --files "${changed_files[@]}"
+          else
+            echo "Falling back to full detect-secrets scan."
+            pre-commit run --all-files detect-secrets
           fi
 
       - name: Detect committed private keys
