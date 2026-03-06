@@ -38,6 +38,33 @@ describe("stripInlineDirectiveTagsFromMessageForDisplay", () => {
     expect(result?.content).toEqual([{ type: "text", text: "hello  world " }]);
   });
 
+  test("returns original message reference when no inline directives are present", () => {
+    const input = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "plain text" },
+        { type: "tool", name: "x", payload: { ok: true } },
+      ],
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    expect(result).toBe(input);
+  });
+
+  test("only recreates text parts that actually changed", () => {
+    const unchanged = { type: "text", text: "plain text" };
+    const changed = { type: "text", text: "[[reply_to_current]] hello" };
+    const input = {
+      role: "assistant",
+      content: [unchanged, changed],
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    expect(result).toBeDefined();
+    expect(result).not.toBe(input);
+    expect(result?.content).toEqual([unchanged, { type: "text", text: " hello" }]);
+    expect(result?.content?.[0]).toBe(unchanged);
+    expect(result?.content?.[1]).not.toBe(changed);
+  });
+
   test("preserves empty-string text when directives are entire content", () => {
     const input = {
       role: "assistant",
