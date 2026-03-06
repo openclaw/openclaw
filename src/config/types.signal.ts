@@ -34,6 +34,8 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   actions?: {
     /** Enable/disable sending reactions via message tool (default: true). */
     reactions?: boolean;
+    /** Enable/disable sticker actions (`sticker`, `sticker-search`) via message tool (default: false). */
+    stickers?: boolean;
   };
   /**
    * Controls agent reaction behavior:

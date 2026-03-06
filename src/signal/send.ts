@@ -7,6 +7,15 @@ import { signalRpcRequest } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
+export type SignalStickerPack = {
+  packId?: string;
+  id?: string;
+  title?: string;
+  author?: string;
+  installed?: boolean;
+  [key: string]: unknown;
+};
+
 export type SignalSendOpts = {
   cfg?: OpenClawConfig;
   baseUrl?: string;
@@ -190,6 +199,93 @@ export async function sendMessageSignal(
     messageId: timestamp ? String(timestamp) : "unknown",
     timestamp,
   };
+}
+
+function validateSignalStickerInput(
+  packId: string,
+  stickerId: number,
+): {
+  packId: string;
+  stickerId: number;
+} {
+  const normalizedPackId = packId.trim();
+  if (!normalizedPackId) {
+    throw new Error("Signal sticker send requires packId");
+  }
+  if (!Number.isFinite(stickerId) || stickerId < 0) {
+    throw new Error("Signal sticker send requires a non-negative stickerId");
+  }
+  return {
+    packId: normalizedPackId,
+    stickerId: Math.trunc(stickerId),
+  };
+}
+
+function normalizeStickerPackList(result: unknown): SignalStickerPack[] {
+  if (Array.isArray(result)) {
+    return result as SignalStickerPack[];
+  }
+  if (!result || typeof result !== "object") {
+    return [];
+  }
+  const packs = (result as { stickerPacks?: unknown }).stickerPacks;
+  if (Array.isArray(packs)) {
+    return packs as SignalStickerPack[];
+  }
+  return [];
+}
+
+export async function sendStickerSignal(
+  to: string,
+  packId: string,
+  stickerId: number,
+  opts: SignalRpcOpts = {},
+): Promise<SignalSendResult> {
+  const accountInfo = resolveSignalAccount({
+    cfg: loadConfig(),
+    accountId: opts.accountId,
+  });
+  const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
+  const targetParams = buildTargetParams(parseTarget(to), {
+    recipient: true,
+    group: true,
+    username: true,
+  });
+  if (!targetParams) {
+    throw new Error("Signal recipient is required");
+  }
+  const sticker = validateSignalStickerInput(packId, stickerId);
+  const params: Record<string, unknown> = {
+    ...targetParams,
+    sticker: `${sticker.packId}:${sticker.stickerId}`,
+  };
+  if (account) {
+    params.account = account;
+  }
+  const result = await signalRpcRequest<{ timestamp?: number }>("send", params, {
+    baseUrl,
+    timeoutMs: opts.timeoutMs,
+  });
+  const timestamp = result?.timestamp;
+  return {
+    messageId: timestamp ? String(timestamp) : "unknown",
+    timestamp,
+  };
+}
+
+export async function listStickerPacksSignal(
+  opts: SignalRpcOpts = {},
+): Promise<SignalStickerPack[]> {
+  const accountInfo = resolveSignalAccount({
+    cfg: loadConfig(),
+    accountId: opts.accountId,
+  });
+  const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
+  const result = await signalRpcRequest("listStickerPacks", account ? { account } : undefined, {
+    baseUrl,
+    timeoutMs: opts.timeoutMs,
+  });
+  return normalizeStickerPackList(result);
 }
 
 export async function sendTypingSignal(
