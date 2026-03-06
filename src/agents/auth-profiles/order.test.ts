@@ -22,4 +22,26 @@ describe("resolveAuthProfileOrder", () => {
 
     expect(order).toEqual(["volcengine:default"]);
   });
+
+  it("accepts openai-codex credentials for codex-cli auth lookup", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      store,
+      provider: "codex-cli",
+    });
+
+    expect(order).toEqual(["openai-codex:default"]);
+  });
 });
