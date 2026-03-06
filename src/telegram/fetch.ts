@@ -13,6 +13,7 @@ import {
 let appliedAutoSelectFamily: boolean | null = null;
 let appliedDnsResultOrder: string | null = null;
 let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
+let stickyIpv4FallbackEnabled = false;
 const log = createSubsystemLogger("telegram/network");
 function isProxyLikeDispatcher(dispatcher: unknown): boolean {
   const ctorName = (dispatcher as { constructor?: { name?: string } })?.constructor?.name;
@@ -37,6 +38,10 @@ type Ipv4FallbackRule = {
   matches: (ctx: Ipv4FallbackContext) => boolean;
 };
 
+type RequestInitWithDispatcher = RequestInit & {
+  dispatcher?: unknown;
+};
+
 const IPV4_FALLBACK_RULES: readonly Ipv4FallbackRule[] = [
   {
     name: "fetch-failed-envelope",
@@ -47,6 +52,8 @@ const IPV4_FALLBACK_RULES: readonly Ipv4FallbackRule[] = [
     matches: ({ codes }) => FALLBACK_RETRY_ERROR_CODES.some((code) => codes.has(code)),
   },
 ];
+
+let ipv4FallbackDispatcher: EnvHttpProxyAgent | null = null;
 
 // Node 22 workaround: enable autoSelectFamily to allow IPv4 fallback on broken IPv6 networks.
 // Many networks have IPv6 configured but not routed, causing "Network is unreachable" errors.
@@ -151,6 +158,14 @@ function collectErrorCodes(err: unknown): Set<string> {
   return codes;
 }
 
+function formatErrorCodes(err: unknown): string {
+  const codes = [...collectErrorCodes(err)];
+  if (codes.length === 0) {
+    return "none";
+  }
+  return codes.join(",");
+}
+
 function shouldRetryWithIpv4Fallback(err: unknown): boolean {
   const ctx: Ipv4FallbackContext = {
     message:
@@ -165,12 +180,23 @@ function shouldRetryWithIpv4Fallback(err: unknown): boolean {
   return true;
 }
 
-function applyTelegramIpv4Fallback(): void {
-  applyTelegramNetworkWorkarounds({
-    autoSelectFamily: false,
-    dnsResultOrder: "ipv4first",
+function resolveIpv4FallbackDispatcher(): EnvHttpProxyAgent {
+  if (ipv4FallbackDispatcher) {
+    return ipv4FallbackDispatcher;
+  }
+  ipv4FallbackDispatcher = new EnvHttpProxyAgent({
+    connect: {
+      // Force IPv4 at the connector level for this retry only.
+      family: 4,
+    },
   });
-  log.warn("fetch fallback: forcing autoSelectFamily=false + dnsResultOrder=ipv4first");
+  return ipv4FallbackDispatcher;
+}
+
+function buildIpv4FallbackInit(init?: RequestInit): RequestInit {
+  const fallbackInit: RequestInitWithDispatcher = init ? { ...init } : {};
+  fallbackInit.dispatcher = resolveIpv4FallbackDispatcher();
+  return fallbackInit;
 }
 
 // Prefer wrapped fetch when available to normalize AbortSignal across runtimes.
@@ -189,12 +215,20 @@ export function resolveTelegramFetch(
     return sourceFetch;
   }
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestInit = stickyIpv4FallbackEnabled ? buildIpv4FallbackInit(init) : init;
     try {
-      return await sourceFetch(input, init);
+      return await sourceFetch(input, requestInit);
     } catch (err) {
       if (shouldRetryWithIpv4Fallback(err)) {
-        applyTelegramIpv4Fallback();
-        return sourceFetch(input, init);
+        // Once fallback proves necessary, keep using IPv4 for Telegram requests
+        // to avoid repeated dual-stack failures and log spam.
+        if (!stickyIpv4FallbackEnabled) {
+          stickyIpv4FallbackEnabled = true;
+          log.warn(
+            `fetch fallback: enabling sticky IPv4-only dispatcher (codes=${formatErrorCodes(err)})`,
+          );
+        }
+        return sourceFetch(input, buildIpv4FallbackInit(init));
       }
       throw err;
     }
@@ -205,4 +239,6 @@ export function resetTelegramFetchStateForTests(): void {
   appliedAutoSelectFamily = null;
   appliedDnsResultOrder = null;
   appliedGlobalDispatcherAutoSelectFamily = null;
+  ipv4FallbackDispatcher = null;
+  stickyIpv4FallbackEnabled = false;
 }

@@ -46,6 +46,14 @@ function expectEnvProxyAgentConstructorCall(params: { nth: number; autoSelectFam
   });
 }
 
+function expectIpv4FallbackDispatcherCall(params: { nth: number }) {
+  expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(params.nth, {
+    connect: {
+      family: 4,
+    },
+  });
+}
+
 function resolveTelegramFetchOrThrow() {
   const resolved = resolveTelegramFetch();
   if (!resolved) {
@@ -246,12 +254,15 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
     expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
-    expectEnvProxyAgentConstructorCall({ nth: 2, autoSelectFamily: false });
+    expectIpv4FallbackDispatcherCall({ nth: 2 });
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      dispatcher: expect.any(Object),
+    });
   });
 
-  it("retries with ipv4 fallback once per request, not once per process", async () => {
+  it("keeps ipv4 fallback sticky after first dual-stack failure", async () => {
     const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
       code: "ETIMEDOUT",
     });
@@ -262,7 +273,6 @@ describe("resolveTelegramFetch", () => {
       .fn()
       .mockRejectedValueOnce(fetchError)
       .mockResolvedValueOnce({ ok: true } as Response)
-      .mockRejectedValueOnce(fetchError)
       .mockResolvedValueOnce({ ok: true } as Response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -271,7 +281,19 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
     await resolved("https://api.telegram.org/file/botx/photos/file_2.jpg");
 
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // initial global dispatcher + one cached IPv4 fallback dispatcher
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(2);
+    expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
+    expectIpv4FallbackDispatcherCall({ nth: 2 });
+    const firstFallbackDispatcher = (fetchMock.mock.calls[1]?.[1] as { dispatcher?: unknown })
+      ?.dispatcher;
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      dispatcher: expect.any(Object),
+    });
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
+      dispatcher: firstFallbackDispatcher,
+    });
   });
 
   it("does not retry when fetch fails without fallback network error codes", async () => {
