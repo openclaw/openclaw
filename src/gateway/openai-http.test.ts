@@ -133,6 +133,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             sessionKey?: string;
             message?: string;
             extraSystemPrompt?: string;
+            clientTools?: Array<{ function?: { name?: string } }>;
+            streamParams?: { maxTokens?: number };
           }
         | undefined;
     const getFirstAgentMessage = () => getFirstAgentCall()?.message ?? "";
@@ -322,7 +324,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const message = getFirstAgentMessage();
         expectMessageContext(message, {
           history: ["User: What's the weather?", "Assistant: Checking the weather."],
-          current: ["Tool: Sunny, 70F."],
+          current: ["Tool:call_4: Sunny, 70F."],
         });
         await res.text();
       }
@@ -348,15 +350,211 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
+        mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(port, {
           model: "openclaw",
-          messages: [{ role: "system", content: "yo" }],
+          messages: [
+            { role: "developer", content: "Use tools carefully." },
+            { role: "user", content: "Check weather." },
+          ],
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "get_weather",
+                description: "Get weather",
+                parameters: { type: "object", properties: { city: { type: "string" } } },
+              },
+            },
+          ],
+          tool_choice: "required",
+          max_tokens: 77,
+        });
+        expect(res.status).toBe(200);
+
+        const firstCall = getFirstAgentCall() ?? {};
+        expect((firstCall.clientTools as Array<Record<string, unknown>> | undefined)?.length).toBe(
+          1,
+        );
+        expect(
+          (firstCall.clientTools as Array<{ function?: { name?: string } }> | undefined)?.[0]
+            ?.function?.name ?? "",
+        ).toBe("get_weather");
+        expect((firstCall.streamParams as { maxTokens?: number } | undefined)?.maxTokens).toBe(77);
+        expect(firstCall.extraSystemPrompt ?? "").toContain("Use tools carefully.");
+        expect(firstCall.extraSystemPrompt ?? "").toContain(
+          "You must call one of the available tools before responding.",
+        );
+        await res.text();
+      }
+
+      {
+        mockAgentOnce([{ text: "done" }]);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [{ role: "user", content: "Use a specific tool." }],
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "get_weather",
+                description: "Get weather",
+                parameters: { type: "object", properties: {} },
+              },
+            },
+            {
+              type: "function",
+              function: {
+                name: "get_time",
+                description: "Get time",
+                parameters: { type: "object", properties: {} },
+              },
+            },
+          ],
+          tool_choice: { type: "function", function: { name: "get_time" } },
+        });
+        expect(res.status).toBe(200);
+
+        const firstCall = getFirstAgentCall() ?? {};
+        const clientTools =
+          (firstCall.clientTools as Array<{ function?: { name?: string } }> | undefined) ?? [];
+        expect(clientTools).toHaveLength(1);
+        expect(clientTools[0]?.function?.name).toBe("get_time");
+        expect(firstCall.extraSystemPrompt ?? "").toContain(
+          "You must call the get_time tool before responding.",
+        );
+        await res.text();
+      }
+
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "" }],
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [
+              { id: "call_weather", name: "get_weather", arguments: '{"city":"Paris"}' },
+            ],
+            agentMeta: { usage: { input: 11, output: 7, total: 18 } },
+          },
+        } as never);
+        const json = await postSyncUserMessage("Call a tool");
+        const choice0 = (json.choices as Array<Record<string, unknown>>)[0] ?? {};
+        const msg = (choice0.message as Record<string, unknown> | undefined) ?? {};
+        const toolCalls = (msg.tool_calls as Array<Record<string, unknown>> | undefined) ?? [];
+        const usage = (json.usage as Record<string, unknown> | undefined) ?? {};
+        expect(msg.content).toBeNull();
+        expect(choice0.finish_reason).toBe("tool_calls");
+        expect(toolCalls).toHaveLength(1);
+        expect(toolCalls[0]?.id).toBe("call_weather");
+        expect((toolCalls[0]?.function as Record<string, unknown> | undefined)?.name).toBe(
+          "get_weather",
+        );
+        expect((toolCalls[0]?.function as Record<string, unknown> | undefined)?.arguments).toBe(
+          '{"city":"Paris"}',
+        );
+        expect(usage.prompt_tokens).toBe(11);
+        expect(usage.completion_tokens).toBe(7);
+        expect(usage.total_tokens).toBe(18);
+      }
+
+      {
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [{ role: "user", content: "Hi" }],
+          tool_choice: "required",
         });
         expect(res.status).toBe(400);
-        const missingUserJson = (await res.json()) as Record<string, unknown>;
-        expect((missingUserJson.error as Record<string, unknown> | undefined)?.type).toBe(
-          "invalid_request_error",
+        const errorJson = (await res.json()) as Record<string, unknown>;
+        const error = (errorJson.error as Record<string, unknown> | undefined) ?? {};
+        expect(error.type).toBe("invalid_request_error");
+        expect(error.param).toBe("tool_choice");
+        expect(error.message).toBe("tool_choice=required but no tools were provided");
+      }
+
+      {
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [{ role: "user", content: "Hi" }],
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "get_weather",
+                description: "Get weather",
+                parameters: { type: "object", properties: {} },
+              },
+            },
+          ],
+          tool_choice: { type: "function", function: { name: "" } },
+        });
+        expect(res.status).toBe(400);
+        const errorJson = (await res.json()) as Record<string, unknown>;
+        const error = (errorJson.error as Record<string, unknown> | undefined) ?? {};
+        expect(error.type).toBe("invalid_request_error");
+        expect(error.param).toBe("tool_choice");
+        expect(error.message).toBe("tool_choice.function.name is required");
+      }
+
+      {
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [{ role: "user", content: "Hi" }],
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "get_weather",
+                description: "Get weather",
+                parameters: { type: "object", properties: {} },
+              },
+            },
+          ],
+          tool_choice: { type: "function", function: { name: "get_time" } },
+        });
+        expect(res.status).toBe(400);
+        const errorJson = (await res.json()) as Record<string, unknown>;
+        const error = (errorJson.error as Record<string, unknown> | undefined) ?? {};
+        expect(error.type).toBe("invalid_request_error");
+        expect(error.param).toBe("tool_choice");
+        expect(error.message).toBe("tool_choice requested unknown tool: get_time");
+      }
+
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "Tool result summarized." }],
+          meta: { agentMeta: { usage: { input: 3, output: 5, total: 8 } } },
+        } as never);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [
+            { role: "user", content: "Call weather." },
+            {
+              role: "assistant",
+              tool_calls: [
+                {
+                  id: "call_weather",
+                  type: "function",
+                  function: { name: "get_weather", arguments: '{"city":"Paris"}' },
+                },
+              ],
+            },
+            {
+              role: "tool",
+              tool_call_id: "call_weather",
+              content: "Paris is sunny.",
+            },
+          ],
+        });
+        expect(res.status).toBe(200);
+
+        const message = getFirstAgentMessage();
+        expect(message).toContain(
+          'Assistant: Called tool get_weather with arguments: {"city":"Paris"}',
         );
+        expect(message).toContain("Tool:call_weather: Paris is sunny.");
+        await res.text();
       }
     } finally {
       // shared server
@@ -491,26 +689,41 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         agentCommand.mockClear();
-        agentCommand.mockRejectedValueOnce(new Error("boom"));
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "" }],
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [
+              { id: "call_weather", name: "get_weather", arguments: '{"city":"Paris"}' },
+            ],
+          },
+        } as never);
 
-        const errorRes = await postChatCompletions(port, {
+        const toolCallRes = await postChatCompletions(port, {
           stream: true,
           model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
+          messages: [{ role: "user", content: "Call a tool" }],
         });
-        expect(errorRes.status).toBe(200);
-        const errorText = await errorRes.text();
-        const errorData = parseSseDataLines(errorText);
-        expect(errorData[errorData.length - 1]).toBe("[DONE]");
+        expect(toolCallRes.status).toBe(200);
+        const toolCallText = await toolCallRes.text();
+        const toolCallData = parseSseDataLines(toolCallText);
+        expect(toolCallData[toolCallData.length - 1]).toBe("[DONE]");
 
-        const errorChunks = errorData
+        const toolCallChunks = toolCallData
           .filter((d) => d !== "[DONE]")
           .map((d) => JSON.parse(d) as Record<string, unknown>);
-        const stopChoice = errorChunks
+        const toolCallChoice = toolCallChunks
           .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .find((choice) => choice.finish_reason === "stop");
-        expect((stopChoice?.delta as Record<string, unknown> | undefined)?.content).toBe(
-          "Error: internal error",
+          .find((choice) => choice.finish_reason === "tool_calls");
+        const delta = (toolCallChoice?.delta as Record<string, unknown> | undefined) ?? {};
+        const toolCalls = (delta.tool_calls as Array<Record<string, unknown>> | undefined) ?? [];
+        expect(toolCalls).toHaveLength(1);
+        expect(toolCalls[0]?.id).toBe("call_weather");
+        expect((toolCalls[0]?.function as Record<string, unknown> | undefined)?.name).toBe(
+          "get_weather",
+        );
+        expect((toolCalls[0]?.function as Record<string, unknown> | undefined)?.arguments).toBe(
+          '{"city":"Paris"}',
         );
       }
     } finally {

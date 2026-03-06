@@ -104,10 +104,6 @@ function resolveResponsesLimits(
   };
 }
 
-function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
-  return (body.tools ?? []) as ClientToolDefinition[];
-}
-
 function applyToolChoice(params: {
   tools: ClientToolDefinition[];
   toolChoice: CreateResponseBody["tool_choice"];
@@ -181,7 +177,7 @@ function toUsage(
   };
 }
 
-function extractUsageFromResult(result: unknown): Usage {
+export function extractUsageFromResult(result: unknown): Usage {
   const meta = (result as { meta?: { agentMeta?: { usage?: unknown } } } | null)?.meta;
   const usage = meta && typeof meta === "object" ? meta.agentMeta?.usage : undefined;
   return toUsage(
@@ -193,7 +189,14 @@ function extractUsageFromResult(result: unknown): Usage {
 
 type PendingToolCall = { id: string; name: string; arguments: string };
 
-function resolveStopReasonAndPendingToolCalls(meta: unknown): {
+type ResponsesExecutionPlan = {
+  message: string;
+  extraSystemPrompt?: string;
+  clientTools: ClientToolDefinition[];
+  streamParams?: { maxTokens: number };
+};
+
+export function resolveStopReasonAndPendingToolCalls(meta: unknown): {
   stopReason: string | undefined;
   pendingToolCalls: PendingToolCall[] | undefined;
 } {
@@ -235,6 +238,44 @@ function createAssistantOutputItem(params: {
     role: "assistant",
     content: [{ type: "output_text", text: params.text }],
     status: params.status,
+  };
+}
+
+export function buildResponsesExecutionPlan(params: {
+  input: CreateResponseBody["input"];
+  instructions?: string;
+  tools?: CreateResponseBody["tools"];
+  toolChoice?: CreateResponseBody["tool_choice"];
+  maxOutputTokens?: number;
+  extraSystemPromptParts?: Array<string | undefined>;
+}): ResponsesExecutionPlan {
+  const prompt = buildAgentPrompt(params.input);
+  if (!prompt.message) {
+    throw new Error("Missing user message in `input`.");
+  }
+
+  const clientTools = (params.tools ?? []) as ClientToolDefinition[];
+  const toolChoiceResult = applyToolChoice({
+    tools: clientTools,
+    toolChoice: params.toolChoice,
+  });
+  const extraSystemPrompt = [
+    params.instructions,
+    prompt.extraSystemPrompt,
+    toolChoiceResult.extraSystemPrompt,
+    ...(params.extraSystemPromptParts ?? []),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  return {
+    message: prompt.message,
+    extraSystemPrompt: extraSystemPrompt || undefined,
+    clientTools: toolChoiceResult.tools,
+    streamParams:
+      typeof params.maxOutputTokens === "number"
+        ? { maxTokens: params.maxOutputTokens }
+        : undefined,
   };
 }
 
@@ -403,23 +444,34 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
 
-  const clientTools = extractClientTools(payload);
-  let toolChoicePrompt: string | undefined;
-  let resolvedClientTools = clientTools;
+  let executionPlan: ResponsesExecutionPlan;
   try {
-    const toolChoiceResult = applyToolChoice({
-      tools: clientTools,
+    executionPlan = buildResponsesExecutionPlan({
+      input: payload.input,
+      instructions: payload.instructions,
+      tools: payload.tools,
       toolChoice: payload.tool_choice,
+      maxOutputTokens: payload.max_output_tokens,
+      extraSystemPromptParts: [fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined],
     });
-    resolvedClientTools = toolChoiceResult.tools;
-    toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
   } catch (err) {
+    const message = err instanceof Error ? err.message : "invalid request";
+    if (message === "Missing user message in `input`.") {
+      sendJson(res, 400, {
+        error: {
+          message,
+          type: "invalid_request_error",
+        },
+      });
+      return true;
+    }
     logWarn(`openresponses: tool configuration failed: ${String(err)}`);
     sendJson(res, 400, {
       error: { message: "invalid tool configuration", type: "invalid_request_error" },
     });
     return true;
   }
+
   const { sessionKey, messageChannel } = resolveGatewayRequestContext({
     req,
     model,
@@ -429,48 +481,20 @@ export async function handleOpenResponsesHttpRequest(
     useMessageChannelHeader: false,
   });
 
-  // Build prompt from input
-  const prompt = buildAgentPrompt(payload.input);
-
-  const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
-  const toolChoiceContext = toolChoicePrompt?.trim();
-
-  // Handle instructions + file context as extra system prompt
-  const extraSystemPrompt = [
-    payload.instructions,
-    prompt.extraSystemPrompt,
-    toolChoiceContext,
-    fileContext,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-
-  if (!prompt.message) {
-    sendJson(res, 400, {
-      error: {
-        message: "Missing user message in `input`.",
-        type: "invalid_request_error",
-      },
-    });
-    return true;
-  }
+  const responsePlan = executionPlan;
 
   const responseId = `resp_${randomUUID()}`;
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
-  const streamParams =
-    typeof payload.max_output_tokens === "number"
-      ? { maxTokens: payload.max_output_tokens }
-      : undefined;
 
   if (!stream) {
     try {
       const result = await runResponsesAgentCommand({
-        message: prompt.message,
+        message: responsePlan.message,
         images,
-        clientTools: resolvedClientTools,
-        extraSystemPrompt,
-        streamParams,
+        clientTools: responsePlan.clientTools,
+        extraSystemPrompt: responsePlan.extraSystemPrompt ?? "",
+        streamParams: responsePlan.streamParams,
         sessionKey,
         runId: responseId,
         messageChannel,
@@ -693,11 +717,11 @@ export async function handleOpenResponsesHttpRequest(
   void (async () => {
     try {
       const result = await runResponsesAgentCommand({
-        message: prompt.message,
+        message: responsePlan.message,
         images,
-        clientTools: resolvedClientTools,
-        extraSystemPrompt,
-        streamParams,
+        clientTools: responsePlan.clientTools,
+        extraSystemPrompt: responsePlan.extraSystemPrompt ?? "",
+        streamParams: responsePlan.streamParams,
         sessionKey,
         runId: responseId,
         messageChannel,

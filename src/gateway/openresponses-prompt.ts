@@ -22,6 +22,11 @@ function extractTextContent(content: string | ContentPart[]): string {
     .join("\n");
 }
 
+function formatFunctionCallForPrompt(item: Extract<ItemParam, { type: "function_call" }>): string {
+  const args = item.arguments.trim();
+  return args ? `Called tool ${item.name} with arguments: ${args}` : `Called tool ${item.name}.`;
+}
+
 export function buildAgentPrompt(input: string | ItemParam[]): {
   message: string;
   extraSystemPrompt?: string;
@@ -51,6 +56,11 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
       conversationEntries.push({
         role: normalizedRole,
         entry: { sender, body: content },
+      });
+    } else if (item.type === "function_call") {
+      conversationEntries.push({
+        role: "assistant",
+        entry: { sender: "Assistant", body: formatFunctionCallForPrompt(item) },
       });
     } else if (item.type === "function_call_output") {
       conversationEntries.push({

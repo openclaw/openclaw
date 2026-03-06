@@ -1,20 +1,23 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
-import {
-  buildAgentMessageFromConversationEntries,
-  type ConversationEntry,
-} from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveGatewayRequestContext } from "./http-utils.js";
+import type { CreateResponseBody, ItemParam, Usage } from "./open-responses.schema.js";
+import {
+  buildResponsesExecutionPlan,
+  extractUsageFromResult,
+  resolveStopReasonAndPendingToolCalls,
+} from "./openresponses-http.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -24,10 +27,36 @@ type OpenAiHttpOptions = {
   rateLimiter?: AuthRateLimiter;
 };
 
+type OpenAiToolFunction = {
+  name?: unknown;
+  description?: unknown;
+  parameters?: unknown;
+};
+
+type OpenAiTool = {
+  type?: unknown;
+  function?: OpenAiToolFunction;
+};
+
+type OpenAiToolChoiceFunction = {
+  name?: unknown;
+};
+
+type OpenAiChatToolCall = {
+  id?: unknown;
+  type?: unknown;
+  function?: {
+    name?: unknown;
+    arguments?: unknown;
+  };
+};
+
 type OpenAiChatMessage = {
   role?: unknown;
   content?: unknown;
   name?: unknown;
+  tool_call_id?: unknown;
+  tool_calls?: unknown;
 };
 
 type OpenAiChatCompletionRequest = {
@@ -35,58 +64,155 @@ type OpenAiChatCompletionRequest = {
   stream?: unknown;
   messages?: unknown;
   user?: unknown;
+  tools?: unknown;
+  tool_choice?: unknown;
+  max_tokens?: unknown;
+};
+
+type PendingToolCall = { id: string; name: string; arguments: string };
+
+type ChatCompletionMessage = {
+  role: "assistant";
+  content: string | null;
+  tool_calls?: Array<{
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string };
+  }>;
+};
+
+type ChatCompletionChunkChoice = {
+  index: number;
+  delta: {
+    role?: "assistant";
+    content?: string;
+    tool_calls?: Array<{
+      index: number;
+      id?: string;
+      type?: "function";
+      function?: { name?: string; arguments?: string };
+    }>;
+  };
+  finish_reason?: "stop" | "tool_calls" | null;
 };
 
 function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-function buildAgentCommandInput(params: {
-  prompt: { message: string; extraSystemPrompt?: string };
-  sessionKey: string;
-  runId: string;
-  messageChannel: string;
-}) {
+function sendOpenAiError(
+  res: ServerResponse,
+  status: number,
+  error: { message: string; type: string; param?: string; code?: string },
+) {
+  sendJson(res, status, { error });
+}
+
+function createOpenAiUsage(usage: Usage) {
   return {
-    message: params.prompt.message,
-    extraSystemPrompt: params.prompt.extraSystemPrompt,
-    sessionKey: params.sessionKey,
-    runId: params.runId,
-    deliver: false as const,
-    messageChannel: params.messageChannel,
-    bestEffortDeliver: false as const,
-    // HTTP API callers are authenticated operator clients for this gateway context.
-    senderIsOwner: true as const,
+    prompt_tokens: usage.input_tokens,
+    completion_tokens: usage.output_tokens,
+    total_tokens: usage.total_tokens,
   };
 }
 
-function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; model: string }) {
-  writeSse(res, {
+function createChatToolCalls(toolCalls: PendingToolCall[]) {
+  return toolCalls.map((toolCall) => ({
+    id: toolCall.id,
+    type: "function" as const,
+    function: {
+      name: toolCall.name,
+      arguments: toolCall.arguments,
+    },
+  }));
+}
+
+function createChatCompletionChoice(params: {
+  text: string;
+  pendingToolCalls?: PendingToolCall[];
+}): { index: number; message: ChatCompletionMessage; finish_reason: "stop" | "tool_calls" } {
+  const hasToolCalls = Boolean(params.pendingToolCalls && params.pendingToolCalls.length > 0);
+  return {
+    index: 0,
+    message: {
+      role: "assistant",
+      content: hasToolCalls ? null : params.text,
+      tool_calls: hasToolCalls ? createChatToolCalls(params.pendingToolCalls ?? []) : undefined,
+    },
+    finish_reason: hasToolCalls ? "tool_calls" : "stop",
+  };
+}
+
+function createChunk(params: { runId: string; model: string; choice: ChatCompletionChunkChoice }) {
+  return {
     id: params.runId,
     object: "chat.completion.chunk",
     created: Math.floor(Date.now() / 1000),
     model: params.model,
-    choices: [{ index: 0, delta: { role: "assistant" } }],
-  });
+    choices: [params.choice],
+  };
+}
+
+function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; model: string }) {
+  writeSse(
+    res,
+    createChunk({
+      runId: params.runId,
+      model: params.model,
+      choice: { index: 0, delta: { role: "assistant" } },
+    }),
+  );
 }
 
 function writeAssistantContentChunk(
   res: ServerResponse,
   params: { runId: string; model: string; content: string; finishReason: "stop" | null },
 ) {
-  writeSse(res, {
-    id: params.runId,
-    object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
-    model: params.model,
-    choices: [
-      {
+  writeSse(
+    res,
+    createChunk({
+      runId: params.runId,
+      model: params.model,
+      choice: {
         index: 0,
         delta: { content: params.content },
         finish_reason: params.finishReason,
       },
-    ],
-  });
+    }),
+  );
+}
+
+function writeAssistantToolCallChunk(
+  res: ServerResponse,
+  params: {
+    runId: string;
+    model: string;
+    toolCalls: PendingToolCall[];
+    finishReason: "tool_calls" | null;
+  },
+) {
+  writeSse(
+    res,
+    createChunk({
+      runId: params.runId,
+      model: params.model,
+      choice: {
+        index: 0,
+        delta: {
+          tool_calls: params.toolCalls.map((toolCall, index) => ({
+            index,
+            id: toolCall.id,
+            type: "function" as const,
+            function: {
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+            },
+          })),
+        },
+        finish_reason: params.finishReason,
+      },
+    }),
+  );
 }
 
 function asMessages(val: unknown): OpenAiChatMessage[] {
@@ -123,56 +249,114 @@ function extractTextContent(content: unknown): string {
   return "";
 }
 
-function buildAgentPrompt(messagesUnknown: unknown): {
-  message: string;
-  extraSystemPrompt?: string;
-} {
-  const messages = asMessages(messagesUnknown);
+function normalizeToolChoice(toolChoice: unknown): CreateResponseBody["tool_choice"] | undefined {
+  if (toolChoice === "auto" || toolChoice === "none" || toolChoice === "required") {
+    return toolChoice;
+  }
+  if (!toolChoice || typeof toolChoice !== "object") {
+    return undefined;
+  }
+  const record = toolChoice as { type?: unknown; function?: OpenAiToolChoiceFunction };
+  if (record.type !== "function") {
+    return undefined;
+  }
+  const name = typeof record.function?.name === "string" ? record.function.name.trim() : "";
+  if (!name) {
+    return { type: "function", function: { name: "" } };
+  }
+  return { type: "function", function: { name } };
+}
 
-  const systemParts: string[] = [];
-  const conversationEntries: ConversationEntry[] = [];
-
-  for (const msg of messages) {
-    if (!msg || typeof msg !== "object") {
+function normalizeTools(value: unknown): ClientToolDefinition[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const tools: ClientToolDefinition[] = [];
+  for (const tool of value) {
+    if (!tool || typeof tool !== "object") {
       continue;
     }
-    const role = typeof msg.role === "string" ? msg.role.trim() : "";
-    const content = extractTextContent(msg.content).trim();
-    if (!role || !content) {
+    const record = tool as OpenAiTool;
+    if (record.type !== "function") {
       continue;
     }
-    if (role === "system" || role === "developer") {
-      systemParts.push(content);
+    const name = typeof record.function?.name === "string" ? record.function.name.trim() : "";
+    if (!name) {
       continue;
     }
-
-    const normalizedRole = role === "function" ? "tool" : role;
-    if (normalizedRole !== "user" && normalizedRole !== "assistant" && normalizedRole !== "tool") {
-      continue;
-    }
-
-    const name = typeof msg.name === "string" ? msg.name.trim() : "";
-    const sender =
-      normalizedRole === "assistant"
-        ? "Assistant"
-        : normalizedRole === "user"
-          ? "User"
-          : name
-            ? `Tool:${name}`
-            : "Tool";
-
-    conversationEntries.push({
-      role: normalizedRole,
-      entry: { sender, body: content },
+    const description =
+      typeof record.function?.description === "string" ? record.function.description : undefined;
+    const parameters =
+      record.function?.parameters && typeof record.function.parameters === "object"
+        ? (record.function.parameters as Record<string, unknown>)
+        : undefined;
+    tools.push({
+      type: "function",
+      function: { name, description, parameters },
     });
   }
+  return tools;
+}
 
-  const message = buildAgentMessageFromConversationEntries(conversationEntries);
+function normalizeToolCallId(value: unknown, index: number): string {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : `call_${index + 1}`;
+}
 
-  return {
-    message,
-    extraSystemPrompt: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
-  };
+function normalizeOpenAiMessages(messagesUnknown: unknown): ItemParam[] {
+  const items: ItemParam[] = [];
+  for (const [index, rawMessage] of asMessages(messagesUnknown).entries()) {
+    if (!rawMessage || typeof rawMessage !== "object") {
+      continue;
+    }
+    const role = typeof rawMessage.role === "string" ? rawMessage.role.trim() : "";
+    const text = extractTextContent(rawMessage.content).trim();
+
+    if (role === "tool") {
+      const rawCallId =
+        typeof rawMessage.tool_call_id === "string" ? rawMessage.tool_call_id.trim() : "";
+      if (!text) {
+        continue;
+      }
+      items.push({
+        type: "function_call_output",
+        call_id: rawCallId || normalizeToolCallId(undefined, index),
+        output: text,
+      });
+      continue;
+    }
+
+    if (role === "assistant") {
+      const toolCallsRaw = Array.isArray(rawMessage.tool_calls)
+        ? (rawMessage.tool_calls as OpenAiChatToolCall[])
+        : [];
+      for (const toolCall of toolCallsRaw) {
+        if (!toolCall || typeof toolCall !== "object") {
+          continue;
+        }
+        const name =
+          typeof toolCall.function?.name === "string" ? toolCall.function.name.trim() : "";
+        if (!name) {
+          continue;
+        }
+        const argsValue = toolCall.function?.arguments;
+        items.push({
+          type: "function_call",
+          call_id: normalizeToolCallId(toolCall.id, index),
+          name,
+          arguments: typeof argsValue === "string" ? argsValue : "{}",
+        });
+      }
+    }
+
+    if (role !== "system" && role !== "developer" && role !== "user" && role !== "assistant") {
+      continue;
+    }
+    if (!text) {
+      continue;
+    }
+    items.push({ type: "message", role, content: text });
+  }
+  return items;
 }
 
 function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
@@ -218,6 +402,45 @@ export async function handleOpenAiHttpRequest(
   const stream = Boolean(payload.stream);
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
+  const input = normalizeOpenAiMessages(payload.messages);
+  const tools = normalizeTools(payload.tools);
+  const toolChoice = normalizeToolChoice(payload.tool_choice);
+  const maxOutputTokens =
+    typeof payload.max_tokens === "number" && Number.isFinite(payload.max_tokens)
+      ? payload.max_tokens
+      : undefined;
+
+  let responsePlan;
+  try {
+    responsePlan = buildResponsesExecutionPlan({
+      input,
+      tools,
+      toolChoice,
+      maxOutputTokens,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "invalid request";
+    const invalidToolConfig =
+      message.includes("tool_choice") ||
+      message.includes("tools were provided") ||
+      message.includes("unknown tool");
+    sendOpenAiError(res, 400, {
+      message:
+        message === "Missing user message in `input`."
+          ? "Missing user message in `messages`."
+          : invalidToolConfig
+            ? message
+            : "invalid request",
+      type: "invalid_request_error",
+      param:
+        message === "Missing user message in `input`."
+          ? "messages"
+          : invalidToolConfig
+            ? "tool_choice"
+            : undefined,
+    });
+    return true;
+  }
 
   const { sessionKey, messageChannel } = resolveGatewayRequestContext({
     req,
@@ -227,31 +450,30 @@ export async function handleOpenAiHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: true,
   });
-  const prompt = buildAgentPrompt(payload.messages);
-  if (!prompt.message) {
-    sendJson(res, 400, {
-      error: {
-        message: "Missing user message in `messages`.",
-        type: "invalid_request_error",
-      },
-    });
-    return true;
-  }
 
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
-  const commandInput = buildAgentCommandInput({
-    prompt,
+  const commandInput = {
+    message: responsePlan.message,
+    extraSystemPrompt: responsePlan.extraSystemPrompt,
+    clientTools: responsePlan.clientTools.length > 0 ? responsePlan.clientTools : undefined,
+    streamParams: responsePlan.streamParams,
     sessionKey,
     runId,
+    deliver: false as const,
     messageChannel,
-  });
+    bestEffortDeliver: false as const,
+    senderIsOwner: true as const,
+  };
 
   if (!stream) {
     try {
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
-
-      const content = resolveAgentResponseText(result);
+      const usage = createOpenAiUsage(extractUsageFromResult(result));
+      const meta = (result as { meta?: unknown } | null)?.meta;
+      const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
+      const hasToolCalls = stopReason === "tool_calls" && (pendingToolCalls?.length ?? 0) > 0;
+      const content = hasToolCalls ? "" : resolveAgentResponseText(result);
 
       sendJson(res, 200, {
         id: runId,
@@ -259,18 +481,19 @@ export async function handleOpenAiHttpRequest(
         created: Math.floor(Date.now() / 1000),
         model,
         choices: [
-          {
-            index: 0,
-            message: { role: "assistant", content },
-            finish_reason: "stop",
-          },
+          createChatCompletionChoice({
+            text: content,
+            pendingToolCalls: hasToolCalls ? pendingToolCalls : undefined,
+          }),
         ],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        usage,
       });
     } catch (err) {
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
-      sendJson(res, 500, {
-        error: { message: "internal error", type: "api_error" },
+      sendOpenAiError(res, 500, {
+        message: "internal error",
+        type: "api_error",
+        code: "internal_error",
       });
     }
     return true;
@@ -281,12 +504,10 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let sawAssistantDelta = false;
   let closed = false;
+  let finalToolCalls: PendingToolCall[] | undefined;
 
   const unsubscribe = onAgentEvent((evt) => {
-    if (evt.runId !== runId) {
-      return;
-    }
-    if (closed) {
+    if (evt.runId !== runId || closed) {
       return;
     }
 
@@ -308,17 +529,6 @@ export async function handleOpenAiHttpRequest(
         content,
         finishReason: null,
       });
-      return;
-    }
-
-    if (evt.stream === "lifecycle") {
-      const phase = evt.data?.phase;
-      if (phase === "end" || phase === "error") {
-        closed = true;
-        unsubscribe();
-        writeDone(res);
-        res.end();
-      }
     }
   });
 
@@ -330,24 +540,25 @@ export async function handleOpenAiHttpRequest(
   void (async () => {
     try {
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
-
       if (closed) {
         return;
       }
 
-      if (!sawAssistantDelta) {
+      const meta = (result as { meta?: unknown } | null)?.meta;
+      const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
+      finalToolCalls = stopReason === "tool_calls" ? pendingToolCalls : undefined;
+
+      if (!sawAssistantDelta && !finalToolCalls?.length) {
         if (!wroteRole) {
           wroteRole = true;
           writeAssistantRoleChunk(res, { runId, model });
         }
 
-        const content = resolveAgentResponseText(result);
-
         sawAssistantDelta = true;
         writeAssistantContentChunk(res, {
           runId,
           model,
-          content,
+          content: resolveAgentResponseText(result),
           finishReason: null,
         });
       }
@@ -355,6 +566,10 @@ export async function handleOpenAiHttpRequest(
       logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
       if (closed) {
         return;
+      }
+      if (!wroteRole) {
+        wroteRole = true;
+        writeAssistantRoleChunk(res, { runId, model });
       }
       writeAssistantContentChunk(res, {
         runId,
@@ -369,6 +584,31 @@ export async function handleOpenAiHttpRequest(
       });
     } finally {
       if (!closed) {
+        if (finalToolCalls?.length) {
+          if (!wroteRole) {
+            wroteRole = true;
+            writeAssistantRoleChunk(res, { runId, model });
+          }
+          writeAssistantToolCallChunk(res, {
+            runId,
+            model,
+            toolCalls: finalToolCalls,
+            finishReason: "tool_calls",
+          });
+        } else {
+          writeSse(
+            res,
+            createChunk({
+              runId,
+              model,
+              choice: {
+                index: 0,
+                delta: {},
+                finish_reason: "stop",
+              },
+            }),
+          );
+        }
         closed = true;
         unsubscribe();
         writeDone(res);
