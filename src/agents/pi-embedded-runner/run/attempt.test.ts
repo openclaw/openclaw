@@ -10,9 +10,11 @@ import {
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldCapGoogleOAuthRetryDelay,
   shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
+  wrapStreamFnCapMaxRetryDelay,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
@@ -456,6 +458,98 @@ describe("wrapOllamaCompatNumCtx", () => {
     expect(baseFn).toHaveBeenCalledTimes(1);
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
     expect(downstream).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("shouldCapGoogleOAuthRetryDelay", () => {
+  it("enables cap for google-gemini-cli oauth mode", () => {
+    expect(
+      shouldCapGoogleOAuthRetryDelay({
+        provider: "google-gemini-cli",
+        modelAuthMode: "oauth",
+      }),
+    ).toBe(true);
+  });
+
+  it("enables cap for google-antigravity mixed mode", () => {
+    expect(
+      shouldCapGoogleOAuthRetryDelay({
+        provider: "google-antigravity",
+        modelAuthMode: "mixed",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not enable cap for api-key mode", () => {
+    expect(
+      shouldCapGoogleOAuthRetryDelay({
+        provider: "google-gemini-cli",
+        modelAuthMode: "api-key",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not enable cap for non-google providers", () => {
+    expect(
+      shouldCapGoogleOAuthRetryDelay({
+        provider: "openai",
+        modelAuthMode: "oauth",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("wrapStreamFnCapMaxRetryDelay", () => {
+  it("applies cap when maxRetryDelayMs is unset", () => {
+    let seenMaxRetryDelayMs: unknown;
+    const baseFn = vi.fn((_model, _context, options) => {
+      seenMaxRetryDelayMs = (options as { maxRetryDelayMs?: unknown } | undefined)?.maxRetryDelayMs;
+      return {} as never;
+    });
+
+    const wrapped = wrapStreamFnCapMaxRetryDelay(baseFn as never, 5_000);
+    void wrapped({} as never, {} as never, undefined);
+
+    expect(seenMaxRetryDelayMs).toBe(5_000);
+  });
+
+  it("caps larger caller-provided values", () => {
+    let seenMaxRetryDelayMs: unknown;
+    const baseFn = vi.fn((_model, _context, options) => {
+      seenMaxRetryDelayMs = (options as { maxRetryDelayMs?: unknown } | undefined)?.maxRetryDelayMs;
+      return {} as never;
+    });
+
+    const wrapped = wrapStreamFnCapMaxRetryDelay(baseFn as never, 5_000);
+    void wrapped({} as never, {} as never, { maxRetryDelayMs: 60_000 } as never);
+
+    expect(seenMaxRetryDelayMs).toBe(5_000);
+  });
+
+  it("preserves smaller positive caller-provided values", () => {
+    let seenMaxRetryDelayMs: unknown;
+    const baseFn = vi.fn((_model, _context, options) => {
+      seenMaxRetryDelayMs = (options as { maxRetryDelayMs?: unknown } | undefined)?.maxRetryDelayMs;
+      return {} as never;
+    });
+
+    const wrapped = wrapStreamFnCapMaxRetryDelay(baseFn as never, 5_000);
+    void wrapped({} as never, {} as never, { maxRetryDelayMs: 1_200 } as never);
+
+    expect(seenMaxRetryDelayMs).toBe(1_200);
+  });
+
+  it("respects explicit non-positive caller-provided values", () => {
+    let seenMaxRetryDelayMs: unknown;
+    const baseFn = vi.fn((_model, _context, options) => {
+      seenMaxRetryDelayMs = (options as { maxRetryDelayMs?: unknown } | undefined)?.maxRetryDelayMs;
+      return {} as never;
+    });
+
+    const wrapped = wrapStreamFnCapMaxRetryDelay(baseFn as never, 5_000);
+    void wrapped({} as never, {} as never, { maxRetryDelayMs: 0 } as never);
+
+    expect(seenMaxRetryDelayMs).toBe(0);
   });
 });
 

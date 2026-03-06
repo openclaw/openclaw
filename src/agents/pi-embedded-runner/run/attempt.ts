@@ -47,7 +47,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
-import { resolveModelAuthMode } from "../../model-auth.js";
+import { resolveModelAuthMode, type ModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
@@ -238,6 +238,39 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
         options?.onPayload?.(payload);
       },
     });
+}
+
+const GOOGLE_OAUTH_MAX_RETRY_DELAY_MS = 5_000;
+
+function isGoogleOAuthRetryProvider(provider?: string): boolean {
+  const normalized = normalizeProviderId(provider ?? "");
+  return normalized === "google-gemini-cli" || normalized === "google-antigravity";
+}
+
+export function shouldCapGoogleOAuthRetryDelay(params: {
+  provider?: string;
+  modelAuthMode?: ModelAuthMode;
+}): boolean {
+  if (!isGoogleOAuthRetryProvider(params.provider)) {
+    return false;
+  }
+  return params.modelAuthMode === "oauth" || params.modelAuthMode === "mixed";
+}
+
+export function wrapStreamFnCapMaxRetryDelay(baseFn: StreamFn, maxRetryDelayMs: number): StreamFn {
+  const capMs = Math.max(1, Math.floor(maxRetryDelayMs));
+  return (model, context, options) => {
+    const requested =
+      typeof options?.maxRetryDelayMs === "number" && Number.isFinite(options.maxRetryDelayMs)
+        ? Math.floor(options.maxRetryDelayMs)
+        : undefined;
+    const resolvedMaxRetryDelayMs =
+      requested === undefined || requested > 0 ? Math.min(requested ?? capMs, capMs) : requested;
+    return baseFn(model, context, {
+      ...options,
+      maxRetryDelayMs: resolvedMaxRetryDelayMs,
+    });
+  };
 }
 
 function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {
@@ -829,6 +862,7 @@ export async function runEmbeddedAttempt(
       config: params.config,
       agentId: params.agentId,
     });
+    const modelAuthMode = resolveModelAuthMode(params.model.provider, params.config);
     const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
       config: params.config,
       sessionAgentId,
@@ -867,7 +901,7 @@ export async function runEmbeddedAttempt(
           modelProvider: params.model.provider,
           modelId: params.modelId,
           modelContextWindowTokens: params.model.contextWindow,
-          modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+          modelAuthMode,
           currentChannelId: params.currentChannelId,
           currentThreadTs: params.currentThreadTs,
           currentMessageId: params.currentMessageId,
@@ -1365,6 +1399,14 @@ export async function runEmbeddedAttempt(
       if (isXaiProvider(params.provider, params.modelId)) {
         activeSession.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(
           activeSession.agent.streamFn,
+        );
+      }
+
+      if (shouldCapGoogleOAuthRetryDelay({ provider: params.provider, modelAuthMode })) {
+        // Cloud Code Assist OAuth can emit long Retry-After values that look like hard hangs.
+        activeSession.agent.streamFn = wrapStreamFnCapMaxRetryDelay(
+          activeSession.agent.streamFn,
+          GOOGLE_OAUTH_MAX_RETRY_DELAY_MS,
         );
       }
 
