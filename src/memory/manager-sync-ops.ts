@@ -93,7 +93,14 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+  protected fallbackFrom?:
+    | "openai"
+    | "local"
+    | "gemini"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "siliconflow";
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
@@ -970,7 +977,8 @@ export abstract class MemoryManagerSyncOps {
       | "local"
       | "voyage"
       | "mistral"
-      | "ollama";
+      | "ollama"
+      | "siliconflow";
 
     const fallbackModel =
       fallback === "gemini"
@@ -983,7 +991,9 @@ export abstract class MemoryManagerSyncOps {
               ? DEFAULT_MISTRAL_EMBEDDING_MODEL
               : fallback === "ollama"
                 ? DEFAULT_OLLAMA_EMBEDDING_MODEL
-                : this.settings.model;
+                : fallback === "siliconflow"
+                  ? DEFAULT_OPENAI_EMBEDDING_MODEL
+                  : this.settings.model;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
