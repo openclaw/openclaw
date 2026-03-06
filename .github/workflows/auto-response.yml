@@ -35,6 +35,7 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
             // Labels prefixed with "r:" are auto-response triggers.
+            const activePrLimit = 10;
             const rules = [
               {
                 label: "r: skill",
@@ -47,6 +48,13 @@ jobs:
                 close: true,
                 message:
                   "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck.",
+              },
+              {
+                label: "r: too-many-prs",
+                close: true,
+                message:
+                  `Closing this PR because the author has more than ${activePrLimit} active PRs in this repo. ` +
+                  "Please reduce the active PR queue and reopen or resubmit once it is back under the limit. You can close your own PRs to get back under the limit.",
               },
               {
                 label: "r: testflight",
@@ -76,10 +84,7 @@ jobs:
               "Please don’t spam-ping multiple maintainers at once. Be patient, or join our community Discord for help: https://discord.gg/clawd";
             const mentionRegex = /@([A-Za-z0-9-]+)/g;
             const maintainerCache = new Map();
-            const privilegedRoleCache = new Map();
             const normalizeLogin = (login) => login.toLowerCase();
-            const activePrLimitLabel = "r: too-many-prs";
-            const activePrLimit = 10;
             const bugSubtypeLabelSpecs = {
               regression: {
                 color: "D93F0B",
@@ -214,49 +219,6 @@ jobs:
               }
               maintainerCache.set(normalized, isMember);
               return isMember;
-            };
-
-            const isMaintainerOrOwner = async (login, authorAssociation) => {
-              if (!login) {
-                return false;
-              }
-              const normalized = normalizeLogin(login);
-              if (await isMaintainer(normalized)) {
-                return true;
-              }
-              if (authorAssociation === "OWNER") {
-                return true;
-              }
-              if (privilegedRoleCache.has(normalized)) {
-                return privilegedRoleCache.get(normalized);
-              }
-              let hasPrivilegedRole = false;
-              try {
-                const permission = await github.rest.repos.getCollaboratorPermissionLevel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  username: normalized,
-                });
-                const roleName = (permission?.data?.role_name ?? "").toLowerCase();
-                hasPrivilegedRole = roleName === "admin" || roleName === "maintain";
-              } catch (error) {
-                if (error?.status !== 404) {
-                  throw error;
-                }
-              }
-              privilegedRoleCache.set(normalized, hasPrivilegedRole);
-              return hasPrivilegedRole;
-            };
-
-            const countOpenPullRequestsByAuthor = async (login) => {
-              if (!login) {
-                return 0;
-              }
-              const result = await github.rest.search.issuesAndPullRequests({
-                q: `repo:${context.repo.owner}/${context.repo.repo} is:pr is:open author:${login}`,
-                per_page: 1,
-              });
-              return result.data.total_count ?? 0;
             };
 
             const countMaintainerMentions = async (body, authorLogin) => {
@@ -426,34 +388,6 @@ jobs:
               "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
 
             if (pullRequest) {
-              const authorLogin = pullRequest.user?.login ?? "";
-              const authorAssociation = pullRequest.author_association ?? "";
-              if (labelSet.has(activePrLimitLabel)) {
-                const skipActivePrLimit = await isMaintainerOrOwner(
-                  authorLogin,
-                  authorAssociation,
-                );
-                if (!skipActivePrLimit) {
-                  const openPrCount = await countOpenPullRequestsByAuthor(authorLogin);
-                  if (openPrCount > activePrLimit) {
-                    await github.rest.issues.createComment({
-                      owner: context.repo.owner,
-                      repo: context.repo.repo,
-                      issue_number: pullRequest.number,
-                      body:
-                        `Closing this PR because the author currently has ${openPrCount} active PRs in this repo, which is above the limit of ${activePrLimit}. ` +
-                        "Please reduce the active PR queue and reopen or resubmit once it is back under the limit. Maintainers and owners are exempt.",
-                    });
-                    await github.rest.issues.update({
-                      owner: context.repo.owner,
-                      repo: context.repo.repo,
-                      issue_number: pullRequest.number,
-                      state: "closed",
-                    });
-                    return;
-                  }
-                }
-              }
               if (labelSet.has(dirtyLabel)) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
