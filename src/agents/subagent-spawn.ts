@@ -19,6 +19,12 @@ import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import {
+  resolveRoleConfig,
+  resolveRoleModel,
+  type SubagentRole,
+  type SubagentRoleConfig,
+} from "./subagent-roles.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { readStringParam } from "./tools/common.js";
 import {
@@ -73,6 +79,17 @@ export type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  /**
+   * Role identifier for specialized subagent behavior.
+   * Built-in roles: coder, reviewer, planner, researcher, debugger, tester, writer, analyzer.
+   * Custom roles are also supported.
+   */
+  role?: SubagentRole;
+  /**
+   * Custom role configuration to merge with built-in defaults.
+   * Only used when role is specified.
+   */
+  roleConfig?: Partial<SubagentRoleConfig>;
 };
 
 export type SpawnSubagentContext = {
@@ -490,6 +507,11 @@ export async function spawnSubagentDirect(
   }
   const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
 
+  // Resolve role configuration if specified
+  const resolvedRoleConfig = resolveRoleConfig(params.role, params.roleConfig);
+  const roleModel = resolveRoleModel(resolvedRoleConfig, resolvedModel);
+  const effectiveModel = roleModel ?? resolvedModel;
+
   let childSystemPrompt = buildSubagentSystemPrompt({
     requesterSessionKey,
     requesterOrigin,
@@ -796,13 +818,15 @@ export async function spawnSubagentDirect(
       task,
       cleanup,
       label: label || undefined,
-      model: resolvedModel,
-      runTimeoutSeconds,
+      model: effectiveModel,
+      runTimeoutSeconds: resolvedRoleConfig?.defaultTimeoutSeconds ?? runTimeoutSeconds,
       expectsCompletionMessage,
       spawnMode,
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,
+      role: params.role,
+      roleConfig: resolvedRoleConfig,
     });
   } catch (err) {
     if (attachmentAbsDir) {

@@ -2,6 +2,7 @@ import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
+import type { SubagentRole, SubagentRoleConfig } from "./subagent-roles.js";
 
 export type SubagentRunRecord = {
   runId: string;
@@ -53,4 +54,15 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  /**
+   * Role identifier for specialized subagent behavior.
+   * Built-in roles: coder, reviewer, planner, researcher, debugger, tester, writer, analyzer.
+   * Custom roles are also supported.
+   */
+  role?: SubagentRole;
+  /**
+   * Resolved role configuration applied to this subagent.
+   * Includes system prompt suffix, tool policies, and preferred model.
+   */
+  roleConfig?: SubagentRoleConfig;
 };
