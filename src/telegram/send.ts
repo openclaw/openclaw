@@ -473,6 +473,9 @@ export async function sendMessageTelegram(
     verbose: opts.verbose,
   });
   const mediaUrl = opts.mediaUrl?.trim();
+  const mediaMaxBytes =
+    opts.maxBytes ??
+    (typeof account.config.mediaMaxMb === "number" ? account.config.mediaMaxMb : 100) * 1024 * 1024;
   const replyMarkup = buildInlineKeyboard(opts.buttons);
 
   const threadParams = buildTelegramThreadReplyParams({
@@ -563,7 +566,7 @@ export async function sendMessageTelegram(
     const media = await loadWebMedia(
       mediaUrl,
       buildOutboundMediaLoadOptions({
-        maxBytes: opts.maxBytes,
+        maxBytes: mediaMaxBytes,
         mediaLocalRoots: opts.mediaLocalRoots,
       }),
     );
