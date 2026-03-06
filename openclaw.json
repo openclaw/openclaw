@@ -185,7 +185,8 @@
           "sensitiveSkills": [
           ],
           "skillsDir": [
-            "/app/skills"
+            "/app/skills",
+            "/home/openclaw/.openclaw/skills"
           ],
           "secureModel": {
             "provider": "oneai",
@@ -199,7 +200,8 @@
           "jwtUrl": "${JWT_URL}",
           "memberUniqueId": "${MEMBER_UNIQUE_ID}",
           "skillsDir": [
-            "/app/skills"
+            "/app/skills",
+            "/home/openclaw/.openclaw/skills"
           ]
         }
       }
