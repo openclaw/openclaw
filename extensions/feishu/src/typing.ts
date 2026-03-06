@@ -3,9 +3,9 @@ import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { getFeishuRuntime } from "./runtime.js";
 
-function logTypingDebug(message: string): void {
+function logTypingWarn(message: string): void {
   try {
-    getFeishuRuntime().logging.getChildLogger({ module: "feishu-typing" }).debug?.(message);
+    getFeishuRuntime().logging.getChildLogger({ module: "feishu-typing" }).warn(message);
   } catch {
     // Fallback when runtime logging is unavailable (e.g. during tests).
   }
@@ -50,7 +50,7 @@ export async function addTypingIndicator(params: {
     return { messageId, reactionId };
   } catch (err) {
     // Silently fail - typing indicator is not critical
-    logTypingDebug(`failed to add typing indicator: ${err}`);
+    logTypingWarn(`failed to add typing indicator: ${err}`);
     return { messageId, reactionId: null };
   }
 }
@@ -84,6 +84,6 @@ export async function removeTypingIndicator(params: {
     });
   } catch (err) {
     // Silently fail - cleanup is not critical
-    logTypingDebug(`failed to remove typing indicator: ${err}`);
+    logTypingWarn(`failed to remove typing indicator: ${err}`);
   }
 }
