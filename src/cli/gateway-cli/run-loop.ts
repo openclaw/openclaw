@@ -1,6 +1,7 @@
 import {
   abortEmbeddedPiRun,
   getActiveEmbeddedRunCount,
+  resetEmbeddedRunTrackingForRestart,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
 import type { startGatewayServer } from "../../gateway/server.js";
@@ -72,6 +73,11 @@ export async function runGatewayLoop(params: {
           ? `spawned pid ${respawn.pid ?? "unknown"}`
           : "supervisor restart";
       gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
+      if (respawn.detail) {
+        gatewayLog.warn(
+          `supervisor-assisted restart is falling back to process exit only (${respawn.detail})`,
+        );
+      }
       exitProcess(0);
       return;
     }
@@ -209,6 +215,7 @@ export async function runGatewayLoop(params: {
       // coordinator level — rather than inside individual subsystem init
       // functions, to avoid surprising cross-cutting side effects.
       resetAllLanes();
+      resetEmbeddedRunTrackingForRestart();
     });
 
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
