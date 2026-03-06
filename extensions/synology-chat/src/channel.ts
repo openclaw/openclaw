@@ -293,12 +293,23 @@ export function createSynologyChatPlugin() {
                 deliver: async (payload: { text?: string; body?: string }) => {
                   const text = payload?.text ?? payload?.body;
                   if (text) {
-                    await sendMessage(
+                    const ok = await sendMessage(
                       account.incomingUrl,
                       text,
                       sendUserId,
                       account.allowInsecureSsl,
                     );
+                    if (!ok) {
+                      // Log the failure so operators can diagnose delivery issues.
+                      // Throwing here surfaces the error to the dispatcher so it
+                      // can be tracked rather than silently dropping the message.
+                      log?.warn?.(
+                        `Synology Chat: failed to deliver message to user ${sendUserId} after retries`,
+                      );
+                      throw new Error(
+                        `Synology Chat: message delivery failed for user ${sendUserId}`,
+                      );
+                    }
                   }
                 },
                 onReplyStart: () => {

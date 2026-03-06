@@ -105,13 +105,32 @@ export async function sendFileUrl(
   const payload = JSON.stringify(payloadObj);
   const body = `payload=${encodeURIComponent(payload)}`;
 
-  try {
-    const ok = await doPost(incomingUrl, body, allowInsecureSsl);
-    lastSendTime = Date.now();
-    return ok;
-  } catch {
-    return false;
+  // Apply the same rate-limit guard and retry logic as sendMessage so file
+  // deliveries are equally resilient to transient network errors.
+  const now = Date.now();
+  const elapsed = now - lastSendTime;
+  if (elapsed < MIN_SEND_INTERVAL_MS) {
+    await sleep(MIN_SEND_INTERVAL_MS - elapsed);
   }
+
+  const maxRetries = 3;
+  const baseDelay = 300;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const ok = await doPost(incomingUrl, body, allowInsecureSsl);
+      lastSendTime = Date.now();
+      if (ok) return true;
+    } catch {
+      // will retry
+    }
+
+    if (attempt < maxRetries - 1) {
+      await sleep(baseDelay * Math.pow(2, attempt));
+    }
+  }
+
+  return false;
 }
 
 /**
