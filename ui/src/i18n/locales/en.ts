@@ -115,6 +115,14 @@ export const en: TranslationMap = {
     showCronSessions: "Show cron sessions",
     showCronSessionsHidden: "Show cron sessions ({count} hidden)",
     onboardingDisabled: "Disabled during onboarding",
+    stt: {
+      listening: "Listening...",
+      help: "Click or press ESC to cancel",
+      error: "Failed to start voice input",
+      loading: "Loading voice model...",
+      loaded: "Voice model loaded successfully",
+      micTitle: "Voice input",
+    },
   },
   languages: {
     en: "English",

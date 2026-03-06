@@ -7,6 +7,7 @@ import {
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
+import { t } from "../i18n/index.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -500,8 +501,18 @@ export function renderChat(props: ChatProps) {
           >
             <div class="chat-stt-overlay__content">
               <div class="chat-stt-overlay__icon">${icons.mic}</div>
-              <div class="chat-stt-overlay__text">${props.sttText || "Listening..."}</div>
-              <div style="font-size: 12px; opacity: 0.6; margin-top: 8px;">点击或按 ESC 退出</div>
+              <div class="chat-stt-overlay__text">
+                ${
+                  // @ts-ignore
+                  props.sttText || t("chat.stt.listening")
+                }
+              </div>
+              <div style="font-size: 12px; opacity: 0.6; margin-top: 8px;">
+                ${
+                  // @ts-ignore
+                  t("chat.stt.help")
+                }
+              </div>
             </div>
           </div>
         `
@@ -533,7 +544,10 @@ export function renderChat(props: ChatProps) {
               type="button"
               ?disabled=${!props.connected}
               @click=${toggleStt}
-              title="Voice input"
+              title=${
+                // @ts-ignore
+                t("chat.stt.micTitle")
+              }
             >
               ${icons.mic}
             </button>
@@ -719,6 +733,8 @@ async function getVosk() {
 
   try {
     console.log("Loading Vosk model...");
+    // @ts-ignore
+    console.log(t("chat.stt.loading"));
     const { createModel } = await import("vosk-browser");
     // 使用本地英文模型
     const model = (await createModel(
@@ -726,6 +742,8 @@ async function getVosk() {
     )) as unknown as VoskModel;
     voskModel = model;
     console.log("Vosk model loaded successfully");
+    // @ts-ignore
+    console.log(t("chat.stt.loaded"));
     return { model };
   } catch (err) {
     console.error("Failed to load Vosk model:", err);
@@ -778,7 +796,8 @@ async function startStt(props: ChatProps) {
     processor.connect(audioContext.destination);
   } catch (err) {
     console.error("Failed to start STT:", err);
-    alert("无法启动语音输入: " + (err instanceof Error ? err.message : String(err)));
+    // @ts-ignore
+    alert(t("chat.stt.error") + ": " + (err instanceof Error ? err.message : String(err)));
     props.onSttToggle?.(false);
     stopStt();
   }

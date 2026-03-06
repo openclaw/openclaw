@@ -114,6 +114,14 @@ export const zh_CN: TranslationMap = {
     showCronSessions: "显示定时任务会话",
     showCronSessionsHidden: "显示定时任务会话 (已隐藏 {count} 个)",
     onboardingDisabled: "引导期间禁用",
+    stt: {
+      listening: "正在倾听...",
+      help: "点击或按 ESC 退出",
+      error: "无法启动语音输入",
+      loading: "正在加载语音模型...",
+      loaded: "语音模型加载成功",
+      micTitle: "语音输入",
+    },
   },
   languages: {
     en: "English",
