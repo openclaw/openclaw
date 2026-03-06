@@ -446,4 +446,23 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-silent");
     expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
   });
+
+  it("reloads history when a local run final has no visible assistant payload", () => {
+    const { state, chatLog, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    noteLocalRunId("run-local");
+
+    handleChatEvent({
+      runId: "run-local",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [] },
+    });
+
+    expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-local");
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
 });

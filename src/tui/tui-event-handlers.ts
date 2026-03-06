@@ -135,10 +135,13 @@ export function createEventHandlers(context: EventHandlerContext) {
     return sessionRuns.has(activeRunId);
   };
 
-  const maybeRefreshHistoryForRun = (runId: string) => {
-    if (isLocalRunId?.(runId)) {
+  const maybeRefreshHistoryForRun = (runId: string, opts?: { allowLocal?: boolean }) => {
+    const isLocal = isLocalRunId?.(runId) ?? false;
+    if (isLocal) {
       forgetLocalRunId?.(runId);
-      return;
+      if (!opts?.allowLocal) {
+        return;
+      }
     }
     if (hasConcurrentActiveRun(runId)) {
       return;
@@ -178,7 +181,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "final") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
       if (!evt.message) {
-        maybeRefreshHistoryForRun(evt.runId);
+        maybeRefreshHistoryForRun(evt.runId, { allowLocal: true });
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
         tui.requestRender();
@@ -208,9 +211,12 @@ export function createEventHandlers(context: EventHandlerContext) {
         state.showThinking,
         evt.errorMessage,
       );
+      const shouldReloadLocalTranscript =
+        finalText === "(no output)" && (isLocalRunId?.(evt.runId) ?? false);
       const suppressEmptyExternalPlaceholder =
-        finalText === "(no output)" && !isLocalRunId?.(evt.runId);
-      if (suppressEmptyExternalPlaceholder) {
+        finalText === "(no output)" && !shouldReloadLocalTranscript;
+      if (shouldReloadLocalTranscript || suppressEmptyExternalPlaceholder) {
+        maybeRefreshHistoryForRun(evt.runId, { allowLocal: shouldReloadLocalTranscript });
         chatLog.dropAssistant(evt.runId);
       } else {
         chatLog.finalizeAssistant(finalText, evt.runId);
