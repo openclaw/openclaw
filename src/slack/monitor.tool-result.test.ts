@@ -598,7 +598,7 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     const ctx = getFirstReplySessionCtx();
-    expect(ctx.SessionKey).toBe("agent:main:main:thread:123");
+    expect(ctx.SessionKey).toBe("agent:main:slack:direct:u1:thread:123");
     expect(ctx.ParentSessionKey).toBeUndefined();
   });
 

@@ -229,7 +229,7 @@ describe("resolveSlackSystemEventSessionKey", () => {
         channelType: "im",
         senderId: "U123",
       }),
-    ).toBe("agent:ops-dm:main");
+    ).toBe("agent:ops-dm:slack:direct:u123");
   });
 });
 
