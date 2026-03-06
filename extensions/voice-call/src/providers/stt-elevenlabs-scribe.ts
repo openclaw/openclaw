@@ -155,13 +155,14 @@ class ElevenLabsScribeSTTSession implements RealtimeSTTSession {
 
       const url = `wss://api.elevenlabs.io/v1/speech-to-text/realtime?${params.toString()}`;
 
-      this.ws = new WebSocket(url, {
+      const ws = new WebSocket(url, {
         headers: {
           "xi-api-key": this.apiKey,
         },
       });
+      this.ws = ws;
 
-      this.ws.on("open", () => {
+      ws.on("open", () => {
         console.log("[ScribeSTT] WebSocket connected");
         this.connected = true;
         this.reconnectAttempts = 0;
@@ -169,7 +170,7 @@ class ElevenLabsScribeSTTSession implements RealtimeSTTSession {
         resolve();
       });
 
-      this.ws.on("message", (data: Buffer) => {
+      ws.on("message", (data: Buffer) => {
         try {
           const event = JSON.parse(data.toString());
           this.handleEvent(event);
@@ -178,14 +179,14 @@ class ElevenLabsScribeSTTSession implements RealtimeSTTSession {
         }
       });
 
-      this.ws.on("error", (error) => {
+      ws.on("error", (error) => {
         console.error("[ScribeSTT] WebSocket error:", error);
         if (!this.connected) {
           reject(error);
         }
       });
 
-      this.ws.on("close", (code, reason) => {
+      ws.on("close", (code, reason) => {
         console.log(
           `[ScribeSTT] WebSocket closed (code: ${code}, reason: ${reason?.toString() || "none"})`,
         );
@@ -197,10 +198,10 @@ class ElevenLabsScribeSTTSession implements RealtimeSTTSession {
       });
 
       setTimeout(() => {
-        if (!this.connected) {
+        if (ws.readyState !== WebSocket.OPEN) {
           // Clean up the WebSocket to avoid orphaned connections
           try {
-            this.ws?.close();
+            ws.close();
           } catch {
             // ignore close errors during timeout cleanup
           }
