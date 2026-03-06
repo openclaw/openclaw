@@ -18,6 +18,7 @@ import {
 const log = createSubsystemLogger("ollama-stream");
 
 export const OLLAMA_NATIVE_BASE_URL = "http://127.0.0.1:11434";
+const OLLAMA_DEFAULT_NUM_CTX = 8192;
 
 // ── Ollama /api/chat request types ──────────────────────────────────────────
 
@@ -423,9 +424,14 @@ export function createOllamaStreamFn(
 
         const ollamaTools = extractOllamaTools(context.tools);
 
-        // Ollama defaults to num_ctx=4096 which is too small for large
-        // system prompts + many tool definitions. Use model's contextWindow.
-        const ollamaOptions: Record<string, unknown> = { num_ctx: model.contextWindow ?? 65536 };
+        // Ollama defaults to num_ctx=4096 which is often too small once tool
+        // definitions are included. Keep a conservative fallback to avoid
+        // over-allocating memory when model metadata omits contextWindow.
+        const numCtx =
+          typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
+            ? Math.max(1, Math.floor(model.contextWindow))
+            : OLLAMA_DEFAULT_NUM_CTX;
+        const ollamaOptions: Record<string, unknown> = { num_ctx: numCtx };
         if (typeof options?.temperature === "number") {
           ollamaOptions.temperature = options.temperature;
         }

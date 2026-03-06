@@ -304,15 +304,17 @@ async function createOllamaTestStream(params: {
   baseUrl: string;
   defaultHeaders?: Record<string, string>;
   options?: { maxTokens?: number; signal?: AbortSignal; headers?: Record<string, string> };
+  omitModelContextWindow?: boolean;
 }) {
   const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
+  const model = {
+    id: "qwen3:32b",
+    api: "ollama",
+    provider: "custom-ollama",
+    ...(params.omitModelContextWindow ? {} : { contextWindow: 131072 }),
+  };
   return streamFn(
-    {
-      id: "qwen3:32b",
-      api: "ollama",
-      provider: "custom-ollama",
-      contextWindow: 131072,
-    } as unknown as Parameters<typeof streamFn>[0],
+    model as unknown as Parameters<typeof streamFn>[0],
     {
       messages: [{ role: "user", content: "hello" }],
     } as unknown as Parameters<typeof streamFn>[1],
@@ -358,6 +360,32 @@ describe("createOllamaStreamFn", () => {
         };
         expect(requestBody.options.num_ctx).toBe(131072);
         expect(requestBody.options.num_predict).toBe(123);
+      },
+    );
+  });
+
+  it("uses a conservative default num_ctx when model contextWindow is missing", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          omitModelContextWindow: true,
+        });
+
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
+
+        if (typeof fetchMock.mock.calls[0]?.[1]?.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
+          options: { num_ctx?: number };
+        };
+        expect(requestBody.options.num_ctx).toBe(8192);
       },
     );
   });
