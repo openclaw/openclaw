@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
@@ -57,6 +58,7 @@ type QueueStatus = {
 
 type StatusArgs = {
   config?: OpenClawConfig;
+  catalog?: ModelCatalogEntry[];
   agent: AgentConfig;
   agentId?: string;
   sessionEntry?: SessionEntry;
@@ -382,7 +384,9 @@ export function buildStatusMessage(args: StatusArgs): string {
   const verboseLevel = args.resolvedVerbose ?? args.agent?.verboseDefault ?? "off";
   const reasoningLevel =
     args.resolvedReasoning ??
-    (args.config ? resolveReasoningDefault({ cfg: args.config, provider, model }) : "off");
+    (args.config
+      ? resolveReasoningDefault({ cfg: args.config, provider, model, catalog: args.catalog })
+      : "off");
   const elevatedLevel =
     args.resolvedElevated ??
     args.sessionEntry?.elevatedLevel ??
