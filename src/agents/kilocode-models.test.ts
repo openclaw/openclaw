@@ -31,7 +31,7 @@ function makeGatewayModel(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeAutoModel() {
+function makeAutoModel(overrides: Record<string, unknown> = {}) {
   return makeGatewayModel({
     id: "kilo/auto",
     name: "Kilo: Auto",
@@ -50,6 +50,7 @@ function makeAutoModel() {
       completion: "0.000025",
     },
     supported_parameters: ["max_tokens", "temperature", "tools", "reasoning", "include_reasoning"],
+    ...overrides,
   });
 }
 
