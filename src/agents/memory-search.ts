@@ -102,6 +102,22 @@ const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 
+export function resolveDefaultMemorySearchModel(
+  provider: ResolvedMemorySearchConfig["provider"] | undefined,
+): string {
+  return provider === "gemini"
+    ? DEFAULT_GEMINI_MODEL
+    : provider === "openai"
+      ? DEFAULT_OPENAI_MODEL
+      : provider === "voyage"
+        ? DEFAULT_VOYAGE_MODEL
+        : provider === "mistral"
+          ? DEFAULT_MISTRAL_MODEL
+          : provider === "ollama"
+            ? DEFAULT_OLLAMA_MODEL
+            : "";
+}
+
 function normalizeSources(
   sources: Array<"memory" | "sessions"> | undefined,
   sessionMemoryEnabled: boolean,
@@ -180,18 +196,7 @@ function mergeConfig(
       }
     : undefined;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
-  const modelDefault =
-    provider === "gemini"
-      ? DEFAULT_GEMINI_MODEL
-      : provider === "openai"
-        ? DEFAULT_OPENAI_MODEL
-        : provider === "voyage"
-          ? DEFAULT_VOYAGE_MODEL
-          : provider === "mistral"
-            ? DEFAULT_MISTRAL_MODEL
-            : provider === "ollama"
-              ? DEFAULT_OLLAMA_MODEL
-              : undefined;
+  const modelDefault = resolveDefaultMemorySearchModel(provider) || undefined;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,

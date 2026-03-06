@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
+import {
+  resolveDefaultMemorySearchModel,
+  resolveMemorySearchConfig,
+} from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { extractEntities } from "./entity-extract.js";
 import { hashText } from "./internal.js";
@@ -107,8 +110,9 @@ export async function ingestSessionToMemory(params: {
       const resolvedAgentId =
         params.agentId?.trim() || params.sessionKey?.split(":")[0]?.trim() || "main";
       const memCfg = resolveMemorySearchConfig(params.config, resolvedAgentId);
-      if (memCfg?.model) {
-        sessionModel = memCfg.model;
+      const configuredModel = memCfg?.model || resolveDefaultMemorySearchModel(memCfg?.provider);
+      if (configuredModel) {
+        sessionModel = configuredModel;
       }
     }
 

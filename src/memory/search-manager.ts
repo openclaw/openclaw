@@ -4,6 +4,7 @@ import type { ResolvedQmdConfig } from "./backend-config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import type {
   MemoryEmbeddingProbeResult,
+  MemorySearchOptions,
   MemorySearchManager,
   MemorySyncProgressUpdate,
 } from "./types.js";
@@ -99,10 +100,7 @@ class FallbackMemoryManager implements MemorySearchManager {
     private readonly onClose?: () => void,
   ) {}
 
-  async search(
-    query: string,
-    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
-  ) {
+  async search(query: string, opts?: MemorySearchOptions) {
     if (!this.primaryFailed) {
       try {
         return await this.deps.primary.search(query, opts);

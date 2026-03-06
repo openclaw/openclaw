@@ -22,6 +22,7 @@ import {
 import { requireNodeSqlite } from "./sqlite.js";
 import type {
   MemoryEmbeddingProbeResult,
+  MemorySearchOptions,
   MemoryProviderStatus,
   MemorySearchManager,
   MemorySearchResult,
@@ -760,10 +761,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     return true;
   }
 
-  async search(
-    query: string,
-    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
-  ): Promise<MemorySearchResult[]> {
+  async search(query: string, opts?: MemorySearchOptions): Promise<MemorySearchResult[]> {
     if (!this.isScopeAllowed(opts?.sessionKey)) {
       this.logScopeDenied(opts?.sessionKey);
       return [];

@@ -73,16 +73,17 @@ export function createMemorySearchTool(options: {
           mode: citationsMode,
           sessionKey: options.agentSessionKey,
         });
-        const status = manager.status();
-        // B1: Warn when since/entity filters used with QMD backend (unsupported)
-        const filtersUnsupported = status.backend === "qmd" && (since || entity);
         const searchOptions = {
           maxResults,
           minScore,
           sessionKey: options.agentSessionKey,
-          ...(filtersUnsupported ? {} : { since, entity }),
+          since,
+          entity,
         };
         const rawResults = await manager.search(query, searchOptions);
+        const status = manager.status();
+        // B1: Warn when since/entity filters used with QMD backend (unsupported)
+        const filtersUnsupported = status.backend === "qmd" && (since || entity);
         const decorated = decorateCitations(rawResults, includeCitations);
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
         const results =
