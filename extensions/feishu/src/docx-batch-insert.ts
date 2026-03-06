@@ -84,7 +84,7 @@ async function insertBatch(
     },
   });
 
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(`${res.msg} (code: ${res.code})`);
   }
 

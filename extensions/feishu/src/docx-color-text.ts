@@ -137,7 +137,7 @@ export async function updateColorText(
     data: { update_text_elements: { elements } },
   });
 
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
