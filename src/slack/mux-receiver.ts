@@ -269,12 +269,12 @@ export class MuxReceiver {
   }
 
   private async resolveFromMcpRemoteCache(): Promise<string | null> {
-    const backstageMcpUrl = this.resolveBackstageMcpUrl();
-    if (!backstageMcpUrl) {
+    const mcpServerUrl = this.resolveMcpServerUrl();
+    if (!mcpServerUrl) {
       return null;
     }
 
-    const hash = createHash("md5").update(backstageMcpUrl).digest("hex");
+    const hash = createHash("md5").update(mcpServerUrl).digest("hex");
     const cacheBase = join(homedir(), ".mcp-auth");
 
     const { readdir } = await import("node:fs/promises");
@@ -311,14 +311,11 @@ export class MuxReceiver {
     return null;
   }
 
-  private resolveBackstageMcpUrl(): string | null {
-    if (this.mux.backstageMcpUrl) {
-      return this.mux.backstageMcpUrl;
+  private resolveMcpServerUrl(): string | null {
+    if (this.mux.mcpServerUrl) {
+      return this.mux.mcpServerUrl;
     }
-    if (this.mux.backstageUrl) {
-      return `${this.mux.backstageUrl.replace(/\/+$/, "")}/api/mcp-actions/v1`;
-    }
-    return process.env.BACKSTAGE_MCP_URL?.trim() || null;
+    return process.env.MUX_MCP_SERVER_URL?.trim() || null;
   }
 
   private isJwtExpired(token: string): boolean {

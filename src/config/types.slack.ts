@@ -82,11 +82,13 @@ export type SlackThreadConfig = {
 export type SlackMuxConfig = {
   /** WebSocket URL of the openclaw-mux service (e.g., wss://openclaw-mux.example.com/ws). */
   url: string;
-  /** Backstage base URL for OAuth token resolution. */
-  backstageUrl?: string;
-  /** Backstage MCP URL for token cache lookup. Defaults to `{backstageUrl}/api/mcp-actions/v1`. */
-  backstageMcpUrl?: string;
-  /** Explicit auth token (overrides OAuth resolution). */
+  /**
+   * MCP server URL for OAuth token cache lookup.  When set, the mux receiver
+   * resolves auth tokens from the local mcp-remote token cache keyed by this URL.
+   * Falls back to MUX_TOKEN env var or the explicit `token` field below.
+   */
+  mcpServerUrl?: string;
+  /** Explicit auth token sent as `Authorization: Bearer` to the mux service (overrides OAuth resolution). */
   token?: string;
 };
 

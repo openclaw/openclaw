@@ -793,8 +793,7 @@ const SlackReplyToModeByChatTypeSchema = z
 export const SlackMuxSchema = z
   .object({
     url: z.string().min(1),
-    backstageUrl: z.string().optional(),
-    backstageMcpUrl: z.string().optional(),
+    mcpServerUrl: z.string().optional(),
     token: z.string().optional().register(sensitive),
   })
   .strict();
