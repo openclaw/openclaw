@@ -299,9 +299,12 @@ export async function spawnSubagentDirect(
     Number.isFinite(cfg.agents.defaults.subagents.runTimeoutSeconds)
       ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.runTimeoutSeconds))
       : 0;
+  // When agent provides runTimeoutSeconds, enforce config value as minimum floor.
+  // This prevents models from autonomously setting too-short timeouts that cause
+  // premature failures, especially on retry attempts where models may decrease the value.
   const runTimeoutSeconds =
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
-      ? Math.max(0, Math.floor(params.runTimeoutSeconds))
+      ? Math.max(cfgSubagentTimeout, Math.floor(params.runTimeoutSeconds))
       : cfgSubagentTimeout;
   let modelApplied = false;
   let threadBindingReady = false;

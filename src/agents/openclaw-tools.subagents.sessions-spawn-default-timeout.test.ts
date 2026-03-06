@@ -49,12 +49,36 @@ describe("sessions_spawn default runTimeoutSeconds", () => {
     expect(getSubagentTimeout(gateway.calls)).toBe(900);
   });
 
-  it("explicit runTimeoutSeconds wins over config default", async () => {
-    applySubagentTimeoutDefault(900);
+  it("explicit runTimeoutSeconds can increase timeout above config default", async () => {
+    applySubagentTimeoutDefault(300);
     const gateway = sessionsHarness.setupSessionsSpawnGatewayMock({});
 
-    await spawnSubagent("call-2", { task: "hello", runTimeoutSeconds: 300 });
+    await spawnSubagent("call-2", { task: "hello", runTimeoutSeconds: 900 });
 
+    expect(getSubagentTimeout(gateway.calls)).toBe(900);
+  });
+
+  it("config default acts as floor when agent provides lower runTimeoutSeconds", async () => {
+    applySubagentTimeoutDefault(300);
+    const gateway = sessionsHarness.setupSessionsSpawnGatewayMock({});
+
+    await spawnSubagent("call-3", { task: "hello", runTimeoutSeconds: 60 });
+
+    // Config default (300) is enforced as minimum, agent's 60 is rejected
     expect(getSubagentTimeout(gateway.calls)).toBe(300);
+  });
+
+  it("config default prevents model from decreasing timeout on retries", async () => {
+    applySubagentTimeoutDefault(300);
+    const gateway = sessionsHarness.setupSessionsSpawnGatewayMock({});
+
+    // Simulate model decreasing timeout across retries (60 → 45 → 20)
+    await spawnSubagent("call-4a", { task: "hello", runTimeoutSeconds: 60 });
+    await spawnSubagent("call-4b", { task: "hello", runTimeoutSeconds: 45 });
+    await spawnSubagent("call-4c", { task: "hello", runTimeoutSeconds: 20 });
+
+    const calls = gateway.calls;
+    // All three spawns should use config default (300) as floor
+    expect(getSubagentTimeout(calls)).toBe(300);
   });
 });
