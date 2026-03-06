@@ -67,6 +67,39 @@ export function normalizeToolParameters(
   tool: AnyAgentTool,
   options?: { modelProvider?: string; modelId?: string },
 ): AnyAgentTool {
+  // Convert array-format parameters (e.g. [{name, type, ...}]) to JSON Schema.
+  // typeof [] === "object" passes the object check below, but no schema property
+  // checks match, leaving a raw array as parameters (rejected by Gemini with 400).
+  if (Array.isArray(tool.parameters)) {
+    const arrayParams = tool.parameters as Array<Record<string, unknown>>;
+    const properties: Record<string, unknown> = {};
+    const required: string[] = [];
+    for (const param of arrayParams) {
+      if (!param || typeof param.name !== "string") {
+        continue;
+      }
+      const prop: Record<string, unknown> = { type: param.type ?? "string" };
+      if (typeof param.description === "string") {
+        prop.description = param.description;
+      }
+      if (Array.isArray(param.enum)) {
+        prop.enum = param.enum;
+      }
+      properties[param.name] = prop;
+      if (param.required) {
+        required.push(param.name);
+      }
+    }
+    tool = {
+      ...tool,
+      parameters: {
+        type: "object",
+        properties,
+        ...(required.length > 0 ? { required } : {}),
+      },
+    };
+  }
+
   const schema =
     tool.parameters && typeof tool.parameters === "object"
       ? (tool.parameters as Record<string, unknown>)
