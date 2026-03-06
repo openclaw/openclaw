@@ -437,8 +437,14 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
           path: "tools.web.search.apiKey",
         })
       : undefined;
-  const fromConfig = normalizeSecretInput(fromConfigRaw);
-  const fromEnv = normalizeSecretInput(process.env.BRAVE_API_KEY);
+  // Handle both string and SecretRef - dont normalize non-string values
+  const fromConfig =
+    fromConfigRaw !== undefined && typeof fromConfigRaw === "string"
+      ? normalizeSecretInput(fromConfigRaw)
+      : fromConfigRaw;
+  const fromEnvRaw = process.env.BRAVE_API_KEY;
+  const fromEnv =
+    fromEnvRaw !== undefined ? normalizeSecretInput(fromEnvRaw) : undefined;
   return fromConfig || fromEnv || undefined;
 }
 
@@ -565,12 +571,19 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
   apiKey?: string;
   source: PerplexityApiKeySource;
 } {
-  const fromConfig = normalizeApiKey(perplexity?.apiKey);
+  const apiKey = perplexity?.apiKey;
+  // Handle both string and SecretRef - dont normalize non-string values
+  const fromConfig =
+    apiKey !== undefined && typeof apiKey === "string"
+      ? normalizeSecretInput(apiKey)
+      : apiKey;
   if (fromConfig) {
     return { apiKey: fromConfig, source: "config" };
   }
 
-  const fromEnvPerplexity = normalizeApiKey(process.env.PERPLEXITY_API_KEY);
+  const fromEnvRaw = process.env.PERPLEXITY_API_KEY;
+  const fromEnvPerplexity =
+    fromEnvRaw !== undefined ? normalizeSecretInput(fromEnvRaw) : undefined;
   if (fromEnvPerplexity) {
     return { apiKey: fromEnvPerplexity, source: "perplexity_env" };
   }
@@ -578,9 +591,6 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
   return { apiKey: undefined, source: "none" };
 }
 
-function normalizeApiKey(key: unknown): string {
-  return normalizeSecretInput(key);
-}
 
 function resolveGrokConfig(search?: WebSearchConfig): GrokConfig {
   if (!search || typeof search !== "object") {
@@ -594,11 +604,18 @@ function resolveGrokConfig(search?: WebSearchConfig): GrokConfig {
 }
 
 function resolveGrokApiKey(grok?: GrokConfig): string | undefined {
-  const fromConfig = normalizeApiKey(grok?.apiKey);
+  const apiKey = grok?.apiKey;
+  // Handle both string and SecretRef - dont normalize non-string values
+  const fromConfig =
+    apiKey !== undefined && typeof apiKey === "string"
+      ? normalizeSecretInput(apiKey)
+      : apiKey;
   if (fromConfig) {
     return fromConfig;
   }
-  const fromEnv = normalizeApiKey(process.env.XAI_API_KEY);
+  const fromEnvRaw = process.env.XAI_API_KEY;
+  const fromEnv =
+    fromEnvRaw !== undefined ? normalizeSecretInput(fromEnvRaw) : undefined;
   return fromEnv || undefined;
 }
 
@@ -660,11 +677,18 @@ function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
 }
 
 function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
-  const fromConfig = normalizeApiKey(gemini?.apiKey);
+  const apiKey = gemini?.apiKey;
+  // Handle both string and SecretRef - dont normalize non-string values
+  const fromConfig =
+    apiKey !== undefined && typeof apiKey === "string"
+      ? normalizeSecretInput(apiKey)
+      : apiKey;
   if (fromConfig) {
     return fromConfig;
   }
-  const fromEnv = normalizeApiKey(process.env.GEMINI_API_KEY);
+  const fromEnvRaw = process.env.GEMINI_API_KEY;
+  const fromEnv =
+    fromEnvRaw !== undefined ? normalizeSecretInput(fromEnvRaw) : undefined;
   return fromEnv || undefined;
 }
 
