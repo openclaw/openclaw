@@ -322,6 +322,33 @@ describe("secrets audit", () => {
     ).toBe(true);
   });
 
+  it("does not flag non-sensitive routing headers in models.json", async () => {
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "OPENAI_API_KEY",
+          headers: {
+            "X-Proxy-Region": "us-west",
+          },
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.modelsPath &&
+          entry.jsonPath === "providers.openai.headers.X-Proxy-Region",
+      ),
+    ).toBe(false);
+  });
+
   it("does not flag models.json marker values as plaintext", async () => {
     await writeJsonFile(fixture.modelsPath, {
       providers: {
@@ -419,5 +446,39 @@ describe("secrets audit", () => {
         (entry) => entry.code === "REF_UNRESOLVED" && entry.file === fixture.modelsPath,
       ),
     ).toBe(true);
+  });
+
+  it("does not flag non-sensitive routing headers in openclaw config", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            headers: {
+              "X-Proxy-Region": "us-west",
+            },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "models.providers.openai.headers.X-Proxy-Region",
+      ),
+    ).toBe(false);
   });
 });

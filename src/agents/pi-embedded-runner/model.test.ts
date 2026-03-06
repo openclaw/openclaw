@@ -180,7 +180,7 @@ describe("buildInlineProviderModels", () => {
     expect(result[0].headers).toBeUndefined();
   });
 
-  it("drops SecretRef marker headers when building inline provider models", () => {
+  it("preserves literal marker-shaped headers in inline provider models", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         headers: {
@@ -195,7 +195,11 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toHaveLength(1);
-    expect(result[0].headers).toEqual({ "X-Static": "tenant-a" });
+    expect(result[0].headers).toEqual({
+      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+      "X-Managed": "secretref-managed",
+      "X-Static": "tenant-a",
+    });
   });
 });
 
@@ -241,7 +245,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("drops marker-backed provider headers in fallback models", () => {
+  it("preserves literal marker-shaped provider headers in fallback models", () => {
     const cfg = {
       models: {
         providers: {
@@ -262,7 +266,32 @@ describe("resolveModel", () => {
 
     expect(result.error).toBeUndefined();
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+      "X-Managed": "secretref-managed",
       "X-Custom-Auth": "token-123",
+    });
+  });
+
+  it("drops marker headers from discovered models.json entries", () => {
+    mockDiscoveredModel({
+      provider: "custom",
+      modelId: "listed-model",
+      templateModel: {
+        ...makeModel("listed-model"),
+        provider: "custom",
+        headers: {
+          Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+          "X-Managed": "secretref-managed",
+          "X-Static": "tenant-a",
+        },
+      },
+    });
+
+    const result = resolveModel("custom", "listed-model", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Static": "tenant-a",
     });
   });
 

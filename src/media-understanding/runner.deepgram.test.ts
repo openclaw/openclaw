@@ -88,12 +88,12 @@ describe("runCapability deepgram provider options", () => {
       expect(seenBaseUrl).toBe("https://entry.example");
       expect(seenHeaders).toMatchObject({
         "X-Provider": "1",
+        "X-Provider-Managed": "secretref-managed",
         "X-Config": "2",
+        "X-Config-Managed": "secretref-env:DEEPGRAM_HEADER_TOKEN",
         "X-Entry": "3",
+        "X-Entry-Managed": "secretref-managed",
       });
-      expect((seenHeaders as Record<string, string>)["X-Provider-Managed"]).toBeUndefined();
-      expect((seenHeaders as Record<string, string>)["X-Config-Managed"]).toBeUndefined();
-      expect((seenHeaders as Record<string, string>)["X-Entry-Managed"]).toBeUndefined();
       expect(seenQuery).toMatchObject({
         detect_language: false,
         punctuate: false,

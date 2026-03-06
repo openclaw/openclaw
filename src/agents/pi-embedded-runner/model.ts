@@ -23,13 +23,19 @@ type InlineProviderConfig = {
   headers?: unknown;
 };
 
-function sanitizeModelHeaders(headers: unknown): Record<string, string> | undefined {
+function sanitizeModelHeaders(
+  headers: unknown,
+  opts?: { stripSecretRefMarkers?: boolean },
+): Record<string, string> | undefined {
   if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
     return undefined;
   }
   const next: Record<string, string> = {};
   for (const [headerName, headerValue] of Object.entries(headers)) {
-    if (typeof headerValue !== "string" || isSecretRefHeaderValueMarker(headerValue)) {
+    if (typeof headerValue !== "string") {
+      continue;
+    }
+    if (opts?.stripSecretRefMarkers && isSecretRefHeaderValueMarker(headerValue)) {
       continue;
     }
     next[headerName] = headerValue;
@@ -63,11 +69,14 @@ function applyConfiguredProviderOverrides(params: {
   if (!providerConfig) {
     return {
       ...discoveredModel,
-      headers: sanitizeModelHeaders(discoveredModel.headers),
+      // Discovered models originate from models.json and may contain persistence markers.
+      headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
     };
   }
   const configuredModel = providerConfig.models?.find((candidate) => candidate.id === modelId);
-  const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers);
+  const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
+    stripSecretRefMarkers: true,
+  });
   const providerHeaders = sanitizeModelHeaders(providerConfig.headers);
   const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers);
   if (!configuredModel && !providerConfig.baseUrl && !providerConfig.api && !providerHeaders) {

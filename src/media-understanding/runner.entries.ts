@@ -4,7 +4,6 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
-import { isSecretRefHeaderValueMarker } from "../agents/model-auth-markers.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
@@ -49,7 +48,7 @@ function sanitizeProviderHeaders(
   }
   const next: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
-    if (typeof value !== "string" || isSecretRefHeaderValueMarker(value)) {
+    if (typeof value !== "string") {
       continue;
     }
     next[key] = value;
