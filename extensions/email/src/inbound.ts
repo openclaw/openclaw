@@ -1,7 +1,6 @@
 import type { GatewayRequestHandler, OpenClawConfig } from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
 import { getEmailRuntime } from "./runtime.js";
-import { resolveEmailAccount } from "./accounts.js";
+import { resolveEmailAccountForRecipient } from "./accounts.js";
 import { checkSenderAccess } from "./access-control.js";
 import { sendEmailOutbound } from "./send.js";
 import type { EmailInboundPayload } from "./types.js";
@@ -33,7 +32,10 @@ export function createEmailInboundHandler(): GatewayRequestHandler {
     const core = getEmailRuntime();
     const cfg = core.config.loadConfig() as OpenClawConfig;
 
-    const account = resolveEmailAccount({ cfg, accountId: DEFAULT_ACCOUNT_ID });
+    const account = resolveEmailAccountForRecipient({
+      cfg,
+      recipient: payload.to,
+    });
     if (!account.enabled || !account.address) {
       respond(false, undefined, { code: 503, message: "Email channel not configured" });
       return;
@@ -61,7 +63,7 @@ export function createEmailInboundHandler(): GatewayRequestHandler {
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "email",
-      accountId: DEFAULT_ACCOUNT_ID,
+      accountId: account.accountId,
       peer: {
         kind: "direct",
         id: senderAddress,

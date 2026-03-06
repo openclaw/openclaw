@@ -47,3 +47,23 @@ export function resolveEmailAccount(params: {
     allowFrom: raw.allowFrom ?? [],
   };
 }
+
+export function resolveEmailAccountForRecipient(params: {
+  cfg: OpenClawConfig;
+  recipient: string;
+}): ResolvedEmailAccount {
+  const { cfg, recipient } = params;
+  const normalizedRecipient = recipient.trim().toLowerCase();
+  const accountIds = listEmailAccountIds(cfg);
+
+  if (normalizedRecipient) {
+    for (const accountId of accountIds) {
+      const account = resolveEmailAccount({ cfg, accountId });
+      if (account.address.trim().toLowerCase() === normalizedRecipient) {
+        return account;
+      }
+    }
+  }
+
+  return resolveEmailAccount({ cfg });
+}

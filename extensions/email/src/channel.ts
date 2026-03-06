@@ -81,13 +81,13 @@ export const emailPlugin: ChannelPlugin<ResolvedEmailAccount> = {
     },
     isEnabled: (account) => account.enabled,
     disabledReason: () => "disabled",
-    isConfigured: (account) => Boolean(account.address && account.outboundUrl),
+    isConfigured: (account) => Boolean(account.address && account.outboundUrl && account.outboundToken),
     unconfiguredReason: () => "not configured",
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.address && account.outboundUrl),
+      configured: Boolean(account.address && account.outboundUrl && account.outboundToken),
       address: account.address,
       dmPolicy: account.dmPolicy,
     }),
@@ -116,9 +116,14 @@ export const emailPlugin: ChannelPlugin<ResolvedEmailAccount> = {
       if (trimmed && trimmed.includes("@")) {
         return { ok: true, to: trimmed };
       }
-      const firstAllow = (allowFrom ?? []).find((e) => String(e).includes("@"));
+      const firstAllow = (allowFrom ?? [])
+        .map((entry) => String(entry).trim())
+        .find((entry) => {
+          const candidate = entry.toLowerCase();
+          return candidate.includes("@") && !candidate.startsWith("*@");
+        });
       if (firstAllow) {
-        return { ok: true, to: String(firstAllow) };
+        return { ok: true, to: firstAllow };
       }
       return {
         ok: false,
