@@ -35,7 +35,12 @@ import {
 } from "./cli-runner/helpers.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
-import { applyGuardToPayloads, resolveGuardModelConfig } from "./guard-model.js";
+import {
+  applyGuardToPayloads,
+  applyGuardToInput,
+  resolveOutputGuardModelConfig,
+  resolveInputGuardModelConfig,
+} from "./guard-model.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -406,14 +411,36 @@ export async function runCliAgent(params: {
     }
   };
 
+  // Input guard screening — check user message before invoking the CLI backend
+  const inputGuardConfig = resolveInputGuardModelConfig(params.config);
+  if (inputGuardConfig) {
+    const inputCheck = await applyGuardToInput(params.prompt, inputGuardConfig, {
+      cfg: params.config,
+      agentDir: params.agentDir,
+    });
+    if (inputCheck.blocked) {
+      return {
+        payloads: inputCheck.payloads,
+        meta: {
+          durationMs: Date.now() - started,
+          agentMeta: {
+            sessionId: params.sessionId,
+            provider: params.provider,
+            model: modelId,
+          },
+        },
+      };
+    }
+  }
+
   // Try with the provided CLI session ID first
   try {
     const output = await executeCliWithSession(params.cliSessionId);
     const text = output.text?.trim();
     let payloads: EmbeddedPiRunResult["payloads"] = text ? [{ text }] : undefined;
-    const guardConfig = resolveGuardModelConfig(params.config);
-    if (guardConfig && payloads?.length) {
-      payloads = await applyGuardToPayloads(payloads, guardConfig, {
+    const outputGuardConfig = resolveOutputGuardModelConfig(params.config);
+    if (outputGuardConfig && payloads?.length) {
+      payloads = await applyGuardToPayloads(payloads, outputGuardConfig, {
         cfg: params.config,
         agentDir: params.agentDir,
       });

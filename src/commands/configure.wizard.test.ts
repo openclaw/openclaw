@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   waitForGatewayReachable: vi.fn(),
   resolveControlUiLinks: vi.fn(),
   summarizeExistingConfig: vi.fn(),
-  promptDefaultModel: vi.fn(),
+  promptGuardModel: vi.fn(),
   resolveGuardModelRefCompatibility: vi.fn(),
 }));
 
@@ -97,8 +97,8 @@ vi.mock("./onboard-channels.js", () => ({
   setupChannels: vi.fn(),
 }));
 
-vi.mock("./model-picker.js", () => ({
-  promptDefaultModel: mocks.promptDefaultModel,
+vi.mock("./guard-model-picker.js", () => ({
+  promptGuardModel: mocks.promptGuardModel,
 }));
 
 vi.mock("../agents/guard-model.js", () => ({
@@ -133,7 +133,7 @@ describe("runConfigureWizard", () => {
     mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
     mocks.summarizeExistingConfig.mockReturnValue("");
     mocks.createClackPrompter.mockReturnValue({});
-    mocks.promptDefaultModel.mockResolvedValue({ model: "openai/gpt-4o-mini" });
+    mocks.promptGuardModel.mockResolvedValue({ model: "openai/gpt-4o-mini" });
     mocks.resolveGuardModelRefCompatibility.mockReturnValue({
       compatible: true,
       api: "openai-completions",
@@ -143,7 +143,8 @@ describe("runConfigureWizard", () => {
     mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
     mocks.clackIntro.mockResolvedValue(undefined);
     mocks.clackOutro.mockResolvedValue(undefined);
-    mocks.clackConfirm.mockResolvedValue(true);
+    // Skip input guard (false), enable output guard (true)
+    mocks.clackConfirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
     await runConfigureWizard(
       { command: "update", sections: ["guard-model"] },
@@ -158,19 +159,19 @@ describe("runConfigureWizard", () => {
       expect.objectContaining({
         agents: expect.objectContaining({
           defaults: expect.objectContaining({
-            guardModel: {
+            outputGuardModel: {
               primary: "openai/gpt-4o-mini",
               fallbacks: ["openai/gpt-4.1-mini"],
             },
-            guardModelAction: "warn",
-            guardModelOnError: "block",
+            outputGuardModelAction: "warn",
+            outputGuardModelOnError: "block",
           }),
         }),
       }),
     );
-    expect(mocks.promptDefaultModel).toHaveBeenCalledWith(
+    expect(mocks.promptGuardModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Guard model",
+        message: "Output guard model",
       }),
     );
   });
@@ -196,7 +197,7 @@ describe("runConfigureWizard", () => {
     mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
     mocks.summarizeExistingConfig.mockReturnValue("");
     mocks.createClackPrompter.mockReturnValue({});
-    mocks.promptDefaultModel.mockResolvedValue({ model: "gpt-4o-mini" });
+    mocks.promptGuardModel.mockResolvedValue({ model: "gpt-4o-mini" });
     mocks.clackSelect.mockResolvedValue("local");
     mocks.clackIntro.mockResolvedValue(undefined);
     mocks.clackOutro.mockResolvedValue(undefined);
@@ -249,7 +250,7 @@ describe("runConfigureWizard", () => {
     mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
     mocks.summarizeExistingConfig.mockReturnValue("");
     mocks.createClackPrompter.mockReturnValue({});
-    mocks.promptDefaultModel.mockResolvedValue({ model: "anthropic/claude-opus-4-6" });
+    mocks.promptGuardModel.mockResolvedValue({ model: "anthropic/claude-opus-4-6" });
     mocks.resolveGuardModelRefCompatibility.mockReturnValue({
       compatible: false,
       api: "anthropic-messages",

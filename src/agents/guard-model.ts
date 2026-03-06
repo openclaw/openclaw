@@ -224,21 +224,17 @@ function extractGuardReplyText(json: unknown, endpointKind: GuardEndpointKind): 
 
 // ─── Config resolution ──────────────────────────────────────────────────────
 
-/**
- * Resolve guard model config from the OpenClaw config.
- * Returns null when no guard model is configured.
- */
-export function resolveGuardModelConfig(cfg: OpenClawConfig | undefined): GuardModelConfig | null {
-  if (!cfg) {
-    return null;
-  }
-
-  const guardModelCfg = cfg.agents?.defaults?.guardModel;
-  if (!guardModelCfg) {
-    return null;
-  }
-
-  const primary = resolveAgentModelPrimaryValue(guardModelCfg);
+function resolveGuardModelConfigFromKeys(
+  cfg: OpenClawConfig,
+  // AgentModelConfig — string or { primary, fallbacks }
+  guardModelCfg: unknown,
+  actionValue: string | undefined,
+  onErrorValue: string | undefined,
+  maxInputCharsValue: unknown,
+): GuardModelConfig | null {
+  const primary = resolveAgentModelPrimaryValue(
+    guardModelCfg as Parameters<typeof resolveAgentModelPrimaryValue>[0],
+  );
   if (!primary) {
     return null;
   }
@@ -252,7 +248,7 @@ export function resolveGuardModelConfig(cfg: OpenClawConfig | undefined): GuardM
 
   const provider = primary.slice(0, slashIdx);
   const modelId = primary.slice(slashIdx + 1);
-  const maxInputChars = resolveGuardMaxInputChars(cfg.agents?.defaults?.guardModelMaxInputChars);
+  const maxInputChars = resolveGuardMaxInputChars(maxInputCharsValue);
   const primaryCompatibility = resolveGuardModelCompatibility({ provider, modelId, cfg });
   if (!primaryCompatibility.compatible) {
     const compatibilityError = `Guard model "${primary}" is not compatible: ${primaryCompatibility.reason ?? "unsupported API"}`;
@@ -260,14 +256,16 @@ export function resolveGuardModelConfig(cfg: OpenClawConfig | undefined): GuardM
     return {
       provider,
       modelId,
-      action: cfg.agents?.defaults?.guardModelAction ?? "block",
+      action: (actionValue as GuardModelAction | undefined) ?? "block",
       onError: "block",
       ...(maxInputChars !== undefined ? { maxInputChars } : {}),
       compatibilityError,
     };
   }
 
-  const fallbackRefs = resolveAgentModelFallbackValues(guardModelCfg);
+  const fallbackRefs = resolveAgentModelFallbackValues(
+    guardModelCfg as Parameters<typeof resolveAgentModelFallbackValues>[0],
+  );
   const seen = new Set<string>([`${provider}/${modelId}`]);
   const fallbacks: Array<{ provider: string; modelId: string }> = [];
   for (const fallbackRaw of fallbackRefs) {
@@ -298,17 +296,79 @@ export function resolveGuardModelConfig(cfg: OpenClawConfig | undefined): GuardM
     provider,
     modelId,
     ...(fallbacks.length > 0 ? { fallbacks } : {}),
-    action: cfg.agents?.defaults?.guardModelAction ?? "block",
-    onError: cfg.agents?.defaults?.guardModelOnError ?? "allow",
+    action: (actionValue as GuardModelAction | undefined) ?? "block",
+    onError: (onErrorValue as GuardModelOnError | undefined) ?? "allow",
     ...(maxInputChars !== undefined ? { maxInputChars } : {}),
   };
 }
 
-// ─── Guard evaluation ───────────────────────────────────────────────────────
+/**
+ * Resolve output guard model config from the OpenClaw config.
+ * Reads outputGuardModel* keys with backwards-compat fallback to legacy guardModel* keys.
+ * Returns null when no output guard model is configured.
+ */
+export function resolveOutputGuardModelConfig(
+  cfg: OpenClawConfig | undefined,
+): GuardModelConfig | null {
+  if (!cfg) {
+    return null;
+  }
 
-const GUARD_SYSTEM_PROMPT = `You are a content safety classifier. Evaluate the following assistant reply for safety.
-Respond ONLY with a JSON object: {"safe": true} or {"safe": false, "reason": "brief explanation", "categories": ["category1"]}
-Do not include any other text.`;
+  // Support both new outputGuardModel and legacy guardModel (backwards compat)
+  const guardModelCfg = cfg.agents?.defaults?.outputGuardModel ?? cfg.agents?.defaults?.guardModel;
+  if (!guardModelCfg) {
+    return null;
+  }
+
+  const actionValue =
+    cfg.agents?.defaults?.outputGuardModelAction ?? cfg.agents?.defaults?.guardModelAction;
+  const onErrorValue =
+    cfg.agents?.defaults?.outputGuardModelOnError ?? cfg.agents?.defaults?.guardModelOnError;
+  const maxInputCharsValue =
+    cfg.agents?.defaults?.outputGuardModelMaxInputChars ??
+    cfg.agents?.defaults?.guardModelMaxInputChars;
+
+  return resolveGuardModelConfigFromKeys(
+    cfg,
+    guardModelCfg,
+    actionValue,
+    onErrorValue,
+    maxInputCharsValue,
+  );
+}
+
+/**
+ * Resolve input guard model config from the OpenClaw config.
+ * Returns null when no input guard model is configured.
+ */
+export function resolveInputGuardModelConfig(
+  cfg: OpenClawConfig | undefined,
+): GuardModelConfig | null {
+  if (!cfg) {
+    return null;
+  }
+
+  const guardModelCfg = cfg.agents?.defaults?.inputGuardModel;
+  if (!guardModelCfg) {
+    return null;
+  }
+
+  return resolveGuardModelConfigFromKeys(
+    cfg,
+    guardModelCfg,
+    cfg.agents?.defaults?.inputGuardModelAction,
+    cfg.agents?.defaults?.inputGuardModelOnError,
+    cfg.agents?.defaults?.inputGuardModelMaxInputChars,
+  );
+}
+
+/**
+ * Backwards-compat alias for resolveOutputGuardModelConfig.
+ * @deprecated Use resolveOutputGuardModelConfig instead.
+ */
+export const resolveGuardModelConfig = resolveOutputGuardModelConfig;
+
+// ─── Guard evaluation ───────────────────────────────────────────────────────
 
 const GUARD_TIMEOUT_MS = 5_000;
 export const DEFAULT_GUARD_MAX_INPUT_CHARS = 32_000;
@@ -399,10 +459,7 @@ export async function evaluateGuard(
     endpointKind === "responses"
       ? JSON.stringify({
           model: config.modelId,
-          input: [
-            { role: "system", content: GUARD_SYSTEM_PROMPT },
-            { role: "user", content: `Evaluate this assistant reply:\n\n${guardInput.content}` },
-          ],
+          input: [{ role: "user", content: guardInput.content }],
           max_output_tokens: 200,
           temperature: 0,
           // Preserve Codex/OpenAI responses compatibility and avoid retention by default.
@@ -410,10 +467,7 @@ export async function evaluateGuard(
         })
       : JSON.stringify({
           model: config.modelId,
-          messages: [
-            { role: "system", content: GUARD_SYSTEM_PROMPT },
-            { role: "user", content: `Evaluate this assistant reply:\n\n${guardInput.content}` },
-          ],
+          messages: [{ role: "user", content: guardInput.content }],
           max_tokens: 200,
           temperature: 0,
         });
@@ -521,19 +575,44 @@ function handleGuardError(config: GuardModelConfig, detail: string): GuardResult
 
 // ─── Payload screening ─────────────────────────────────────────────────────
 
-const BLOCKED_MESSAGE = "⚠️ This response was blocked by the content safety guard.";
 const REDACTED_MESSAGE = "⚠️ This response was redacted by the content safety guard.";
 const GUARD_UNAVAILABLE_BLOCKED_MESSAGE =
   "⚠️ This response was blocked because the content safety guard is unavailable.";
 const GUARD_TRUNCATED_WARNING_PREFIX = "⚠️ Guard model input was truncated to ";
+const QUARANTINE_SEPARATOR = "───────────────────────────────────────";
 
-function buildBlockedPayload(reason?: string): ReplyPayload[] {
-  return [
-    {
-      text: BLOCKED_MESSAGE + (reason ? `\nReason: ${reason}` : ""),
-      isError: true,
-    },
-  ];
+function buildBlockedPayload(reason?: string, originalContent?: string): ReplyPayload[] {
+  const lines = ["⚠️ BLOCKED: Safety guard flagged this response."];
+  if (reason) {
+    lines.push(`Reason: ${reason}`);
+  }
+  if (originalContent) {
+    lines.push(
+      "",
+      "Flagged content (shown for your review):",
+      QUARANTINE_SEPARATOR,
+      originalContent,
+      QUARANTINE_SEPARATOR,
+    );
+  }
+  return [{ text: lines.join("\n"), isError: true }];
+}
+
+function buildInputBlockedPayload(reason?: string, originalContent?: string): ReplyPayload[] {
+  const lines = ["⚠️ BLOCKED: Safety guard flagged this input."];
+  if (reason) {
+    lines.push(`Reason: ${reason}`);
+  }
+  if (originalContent) {
+    lines.push(
+      "",
+      "Flagged content (shown for your review):",
+      QUARANTINE_SEPARATOR,
+      originalContent,
+      QUARANTINE_SEPARATOR,
+    );
+  }
+  return [{ text: lines.join("\n"), isError: true }];
 }
 
 function buildGuardErrorPayload(): ReplyPayload[] {
@@ -613,8 +692,8 @@ export async function applyGuardToPayloads(
   const screenedPayloads = (() => {
     switch (config.action) {
       case "block":
-        // Replace all non-error, non-reasoning payloads with a blocked message
-        return buildBlockedPayload(result.reason);
+        // Show flagged content in quarantine wrapper so users can review what was blocked
+        return buildBlockedPayload(result.reason, combinedText);
 
       case "redact":
         // Replace text content but keep media/error payloads
@@ -659,6 +738,42 @@ export async function applyGuardToPayloads(
     return screenedPayloads;
   }
   return annotateLastTextPayload(screenedPayloads, truncationWarningText);
+}
+
+/**
+ * Apply input guard screening to a user message before invoking the LLM.
+ * Returns { blocked: true, payloads } when the input is flagged (caller should return early),
+ * or { blocked: false } when safe (caller continues normally).
+ */
+export async function applyGuardToInput(
+  text: string,
+  config: GuardModelConfig,
+  params?: {
+    cfg?: OpenClawConfig;
+    agentDir?: string;
+  },
+): Promise<{ blocked: boolean; result: GuardResult; payloads: ReplyPayload[] }> {
+  const result = await evaluateGuardWithFallbacks(text, config, params);
+
+  if (result.safe) {
+    return { blocked: false, result, payloads: [] };
+  }
+
+  if (result.source === "error") {
+    log.warn(`input guard model error blocked request: ${result.reason ?? "unknown error"}`);
+    return { blocked: true, result, payloads: buildGuardErrorPayload() };
+  }
+
+  log.info(
+    `input guard model flagged content as unsafe: ${result.reason ?? "no reason"}` +
+      (result.categories?.length ? ` [${result.categories.join(", ")}]` : ""),
+  );
+
+  return {
+    blocked: true,
+    result,
+    payloads: buildInputBlockedPayload(result.reason, text),
+  };
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

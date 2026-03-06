@@ -977,15 +977,37 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.pdfMaxPages":
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
   "agents.defaults.guardModel":
-    "Guard/safety model for screening LLM output before delivery (provider/model). Accepts string or {primary,fallbacks}.",
+    "Guard/safety model for screening LLM output before delivery (provider/model). Accepts string or {primary,fallbacks}. Legacy alias for outputGuardModel.",
   "agents.defaults.guardModel.primary": "Primary guard model (provider/model).",
   "agents.defaults.guardModel.fallbacks": "Ordered fallback guard models (provider/model).",
   "agents.defaults.guardModelAction":
-    'Action when guard flags content as unsafe: "block" (suppress reply, default), "redact" (replace with safe message), or "warn" (annotate reply with warning).',
+    'Action when guard flags content as unsafe: "block" (show quarantine wrapper, default), "redact" (replace with safe message), or "warn" (annotate reply with warning). Legacy alias for outputGuardModelAction.',
   "agents.defaults.guardModelOnError":
-    'Behavior on guard model API failure: "allow" (fail-open, default) or "block" (fail-closed).',
+    'Behavior on guard model API failure: "allow" (fail-open, default) or "block" (fail-closed). Legacy alias for outputGuardModelOnError.',
   "agents.defaults.guardModelMaxInputChars":
-    "Maximum characters sent to guard model before truncation with a trailing [truncated] marker (default: 32000).",
+    "Maximum characters sent to guard model before truncation with a trailing [truncated] marker (default: 32000). Legacy alias for outputGuardModelMaxInputChars.",
+  "agents.defaults.inputGuardModel":
+    "Guard/safety model for screening user messages *before* they reach the LLM (provider/model). Accepts string or {primary,fallbacks}.",
+  "agents.defaults.inputGuardModel.primary": "Primary input guard model (provider/model).",
+  "agents.defaults.inputGuardModel.fallbacks":
+    "Ordered fallback input guard models (provider/model).",
+  "agents.defaults.inputGuardModelAction":
+    'Input guard action when content is flagged: "block" (show quarantine wrapper, default), "redact" (replace with safe message), or "warn" (annotate with warning).',
+  "agents.defaults.inputGuardModelOnError":
+    'Input guard behavior on API failure: "allow" (fail-open, default) or "block" (fail-closed).',
+  "agents.defaults.inputGuardModelMaxInputChars":
+    "Maximum characters sent to input guard model before truncation with a trailing [truncated] marker (default: 32000).",
+  "agents.defaults.outputGuardModel":
+    "Guard/safety model for screening the LLM's reply *before* delivery (provider/model). Accepts string or {primary,fallbacks}.",
+  "agents.defaults.outputGuardModel.primary": "Primary output guard model (provider/model).",
+  "agents.defaults.outputGuardModel.fallbacks":
+    "Ordered fallback output guard models (provider/model).",
+  "agents.defaults.outputGuardModelAction":
+    'Output guard action when content is flagged: "block" (show quarantine wrapper, default), "redact" (replace with safe message), or "warn" (annotate with warning).',
+  "agents.defaults.outputGuardModelOnError":
+    'Output guard behavior on API failure: "allow" (fail-open, default) or "block" (fail-closed).',
+  "agents.defaults.outputGuardModelMaxInputChars":
+    "Maximum characters sent to output guard model before truncation with a trailing [truncated] marker (default: 32000).",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolveGuardModelConfig } from "../agents/guard-model.js";
+import { resolveOutputGuardModelConfig } from "../agents/guard-model.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { ImageContent } from "../commands/agent/types.js";
@@ -413,7 +413,7 @@ function resolveAgentResponseText(result: unknown): string {
 
 function shouldSuppressAssistantStreamingForGuard(): boolean {
   try {
-    return Boolean(resolveGuardModelConfig(loadConfig()));
+    return Boolean(resolveOutputGuardModelConfig(loadConfig()));
   } catch {
     return false;
   }

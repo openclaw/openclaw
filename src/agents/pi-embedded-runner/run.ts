@@ -23,7 +23,12 @@ import {
 } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
-import { resolveGuardModelConfig, applyGuardToPayloads } from "../guard-model.js";
+import {
+  resolveOutputGuardModelConfig,
+  resolveInputGuardModelConfig,
+  applyGuardToPayloads,
+  applyGuardToInput,
+} from "../guard-model.js";
 import {
   ensureAuthProfileStore,
   getApiKeyForModel,
@@ -783,8 +788,31 @@ export async function runEmbeddedPiAgent(
 
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
-          const guardConfigForRun = resolveGuardModelConfig(params.config);
-          const suppressLiveStreaming = Boolean(guardConfigForRun);
+
+          // Input guard screening — check on first iteration before invoking the model
+          const inputGuardConfig = resolveInputGuardModelConfig(params.config);
+          if (inputGuardConfig && runLoopIterations === 1) {
+            const inputCheck = await applyGuardToInput(prompt, inputGuardConfig, {
+              cfg: params.config,
+              agentDir: params.agentDir,
+            });
+            if (inputCheck.blocked) {
+              return {
+                payloads: inputCheck.payloads,
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: {
+                    sessionId: params.sessionId,
+                    provider,
+                    model: model.id,
+                  },
+                },
+              };
+            }
+          }
+
+          const outputGuardConfig = resolveOutputGuardModelConfig(params.config);
+          const suppressLiveStreaming = Boolean(outputGuardConfig);
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -1342,9 +1370,9 @@ export async function runEmbeddedPiAgent(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
           });
 
-          // Guard model screening — evaluate payloads before delivery
-          if (guardConfigForRun && payloads.length > 0) {
-            payloads = await applyGuardToPayloads(payloads, guardConfigForRun, {
+          // Output guard model screening — evaluate payloads before delivery
+          if (outputGuardConfig && payloads.length > 0) {
+            payloads = await applyGuardToPayloads(payloads, outputGuardConfig, {
               cfg: params.config,
               agentDir: params.agentDir,
             });

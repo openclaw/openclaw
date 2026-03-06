@@ -8,7 +8,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolveGuardModelConfig } from "../agents/guard-model.js";
+import { resolveOutputGuardModelConfig } from "../agents/guard-model.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -242,7 +242,7 @@ function createAssistantOutputItem(params: {
 
 function shouldSuppressAssistantStreamingForGuard(): boolean {
   try {
-    return Boolean(resolveGuardModelConfig(loadConfig()));
+    return Boolean(resolveOutputGuardModelConfig(loadConfig()));
   } catch {
     return false;
   }
