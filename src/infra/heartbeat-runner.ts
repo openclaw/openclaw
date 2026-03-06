@@ -447,12 +447,14 @@ function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
   ackMaxChars: number,
+  ackToken?: string,
 ) {
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
   const stripped = stripHeartbeatToken(textForStrip, {
     mode: "heartbeat",
     maxAckChars: ackMaxChars,
+    ackToken,
   });
   const hasMedia = Boolean(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0);
   if (stripped.shouldSkip && !hasMedia) {
@@ -712,7 +714,10 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "alerts-disabled" };
   }
 
-  const heartbeatOkText = responsePrefix ? `${responsePrefix} ${HEARTBEAT_TOKEN}` : HEARTBEAT_TOKEN;
+  const effectiveAckToken = heartbeat?.ackToken?.trim() || HEARTBEAT_TOKEN;
+  const heartbeatOkText = responsePrefix
+    ? `${responsePrefix} ${effectiveAckToken}`
+    : effectiveAckToken;
   const outboundSession = buildOutboundSessionContext({
     cfg,
     agentId,
@@ -801,7 +806,8 @@ export async function runHeartbeatOnce(opts: {
     }
 
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
-    const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars);
+    const ackToken = heartbeat?.ackToken;
+    const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars, ackToken);
     // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
     // The model should be responding with exec results, not ack tokens.
     // Also, if normalized.text is empty due to token stripping but we have exec completion,

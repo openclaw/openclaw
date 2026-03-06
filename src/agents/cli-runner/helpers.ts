@@ -45,6 +45,7 @@ export function buildSystemPrompt(params: {
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
   heartbeatPrompt?: string;
+  heartbeatAckToken?: string;
   docsPath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
@@ -83,6 +84,7 @@ export function buildSystemPrompt(params: {
     ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
     reasoningTagHint: false,
     heartbeatPrompt: params.heartbeatPrompt,
+    heartbeatAckToken: params.heartbeatAckToken,
     docsPath: params.docsPath,
     acpEnabled: params.config?.acp?.enabled !== false,
     runtimeInfo,

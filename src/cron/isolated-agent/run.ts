@@ -68,6 +68,7 @@ import {
   pickSummaryFromOutput,
   pickSummaryFromPayloads,
   resolveHeartbeatAckMaxChars,
+  resolveHeartbeatAckToken,
 } from "./helpers.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
@@ -725,9 +726,11 @@ export async function runCronIsolatedAgentTurn(params: {
       ...telemetry,
     });
 
-  // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
+  // Skip delivery for heartbeat-only responses (HEARTBEAT_OK or custom ackToken with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
-  const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
+  const ackToken = resolveHeartbeatAckToken(agentCfg);
+  const skipHeartbeatDelivery =
+    deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars, ackToken);
   const skipMessagingToolDelivery =
     deliveryRequested &&
     finalRunResult.didSendViaMessagingTool === true &&

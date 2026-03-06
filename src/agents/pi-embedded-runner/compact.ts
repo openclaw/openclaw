@@ -514,6 +514,9 @@ export async function compactEmbeddedPiSessionDirect(
       heartbeatPrompt: isDefaultAgent
         ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
         : undefined,
+      heartbeatAckToken: isDefaultAgent
+        ? params.config?.agents?.defaults?.heartbeat?.ackToken
+        : undefined,
       skillsPrompt,
       docsPath: docsPath ?? undefined,
       ttsHint,

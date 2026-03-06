@@ -244,7 +244,9 @@ export type AgentDefaultsConfig = {
     accountId?: string;
     /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."). */
     prompt?: string;
-    /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
+    /** Custom heartbeat acknowledgement token (default: "HEARTBEAT_OK"). The agent replies with this token to signal "nothing to report". Can be an emoji (e.g. "💗") or any short string. */
+    ackToken?: string;
+    /** Max chars allowed after the ack token before delivery (default: 30). */
     ackMaxChars?: number;
     /** Suppress tool error warning payloads during heartbeat runs. */
     suppressToolErrorWarnings?: boolean;

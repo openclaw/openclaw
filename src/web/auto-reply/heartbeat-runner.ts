@@ -51,7 +51,7 @@ export async function runWebHeartbeatOnce(opts: {
 
   // Resolve heartbeat visibility settings for WhatsApp
   const visibility = resolveHeartbeatVisibility({ cfg, channel: "whatsapp" });
-  const heartbeatOkText = HEARTBEAT_TOKEN;
+  const heartbeatOkText = cfg?.agents?.defaults?.heartbeat?.ackToken?.trim() || HEARTBEAT_TOKEN;
 
   const maybeSendHeartbeatOk = async (): Promise<boolean> => {
     if (!visibility.showOk) {

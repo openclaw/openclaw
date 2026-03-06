@@ -205,6 +205,7 @@ export function buildAgentSystemPrompt(params: {
   bootstrapTruncationWarningLines?: string[];
   skillsPrompt?: string;
   heartbeatPrompt?: string;
+  heartbeatAckToken?: string;
   docsPath?: string;
   workspaceNotes?: string[];
   ttsHint?: string;
@@ -665,13 +666,14 @@ export function buildAgentSystemPrompt(params: {
 
   // Skip heartbeats for subagent/none modes
   if (!isMinimal) {
+    const ackToken = params.heartbeatAckToken?.trim() || "HEARTBEAT_OK";
     lines.push(
       "## Heartbeats",
       heartbeatPromptLine,
       "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
-      "HEARTBEAT_OK",
-      'OpenClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
-      'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
+      ackToken,
+      `OpenClaw treats a leading/trailing "${ackToken}" as a heartbeat ack (and may discard it).`,
+      `If something needs attention, do NOT include "${ackToken}"; reply with the alert text instead.`,
       "",
     );
   }

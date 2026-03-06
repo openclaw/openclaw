@@ -9,6 +9,7 @@ export type HeartbeatDeliveryPayload = {
 export function shouldSkipHeartbeatOnlyDelivery(
   payloads: HeartbeatDeliveryPayload[],
   ackMaxChars: number,
+  ackToken?: string,
 ): boolean {
   if (payloads.length === 0) {
     return true;
@@ -23,6 +24,7 @@ export function shouldSkipHeartbeatOnlyDelivery(
     const result = stripHeartbeatToken(payload.text, {
       mode: "heartbeat",
       maxAckChars: ackMaxChars,
+      ackToken,
     });
     return result.shouldSkip;
   });

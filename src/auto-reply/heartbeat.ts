@@ -1,5 +1,5 @@
 import { escapeRegExp } from "../utils.js";
-import { HEARTBEAT_TOKEN } from "./tokens.js";
+import { DEFAULT_HEARTBEAT_ACK_TOKEN, HEARTBEAT_TOKEN } from "./tokens.js";
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
@@ -59,13 +59,25 @@ export function resolveHeartbeatPrompt(raw?: string): string {
 
 export type StripHeartbeatMode = "heartbeat" | "message";
 
-function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
+/**
+ * Resolve the effective heartbeat ack token from config.
+ * Falls back to the built-in HEARTBEAT_OK constant.
+ */
+export function resolveHeartbeatAckToken(configToken?: string): string {
+  const trimmed = typeof configToken === "string" ? configToken.trim() : "";
+  return trimmed || DEFAULT_HEARTBEAT_ACK_TOKEN;
+}
+
+function stripTokenAtEdges(
+  raw: string,
+  tokenOverride?: string,
+): { text: string; didStrip: boolean } {
   let text = raw.trim();
   if (!text) {
     return { text: "", didStrip: false };
   }
 
-  const token = HEARTBEAT_TOKEN;
+  const token = tokenOverride || HEARTBEAT_TOKEN;
   const tokenAtEndWithOptionalTrailingPunctuation = new RegExp(
     `${escapeRegExp(token)}[^\\w]{0,4}$`,
   );
@@ -109,7 +121,7 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
 
 export function stripHeartbeatToken(
   raw?: string,
-  opts: { mode?: StripHeartbeatMode; maxAckChars?: number } = {},
+  opts: { mode?: StripHeartbeatMode; maxAckChars?: number; ackToken?: string } = {},
 ) {
   if (!raw) {
     return { shouldSkip: true, text: "", didStrip: false };
@@ -142,14 +154,26 @@ export function stripHeartbeatToken(
       .replace(/^[*`~_]+/, "")
       .replace(/[*`~_]+$/, "");
 
+  const effectiveToken = resolveHeartbeatAckToken(opts.ackToken);
   const trimmedNormalized = stripMarkup(trimmed);
-  const hasToken = trimmed.includes(HEARTBEAT_TOKEN) || trimmedNormalized.includes(HEARTBEAT_TOKEN);
+  // Check for both the configured token and the built-in HEARTBEAT_OK
+  // so agents can use either form regardless of config.
+  const hasToken =
+    trimmed.includes(effectiveToken) ||
+    trimmedNormalized.includes(effectiveToken) ||
+    trimmed.includes(HEARTBEAT_TOKEN) ||
+    trimmedNormalized.includes(HEARTBEAT_TOKEN);
   if (!hasToken) {
     return { shouldSkip: false, text: trimmed, didStrip: false };
   }
 
-  const strippedOriginal = stripTokenAtEdges(trimmed);
-  const strippedNormalized = stripTokenAtEdges(trimmedNormalized);
+  // Try stripping the configured token first, fall back to built-in
+  const strippedOriginal = trimmed.includes(effectiveToken)
+    ? stripTokenAtEdges(trimmed, effectiveToken)
+    : stripTokenAtEdges(trimmed, HEARTBEAT_TOKEN);
+  const strippedNormalized = trimmedNormalized.includes(effectiveToken)
+    ? stripTokenAtEdges(trimmedNormalized, effectiveToken)
+    : stripTokenAtEdges(trimmedNormalized, HEARTBEAT_TOKEN);
   const picked =
     strippedOriginal.didStrip && strippedOriginal.text ? strippedOriginal : strippedNormalized;
   if (!picked.didStrip) {

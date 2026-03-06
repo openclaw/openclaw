@@ -88,11 +88,21 @@ export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
  * Check if delivery should be skipped because the agent signaled no user-visible update.
  * Returns true when any payload is a heartbeat ack token and no payload contains media.
  */
-export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars: number) {
-  return shouldSkipHeartbeatOnlyDelivery(payloads, ackMaxChars);
+export function isHeartbeatOnlyResponse(
+  payloads: DeliveryPayload[],
+  ackMaxChars: number,
+  ackToken?: string,
+) {
+  return shouldSkipHeartbeatOnlyDelivery(payloads, ackMaxChars, ackToken);
 }
 
 export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxChars?: number } }) {
   const raw = agentCfg?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
   return Math.max(0, raw);
+}
+
+export function resolveHeartbeatAckToken(agentCfg?: {
+  heartbeat?: { ackToken?: string };
+}): string | undefined {
+  return agentCfg?.heartbeat?.ackToken;
 }

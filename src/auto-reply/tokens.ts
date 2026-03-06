@@ -1,6 +1,7 @@
 import { escapeRegExp } from "../utils.js";
 
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+export const DEFAULT_HEARTBEAT_ACK_TOKEN = HEARTBEAT_TOKEN;
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
 
 const silentExactRegexByToken = new Map<string, RegExp>();
