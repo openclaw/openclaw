@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const jitiMockState = vi.hoisted(() => ({
   options: undefined as Record<string, unknown> | undefined,
@@ -23,6 +23,7 @@ vi.mock("jiti", () => ({
 import { loadOpenClawPlugins } from "./loader.js";
 
 const fixtureRoot = path.join(os.tmpdir(), `openclaw-plugin-${randomUUID()}`);
+const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
 function createPluginFixture(pluginId: string): { dir: string; entry: string } {
   const dir = path.join(fixtureRoot, pluginId);
@@ -50,6 +51,14 @@ afterAll(() => {
   } catch {
     // ignore cleanup failures
   }
+});
+
+afterEach(() => {
+  if (prevBundledDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    return;
+  }
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundledDir;
 });
 
 describe("loadOpenClawPlugins jiti native modules", () => {
