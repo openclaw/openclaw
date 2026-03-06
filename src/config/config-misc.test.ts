@@ -336,6 +336,27 @@ describe("config paths", () => {
     expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
     expect(getConfigValueAtPath(root, parsed.path)).toBeUndefined();
   });
+
+  it("supports bracket notation for keys with periods", () => {
+    expect(parseConfigPath('foo["bar.baz"].qux')).toEqual({
+      ok: true,
+      path: ["foo", "bar.baz", "qux"],
+    });
+    expect(parseConfigPath("foo['bar.baz'].qux")).toEqual({
+      ok: true,
+      path: ["foo", "bar.baz", "qux"],
+    });
+    expect(parseConfigPath('providers["llama.cpp"].baseUrl')).toEqual({
+      ok: true,
+      path: ["providers", "llama.cpp", "baseUrl"],
+    });
+  });
+
+  it("handles edge cases in bracket notation", () => {
+    expect(parseConfigPath('foo[""].bar').ok).toBe(false);
+    expect(parseConfigPath("foo].bar").ok).toBe(false);
+    expect(parseConfigPath('foo["bar').ok).toBe(false);
+  });
 });
 
 describe("config strict validation", () => {

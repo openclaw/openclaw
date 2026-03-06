@@ -58,24 +58,33 @@ export function parseConfigPath(raw: string): {
           i += 2;
           continue;
         }
-        // Closing bracket - end of this segment
-        if (!current) {
-          // Empty bracket content - reject
-          return {
-            ok: false,
-            error: "Invalid path. Use dot notation (e.g. foo.bar).",
-          };
+        // Closing quote - but we're still inside brackets, need to find closing ]
+        // Check if next char is ]
+        if (i + 1 < trimmed.length && trimmed[i + 1] === "]") {
+          // End of bracket notation
+          if (!current) {
+            // Empty bracket content - reject
+            return {
+              ok: false,
+              error: "Invalid path. Use dot notation (e.g. foo.bar).",
+            };
+          }
+          parts.push(current);
+          current = "";
+          inBracket = false;
+          bracketType = null;
+          i += 2; // Skip both " and ]
+          // Skip any dots after closing bracket
+          while (i < trimmed.length && trimmed[i] === ".") {
+            i++;
+          }
+          continue;
         }
-        parts.push(current);
-        current = "";
-        inBracket = false;
-        bracketType = null;
-        i++;
-        // Skip trailing dot after closing bracket (e.g., foo["bar"].baz)
-        if (i < trimmed.length && trimmed[i] === ".") {
-          i++;
-        }
-        continue;
+        // Closing quote without matching ] - this is an error
+        return {
+          ok: false,
+          error: "Invalid path. Use dot notation (e.g. foo.bar).",
+        };
       }
       current += char;
       i++;
@@ -92,7 +101,7 @@ export function parseConfigPath(raw: string): {
       }
       // Check bracket type
       if (i + 1 < trimmed.length && (trimmed[i + 1] === "'" || trimmed[i + 1] === '"')) {
-        bracketType = trimmed[i + 1];
+        bracketType = trimmed[i + 1] as "'" | '"';
         inBracket = true;
         i += 2;
         continue;
