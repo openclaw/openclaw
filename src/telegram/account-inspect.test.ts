@@ -33,6 +33,7 @@ describe("inspectTelegramAccount", () => {
     const result = inspectTelegramAccount({ cfg });
     expect(result.configured).toBe(true);
     expect(result.tokenStatus).toBe("configured_unavailable");
+    expect(result.token).toBe("");
     vi.unstubAllEnvs();
   });
 
