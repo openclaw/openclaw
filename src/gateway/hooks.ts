@@ -199,6 +199,8 @@ export function normalizeWakePayload(
   return { ok: true, value: { text: normalizedText, mode } };
 }
 
+export type HookSessionTarget = "isolated" | "reuse";
+
 export type HookAgentPayload = {
   message: string;
   name: string;
@@ -206,6 +208,7 @@ export type HookAgentPayload = {
   idempotencyKey?: string;
   wakeMode: "now" | "next-heartbeat";
   sessionKey?: string;
+  sessionTarget?: HookSessionTarget;
   deliver: boolean;
   channel: HookMessageChannel;
   to?: string;
@@ -370,6 +373,8 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
   const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
   const sessionKeyRaw = payload.sessionKey;
   const sessionKey = normalizeOptionalString(sessionKeyRaw);
+  const sessionTarget: HookSessionTarget | undefined =
+    payload.sessionTarget === "reuse" ? "reuse" : undefined;
   const channel = resolveHookChannel(payload.channel);
   if (!channel) {
     return { ok: false, error: getHookChannelError() };
@@ -398,6 +403,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       idempotencyKey,
       wakeMode,
       sessionKey,
+      sessionTarget,
       deliver,
       channel,
       to,

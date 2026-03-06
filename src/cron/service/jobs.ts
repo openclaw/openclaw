@@ -152,6 +152,9 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   if (isIsolatedLike && job.payload.kind !== "agentTurn") {
     throw new Error('isolated/current/session cron jobs require payload.kind="agentTurn"');
   }
+  if (job.sessionTarget === "reuse" && job.payload.kind !== "agentTurn") {
+    throw new Error('reuse cron jobs require payload.kind="agentTurn"');
+  }
 }
 
 function assertMainSessionAgentId(
@@ -189,10 +192,11 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
   }
   const isIsolatedLike =
     job.sessionTarget === "isolated" ||
+    job.sessionTarget === "reuse" ||
     job.sessionTarget === "current" ||
     job.sessionTarget.startsWith("session:");
   if (!isIsolatedLike) {
-    throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
+    throw new Error('cron channel delivery config is only supported for sessionTarget="isolated", "reuse", "current", or "session:*"');
   }
 }
 

@@ -14,7 +14,7 @@ export type CronSchedule =
       staggerMs?: number;
     };
 
-export type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
+export type CronSessionTarget = "main" | "isolated" | "current" | "reuse" | `session:${string}`;
 export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronMessageChannel = ChannelId;

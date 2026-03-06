@@ -322,7 +322,7 @@ function normalizeSessionTarget(raw: unknown) {
   }
   const trimmed = raw.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lower === "main" || lower === "isolated" || lower === "current") {
+  if (lower === "main" || lower === "isolated" || lower === "current" || lower === "reuse") {
     return lower;
   }
   // Support custom session IDs with "session:" prefix
