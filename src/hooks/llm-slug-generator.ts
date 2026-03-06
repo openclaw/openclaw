@@ -62,6 +62,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       provider,
       model,
       timeoutMs: 15_000, // 15 second timeout
+      disableEscalation: true,
       runId: `slug-gen-${Date.now()}`,
     });
 

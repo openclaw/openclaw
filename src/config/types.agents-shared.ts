@@ -11,6 +11,8 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /** Escalation target model (provider/model). When set, the primary model can self-escalate to this model via the escalate tool. */
+      escalation?: string;
     };
 
 export type AgentSandboxConfig = {

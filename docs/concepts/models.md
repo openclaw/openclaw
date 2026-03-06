@@ -28,6 +28,35 @@ Related:
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
+## Self-escalation
+
+When a lighter model (e.g. Haiku or Sonnet) encounters a task that needs deeper
+reasoning, it can hand off to a more capable model mid-turn. Set the
+`escalation` field to enable this:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: {
+        primary: "bedrock/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        escalation: "bedrock/eu.anthropic.claude-opus-4-6",
+      },
+    },
+  },
+}
+```
+
+When `escalation` is set and the current model is not the escalation target,
+the model receives an `escalate` tool. If the model determines the task is too
+complex, it calls this tool as its first action. The agent loop then re-runs the
+same prompt on the escalation model.
+
+- Escalation is one-shot per turn to prevent loops.
+- No latency is added to messages that don't escalate.
+- Per-agent escalation targets are supported via `agents.list[].model.escalation`
+  and fall back to the global default.
+
 ## Quick model policy
 
 - Set your primary to the strongest latest-generation model available to you.
