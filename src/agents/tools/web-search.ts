@@ -565,7 +565,11 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
   apiKey?: string;
   source: PerplexityApiKeySource;
 } {
-  const fromConfig = normalizeApiKey(perplexity?.apiKey);
+  const fromConfigRaw = normalizeResolvedSecretInputString({
+    value: perplexity?.apiKey,
+    path: "tools.web.search.perplexity.apiKey",
+  });
+  const fromConfig = normalizeApiKey(fromConfigRaw);
   if (fromConfig) {
     return { apiKey: fromConfig, source: "config" };
   }
@@ -594,7 +598,11 @@ function resolveGrokConfig(search?: WebSearchConfig): GrokConfig {
 }
 
 function resolveGrokApiKey(grok?: GrokConfig): string | undefined {
-  const fromConfig = normalizeApiKey(grok?.apiKey);
+  const fromConfigRaw = normalizeResolvedSecretInputString({
+    value: grok?.apiKey,
+    path: "tools.web.search.grok.apiKey",
+  });
+  const fromConfig = normalizeApiKey(fromConfigRaw);
   if (fromConfig) {
     return fromConfig;
   }
@@ -624,7 +632,11 @@ function resolveKimiConfig(search?: WebSearchConfig): KimiConfig {
 }
 
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
-  const fromConfig = normalizeApiKey(kimi?.apiKey);
+  const fromConfigRaw = normalizeResolvedSecretInputString({
+    value: kimi?.apiKey,
+    path: "tools.web.search.kimi.apiKey",
+  });
+  const fromConfig = normalizeApiKey(fromConfigRaw);
   if (fromConfig) {
     return fromConfig;
   }
@@ -660,7 +672,11 @@ function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
 }
 
 function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
-  const fromConfig = normalizeApiKey(gemini?.apiKey);
+  const fromConfigRaw = normalizeResolvedSecretInputString({
+    value: gemini?.apiKey,
+    path: "tools.web.search.gemini.apiKey",
+  });
+  const fromConfig = normalizeApiKey(fromConfigRaw);
   if (fromConfig) {
     return fromConfig;
   }
@@ -1679,6 +1695,8 @@ export const __testing = {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  resolvePerplexityApiKey,
+  resolveGeminiApiKey,
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,

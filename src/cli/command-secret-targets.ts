@@ -28,6 +28,7 @@ const COMMAND_SECRET_TARGETS = {
     "channels.",
     "agents.defaults.memorySearch.remote.",
     "agents.list[].memorySearch.remote.",
+    "tools.web.search",
   ]),
 } as const;
 

@@ -11,6 +11,8 @@ const {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  resolvePerplexityApiKey,
+  resolveGeminiApiKey,
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
@@ -110,6 +112,18 @@ describe("web_search grok config resolution", () => {
       expect(resolveGrokApiKey({})).toBeUndefined();
       expect(resolveGrokApiKey(undefined)).toBeUndefined();
     });
+  });
+
+  it("throws when config apiKey is an unresolved SecretRef", () => {
+    expect(() =>
+      resolveGrokApiKey({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "XAI_API_KEY",
+        } as unknown as string,
+      }),
+    ).toThrow(/tools\.web\.search\.grok\.apiKey: unresolved SecretRef/i);
   });
 
   it("uses default model when not specified", () => {
@@ -240,9 +254,47 @@ describe("web_search kimi config resolution", () => {
     });
   });
 
+  it("throws when config apiKey is an unresolved SecretRef", () => {
+    expect(() =>
+      resolveKimiApiKey({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "KIMI_API_KEY",
+        } as unknown as string,
+      }),
+    ).toThrow(/tools\.web\.search\.kimi\.apiKey: unresolved SecretRef/i);
+  });
+
   it("resolves default model and baseUrl", () => {
     expect(resolveKimiModel({})).toBe("moonshot-v1-128k");
     expect(resolveKimiBaseUrl({})).toBe("https://api.moonshot.ai/v1");
+  });
+});
+
+describe("web_search additional provider api key resolution", () => {
+  it("throws when perplexity config apiKey is an unresolved SecretRef", () => {
+    expect(() =>
+      resolvePerplexityApiKey({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "PERPLEXITY_API_KEY",
+        } as unknown as string,
+      }),
+    ).toThrow(/tools\.web\.search\.perplexity\.apiKey: unresolved SecretRef/i);
+  });
+
+  it("throws when gemini config apiKey is an unresolved SecretRef", () => {
+    expect(() =>
+      resolveGeminiApiKey({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "GEMINI_API_KEY",
+        } as unknown as string,
+      }),
+    ).toThrow(/tools\.web\.search\.gemini\.apiKey: unresolved SecretRef/i);
   });
 });
 
