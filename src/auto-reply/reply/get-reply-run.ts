@@ -380,10 +380,11 @@ export async function runPreparedReply(
   const skillsSnapshot = skillResult.skillsSnapshot;
   const prefixedBody = [threadContextNote, prefixedBodyBase].filter(Boolean).join("\n\n");
   const mediaNote = buildInboundMediaNote(ctx);
-  const mediaReplyHint = mediaNote
-    ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
+  const shouldAddMediaReplyHint = Boolean(mediaNote || hasMediaAttachment);
+  const mediaReplyHint = shouldAddMediaReplyHint
+    ? "To send an image back: if the `message` tool is available, prefer it (media/path/filePath). Otherwise, include `MEDIA:` lines in your reply (one per file). `MEDIA:` supports `https://...` URLs and local paths under the allowed roots (agent workspace / OpenClaw state dir). Quote the path if it contains spaces. Keep the caption in the text body."
     : undefined;
-  let prefixedCommandBody = mediaNote
+  let prefixedCommandBody = shouldAddMediaReplyHint
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
     : prefixedBody;
   if (!resolvedThinkLevel) {

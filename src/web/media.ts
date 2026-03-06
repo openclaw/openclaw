@@ -137,6 +137,41 @@ async function assertLocalMediaAllowed(
   );
 }
 
+function prioritizeRelativeResolutionRoots(roots: readonly string[]): string[] {
+  const workspaceRoots: string[] = [];
+  const otherRoots: string[] = [];
+  for (const root of roots) {
+    const base = path.basename(root).toLowerCase();
+    if (base === "workspace" || base.startsWith("workspace-")) {
+      workspaceRoots.push(root);
+      continue;
+    }
+    otherRoots.push(root);
+  }
+  return [...workspaceRoots, ...otherRoots];
+}
+
+async function resolveRelativeMediaPathAgainstRoots(params: {
+  mediaPath: string;
+  roots: readonly string[];
+}): Promise<string | undefined> {
+  // Resolve relative paths against allowed roots instead of process.cwd().
+  // This keeps MEDIA:./file behavior deterministic across delivery paths.
+  for (const root of prioritizeRelativeResolutionRoots(params.roots)) {
+    const candidate = path.resolve(root, params.mediaPath);
+    try {
+      const stat = await fs.stat(candidate);
+      if (!stat.isFile()) {
+        continue;
+      }
+      return candidate;
+    } catch {
+      // Ignore missing/cannot-stat candidates.
+    }
+  }
+  return undefined;
+}
+
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
 const MB = 1024 * 1024;
@@ -340,6 +375,24 @@ async function loadWebMediaInternal(
   // Expand tilde paths to absolute paths (e.g., ~/Downloads/photo.jpg)
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
+  }
+
+  // Resolve relative paths (MEDIA:./..., ./file, etc.) against allowed roots so delivery
+  // doesn't depend on the gateway's current working directory.
+  if (
+    !readFileOverride &&
+    !sandboxValidated &&
+    localRoots !== "any" &&
+    !path.isAbsolute(mediaUrl)
+  ) {
+    const rootsForResolution = localRoots ?? getDefaultLocalRoots();
+    const resolved = await resolveRelativeMediaPathAgainstRoots({
+      mediaPath: mediaUrl,
+      roots: rootsForResolution,
+    });
+    if (resolved) {
+      mediaUrl = resolved;
+    }
   }
 
   if ((sandboxValidated || localRoots === "any") && !readFileOverride) {

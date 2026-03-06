@@ -361,6 +361,29 @@ describe("local media root guard", () => {
     expect(result.kind).toBe("image");
   });
 
+  it("resolves relative local media paths against allowed roots (not process cwd)", async () => {
+    const prevCwd = process.cwd();
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-cwd-"));
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-root-"));
+    const relFile = path.join(allowedRoot, "relative.png");
+    await fs.writeFile(relFile, tinyPngBuffer);
+
+    try {
+      process.chdir(outsideDir);
+
+      const result = await loadWebMedia("./relative.png", {
+        maxBytes: 1024 * 1024,
+        localRoots: [allowedRoot],
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    } finally {
+      process.chdir(prevCwd);
+      await fs.rm(outsideDir, { recursive: true, force: true });
+      await fs.rm(allowedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("accepts win32 dev=0 stat mismatch for local file loads", async () => {
     const actualLstat = await fs.lstat(tinyPngFile);
     const actualStat = await fs.stat(tinyPngFile);
