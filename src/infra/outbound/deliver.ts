@@ -136,6 +136,7 @@ type ChannelHandlerParams = {
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
   formatting?: OutboundDeliveryFormattingOptions;
+  quoteAuthor?: string | null;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
@@ -179,6 +180,7 @@ function createPluginHandler(
   const resolveCtx = (overrides?: {
     replyToId?: string | null;
     replyToIdSource?: "explicit" | "implicit";
+    quoteAuthor?: string | null;
     threadId?: string | number | null;
     audioAsVoice?: boolean;
   }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
@@ -188,6 +190,8 @@ function createPluginHandler(
       overrides && "replyToIdSource" in overrides
         ? overrides.replyToIdSource
         : baseCtx.replyToIdSource,
+    quoteAuthor:
+      overrides && "quoteAuthor" in overrides ? overrides.quoteAuthor : baseCtx.quoteAuthor,
     threadId: overrides && "threadId" in overrides ? overrides.threadId : baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
   });
@@ -299,6 +303,7 @@ function createPluginHandler(
       return sendText({
         ...resolveCtx(overrides),
         text: caption,
+        mediaUrl,
       });
     },
   };
@@ -314,6 +319,7 @@ function createChannelOutboundContextBase(
     replyToId: params.replyToId,
     replyToMode: params.replyToMode,
     formatting: params.formatting,
+    quoteAuthor: params.quoteAuthor,
     threadId: params.threadId,
     identity: params.identity,
     gifPlayback: params.gifPlayback,
@@ -338,6 +344,7 @@ type DeliverOutboundPayloadsCoreParams = {
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
   formatting?: OutboundDeliveryFormattingOptions;
+  quoteAuthor?: string | null;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
@@ -877,6 +884,7 @@ async function deliverOutboundPayloadsCore(
     replyToId: params.replyToId,
     replyToMode: params.replyToMode,
     formatting: params.formatting,
+    quoteAuthor: params.quoteAuthor,
     threadId: params.threadId,
     identity: params.identity,
     gifPlayback: params.gifPlayback,
@@ -1027,19 +1035,28 @@ async function deliverOutboundPayloadsCore(
 
       params.onPayload?.(payloadSummary);
       const replyToResolution = resolveCurrentReplyTo(effectivePayload);
+      const effectiveQuoteAuthor = replyToResolution.replyToId
+        ? (params.quoteAuthor ?? undefined)
+        : undefined;
       const sendOverrides: OutboundMessageSendOverrides = {
         replyToId: replyToResolution.replyToId,
         replyToIdSource: replyToResolution.source,
+        quoteAuthor: effectiveQuoteAuthor,
         ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
         ...(effectivePayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         ...(params.forceDocument !== undefined ? { forceDocument: params.forceDocument } : {}),
       };
       const applySendReplyToConsumption = <T extends OutboundMessageSendOverrides>(
         overrides: T,
-      ): T =>
-        applyReplyToConsumption(overrides, {
+      ): T => {
+        const resolved = applyReplyToConsumption(overrides, {
           consumeImplicitReply: replyToResolution.source === "implicit",
         });
+        if (resolved.replyToId || resolved.quoteAuthor === undefined) {
+          return resolved;
+        }
+        return { ...resolved, quoteAuthor: undefined };
+      };
       const deliveryTarget = handler.buildTargetRef({ threadId: sendOverrides.threadId });
       if (
         handler.sendPayload &&
@@ -1075,6 +1092,7 @@ async function deliverOutboundPayloadsCore(
         });
         continue;
       }
+
       if (payloadSummary.mediaUrls.length === 0) {
         const beforeCount = results.length;
         if (handler.sendFormattedText) {

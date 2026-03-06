@@ -12,7 +12,8 @@ export type OutboundReplyPayload = {
   mediaUrls?: string[];
   mediaUrl?: string;
   sensitiveMedia?: boolean;
-  replyToId?: string;
+  // null explicitly suppresses inherited reply metadata (distinct from undefined = "not set")
+  replyToId?: string | null;
 };
 
 export type ReasoningReplyPayload = {
@@ -76,7 +77,12 @@ export function normalizeOutboundReplyPayload(
     : undefined;
   const mediaUrl = readStringValue(payload.mediaUrl);
   const sensitiveMedia = payload.sensitiveMedia === true ? true : undefined;
-  const replyToId = readStringValue(payload.replyToId);
+  const replyToId =
+    typeof payload.replyToId === "string"
+      ? payload.replyToId
+      : payload.replyToId === null
+        ? null
+        : undefined;
   return {
     text,
     mediaUrls,

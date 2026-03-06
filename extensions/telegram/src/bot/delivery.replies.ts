@@ -755,7 +755,7 @@ export async function deliverReplies(params: {
     }
 
     const rawContent = reply.text || "";
-    const replyToId =
+    const hookReplyToId =
       params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
     const replyQuote = resolveReplyQuoteForSend({
       replyToId,
@@ -770,7 +770,7 @@ export async function deliverReplies(params: {
         {
           to: params.chatId,
           content: rawContent,
-          replyToId,
+          replyToId: hookReplyToId,
           threadId: params.thread?.id,
           metadata: {
             channel: "telegram",
@@ -796,6 +796,10 @@ export async function deliverReplies(params: {
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
+      const replyToId =
+        params.replyToMode === "off"
+          ? undefined
+          : resolveTelegramReplyId(reply.replyToId ?? undefined);
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
       let firstDeliveredMessageId: number | undefined;
