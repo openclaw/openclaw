@@ -97,10 +97,13 @@ function extractPermissionError(err: unknown): PermissionError | null {
   };
 }
 
-// --- Sender name resolution (so the agent can distinguish who is speaking in group chats) ---
+// --- Sender/group display name resolution (so the agent can distinguish who is speaking and where) ---
 // Cache display names by sender id (open_id/user_id) to avoid an API call on every message.
 const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
 const senderNameCache = new Map<string, { name: string; expireAt: number }>();
+// Cache group names by account+chat id; used for display fields only.
+const GROUP_NAME_TTL_MS = 10 * 60 * 1000;
+const groupNameCache = new Map<string, { name: string; expireAt: number }>();
 
 // Cache permission errors to avoid spamming the user with repeated notifications.
 // Key: appId or "default", Value: timestamp of last notification
@@ -176,6 +179,53 @@ async function resolveFeishuSenderName(params: {
     log(`feishu: failed to resolve sender name for ${normalizedSenderId}: ${String(err)}`);
     return {};
   }
+}
+
+async function resolveFeishuGroupName(params: {
+  account: ResolvedFeishuAccount;
+  chatId: string;
+  log: (...args: any[]) => void;
+}): Promise<string | undefined> {
+  const { account, chatId, log } = params;
+  if (!account.configured) return undefined;
+
+  const normalizedChatId = chatId.trim();
+  if (!normalizedChatId) return undefined;
+
+  const cacheKey = `${account.accountId}:${normalizedChatId}`;
+  const cached = groupNameCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && cached.expireAt > now) return cached.name;
+
+  try {
+    const client = createFeishuClient(account) as any;
+    const getChat = client?.im?.chat?.get;
+    if (typeof getChat !== "function") {
+      return undefined;
+    }
+
+    const res: any = await getChat({ path: { chat_id: normalizedChatId } });
+    if (res?.code !== 0) {
+      log(
+        `feishu: failed to resolve group name for ${normalizedChatId}: code=${String(res?.code)} msg=${String(res?.msg ?? "")}`,
+      );
+      return undefined;
+    }
+
+    const name =
+      typeof res?.data?.name === "string" && res.data.name.trim().length > 0
+        ? res.data.name.trim()
+        : undefined;
+    if (name) {
+      groupNameCache.set(cacheKey, { name, expireAt: now + GROUP_NAME_TTL_MS });
+      return name;
+    }
+  } catch (err) {
+    // Best-effort. Don't fail message handling if group lookup fails.
+    log(`feishu: failed to resolve group name for ${normalizedChatId}: ${String(err)}`);
+  }
+
+  return undefined;
 }
 
 export type FeishuMessageEvent = {
@@ -455,7 +505,11 @@ function formatSubMessageContent(content: string, contentType: string): string {
   }
 }
 
-function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string, botName?: string): boolean {
+function checkBotMentioned(
+  event: FeishuMessageEvent,
+  botOpenId?: string,
+  botName?: string,
+): boolean {
   if (!botOpenId) return false;
   // Check for @all (@_all in Feishu) — treat as mentioning every bot
   const rawContent = event.message.content ?? "";
@@ -922,8 +976,21 @@ export async function handleFeishuMessage(params: {
     }
   }
 
+  if (isGroup && (feishuCfg?.resolveGroupNames ?? true)) {
+    const groupName = await resolveFeishuGroupName({
+      account,
+      chatId: ctx.chatId,
+      log,
+    });
+    if (groupName) {
+      ctx = { ...ctx, groupName };
+    }
+  }
+
+  const groupDisplayName = isGroup ? ctx.groupName?.trim() || ctx.chatId : undefined;
+
   log(
-    `feishu[${account.accountId}]: received message from ${ctx.senderOpenId} in ${ctx.chatId} (${ctx.chatType})`,
+    `feishu[${account.accountId}]: received message from ${ctx.senderOpenId} in ${groupDisplayName ?? ctx.chatId} (${ctx.chatType})`,
   );
 
   // Log mention targets if detected
@@ -1177,7 +1244,7 @@ export async function handleFeishuMessage(params: {
 
     const preview = ctx.content.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isGroup
-      ? `Feishu[${account.accountId}] message in group ${ctx.chatId}`
+      ? `Feishu[${account.accountId}] message in group ${groupDisplayName ?? ctx.chatId}`
       : `Feishu[${account.accountId}] DM from ${ctx.senderOpenId}`;
 
     // Do not enqueue inbound user previews as system events.
@@ -1287,7 +1354,7 @@ export async function handleFeishuMessage(params: {
         SessionKey: agentSessionKey,
         AccountId: agentAccountId,
         ChatType: isGroup ? "group" : "direct",
-        GroupSubject: isGroup ? ctx.chatId : undefined,
+        GroupSubject: isGroup ? groupDisplayName : undefined,
         SenderName: ctx.senderName ?? ctx.senderOpenId,
         SenderId: ctx.senderOpenId,
         Provider: "feishu" as const,

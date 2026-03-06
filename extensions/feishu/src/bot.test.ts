@@ -342,6 +342,150 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCreateFeishuClient).not.toHaveBeenCalled();
   });
 
+  it("resolves group name via im.chat.get for display fields only", async () => {
+    const getChat = vi.fn().mockResolvedValue({ code: 0, data: { name: "FutureMind Ops" } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: { user: { get: vi.fn() } },
+      im: { chat: { get: getChat } },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret_test",
+          groupPolicy: "open",
+          requireMention: false,
+          resolveSenderNames: false,
+          resolveGroupNames: true,
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-group-user",
+        },
+      },
+      message: {
+        message_id: "msg-group-name-display",
+        chat_id: "oc-group-resolve-display",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello group" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(getChat).toHaveBeenCalledWith({ path: { chat_id: "oc-group-resolve-display" } });
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group-resolve-display" },
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        GroupSubject: "FutureMind Ops",
+      }),
+    );
+  });
+
+  it("falls back to chat_id when group name lookup fails", async () => {
+    const getChat = vi.fn().mockResolvedValue({ code: 999, msg: "permission denied" });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: { user: { get: vi.fn() } },
+      im: { chat: { get: getChat } },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret_test",
+          groupPolicy: "open",
+          requireMention: false,
+          resolveSenderNames: false,
+          resolveGroupNames: true,
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-group-user-fallback",
+        },
+      },
+      message: {
+        message_id: "msg-group-name-fallback",
+        chat_id: "oc-group-fallback-id",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello fallback" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        GroupSubject: "oc-group-fallback-id",
+      }),
+    );
+  });
+
+  it("caches resolved group names for 10 minutes", async () => {
+    const getChat = vi.fn().mockResolvedValue({ code: 0, data: { name: "Cached Group" } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: { user: { get: vi.fn() } },
+      im: { chat: { get: getChat } },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret_test",
+          groupPolicy: "open",
+          requireMention: false,
+          resolveSenderNames: false,
+          resolveGroupNames: true,
+        },
+      },
+    } as ClawdbotConfig;
+
+    const baseEvent: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-cache-user",
+        },
+      },
+      message: {
+        message_id: "msg-group-cache-1",
+        chat_id: "oc-group-cache-id-20260306",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello cache" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event: baseEvent });
+    await dispatchMessage({
+      cfg,
+      event: {
+        ...baseEvent,
+        message: {
+          ...baseEvent.message,
+          message_id: "msg-group-cache-2",
+        },
+      },
+    });
+
+    expect(getChat).toHaveBeenCalledTimes(1);
+  });
+
   it("propagates parent/root message ids into inbound context for reply reconstruction", async () => {
     mockGetMessageFeishu.mockResolvedValueOnce({
       messageId: "om_parent_001",

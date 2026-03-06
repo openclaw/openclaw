@@ -138,10 +138,11 @@ describe("FeishuConfigSchema replyInThread", () => {
 });
 
 describe("FeishuConfigSchema optimization flags", () => {
-  it("defaults top-level typingIndicator and resolveSenderNames to true", () => {
+  it("defaults top-level typingIndicator, resolveSenderNames and resolveGroupNames to true", () => {
     const result = FeishuConfigSchema.parse({});
     expect(result.typingIndicator).toBe(true);
     expect(result.resolveSenderNames).toBe(true);
+    expect(result.resolveGroupNames).toBe(true);
   });
 
   it("accepts account-level optimization flags", () => {
@@ -150,11 +151,13 @@ describe("FeishuConfigSchema optimization flags", () => {
         main: {
           typingIndicator: false,
           resolveSenderNames: false,
+          resolveGroupNames: false,
         },
       },
     });
     expect(result.accounts?.main?.typingIndicator).toBe(false);
     expect(result.accounts?.main?.resolveSenderNames).toBe(false);
+    expect(result.accounts?.main?.resolveGroupNames).toBe(false);
   });
 });
 
