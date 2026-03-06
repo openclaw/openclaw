@@ -12,8 +12,8 @@ import { ensureOpenClawModelsJson } from "./models-config.js";
 
 type ModelEntry = { id: string; provider?: string; contextWindow?: number };
 type ModelRegistryLike = {
-  getAvailable?: () => ModelEntry[];
-  getAll: () => ModelEntry[];
+  getAvailable?: () => Model<Api>[];
+  getAll: () => Model<Api>[];
 };
 type ConfigModelEntry = { id?: string; contextWindow?: number };
 type ProviderConfigEntry = { models?: ConfigModelEntry[] };
