@@ -16,6 +16,15 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
       channel: Type.Optional(Type.String()),
       to: Type.Optional(Type.String()),
       bestEffortDeliver: Type.Optional(Type.Boolean()),
+      gate: Type.Optional(
+        Type.Object(
+          {
+            command: NonEmptyString,
+            timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 300 })),
+          },
+          { additionalProperties: false },
+        ),
+      ),
     },
     { additionalProperties: false },
   );

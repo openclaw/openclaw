@@ -81,6 +81,19 @@ export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnP
 
 export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
 
+/** Pre-LLM gate check for agentTurn cron jobs. */
+export type CronJobGate = {
+  /**
+   * Shell command to run before invoking the LLM. The job is skipped (status
+   * "skipped", not "error") when the command exits with a non-zero code. Use
+   * this for cheap deterministic checks (e.g. count unread messages, check for
+   * open issues) to avoid burning LLM calls when there is nothing to act on.
+   */
+  command: string;
+  /** Timeout in seconds for the gate command. Defaults to 30. */
+  timeoutSeconds?: number;
+};
+
 type CronAgentTurnPayloadFields = {
   message: string;
   /** Optional model override (provider/model or alias). */
@@ -96,6 +109,11 @@ type CronAgentTurnPayloadFields = {
   channel?: CronMessageChannel;
   to?: string;
   bestEffortDeliver?: boolean;
+  /**
+   * Optional pre-LLM gate check. When set, the shell command is run before
+   * invoking the agent. A non-zero exit code skips the job without error.
+   */
+  gate?: CronJobGate;
 };
 
 type CronAgentTurnPayload = {

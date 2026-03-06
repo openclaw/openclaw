@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import { isCronSystemEvent } from "../../infra/heartbeat-events-filter.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
@@ -117,6 +118,47 @@ function errorBackoffMs(
 
 /** Default max retries for one-shot jobs on transient errors (#24355). */
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
+
+const DEFAULT_GATE_TIMEOUT_SECONDS = 30;
+
+/**
+ * Run a cron gate command synchronously and return whether the gate passed.
+ * Returns `{ passed: true }` when the command exits 0, or
+ * `{ passed: false, reason }` when it exits non-zero or times out.
+ *
+ * Gate commands are expected to be fast deterministic checks (e.g. count
+ * unread messages, check for open issues). They run in a shell so that
+ * pipelines and redirects work naturally.
+ */
+function runCronGate(
+  command: string,
+  timeoutSeconds?: number,
+): { passed: true } | { passed: false; reason: string } {
+  const timeoutMs = (timeoutSeconds ?? DEFAULT_GATE_TIMEOUT_SECONDS) * 1000;
+  const result = spawnSync(command, {
+    shell: true,
+    timeout: timeoutMs,
+    encoding: "utf-8",
+    maxBuffer: 64 * 1024, // 64 KiB — gate output is for diagnostics only
+  });
+
+  if (result.signal === "SIGTERM" || result.error?.message?.includes("ETIMEDOUT")) {
+    return {
+      passed: false,
+      reason: `gate timed out after ${timeoutSeconds ?? DEFAULT_GATE_TIMEOUT_SECONDS}s`,
+    };
+  }
+  if (result.error) {
+    return { passed: false, reason: `gate error: ${result.error.message}` };
+  }
+  if (result.status !== 0) {
+    const stderr = result.stderr?.trim();
+    const stdout = result.stdout?.trim();
+    const detail = stderr || stdout || `exit ${result.status}`;
+    return { passed: false, reason: `gate exited ${result.status}: ${detail}`.slice(0, 200) };
+  }
+  return { passed: true };
+}
 
 const TRANSIENT_PATTERNS: Record<string, RegExp> = {
   rate_limit: /(rate[_ ]limit|too many requests|429|resource has been exhausted|cloudflare)/i,
@@ -1043,6 +1085,21 @@ export async function executeJobCore(
   }
   if (abortSignal?.aborted) {
     return resolveAbortError();
+  }
+
+  // Run the optional pre-LLM gate check. A non-zero exit skips the job
+  // (status "skipped", not "error") so consecutive-error backoff is not
+  // triggered. This lets users skip unneeded LLM calls cheaply, e.g.:
+  //   gate: { command: "[ $(mailcount) -gt 0 ]" }
+  if (job.payload.gate) {
+    const gateResult = runCronGate(job.payload.gate.command, job.payload.gate.timeoutSeconds);
+    if (!gateResult.passed) {
+      state.deps.log.debug(
+        { jobId: job.id, reason: gateResult.reason },
+        "cron: gate check failed, skipping job",
+      );
+      return { status: "skipped", error: `gate: ${gateResult.reason}` };
+    }
   }
 
   const res = await state.deps.runIsolatedAgentJob({
