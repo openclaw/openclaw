@@ -571,6 +571,17 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("sets disableBlockStreaming in replyOptions to prevent silent reply drops", () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
+  });
+
   it("passes replyInThread to media attachments", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,
