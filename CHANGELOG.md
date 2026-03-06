@@ -208,6 +208,7 @@ Docs: https://docs.openclaw.ai
 - Windows/Plugin install: when OpenClaw runs on Windows via Bun and `npm-cli.js` is not colocated with the runtime binary, fall back to `npm.cmd`/`npx.cmd` through the existing `cmd.exe` wrapper so `openclaw plugins install` no longer fails with `spawn EINVAL`. (#38056) Thanks @0xlin2023.
 - Telegram/send retry classification: retry grammY `Network request ... failed after N attempts` envelopes in send flows without reclassifying plain `Network request ... failed!` wrappers as transient, restoring the intended retry path while keeping broad send-context message matching tight. (#38056) Thanks @0xlin2023.
 - Gateway/probes: keep `/health`, `/healthz`, `/ready`, and `/readyz` reachable when the Control UI is mounted at `/`, preserve plugin-owned route precedence on those paths, and make `/ready` and `/readyz` report channel-backed readiness with startup grace plus `503` on disconnected managed channels, while `/health` and `/healthz` stay shallow liveness probes. (#18446) Thanks @vibecodooor, @mahsumaktas, and @vincentkoc.
+- Feishu/media downloads: drop invalid timeout fields from SDK method calls now that client-level `httpTimeoutMs` applies to requests. (#38267) Thanks @ant1eicher and @thewilloftheshadow.
 
 ## 2026.3.2
 
