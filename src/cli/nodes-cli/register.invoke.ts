@@ -209,7 +209,9 @@ async function maybeRequestNodesRunApproval(params: {
   let approvedByAsk = false;
   let approvalDecision: "allow-once" | "allow-always" | null = null;
   let approvalId: string | null = null;
-  const requiresAsk = params.hostAsk === "always" || params.hostAsk === "on-miss";
+  const requiresAsk =
+    params.hostAsk === "always" ||
+    (params.hostAsk === "on-miss" && params.hostSecurity === "allowlist");
   if (!requiresAsk) {
     return { approvedByAsk, approvalDecision, approvalId };
   }

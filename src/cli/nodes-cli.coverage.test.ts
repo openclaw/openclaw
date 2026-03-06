@@ -15,6 +15,16 @@ type NodeInvokeCall = {
 
 let lastNodeInvokeCall: NodeInvokeCall | null = null;
 let lastApprovalRequestCall: { params?: Record<string, unknown> } | null = null;
+let mockedConfig: Record<string, unknown> = {};
+let mockedNodeApprovalsFile: Record<string, unknown> = {
+  version: 1,
+  defaults: {
+    security: "allowlist",
+    ask: "on-miss",
+    askFallback: "deny",
+  },
+  agents: {},
+};
 
 const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
   if (opts.method === "node.list") {
@@ -58,15 +68,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
       path: "/tmp/exec-approvals.json",
       exists: true,
       hash: "hash",
-      file: {
-        version: 1,
-        defaults: {
-          security: "allowlist",
-          ask: "on-miss",
-          askFallback: "deny",
-        },
-        agents: {},
-      },
+      file: mockedNodeApprovalsFile,
     };
   }
   if (opts.method === "exec.approval.request") {
@@ -90,7 +92,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({}),
+  loadConfig: () => mockedConfig,
 }));
 
 describe("nodes-cli coverage", () => {
@@ -125,6 +127,16 @@ describe("nodes-cli coverage", () => {
     randomIdempotencyKey.mockClear();
     lastNodeInvokeCall = null;
     lastApprovalRequestCall = null;
+    mockedConfig = {};
+    mockedNodeApprovalsFile = {
+      version: 1,
+      defaults: {
+        security: "allowlist",
+        ask: "on-miss",
+        askFallback: "deny",
+      },
+      agents: {},
+    };
   });
 
   it("invokes system.run with parsed params", async () => {
@@ -205,6 +217,44 @@ describe("nodes-cli coverage", () => {
       agentId: "main",
       sessionKey: null,
     });
+  });
+
+  it("does not request approval when on-miss is paired with full security", async () => {
+    mockedConfig = {
+      tools: {
+        exec: {
+          security: "full",
+          ask: "off",
+        },
+      },
+    };
+    mockedNodeApprovalsFile = {
+      version: 1,
+      defaults: {
+        security: "full",
+        ask: "on-miss",
+        askFallback: "deny",
+      },
+      agents: {},
+    };
+
+    const invoke = await runNodesCommand(["nodes", "run", "--node", "mac-1", "echo", "hi"]);
+
+    expect(invoke).toBeTruthy();
+    expect(invoke?.params?.command).toBe("system.run");
+    expect(invoke?.params?.params).toMatchObject({
+      command: ["echo", "hi"],
+      rawCommand: null,
+      agentId: "main",
+      approved: false,
+    });
+    expect(getApprovalRequestCall()).toBeNull();
+    expect(
+      (invoke?.params?.params as Record<string, unknown> | undefined)?.["approvalDecision"],
+    ).toBeUndefined();
+    expect(
+      (invoke?.params?.params as Record<string, unknown> | undefined)?.["runId"],
+    ).toBeUndefined();
   });
 
   it("invokes system.notify with provided fields", async () => {
