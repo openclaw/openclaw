@@ -144,7 +144,7 @@ function createStreamFnWithExtraParams(
   // data_collection, ignore, sort, quantizations, etc.
   const providerRouting =
     provider === "openrouter" &&
-    extraParams.provider != null &&
+    extraParams?.provider != null &&
     typeof extraParams.provider === "object"
       ? (extraParams.provider as Record<string, unknown>)
       : undefined;
