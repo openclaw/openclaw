@@ -327,18 +327,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     // QMD collections are persisted inside the index database and must be created
     // via the CLI. Prefer listing existing collections when supported, otherwise
     // fall back to best-effort idempotent `qmd collection add`.
-    const existing = new Map<string, ListedCollection>();
-    try {
-      const result = await this.runQmd(["collection", "list", "--json"], {
-        timeoutMs: this.qmd.update.commandTimeoutMs,
-      });
-      const parsed = this.parseListedCollections(result.stdout);
-      for (const [name, details] of parsed) {
-        existing.set(name, details);
-      }
-    } catch {
-      // ignore; older qmd versions might not support list --json.
-    }
+    const existing = await this.listCollectionsBestEffort();
 
     await this.migrateLegacyUnscopedCollections(existing);
 
@@ -360,13 +349,117 @@ export class QmdMemoryManager implements MemorySearchManager {
       try {
         await this.ensureCollectionPath(collection);
         await this.addCollection(collection.path, collection.name, collection.pattern);
+        existing.set(collection.name, {
+          path: collection.path,
+          pattern: collection.pattern,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (this.isCollectionAlreadyExistsError(message)) {
+          const rebound = await this.tryRebindConflictingCollection({
+            collection,
+            existing,
+            addErrorMessage: message,
+          });
+          if (!rebound) {
+            log.warn(`qmd collection add skipped for ${collection.name}: ${message}`);
+          }
           continue;
         }
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
+    }
+  }
+
+  private async listCollectionsBestEffort(): Promise<Map<string, ListedCollection>> {
+    const existing = new Map<string, ListedCollection>();
+    try {
+      const result = await this.runQmd(["collection", "list", "--json"], {
+        timeoutMs: this.qmd.update.commandTimeoutMs,
+      });
+      const parsed = this.parseListedCollections(result.stdout);
+      for (const [name, details] of parsed) {
+        existing.set(name, details);
+      }
+    } catch {
+      // ignore; older qmd versions might not support list --json.
+    }
+    return existing;
+  }
+
+  private findCollectionByPathPattern(
+    collection: ManagedCollection,
+    listed: Map<string, ListedCollection>,
+  ): string | null {
+    for (const [name, details] of listed) {
+      if (!details.path || typeof details.pattern !== "string") {
+        continue;
+      }
+      if (!this.pathsMatch(details.path, collection.path)) {
+        continue;
+      }
+      if (details.pattern !== collection.pattern) {
+        continue;
+      }
+      return name;
+    }
+    return null;
+  }
+
+  private async tryRebindConflictingCollection(params: {
+    collection: ManagedCollection;
+    existing: Map<string, ListedCollection>;
+    addErrorMessage: string;
+  }): Promise<boolean> {
+    const { collection, existing, addErrorMessage } = params;
+    let conflictName = this.findCollectionByPathPattern(collection, existing);
+    if (!conflictName) {
+      const refreshed = await this.listCollectionsBestEffort();
+      existing.clear();
+      for (const [name, details] of refreshed) {
+        existing.set(name, details);
+      }
+      conflictName = this.findCollectionByPathPattern(collection, existing);
+    }
+
+    if (!conflictName) {
+      return false;
+    }
+    if (conflictName === collection.name) {
+      existing.set(collection.name, {
+        path: collection.path,
+        pattern: collection.pattern,
+      });
+      return true;
+    }
+
+    log.warn(
+      `qmd collection add conflict for ${collection.name}: path+pattern already bound by ${conflictName}; rebinding`,
+    );
+    try {
+      await this.removeCollection(conflictName);
+      existing.delete(conflictName);
+    } catch (removeErr) {
+      const removeMessage = removeErr instanceof Error ? removeErr.message : String(removeErr);
+      if (!this.isCollectionMissingError(removeMessage)) {
+        log.warn(`qmd collection remove failed for ${conflictName}: ${removeMessage}`);
+      }
+      return false;
+    }
+
+    try {
+      await this.addCollection(collection.path, collection.name, collection.pattern);
+      existing.set(collection.name, {
+        path: collection.path,
+        pattern: collection.pattern,
+      });
+      return true;
+    } catch (retryErr) {
+      const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      log.warn(
+        `qmd collection add failed for ${collection.name} after rebinding ${conflictName}: ${retryMessage} (initial: ${addErrorMessage})`,
+      );
+      return false;
     }
   }
 
