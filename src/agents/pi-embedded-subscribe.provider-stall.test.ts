@@ -4,10 +4,12 @@ import {
   noteProviderProgress,
 } from "./pi-embedded-subscribe.provider-stall.js";
 
+type ProviderStallTestContext = Parameters<typeof noteProviderProgress>[0];
+
 describe("provider stall diagnostics", () => {
   it("logs a warning for long google-gemini-cli stalls", () => {
     const warn = vi.fn();
-    const ctx = {
+    const ctx: ProviderStallTestContext = {
       params: {
         runId: "run-1",
         provider: "google-gemini-cli",
@@ -40,7 +42,7 @@ describe("provider stall diagnostics", () => {
 
   it("does not warn below the stall threshold", () => {
     const warn = vi.fn();
-    const ctx = {
+    const ctx: ProviderStallTestContext = {
       params: {
         runId: "run-2",
         provider: "google-gemini-cli",
@@ -61,7 +63,7 @@ describe("provider stall diagnostics", () => {
 
   it("advances the warning baseline so the same gap is not warned twice", () => {
     const warn = vi.fn();
-    const ctx = {
+    const ctx: ProviderStallTestContext = {
       params: {
         runId: "run-dup",
         provider: "google-gemini-cli",
@@ -90,7 +92,7 @@ describe("provider stall diagnostics", () => {
 
   it("ignores non-google providers", () => {
     const warn = vi.fn();
-    const ctx = {
+    const ctx: ProviderStallTestContext = {
       params: {
         runId: "run-3",
         provider: "openai",
