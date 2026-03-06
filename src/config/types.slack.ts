@@ -180,6 +180,14 @@ export type SlackAccountConfig = {
   channels?: Record<string, SlackChannelConfig>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Thread binding configuration for ACP/subagent session spawning. */
+  threadBindings?: {
+    enabled?: boolean;
+    idleHours?: number;
+    maxAgeHours?: number;
+    spawnAcpSessions?: boolean;
+    spawnSubagentSessions?: boolean;
+  };
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
   /**

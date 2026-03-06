@@ -143,12 +143,24 @@ async function bindSpawnedAcpSessionToThread(params: {
       error: `Thread bindings do not support ${placement} placement for ${channel}.`,
     };
   }
-  if (!currentConversationId) {
+  // For child placement, use parentConversationId (channel) when available.
+  // Slack threads require channel + thread_ts context, and in DM contexts
+  // parentConversationId carries the backing D* channel id.
+  const channelId =
+    placement === "child"
+      ? bindingContext.parentConversationId || currentConversationId
+      : undefined;
+
+  if (placement === "child" && !channelId) {
     return {
       ok: false,
       error: `Could not resolve a ${channel} conversation for ACP thread spawn.`,
     };
   }
+
+  // parentConversationId is the parent channel for thread-based channels (e.g., Slack channel ID).
+  // For Discord, threads are their own channels so parentConversationId may not be needed.
+  const parentConversationId = bindingContext.parentConversationId;
 
   const senderId = commandParams.command.senderId?.trim() || "";
   if (placement === "current") {
@@ -156,6 +168,7 @@ async function bindSpawnedAcpSessionToThread(params: {
       channel: spawnPolicy.channel,
       accountId: spawnPolicy.accountId,
       conversationId: currentConversationId,
+      parentConversationId,
     });
     const boundBy =
       typeof existingBinding?.metadata?.boundBy === "string"
@@ -170,7 +183,13 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const label = params.label || params.agentId;
-  const conversationId = currentConversationId;
+  const conversationId = placement === "current" ? currentConversationId : channelId;
+  if (!conversationId) {
+    return {
+      ok: false,
+      error: `Could not resolve a ${channel} conversation for ACP thread spawn.`,
+    };
+  }
 
   try {
     const binding = await bindingService.bind({
@@ -180,6 +199,7 @@ async function bindSpawnedAcpSessionToThread(params: {
         channel: spawnPolicy.channel,
         accountId: spawnPolicy.accountId,
         conversationId,
+        parentConversationId,
       },
       placement,
       metadata: {

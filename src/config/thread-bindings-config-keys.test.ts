@@ -93,6 +93,39 @@ describe("thread binding config keys", () => {
     );
   });
 
+  it("accepts channels.slack.threadBindings config keys", () => {
+    const result = validateConfigObjectRaw({
+      channels: {
+        slack: {
+          threadBindings: {
+            enabled: true,
+            idleHours: 24,
+            maxAgeHours: 0,
+            spawnAcpSessions: true,
+            spawnSubagentSessions: false,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects unknown keys in channels.slack.threadBindings", () => {
+    const result = validateConfigObjectRaw({
+      channels: {
+        slack: {
+          threadBindings: {
+            enabled: true,
+            bogusKey: 42,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
   it("migrates Discord threadBindings.ttlHours for root and account entries", () => {
     const result = migrateLegacyConfig({
       channels: {
