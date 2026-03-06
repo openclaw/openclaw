@@ -35,7 +35,7 @@ export function registerPackCli(program: Command) {
           return;
         }
         const lines: string[] = [];
-        lines.push(`${theme.bold("Pack:")} ${entry.metadata.name}`);
+        lines.push(`${theme.heading("Pack:")} ${entry.metadata.name}`);
         if (entry.metadata.description) {
           lines.push(`${theme.muted("Description:")} ${entry.metadata.description}`);
         }
@@ -199,7 +199,7 @@ export function registerPackCli(program: Command) {
         for (const pack of packs) {
           const desc = pack.metadata.description ? ` — ${pack.metadata.description}` : "";
           const ver = pack.metadata.version ? ` (${pack.metadata.version})` : "";
-          lines.push(`  ${theme.bold(pack.metadata.name)}${ver}${theme.muted(desc)}`);
+          lines.push(`  ${theme.heading(pack.metadata.name)}${ver}${theme.muted(desc)}`);
         }
         defaultRuntime.log(lines.join("\n"));
       } catch (err) {
