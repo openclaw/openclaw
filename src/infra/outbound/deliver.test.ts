@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
@@ -339,6 +340,30 @@ describe("deliverOutboundPayloads", () => {
       "hi",
       expect.objectContaining({
         mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+      }),
+    );
+  });
+
+  it("includes configured telegram mediaLocalRoots in outbound delivery", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverTelegramPayload({
+      sendTelegram,
+      payload: { text: "hi", mediaUrl: "file:///Users/demo/Desktop/photo.png" },
+      cfg: {
+        channels: {
+          telegram: {
+            mediaLocalRoots: ["~/Desktop"],
+          },
+        },
+      },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([path.resolve(os.homedir(), "Desktop")]),
       }),
     );
   });

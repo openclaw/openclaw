@@ -874,6 +874,7 @@ Primary reference:
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
 - `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `partial`; `progress` maps to `partial`; `block` is legacy preview mode compatibility). In DMs, `partial` uses native `sendMessageDraft` when available.
 - `channels.telegram.mediaMaxMb`: inbound Telegram media download/processing cap (MB).
+- `channels.telegram.mediaLocalRoots`: explicit allowlist of absolute local directories permitted for outbound local media paths (for example `~/Desktop`). Account override: `channels.telegram.accounts.<id>.mediaLocalRoots`.
 - `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
 - `channels.telegram.network.dnsResultOrder`: override DNS result order (`ipv4first` or `verbatim`). Defaults to `ipv4first` on Node 22+.
@@ -900,7 +901,7 @@ Telegram-specific high-signal fields:
 - threading/replies: `replyToMode`
 - streaming: `streaming` (preview), `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
-- media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
+- media/network: `mediaMaxMb`, `mediaLocalRoots`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`
 - reactions: `reactionNotifications`, `reactionLevel`

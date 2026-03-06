@@ -3,7 +3,10 @@ import { dispatchChannelMessageAction } from "../../channels/plugins/message-act
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import {
+  getAgentScopedMediaLocalRoots,
+  resolveTelegramMediaLocalRoots,
+} from "../../media/local-roots.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";
@@ -58,6 +61,9 @@ async function tryHandleWithPluginAction(params: {
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(
     params.ctx.cfg,
     params.ctx.agentId ?? params.ctx.mirror?.agentId,
+    params.ctx.channel === "telegram"
+      ? resolveTelegramMediaLocalRoots(params.ctx.cfg, params.ctx.accountId)
+      : undefined,
   );
   const handled = await dispatchChannelMessageAction({
     channel: params.ctx.channel,

@@ -28,7 +28,10 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import {
+  getAgentScopedMediaLocalRoots,
+  resolveTelegramMediaLocalRoots,
+} from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
@@ -533,6 +536,7 @@ async function deliverOutboundPayloadsCore(
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(
     cfg,
     params.session?.agentId ?? params.mirror?.agentId,
+    channel === "telegram" ? resolveTelegramMediaLocalRoots(cfg, accountId) : undefined,
   );
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({

@@ -36,7 +36,10 @@ import type {
 } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getChildLogger } from "../logging.js";
-import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import {
+  getAgentScopedMediaLocalRoots,
+  resolveTelegramMediaLocalRoots,
+} from "../media/local-roots.js";
 import {
   executePluginCommand,
   getPluginCommandSpecs,
@@ -484,7 +487,11 @@ export const registerTelegramNativeCommands = ({
         return null;
       }
     }
-    const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+    const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+      cfg,
+      route.agentId,
+      resolveTelegramMediaLocalRoots(cfg, route.accountId),
+    );
     const tableMode = resolveMarkdownTableMode({
       cfg,
       channel: "telegram",

@@ -18,7 +18,10 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
-import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import {
+  getAgentScopedMediaLocalRoots,
+  resolveTelegramMediaLocalRoots,
+} from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
@@ -186,7 +189,11 @@ export const dispatchTelegramMessage = async ({
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+    cfg,
+    route.agentId,
+    resolveTelegramMediaLocalRoots(cfg, route.accountId),
+  );
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {

@@ -13,7 +13,10 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import {
+  getAgentScopedMediaLocalRoots,
+  resolveTelegramMediaLocalRoots,
+} from "../../media/local-roots.js";
 import { hasPollCreationParams, resolveTelegramPollVisibility } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
@@ -730,7 +733,11 @@ export async function runMessageAction(
     params.accountId = accountId;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, resolvedAgentId);
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+    cfg,
+    resolvedAgentId,
+    channel === "telegram" ? resolveTelegramMediaLocalRoots(cfg, accountId) : undefined,
+  );
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
     mediaLocalRoots,

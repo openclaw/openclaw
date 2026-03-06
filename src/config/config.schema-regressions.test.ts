@@ -23,6 +23,18 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts telegram mediaLocalRoots overrides", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          mediaLocalRoots: ["~/Desktop"],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       agents: {
