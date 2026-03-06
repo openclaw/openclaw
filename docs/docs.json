@@ -32,6 +32,9 @@
       }
     }
   },
+  "contextual": {
+    "options": ["copy", "view", "claude", "chatgpt"]
+  },
   "navbar": {
     "links": [
       {
