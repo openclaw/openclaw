@@ -481,14 +481,13 @@ function normalizeMentions(
 
   for (const mention of mentions) {
     const mentionId = mention.id.open_id;
-    const replacement =
-      botStripId && mentionId === botStripId
-        ? ""
-        : mentionId
-          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
-          : `@${mention.name}`;
 
-    result = result.replace(new RegExp(escaped(mention.key), "g"), () => replacement).trim();
+    if (botStripId && mentionId === botStripId) {
+      // Strip the full bot mention: optional "@Name " prefix + key
+      const pattern = new RegExp(`(?:@${escaped(mention.name)}\\s+)?${escaped(mention.key)}`, "g");
+      result = result.replace(pattern, "").trim();
+    }
+    // Non-bot mentions: leave text as-is
   }
 
   return result;
