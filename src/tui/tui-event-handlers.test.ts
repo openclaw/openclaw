@@ -231,6 +231,26 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).not.toHaveBeenCalled();
   });
 
+  it("does not match bare aliases against non-default agent canonical keys", () => {
+    const { chatLog, handleChatEvent } = createHandlersHarness({
+      state: {
+        agentDefaultId: "main",
+        currentAgentId: "alpha",
+        currentSessionKey: "agent:alpha:main",
+        activeChatRunId: null,
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-non-default-alias",
+      sessionKey: "main",
+      state: "delta",
+      message: { content: "should be ignored" },
+    });
+
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+  });
+
   it("clears run mapping when the session changes", () => {
     const { state, chatLog, tui, handleChatEvent, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: null },

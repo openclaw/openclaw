@@ -150,6 +150,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
     const normalizedLeft = (left ?? "").trim().toLowerCase();
     const normalizedRight = (right ?? "").trim().toLowerCase();
+    const defaultAgentId = (state.agentDefaultId ?? "").trim().toLowerCase();
     if (!normalizedLeft || !normalizedRight) {
       return false;
     }
@@ -162,10 +163,10 @@ export function createEventHandlers(context: EventHandlerContext) {
       return parsedLeft.agentId === parsedRight.agentId && parsedLeft.rest === parsedRight.rest;
     }
     if (parsedLeft) {
-      return parsedLeft.rest === normalizedRight;
+      return parsedLeft.agentId === defaultAgentId && parsedLeft.rest === normalizedRight;
     }
     if (parsedRight) {
-      return normalizedLeft === parsedRight.rest;
+      return parsedRight.agentId === defaultAgentId && normalizedLeft === parsedRight.rest;
     }
     return false;
   };
