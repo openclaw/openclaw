@@ -12,6 +12,7 @@ import {
   getStatusCode,
   logoutWeb,
   readWebSelfId,
+  waitForCredsSaveQueue,
   waitForWaConnection,
   webAuthExists,
 } from "./session.js";
@@ -88,6 +89,12 @@ async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
     info("WhatsApp asked for a restart after pairing (code 515); retrying connection once…"),
   );
   closeSocket(login.sock);
+  // Wait for any pending creds-save operations to flush to disk before
+  // recreating the socket. createWaSocket calls useMultiFileAuthState which
+  // reads creds from disk; if the credsSaveQueue hasn't settled yet the new
+  // socket will read stale/empty creds → WhatsApp sees a conflict → 401
+  // device_removed.
+  await waitForCredsSaveQueue();
   try {
     const sock = await createWaSocket(false, login.verbose, {
       authDir: login.authDir,
