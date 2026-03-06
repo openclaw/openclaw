@@ -152,8 +152,12 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as ChatEvent;
     syncSessionKey();
-    if (evt.sessionKey !== state.currentSessionKey) {
-      return;
+    // Update the current session key from the event to handle cases where
+    // the gateway resolves or updates the session key during message processing.
+    // This ensures push notifications are not filtered out when the session key
+    // changes between send and receive (e.g., "unknown" -> resolved session key).
+    if (evt.sessionKey && evt.sessionKey !== state.currentSessionKey) {
+      state.currentSessionKey = evt.sessionKey;
     }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {

@@ -426,4 +426,53 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-silent");
     expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
   });
+
+  it("updates currentSessionKey from chat event when session key changes", () => {
+    const { state, chatLog, tui, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, currentSessionKey: "agent:main:unknown" },
+    });
+
+    // Simulate a chat event where the gateway resolved the session key
+    const chatEvt: ChatEvent = {
+      runId: "run-resolved",
+      sessionKey: "agent:main:resolved-session",
+      state: "delta",
+      message: { content: "hello from resolved session" },
+    };
+
+    handleChatEvent(chatEvt);
+
+    // Verify the session key was updated
+    expect(state.currentSessionKey).toBe("agent:main:resolved-session");
+    // Verify the event was processed (assistant updated)
+    expect(chatLog.updateAssistant).toHaveBeenCalled();
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("processes chat events after session key update", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, currentSessionKey: "agent:main:initial" },
+    });
+
+    // First event updates the session key
+    handleChatEvent({
+      runId: "run-1",
+      sessionKey: "agent:main:updated",
+      state: "delta",
+      message: { content: "first message" },
+    });
+
+    expect(state.currentSessionKey).toBe("agent:main:updated");
+
+    // Second event with the updated session key should be processed
+    handleChatEvent({
+      runId: "run-2",
+      sessionKey: "agent:main:updated",
+      state: "delta",
+      message: { content: "second message" },
+    });
+
+    // Both messages should be processed
+    expect(chatLog.updateAssistant).toHaveBeenCalledTimes(2);
+  });
 });
