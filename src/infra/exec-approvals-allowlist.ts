@@ -382,6 +382,8 @@ function collectAllowAlwaysPatterns(params: {
   }
   const inlineCommand = extractShellWrapperInlineCommand(params.segment.argv);
   if (!inlineCommand) {
+    // Shell invoked without -c: treat as direct executable (e.g., bash script.sh)
+    params.out.add(candidatePath);
     return;
   }
   const nested = analyzeShellCommand({
