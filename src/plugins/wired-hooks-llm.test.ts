@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+import { addTestHook, createMockPluginRegistry } from "./hooks.test-helpers.js";
 
 describe("llm hook runner methods", () => {
   it("runLlmInput invokes registered llm_input hooks", async () => {
@@ -150,6 +150,40 @@ describe("llm hook runner methods", () => {
     });
   });
 
+  it("runLlmInput keeps higher-priority prompt override on conflicts", async () => {
+    const registry = createMockPluginRegistry([]);
+    addTestHook({
+      registry,
+      pluginId: "high-priority",
+      hookName: "llm_input",
+      priority: 10,
+      handler: vi.fn().mockResolvedValue({ prompt: "high-priority prompt" }),
+    });
+    addTestHook({
+      registry,
+      pluginId: "low-priority",
+      hookName: "llm_input",
+      priority: 1,
+      handler: vi.fn().mockResolvedValue({ prompt: "low-priority prompt" }),
+    });
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runLlmInput(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5",
+        prompt: "hello",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { agentId: "main", sessionId: "session-1" },
+    );
+
+    expect(result).toEqual({ prompt: "high-priority prompt", historyMessages: undefined });
+  });
+
   it("runLlmOutput returns modified assistant texts", async () => {
     const handler = vi.fn().mockResolvedValue({ assistantTexts: ["rehydrated response"] });
     const registry = createMockPluginRegistry([{ hookName: "llm_output", handler }]);
@@ -189,5 +223,38 @@ describe("llm hook runner methods", () => {
     );
 
     expect(result).toBeUndefined();
+  });
+
+  it("runLlmOutput keeps higher-priority assistant override on conflicts", async () => {
+    const registry = createMockPluginRegistry([]);
+    addTestHook({
+      registry,
+      pluginId: "high-priority",
+      hookName: "llm_output",
+      priority: 10,
+      handler: vi.fn().mockResolvedValue({ assistantTexts: ["high-priority text"] }),
+    });
+    addTestHook({
+      registry,
+      pluginId: "low-priority",
+      hookName: "llm_output",
+      priority: 1,
+      handler: vi.fn().mockResolvedValue({ assistantTexts: ["low-priority text"] }),
+    });
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runLlmOutput(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5",
+        assistantTexts: ["hi"],
+        usage: { input: 10, output: 20, total: 30 },
+      },
+      { agentId: "main", sessionId: "session-1" },
+    );
+
+    expect(result).toEqual({ assistantTexts: ["high-priority text"] });
   });
 });

@@ -347,8 +347,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       event,
       ctx,
       (acc, next) => ({
-        prompt: next.prompt ?? acc?.prompt,
-        historyMessages: next.historyMessages ?? acc?.historyMessages,
+        // runModifyingHook executes handlers high->low priority, so existing
+        // values in `acc` must win when multiple handlers set the same field.
+        prompt: acc?.prompt ?? next.prompt,
+        historyMessages: acc?.historyMessages ?? next.historyMessages,
       }),
     );
   }
@@ -366,7 +368,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       event,
       ctx,
       (acc, next) => ({
-        assistantTexts: next.assistantTexts ?? acc?.assistantTexts,
+        // Preserve the highest-priority override when multiple handlers compete.
+        assistantTexts: acc?.assistantTexts ?? next.assistantTexts,
       }),
     );
   }
