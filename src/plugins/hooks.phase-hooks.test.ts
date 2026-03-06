@@ -87,7 +87,7 @@ describe("phase hooks merger", () => {
     const runner = createHookRunner(registry, { logger: { warn, error: vi.fn() } });
     const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
 
-    expect(result?.prependContext?.length).toBeLessThan(oversized.length);
+    expect(result?.prependContext?.length).toBeLessThanOrEqual(MAX_HOOK_CONTEXT_LENGTH);
     expect(result?.prependContext).toContain("[…truncated by openclaw]");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("prependContext"));
   });
@@ -106,7 +106,7 @@ describe("phase hooks merger", () => {
     const runner = createHookRunner(registry, { logger: { warn, error: vi.fn() } });
     const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
 
-    expect(result?.systemPrompt?.length).toBeLessThan(oversized.length);
+    expect(result?.systemPrompt?.length).toBeLessThanOrEqual(MAX_HOOK_CONTEXT_LENGTH);
     expect(result?.systemPrompt).toContain("[…truncated by openclaw]");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("systemPrompt"));
   });

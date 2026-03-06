@@ -113,9 +113,11 @@ function getHooksForName<K extends PluginHookName>(
  */
 export const MAX_HOOK_CONTEXT_LENGTH = 50_000;
 
+const TRUNCATION_MARKER = "\n[…truncated by openclaw]";
+
 /**
- * Clamp a string to `MAX_HOOK_CONTEXT_LENGTH`, appending a truncation
- * marker so the model (and operators) can see that content was cut.
+ * Clamp a string to `MAX_HOOK_CONTEXT_LENGTH` (inclusive of the
+ * truncation marker), so the returned value never exceeds the limit.
  */
 function clampHookString(
   value: string | undefined,
@@ -125,10 +127,10 @@ function clampHookString(
   if (!value) return value;
   if (value.length <= MAX_HOOK_CONTEXT_LENGTH) return value;
   warn?.(
-    `[hooks] ${label} from plugin exceeded ${MAX_HOOK_CONTEXT_LENGTH} chars ` +
+    `[hooks] ${label} from plugin hooks exceeded ${MAX_HOOK_CONTEXT_LENGTH} chars ` +
       `(${value.length}) and was truncated`,
   );
-  return value.slice(0, MAX_HOOK_CONTEXT_LENGTH) + "\n[…truncated by openclaw]";
+  return value.slice(0, MAX_HOOK_CONTEXT_LENGTH - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
 }
 
 /**

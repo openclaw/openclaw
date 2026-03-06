@@ -5,8 +5,8 @@
  * propagated through the hook merger, including priority ordering and
  * backward compatibility.
  */
-import { beforeEach, describe, expect, it } from "vitest";
-import { createHookRunner } from "./hooks.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createHookRunner, MAX_HOOK_CONTEXT_LENGTH } from "./hooks.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type { PluginHookBeforeAgentStartResult, PluginHookRegistration } from "./types.js";
 
@@ -184,5 +184,39 @@ describe("before_agent_start hook merger", () => {
     expect(result?.systemPrompt).toBe("You are a helpful assistant");
     expect(result?.modelOverride).toBe("llama3.3:8b");
     expect(result?.providerOverride).toBe("ollama");
+  });
+
+  it("truncates oversized prependContext while preserving model overrides", async () => {
+    const oversized = "x".repeat(MAX_HOOK_CONTEXT_LENGTH + 500);
+    addBeforeAgentStartHook(registry, "big-plugin", () => ({
+      prependContext: oversized,
+      modelOverride: "llama3.3:8b",
+      providerOverride: "ollama",
+    }));
+
+    const warn = vi.fn();
+    const runner = createHookRunner(registry, { logger: { warn, error: vi.fn() } });
+    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+
+    expect(result?.prependContext?.length).toBeLessThanOrEqual(MAX_HOOK_CONTEXT_LENGTH);
+    expect(result?.prependContext).toContain("[…truncated by openclaw]");
+    expect(result?.modelOverride).toBe("llama3.3:8b");
+    expect(result?.providerOverride).toBe("ollama");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("prependContext"));
+  });
+
+  it("truncates oversized systemPrompt via legacy hook path", async () => {
+    const oversized = "s".repeat(MAX_HOOK_CONTEXT_LENGTH + 100);
+    addBeforeAgentStartHook(registry, "big-plugin", () => ({
+      systemPrompt: oversized,
+    }));
+
+    const warn = vi.fn();
+    const runner = createHookRunner(registry, { logger: { warn, error: vi.fn() } });
+    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+
+    expect(result?.systemPrompt?.length).toBeLessThanOrEqual(MAX_HOOK_CONTEXT_LENGTH);
+    expect(result?.systemPrompt).toContain("[…truncated by openclaw]");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("systemPrompt"));
   });
 });
