@@ -303,9 +303,7 @@ export async function startTelegramWebhook(opts: {
     };
     void ping();
     webhookHeartbeat = setInterval(ping, 10 * 60_000);
-    if (typeof webhookHeartbeat === "object" && "unref" in webhookHeartbeat) {
-      (webhookHeartbeat as NodeJS.Timeout).unref();
-    }
+    webhookHeartbeat.unref();
   }
 
   let shutDown = false;
