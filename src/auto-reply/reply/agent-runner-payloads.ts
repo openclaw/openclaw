@@ -19,6 +19,7 @@ import {
   isRenderablePayload,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
+import { sanitizeOutboundText } from "./reply-utils.js";
 
 export function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
@@ -72,15 +73,19 @@ export function buildReplyPayloads(params: {
     replyToChannel: params.replyToChannel,
     currentMessageId: params.currentMessageId,
   })
-    .map(
-      (payload) =>
-        normalizeReplyPayloadDirectives({
-          payload,
-          currentMessageId: params.currentMessageId,
-          silentToken: SILENT_REPLY_TOKEN,
-          parseMode: "always",
-        }).payload,
-    )
+    .map((payload) => {
+      const normalized = normalizeReplyPayloadDirectives({
+        payload,
+        currentMessageId: params.currentMessageId,
+        silentToken: SILENT_REPLY_TOKEN,
+        parseMode: "always",
+      });
+      const text = sanitizeOutboundText(normalized.payload.text);
+      return {
+        ...normalized.payload,
+        text: text ? text : undefined,
+      };
+    })
     .filter(isRenderablePayload);
 
   // Drop final payloads only when block streaming succeeded end-to-end.
