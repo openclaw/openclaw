@@ -33,11 +33,35 @@ const defaultImportPiSdk = () => import("./pi-model-discovery.js");
 let importPiSdk = defaultImportPiSdk;
 
 const CODEX_PROVIDER = "openai-codex";
+const OPENAI_CODEX_GPT54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
 
-function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
+function applyOpenAICodexForwardCompatFallbacks(models: ModelCatalogEntry[]): void {
+  const hasGpt54 = models.some(
+    (entry) =>
+      entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === OPENAI_CODEX_GPT54_MODEL_ID,
+  );
+  if (!hasGpt54) {
+    const gpt54BaseModel =
+      models.find(
+        (entry) =>
+          entry.provider === CODEX_PROVIDER &&
+          entry.id.toLowerCase() === OPENAI_CODEX_GPT53_MODEL_ID,
+      ) ??
+      models.find(
+        (entry) => entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === "gpt-5.2-codex",
+      );
+    if (gpt54BaseModel) {
+      models.push({
+        ...gpt54BaseModel,
+        id: OPENAI_CODEX_GPT54_MODEL_ID,
+        name: OPENAI_CODEX_GPT54_MODEL_ID,
+      });
+    }
+  }
+
   const hasSpark = models.some(
     (entry) =>
       entry.provider === CODEX_PROVIDER &&
@@ -218,7 +242,7 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
-      applyOpenAICodexSparkFallback(models);
+      applyOpenAICodexForwardCompatFallbacks(models);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.

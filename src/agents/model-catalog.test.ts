@@ -85,6 +85,31 @@ describe("loadModelCatalog", () => {
     }
   });
 
+  it("adds openai-codex/gpt-5.4 when gpt-5.3-codex exists", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5.3-codex",
+        provider: "openai-codex",
+        name: "GPT-5.3 Codex",
+        reasoning: true,
+        contextWindow: 272000,
+        input: ["text", "image"],
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.4",
+      }),
+    );
+    const gpt54 = result.find((entry) => entry.id === "gpt-5.4");
+    expect(gpt54?.name).toBe("gpt-5.4");
+    expect(gpt54?.reasoning).toBe(true);
+    expect(gpt54?.input).toEqual(["text", "image"]);
+  });
+
   it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.3-codex exists", async () => {
     mockPiDiscoveryModels([
       {
