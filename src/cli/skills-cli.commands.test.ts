@@ -2,8 +2,10 @@ import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfigMock = vi.fn();
+const listAgentIdsMock = vi.fn();
 const resolveAgentWorkspaceDirMock = vi.fn();
 const resolveDefaultAgentIdMock = vi.fn();
+const normalizeAgentIdMock = vi.fn();
 const buildWorkspaceSkillStatusMock = vi.fn();
 const formatSkillsListMock = vi.fn();
 const formatSkillInfoMock = vi.fn();
@@ -20,8 +22,13 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  listAgentIds: listAgentIdsMock,
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   resolveDefaultAgentId: resolveDefaultAgentIdMock,
+}));
+
+vi.mock("../routing/session-key.js", () => ({
+  normalizeAgentId: normalizeAgentIdMock,
 }));
 
 vi.mock("../agents/skills-status.js", () => ({
@@ -60,6 +67,8 @@ describe("registerSkillsCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     loadConfigMock.mockReturnValue({ gateway: {} });
+    listAgentIdsMock.mockReturnValue(["main", "planner"]);
+    normalizeAgentIdMock.mockImplementation((value: string) => value.trim().toLowerCase());
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     buildWorkspaceSkillStatusMock.mockReturnValue(report);
@@ -71,6 +80,7 @@ describe("registerSkillsCli", () => {
   it("runs list command with resolved report and formatter options", async () => {
     await runCli(["skills", "list", "--eligible", "--verbose", "--json"]);
 
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith({ gateway: {} }, "main");
     expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace", {
       config: { gateway: {} },
     });
@@ -108,6 +118,28 @@ describe("registerSkillsCli", () => {
 
     expect(formatSkillsListMock).toHaveBeenCalledWith(report, {});
     expect(runtime.log).toHaveBeenCalledWith("skills-list-output");
+  });
+
+  it("supports targeting a specific agent workspace", async () => {
+    resolveAgentWorkspaceDirMock.mockReturnValueOnce("/tmp/workspace-planner");
+
+    await runCli(["skills", "list", "--agent", "planner"]);
+
+    expect(normalizeAgentIdMock).toHaveBeenCalledWith("planner");
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith({ gateway: {} }, "planner");
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace-planner", {
+      config: { gateway: {} },
+    });
+  });
+
+  it("rejects unknown agent ids", async () => {
+    await runCli(["skills", "list", "--agent", "ghost"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Error: Unknown agent id "ghost". Use "openclaw agents list" to see configured agents.',
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
   });
 
   it("reports runtime errors when report loading fails", async () => {

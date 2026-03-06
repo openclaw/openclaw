@@ -11,6 +11,27 @@ import { resolveFeishuSendTarget } from "./send-target.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 
+type FeishuImageGetRequest = Parameters<
+  ReturnType<typeof createFeishuClient>["im"]["image"]["get"]
+>[0] & {
+  timeout: number;
+};
+type FeishuMessageResourceGetRequest = Parameters<
+  ReturnType<typeof createFeishuClient>["im"]["messageResource"]["get"]
+>[0] & {
+  timeout: number;
+};
+type FeishuImageCreateRequest = Parameters<
+  ReturnType<typeof createFeishuClient>["im"]["image"]["create"]
+>[0] & {
+  timeout: number;
+};
+type FeishuFileCreateRequest = Parameters<
+  ReturnType<typeof createFeishuClient>["im"]["file"]["create"]
+>[0] & {
+  timeout: number;
+};
+
 export type DownloadImageResult = {
   buffer: Buffer;
   contentType?: string;
@@ -104,9 +125,12 @@ export async function downloadImageFeishu(params: {
     httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
   });
 
-  const response = await client.im.image.get({
+  const request: FeishuImageGetRequest = {
     path: { image_key: normalizedImageKey },
-  });
+    timeout: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+  };
+
+  const response = await client.im.image.get(request);
 
   const buffer = await readFeishuResponseBuffer({
     response,
@@ -142,10 +166,13 @@ export async function downloadMessageResourceFeishu(params: {
     httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
   });
 
-  const response = await client.im.messageResource.get({
+  const request: FeishuMessageResourceGetRequest = {
     path: { message_id: messageId, file_key: normalizedFileKey },
     params: { type },
-  });
+    timeout: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+  };
+
+  const response = await client.im.messageResource.get(request);
 
   const buffer = await readFeishuResponseBuffer({
     response,
@@ -194,13 +221,16 @@ export async function uploadImageFeishu(params: {
   // See: https://github.com/larksuite/node-sdk/issues/121
   const imageData = typeof image === "string" ? fs.createReadStream(image) : image;
 
-  const response = await client.im.image.create({
+  const request: FeishuImageCreateRequest = {
     data: {
       image_type: imageType,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
       image: imageData as any,
     },
-  });
+    timeout: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+  };
+
+  const response = await client.im.image.create(request);
 
   // SDK v1.30+ returns data directly without code wrapper on success
   // On error, it throws or returns { code, msg }
@@ -266,7 +296,7 @@ export async function uploadFileFeishu(params: {
 
   const safeFileName = sanitizeFileNameForUpload(fileName);
 
-  const response = await client.im.file.create({
+  const request: FeishuFileCreateRequest = {
     data: {
       file_type: fileType,
       file_name: safeFileName,
@@ -274,7 +304,10 @@ export async function uploadFileFeishu(params: {
       file: fileData as any,
       ...(duration !== undefined && { duration }),
     },
-  });
+    timeout: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+  };
+
+  const response = await client.im.file.create(request);
 
   // SDK v1.30+ returns data directly without code wrapper on success
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type

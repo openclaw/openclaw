@@ -21,6 +21,11 @@ Related:
 ```bash
 openclaw skills list
 openclaw skills list --eligible
+openclaw skills list --agent planner
 openclaw skills info <name>
+openclaw skills info <name> --agent planner
 openclaw skills check
+openclaw skills check --agent planner
 ```
+
+Use `--agent <id>` to inspect the skills visible to a specific configured agent workspace instead of the default agent.
