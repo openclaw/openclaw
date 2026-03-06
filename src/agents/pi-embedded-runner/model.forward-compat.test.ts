@@ -88,11 +88,12 @@ describe("pi embedded model e2e smoke", () => {
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
       ...GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
-      provider: "google",
       id: "gemini-3.1-pro-preview",
       name: "gemini-3.1-pro-preview",
       reasoning: true,
     });
+    expect(result.model?.provider).toBe("google-gemini-cli");
+    expect(result.model?.api).toBe("google-gemini-cli");
   });
 
   it("builds a google forward-compat fallback for gemini-3.1-flash-lite-preview", () => {
@@ -102,11 +103,12 @@ describe("pi embedded model e2e smoke", () => {
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
       ...GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
-      provider: "google",
       id: "gemini-3.1-flash-lite-preview",
       name: "gemini-3.1-flash-lite-preview",
       reasoning: true,
     });
+    expect(result.model?.provider).toBe("google-gemini-cli");
+    expect(result.model?.api).toBe("google-gemini-cli");
   });
 
   it("keeps unknown-model errors for unrecognized google-gemini-cli model IDs", () => {

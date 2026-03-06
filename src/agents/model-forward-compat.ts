@@ -205,7 +205,7 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
       trimmedModelId: trimmed,
       templateIds: [...templateIds],
       modelRegistry,
-      patch: { reasoning: true, provider: normalizedProvider },
+      patch: { reasoning: true },
     });
     if (resolved) {
       return resolved;
