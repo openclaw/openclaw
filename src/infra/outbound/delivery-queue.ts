@@ -387,6 +387,10 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
+
+  // Telegram "Bad Request" errors that are content/target-dependent and will never succeed on retry.
+  /message to be replied\b.*\bnot found/i,
+  /message is too long/i,
 ];
 
 export function isPermanentDeliveryError(error: string): boolean {
