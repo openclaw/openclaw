@@ -613,4 +613,50 @@ describe("Feishu inbound debounce regressions", () => {
     expect(recordSpy).toHaveBeenCalledWith("default:om_old");
     expect(recordSpy).not.toHaveBeenCalledWith("default:om_new");
   });
+
+  it("drops duplicate inbound envelopes with the same event_id", async () => {
+    const onMessage = await setupDebounceMonitor();
+
+    await onMessage({
+      header: { event_id: "evt_same" },
+      event: createTextEvent({ messageId: "om_evt_1", text: "first" }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(25);
+
+    await onMessage({
+      header: { event_id: "evt_same" },
+      event: createTextEvent({ messageId: "om_evt_2", text: "retry payload" }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+    const dispatched = getFirstDispatchedEvent();
+    expect(dispatched.message.message_id).toBe("om_evt_1");
+  });
+
+  it("accepts distinct inbound envelopes when event_id differs", async () => {
+    const onMessage = await setupDebounceMonitor();
+
+    await onMessage({
+      header: { event_id: "evt_1" },
+      event: createTextEvent({ messageId: "om_evt_1", text: "first" }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(25);
+
+    await onMessage({
+      header: { event_id: "evt_2" },
+      event: createTextEvent({ messageId: "om_evt_2", text: "second" }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(2);
+  });
 });

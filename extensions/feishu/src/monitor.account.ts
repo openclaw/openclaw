@@ -20,7 +20,7 @@ import {
 } from "./dedup.js";
 import { isMentionForwardRequest } from "./mention.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
-import { botNames, botOpenIds } from "./monitor.state.js";
+import { botNames, botOpenIds, isDuplicateFeishuInboundEventId } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
@@ -133,6 +133,34 @@ type RegisterEventHandlersContext = {
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
 };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function unwrapFeishuEventEnvelope<T>(payload: unknown): { event: T; eventId?: string } {
+  const record = asRecord(payload);
+  if (!record) {
+    return { event: payload as T };
+  }
+
+  const header = asRecord(record.header);
+  const headerEventId = header?.event_id;
+  const topEventId = record.event_id;
+  const eventIdRaw =
+    typeof headerEventId === "string"
+      ? headerEventId
+      : typeof topEventId === "string"
+        ? topEventId
+        : undefined;
+  const eventId = eventIdRaw?.trim() || undefined;
+
+  const eventPayload = asRecord(record.event);
+  if (eventPayload) {
+    return { event: eventPayload as T, eventId };
+  }
+  return { event: payload as T, eventId };
+}
 
 /**
  * Per-chat serial queue that ensures messages from the same chat are processed
@@ -379,7 +407,11 @@ function registerEventHandlers(
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
       const processMessage = async () => {
-        const event = data as unknown as FeishuMessageEvent;
+        const { event, eventId } = unwrapFeishuEventEnvelope<FeishuMessageEvent>(data);
+        if (eventId && isDuplicateFeishuInboundEventId(accountId, eventId)) {
+          log(`feishu[${accountId}]: skipping duplicate event_id ${eventId}`);
+          return;
+        }
         await inboundDebouncer.enqueue(event);
       };
       if (fireAndForget) {
@@ -399,7 +431,11 @@ function registerEventHandlers(
     },
     "im.chat.member.bot.added_v1": async (data) => {
       try {
-        const event = data as unknown as FeishuBotAddedEvent;
+        const { event, eventId } = unwrapFeishuEventEnvelope<FeishuBotAddedEvent>(data);
+        if (eventId && isDuplicateFeishuInboundEventId(accountId, eventId)) {
+          log(`feishu[${accountId}]: skipping duplicate event_id ${eventId}`);
+          return;
+        }
         log(`feishu[${accountId}]: bot added to chat ${event.chat_id}`);
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot added event: ${String(err)}`);
@@ -407,7 +443,11 @@ function registerEventHandlers(
     },
     "im.chat.member.bot.deleted_v1": async (data) => {
       try {
-        const event = data as unknown as { chat_id: string };
+        const { event, eventId } = unwrapFeishuEventEnvelope<{ chat_id: string }>(data);
+        if (eventId && isDuplicateFeishuInboundEventId(accountId, eventId)) {
+          log(`feishu[${accountId}]: skipping duplicate event_id ${eventId}`);
+          return;
+        }
         log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
@@ -415,7 +455,11 @@ function registerEventHandlers(
     },
     "im.message.reaction.created_v1": async (data) => {
       const processReaction = async () => {
-        const event = data as FeishuReactionCreatedEvent;
+        const { event, eventId } = unwrapFeishuEventEnvelope<FeishuReactionCreatedEvent>(data);
+        if (eventId && isDuplicateFeishuInboundEventId(accountId, eventId)) {
+          log(`feishu[${accountId}]: skipping duplicate event_id ${eventId}`);
+          return;
+        }
         const myBotId = botOpenIds.get(accountId);
         const syntheticEvent = await resolveReactionSyntheticEvent({
           cfg,
@@ -463,7 +507,11 @@ function registerEventHandlers(
     },
     "card.action.trigger": async (data: unknown) => {
       try {
-        const event = data as unknown as FeishuCardActionEvent;
+        const { event, eventId } = unwrapFeishuEventEnvelope<FeishuCardActionEvent>(data);
+        if (eventId && isDuplicateFeishuInboundEventId(accountId, eventId)) {
+          log(`feishu[${accountId}]: skipping duplicate event_id ${eventId}`);
+          return;
+        }
         const promise = handleFeishuCardAction({
           cfg,
           event,

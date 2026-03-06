@@ -1,6 +1,7 @@
 import * as http from "http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import {
+  createDedupeCache,
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
   type RuntimeEnv,
@@ -15,6 +16,8 @@ export const botNames = new Map<string, string>();
 
 export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const FEISHU_EVENT_DEDUP_TTL_MS = 60_000;
+const FEISHU_EVENT_DEDUP_MAX_SIZE = 8_192;
 
 type WebhookRateLimitDefaults = {
   windowMs: number;
@@ -104,9 +107,15 @@ const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker({
   logEvery: feishuWebhookAnomalyDefaults.logEvery,
 });
 
+const recentFeishuEventIds = createDedupeCache({
+  ttlMs: FEISHU_EVENT_DEDUP_TTL_MS,
+  maxSize: FEISHU_EVENT_DEDUP_MAX_SIZE,
+});
+
 export function clearFeishuWebhookRateLimitStateForTest(): void {
   feishuWebhookRateLimiter.clear();
   feishuWebhookAnomalyTracker.clear();
+  recentFeishuEventIds.clear();
 }
 
 export function getFeishuWebhookRateLimitStateSizeForTest(): number {
@@ -115,6 +124,18 @@ export function getFeishuWebhookRateLimitStateSizeForTest(): number {
 
 export function isWebhookRateLimitedForTest(key: string, nowMs: number): boolean {
   return feishuWebhookRateLimiter.isRateLimited(key, nowMs);
+}
+
+export function isDuplicateFeishuInboundEventId(
+  accountId: string,
+  eventId: string,
+  nowMs = Date.now(),
+): boolean {
+  const normalizedEventId = eventId.trim();
+  if (!normalizedEventId) {
+    return false;
+  }
+  return recentFeishuEventIds.check(`${accountId}:${normalizedEventId}`, nowMs);
 }
 
 export function recordWebhookStatus(
