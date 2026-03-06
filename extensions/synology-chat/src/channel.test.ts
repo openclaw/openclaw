@@ -45,8 +45,14 @@ vi.mock("zod", () => ({
 
 const { createSynologyChatPlugin } = await import("./channel.js");
 const { registerPluginHttpRoute } = await import("openclaw/plugin-sdk/synology-chat");
+const { sendMessage, sendFileUrl } = await import("./client.js");
+const { getSynologyRuntime } = await import("./runtime.js");
 
 describe("createSynologyChatPlugin", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("returns a plugin object with all required sections", () => {
     const plugin = createSynologyChatPlugin();
     expect(plugin.id).toBe("synology-chat");
@@ -313,6 +319,70 @@ describe("createSynologyChatPlugin", () => {
           to: "user1",
         }),
       ).rejects.toThrow("not configured");
+    });
+
+    it("sendText loads runtime config when cfg is missing", async () => {
+      const loadConfig = vi.fn().mockResolvedValue({
+        channels: {
+          "synology-chat": {
+            enabled: true,
+            token: "t",
+            incomingUrl: "https://nas/incoming",
+            allowInsecureSsl: false,
+          },
+        },
+      });
+      vi.mocked(getSynologyRuntime).mockReturnValue({
+        config: { loadConfig },
+        channel: {
+          reply: {
+            dispatchReplyWithBufferedBlockDispatcher: vi.fn().mockResolvedValue({ counts: {} }),
+          },
+        },
+      } as any);
+
+      const plugin = createSynologyChatPlugin();
+      await plugin.outbound.sendText({ text: "hello", to: "user1" });
+
+      expect(loadConfig).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(sendMessage)).toHaveBeenCalledWith(
+        "https://nas/incoming",
+        "hello",
+        "user1",
+        false,
+      );
+    });
+
+    it("sendMedia loads runtime config when cfg is missing", async () => {
+      const loadConfig = vi.fn().mockResolvedValue({
+        channels: {
+          "synology-chat": {
+            enabled: true,
+            token: "t",
+            incomingUrl: "https://nas/incoming",
+            allowInsecureSsl: true,
+          },
+        },
+      });
+      vi.mocked(getSynologyRuntime).mockReturnValue({
+        config: { loadConfig },
+        channel: {
+          reply: {
+            dispatchReplyWithBufferedBlockDispatcher: vi.fn().mockResolvedValue({ counts: {} }),
+          },
+        },
+      } as any);
+
+      const plugin = createSynologyChatPlugin();
+      await plugin.outbound.sendMedia({ mediaUrl: "https://example.com/img.png", to: "user1" });
+
+      expect(loadConfig).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(sendFileUrl)).toHaveBeenCalledWith(
+        "https://nas/incoming",
+        "https://example.com/img.png",
+        "user1",
+        true,
+      );
     });
   });
 

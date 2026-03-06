@@ -40,6 +40,15 @@ function waitUntilAbort(signal?: AbortSignal, onAbort?: () => void): Promise<voi
 }
 
 export function createSynologyChatPlugin() {
+  const resolveOutboundAccount = async (
+    cfg: any,
+    accountId?: string,
+  ): Promise<ResolvedSynologyChatAccount> => {
+    const rt = getSynologyRuntime();
+    const effectiveCfg = cfg ?? (await rt.config.loadConfig());
+    return resolveAccount(effectiveCfg ?? {}, accountId);
+  };
+
   return {
     id: CHANNEL_ID,
 
@@ -196,7 +205,7 @@ export function createSynologyChatPlugin() {
       textChunkLimit: 2000,
 
       sendText: async ({ to, text, accountId, cfg }: any) => {
-        const account: ResolvedSynologyChatAccount = resolveAccount(cfg ?? {}, accountId);
+        const account = await resolveOutboundAccount(cfg, accountId);
 
         if (!account.incomingUrl) {
           throw new Error("Synology Chat incoming URL not configured");
@@ -210,7 +219,7 @@ export function createSynologyChatPlugin() {
       },
 
       sendMedia: async ({ to, mediaUrl, accountId, cfg }: any) => {
-        const account: ResolvedSynologyChatAccount = resolveAccount(cfg ?? {}, accountId);
+        const account = await resolveOutboundAccount(cfg, accountId);
 
         if (!account.incomingUrl) {
           throw new Error("Synology Chat incoming URL not configured");
