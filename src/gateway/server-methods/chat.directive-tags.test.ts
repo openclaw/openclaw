@@ -393,6 +393,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.objectContaining({
         OriginatingChannel: "telegram",
         OriginatingTo: "telegram:6812765697",
+        ExplicitDeliverRoute: true,
         AccountId: "default",
         MessageThreadId: 42,
       }),
@@ -566,6 +567,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.objectContaining({
         OriginatingChannel: "webchat",
         OriginatingTo: undefined,
+        ExplicitDeliverRoute: false,
         AccountId: undefined,
       }),
     );
