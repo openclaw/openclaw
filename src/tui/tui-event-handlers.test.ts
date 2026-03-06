@@ -212,7 +212,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).toHaveBeenCalledWith("hello", "run-alias");
   });
 
-  it("accepts chat events when event session key is missing", () => {
+  it("ignores keyless chat events for unknown runs", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: {
         currentSessionKey: "agent:main:main",
@@ -226,8 +226,27 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: "hello" },
     } as ChatEvent);
 
-    expect(state.activeChatRunId).toBe("run-missing-session");
-    expect(chatLog.updateAssistant).toHaveBeenCalledWith("hello", "run-missing-session");
+    expect(state.activeChatRunId).toBeNull();
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+  });
+
+  it("accepts keyless chat events for known local runs", () => {
+    const { state, chatLog, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: {
+        currentSessionKey: "agent:main:main",
+        activeChatRunId: null,
+      },
+    });
+    noteLocalRunId("run-missing-session-local");
+
+    handleChatEvent({
+      runId: "run-missing-session-local",
+      state: "delta",
+      message: { content: "hello" },
+    } as ChatEvent);
+
+    expect(state.activeChatRunId).toBe("run-missing-session-local");
+    expect(chatLog.updateAssistant).toHaveBeenCalledWith("hello", "run-missing-session-local");
   });
 
   it("does not cross-match canonical session keys from different agents", () => {
@@ -311,6 +330,21 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     } as ChatEvent);
 
     expect(loadHistory).toHaveBeenCalled();
+  });
+
+  it("does not double-refresh history for non-local empty final output", () => {
+    const { state, loadHistory, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-nonlocal-empty-final",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [] },
+    } as ChatEvent);
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
   it("ignores lifecycle updates for non-active runs in the same session", () => {
