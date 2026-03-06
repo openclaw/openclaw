@@ -120,6 +120,9 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly spawnCommandCache: SpawnCommandCache = {};
   private readonly spawnCommandOptions: SpawnCommandOptions;
   private readonly loggedSpawnResolutions = new Set<string>();
+  /** Child processes currently running a turn, keyed by session handle name.
+   *  Used to kill zombies when the session TTL expires during an active turn. */
+  private readonly activeChildren = new Map<string, ReturnType<typeof spawnWithResolvedCommand>>();
 
   constructor(
     private readonly config: ResolvedAcpxPluginConfig,
@@ -297,6 +300,8 @@ export class AcpxRuntime implements AcpRuntime {
       },
       this.spawnCommandOptions,
     );
+    // Track the child so close() can kill it when the session TTL expires.
+    this.activeChildren.set(state.name, child);
     child.stdin.on("error", () => {
       // Ignore EPIPE when the child exits before stdin flush completes.
     });
@@ -366,6 +371,8 @@ export class AcpxRuntime implements AcpRuntime {
       }
     } finally {
       lines.close();
+      // Deregister the child process — it has exited or the generator was abandoned.
+      this.activeChildren.delete(state.name);
       if (input.signal) {
         input.signal.removeEventListener("abort", onAbort);
       }
@@ -552,6 +559,35 @@ export class AcpxRuntime implements AcpRuntime {
 
   async close(input: { handle: AcpRuntimeHandle; reason: string }): Promise<void> {
     const state = this.resolveHandleState(input.handle);
+
+    // Kill any child process that is still running a turn for this session so
+    // it does not linger as a zombie after the TTL expires.  Send SIGTERM first
+    // and follow up with SIGKILL after a short grace period.
+    const activeChild = this.activeChildren.get(state.name);
+    if (activeChild && activeChild.exitCode === null && activeChild.signalCode === null) {
+      this.logger?.debug?.(
+        `acpx close (reason=${input.reason}): sending SIGTERM to child pid=${activeChild.pid} for session ${state.name}`,
+      );
+      try {
+        activeChild.kill("SIGTERM");
+      } catch {
+        // Ignore kill races when the child exits concurrently.
+      }
+      // Schedule SIGKILL in case SIGTERM is not honoured within 2 seconds.
+      const sigkillTimer = setTimeout(() => {
+        if (activeChild.exitCode !== null || activeChild.signalCode !== null) {
+          return;
+        }
+        try {
+          activeChild.kill("SIGKILL");
+        } catch {
+          // Ignore kill races.
+        }
+      }, 2_000);
+      sigkillTimer.unref?.();
+      this.activeChildren.delete(state.name);
+    }
+
     await this.runControlCommand({
       args: this.buildControlArgs({
         cwd: state.cwd,
