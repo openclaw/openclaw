@@ -172,7 +172,9 @@ export function registerControlUiAndPairingSuite(): void {
       displayName: params.displayName,
       platform: params.platform,
     });
-    await approveDevicePairing(seeded.request.requestId);
+    if (seeded.status === "pending") {
+      await approveDevicePairing(seeded.request.requestId);
+    }
     return { identityPath, identity: { deviceId: identity.deviceId } };
   };
 
@@ -726,7 +728,9 @@ export function registerControlUiAndPairingSuite(): void {
       displayName: "legacy-test",
       platform: "test",
     });
-    await approveDevicePairing(pending.request.requestId);
+    if (pending.status === "pending") {
+      await approveDevicePairing(pending.request.requestId);
+    }
 
     await stripPairedMetadataRolesAndScopes(deviceId);
 

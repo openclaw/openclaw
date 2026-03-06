@@ -272,11 +272,10 @@ export async function getPairedDevice(
 export async function requestDevicePairing(
   req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
   baseDir?: string,
-): Promise<{
-  status: "pending";
-  request: DevicePairingPendingRequest;
-  created: boolean;
-}> {
+): Promise<
+  | { status: "pending"; request: DevicePairingPendingRequest; created: boolean }
+  | { status: "approved"; request: DevicePairingPendingRequest; device: PairedDevice }
+> {
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const deviceId = normalizeDeviceId(req.deviceId);
@@ -284,14 +283,27 @@ export async function requestDevicePairing(
       throw new Error("deviceId required");
     }
     const isRepair = Boolean(state.pairedByDeviceId[deviceId]);
-    const existing = Object.values(state.pendingById).find(
+    const existingPaired = state.pairedByDeviceId[deviceId];
+    const existingPending = Object.values(state.pendingById).find(
       (pending) => pending.deviceId === deviceId,
     );
-    if (existing) {
-      const merged = mergePendingDevicePairingRequest(existing, req, isRepair);
-      state.pendingById[existing.requestId] = merged;
+    if (existingPending) {
+      const merged = mergePendingDevicePairingRequest(existingPending, req, isRepair);
+      state.pendingById[existingPending.requestId] = merged;
       await persistState(state, baseDir);
-      return { status: "pending" as const, request: merged, created: false };
+      const request = merged;
+      if (
+        request.isRepair &&
+        existingPaired &&
+        existingPaired.publicKey === request.publicKey
+      ) {
+        const approved = applyDevicePairingApproval(state, request);
+        delete state.pendingById[request.requestId];
+        state.pairedByDeviceId[approved.deviceId] = approved;
+        await persistState(state, baseDir);
+        return { status: "approved" as const, request, device: approved };
+      }
+      return { status: "pending" as const, request, created: false };
     }
 
     const request: DevicePairingPendingRequest = {
@@ -313,8 +325,74 @@ export async function requestDevicePairing(
     };
     state.pendingById[request.requestId] = request;
     await persistState(state, baseDir);
+    if (
+      request.isRepair &&
+      existingPaired &&
+      existingPaired.publicKey === request.publicKey
+    ) {
+      const approved = applyDevicePairingApproval(state, request);
+      delete state.pendingById[request.requestId];
+      state.pairedByDeviceId[approved.deviceId] = approved;
+      await persistState(state, baseDir);
+      return { status: "approved" as const, request, device: approved };
+    }
     return { status: "pending" as const, request, created: true };
   });
+}
+
+/** Build approved device from a pending request and current state (used by approve and by repair auto-approve). */
+function applyDevicePairingApproval(
+  state: DevicePairingStateFile,
+  pending: DevicePairingPendingRequest,
+): PairedDevice {
+  const now = Date.now();
+  const existing = state.pairedByDeviceId[pending.deviceId];
+  const roles = mergeRoles(existing?.roles, existing?.role, pending.roles, pending.role);
+  const approvedScopes = mergeScopes(
+    existing?.approvedScopes ?? existing?.scopes,
+    pending.scopes,
+  );
+  const tokens = existing?.tokens ? { ...existing.tokens } : {};
+  const roleForToken = normalizeRole(pending.role);
+  if (roleForToken) {
+    const existingToken = tokens[roleForToken];
+    const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
+    const nextScopes =
+      requestedScopes.length > 0
+        ? requestedScopes
+        : normalizeDeviceAuthScopes(
+            existingToken?.scopes ??
+              approvedScopes ??
+              existing?.approvedScopes ??
+              existing?.scopes,
+          );
+    tokens[roleForToken] = {
+      token: newToken(),
+      role: roleForToken,
+      scopes: nextScopes,
+      createdAtMs: existingToken?.createdAtMs ?? now,
+      rotatedAtMs: existingToken ? now : undefined,
+      revokedAtMs: undefined,
+      lastUsedAtMs: existingToken?.lastUsedAtMs,
+    };
+  }
+  return {
+    deviceId: pending.deviceId,
+    publicKey: pending.publicKey,
+    displayName: pending.displayName,
+    platform: pending.platform,
+    deviceFamily: pending.deviceFamily,
+    clientId: pending.clientId,
+    clientMode: pending.clientMode,
+    role: pending.role,
+    roles,
+    scopes: approvedScopes,
+    approvedScopes,
+    remoteIp: pending.remoteIp,
+    tokens,
+    createdAtMs: existing?.createdAtMs ?? now,
+    approvedAtMs: now,
+  };
 }
 
 export async function approveDevicePairing(
@@ -327,55 +405,7 @@ export async function approveDevicePairing(
     if (!pending) {
       return null;
     }
-    const now = Date.now();
-    const existing = state.pairedByDeviceId[pending.deviceId];
-    const roles = mergeRoles(existing?.roles, existing?.role, pending.roles, pending.role);
-    const approvedScopes = mergeScopes(
-      existing?.approvedScopes ?? existing?.scopes,
-      pending.scopes,
-    );
-    const tokens = existing?.tokens ? { ...existing.tokens } : {};
-    const roleForToken = normalizeRole(pending.role);
-    if (roleForToken) {
-      const existingToken = tokens[roleForToken];
-      const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
-      const nextScopes =
-        requestedScopes.length > 0
-          ? requestedScopes
-          : normalizeDeviceAuthScopes(
-              existingToken?.scopes ??
-                approvedScopes ??
-                existing?.approvedScopes ??
-                existing?.scopes,
-            );
-      const now = Date.now();
-      tokens[roleForToken] = {
-        token: newToken(),
-        role: roleForToken,
-        scopes: nextScopes,
-        createdAtMs: existingToken?.createdAtMs ?? now,
-        rotatedAtMs: existingToken ? now : undefined,
-        revokedAtMs: undefined,
-        lastUsedAtMs: existingToken?.lastUsedAtMs,
-      };
-    }
-    const device: PairedDevice = {
-      deviceId: pending.deviceId,
-      publicKey: pending.publicKey,
-      displayName: pending.displayName,
-      platform: pending.platform,
-      deviceFamily: pending.deviceFamily,
-      clientId: pending.clientId,
-      clientMode: pending.clientMode,
-      role: pending.role,
-      roles,
-      scopes: approvedScopes,
-      approvedScopes,
-      remoteIp: pending.remoteIp,
-      tokens,
-      createdAtMs: existing?.createdAtMs ?? now,
-      approvedAtMs: now,
-    };
+    const device = applyDevicePairingApproval(state, pending);
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, baseDir);

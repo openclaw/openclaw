@@ -94,7 +94,9 @@ beforeAll(async () => {
     scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
     silent: false,
   });
-  await approveDevicePairing(pending.request.requestId);
+  if (pending.status === "pending") {
+    await approveDevicePairing(pending.request.requestId);
+  }
   server = await startGatewayServer(gatewayPort);
 });
 

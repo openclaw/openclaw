@@ -13,7 +13,7 @@ import {
 } from "./device-pairing.js";
 
 async function setupPairedOperatorDevice(baseDir: string, scopes: string[]) {
-  const request = await requestDevicePairing(
+  const result = await requestDevicePairing(
     {
       deviceId: "device-1",
       publicKey: "public-key-1",
@@ -22,7 +22,10 @@ async function setupPairedOperatorDevice(baseDir: string, scopes: string[]) {
     },
     baseDir,
   );
-  await approveDevicePairing(request.request.requestId, baseDir);
+  if (result.status === "approved") {
+    return;
+  }
+  await approveDevicePairing(result.request.requestId, baseDir);
 }
 
 async function setupOperatorToken(scopes: string[]) {
@@ -69,9 +72,13 @@ describe("device pairing tokens", () => {
       baseDir,
     );
 
-    expect(first.created).toBe(true);
-    expect(second.created).toBe(false);
-    expect(second.request.requestId).toBe(first.request.requestId);
+    expect(first.status).toBe("pending");
+    expect(second.status).toBe("pending");
+    if (first.status === "pending" && second.status === "pending") {
+      expect(first.created).toBe(true);
+      expect(second.created).toBe(false);
+      expect(second.request.requestId).toBe(first.request.requestId);
+    }
   });
 
   test("merges pending roles/scopes for the same device before approval", async () => {
@@ -95,6 +102,9 @@ describe("device pairing tokens", () => {
       baseDir,
     );
 
+    expect(first.status).toBe("pending");
+    expect(second.status).toBe("pending");
+    if (first.status !== "pending" || second.status !== "pending") return;
     expect(second.created).toBe(false);
     expect(second.request.requestId).toBe(first.request.requestId);
     expect(second.request.roles).toEqual(["node", "operator"]);
@@ -152,12 +162,40 @@ describe("device pairing tokens", () => {
       },
       baseDir,
     );
+    if (repair.status === "approved") {
+      expect(repair.device.scopes).toEqual(["operator.admin"]);
+      expect(repair.device.approvedScopes).toEqual(["operator.admin"]);
+      expect(repair.device.tokens?.operator?.scopes).toEqual(["operator.admin"]);
+      return;
+    }
     await approveDevicePairing(repair.request.requestId, baseDir);
 
     const paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.scopes).toEqual(["operator.admin"]);
     expect(paired?.approvedScopes).toEqual(["operator.admin"]);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.admin"]);
+  });
+
+  test("auto-approves repair when deviceId and publicKey match existing paired device", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+
+    const repair = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        platform: "macOS 26.3.1",
+        role: "operator",
+      },
+      baseDir,
+    );
+    expect(repair.status).toBe("approved");
+    if (repair.status !== "approved") return;
+    expect(repair.device.deviceId).toBe("device-1");
+    expect(repair.device.publicKey).toBe("public-key-1");
+    expect(repair.device.platform).toBe("macOS 26.3.1");
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.platform).toBe("macOS 26.3.1");
   });
 
   test("rejects scope escalation when rotating a token and leaves state unchanged", async () => {

@@ -822,6 +822,22 @@ export function attachGatewayWsMessageHandler(params: {
               silent: allowSilentLocalPairing,
             });
             const context = buildRequestContext();
+            if (pairing.status === "approved") {
+              logGateway.info(
+                `device pairing repair auto-approved device=${pairing.device.deviceId} role=${pairing.device.role ?? "unknown"}`,
+              );
+              context.broadcast(
+                "device.pair.resolved",
+                {
+                  requestId: pairing.request.requestId,
+                  deviceId: pairing.device.deviceId,
+                  decision: "approved",
+                  ts: Date.now(),
+                },
+                { dropIfSlow: true },
+              );
+              return true;
+            }
             if (pairing.request.silent === true) {
               const approved = await approveDevicePairing(pairing.request.requestId);
               if (approved) {
