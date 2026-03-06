@@ -18,6 +18,10 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import {
+  loadVoiceWakeRoutingConfig,
+  resolveVoiceWakeRouteByTrigger,
+} from "../../infra/voicewake-routing.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -211,6 +215,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       label?: string;
       spawnedBy?: string;
       inputProvenance?: InputProvenance;
+      voiceWakeTrigger?: string;
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const cfg = loadConfig();
@@ -272,21 +277,19 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
+    const knownAgents = listAgentIds(cfg);
     const agentIdRaw = typeof request.agentId === "string" ? request.agentId.trim() : "";
-    const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
-    if (agentId) {
-      const knownAgents = listAgentIds(cfg);
-      if (!knownAgents.includes(agentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid agent params: unknown agent id "${request.agentId}"`,
-          ),
-        );
-        return;
-      }
+    let effectiveAgentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
+    if (effectiveAgentId && !knownAgents.includes(effectiveAgentId)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent params: unknown agent id "${request.agentId}"`,
+        ),
+      );
+      return;
     }
 
     const requestedSessionKeyRaw =
@@ -311,11 +314,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       requestedSessionKeyRaw ??
       resolveExplicitAgentSessionKey({
         cfg,
-        agentId,
+        agentId: effectiveAgentId,
       });
-    if (agentId && requestedSessionKeyRaw) {
+    if (effectiveAgentId && requestedSessionKeyRaw) {
       const sessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
-      if (sessionAgentId !== agentId) {
+      if (sessionAgentId !== effectiveAgentId) {
         respond(
           false,
           undefined,
@@ -325,6 +328,50 @@ export const agentHandlers: GatewayRequestHandlers = {
           ),
         );
         return;
+      }
+    }
+
+    const voiceWakeTrigger =
+      typeof request.voiceWakeTrigger === "string" ? request.voiceWakeTrigger.trim() : "";
+    const canAutoRouteVoiceWake = !effectiveAgentId && !request.replyTo && !request.to;
+    if (voiceWakeTrigger && canAutoRouteVoiceWake) {
+      try {
+        const routingConfig = await loadVoiceWakeRoutingConfig();
+        const route = resolveVoiceWakeRouteByTrigger({
+          trigger: voiceWakeTrigger,
+          config: routingConfig,
+        });
+        if ("agentId" in route) {
+          if (knownAgents.includes(route.agentId)) {
+            effectiveAgentId = route.agentId;
+            requestedSessionKey = resolveExplicitAgentSessionKey({
+              cfg,
+              agentId: effectiveAgentId,
+            });
+          } else {
+            context.logGateway.warn(
+              `voicewake routing ignored unknown agentId="${route.agentId}" trigger="${voiceWakeTrigger}"`,
+            );
+          }
+        } else if ("sessionKey" in route) {
+          if (classifySessionKeyShape(route.sessionKey) !== "malformed_agent") {
+            const routedAgentId = resolveAgentIdFromSessionKey(route.sessionKey);
+            if (knownAgents.includes(routedAgentId)) {
+              requestedSessionKey = route.sessionKey;
+              effectiveAgentId = routedAgentId;
+            } else {
+              context.logGateway.warn(
+                `voicewake routing ignored unknown session agent="${routedAgentId}" sessionKey="${route.sessionKey}" trigger="${voiceWakeTrigger}"`,
+              );
+            }
+          } else {
+            context.logGateway.warn(
+              `voicewake routing ignored malformed sessionKey="${route.sessionKey}" trigger="${voiceWakeTrigger}"`,
+            );
+          }
+        }
+      } catch (err) {
+        context.logGateway.warn(`voicewake routing load failed: ${formatForLog(err)}`);
       }
     }
     let resolvedSessionId = request.sessionId?.trim() || undefined;
