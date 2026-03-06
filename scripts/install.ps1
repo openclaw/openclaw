@@ -270,25 +270,25 @@ function Add-ToPath {
 # Main
 function Main {
     Write-Banner
-    
+
     Write-Host "Windows detected" -Level success
-    
+
     # Check and handle execution policy FIRST, before any npm calls
     if (!(Ensure-ExecutionPolicy)) {
         Write-Host ""
         Write-Host "Installation cannot continue due to execution policy restrictions" -Level error
-        exit 1
+        throw "Execution policy restrictions prevent installation"
     }
-    
+
     if (!(Ensure-Node)) {
-        exit 1
+        throw "Node.js 22+ is required but could not be installed"
     }
-    
+
     if ($InstallMethod -eq "git") {
         if (!(Ensure-Git)) {
-            exit 1
+            throw "Git is required but could not be installed"
         }
-        
+
         if ($DryRun) {
             Write-Host "[DRY RUN] Would install OpenClaw from git to $GitDir" -Level info
         } else {
@@ -299,16 +299,16 @@ function Main {
         if (!(Ensure-Git)) {
             Write-Host "Git is required for npm installs. Please install Git and try again." -Level warn
         }
-        
+
         if ($DryRun) {
             Write-Host "[DRY RUN] Would install OpenClaw via npm (tag: $Tag)" -Level info
         } else {
             if (!(Install-OpenClawNpm -Version $Tag)) {
-                exit 1
+                throw "npm install failed"
             }
         }
     }
-    
+
     # Try to add npm global bin to PATH
     try {
         $npmPrefix = npm config get prefix 2>$null
@@ -316,14 +316,36 @@ function Main {
             Add-ToPath -Path "$npmPrefix"
         }
     } catch { }
-    
+
     if (!$NoOnboard -and !$DryRun) {
         Write-Host ""
         Write-Host "Run 'openclaw onboard' to complete setup" -Level info
     }
-    
+
     Write-Host ""
     Write-Host "🦞 OpenClaw installed successfully!" -Level success
 }
 
-Main
+# Detect piped execution (iwr ... | iex) and pause before exit so
+# the user can read any errors. Without this, the PowerShell window
+# closes immediately on failure and the user never sees the message.
+$isPiped = $MyInvocation.CommandOrigin -eq "Internal" -or
+           [Console]::IsInputRedirected
+
+try {
+    Main
+} catch {
+    Write-Host ""
+    Write-Host "Installation failed: $_" -Level error
+    if ($isPiped) {
+        Write-Host ""
+        Write-Host "Press Enter to close..." -Level info
+        [void][Console]::ReadLine()
+    }
+    exit 1
+}
+if ($isPiped) {
+    Write-Host ""
+    Write-Host "Press Enter to close..." -Level info
+    [void][Console]::ReadLine()
+}
