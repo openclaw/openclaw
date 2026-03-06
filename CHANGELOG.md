@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord/channel-edit appliedTags: pass `appliedTags` through the `channel-edit` action payload and the `editChannelDiscord` REST call as `applied_tags` so forum thread tags can be updated via the message tool (e.g. toggling 🔴 Open → 🟢 Done). (#36736)
 - OpenAI Codex OAuth/login hardening: fail OAuth completion early when the returned token is missing `api.responses.write`, and allow `openclaw models auth login --provider openai-codex` to use the built-in OAuth path even when no provider plugins are installed. (#36660) Thanks @driesvints.
 - Gateway/remote WS break-glass hostname support: honor `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` for `ws://` hostname URLs (not only private IP literals) across onboarding validation and runtime gateway connection checks, while still rejecting public IP literals and non-unicast IPv6 endpoints. (#36930) Thanks @manju-rn.
 - Routing/binding lookup scalability: pre-index route bindings by channel/account and avoid full binding-list rescans on channel-account cache rollover, preventing multi-second `resolveAgentRoute` stalls in large binding configurations. (#36915) Thanks @songchenghao.
