@@ -211,7 +211,7 @@ If your custom provider ID contains a period (e.g., `llama.cpp`), you must use b
 
 ```bash
 # Correct: Bracket notation protects the period
-/config set 'models.providers["llama.cpp"].baseUrl'=http://127.0.0.1:8080
+/config set models.providers["llama.cpp"].baseUrl=http://127.0.0.1:8080
 
 # Incorrect: The path parser will split this into nested objects
 /config set models.providers.llama.cpp.baseUrl http://127.0.0.1:8080
