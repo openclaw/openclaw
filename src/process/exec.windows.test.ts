@@ -5,6 +5,9 @@ const spawnMock = vi.hoisted(() => vi.fn());
 const execFileMock = vi.hoisted(() => vi.fn());
 const existsSyncMock = vi.hoisted(() => vi.fn());
 
+// Ensure npm argv resolution path exists for Windows tests (portable across hosts).
+existsSyncMock.mockReturnValue(true);
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -83,8 +86,6 @@ describe("windows command wrapper behavior", () => {
   it("quotes args and enables windowsVerbatimArguments for node + npm-cli.js when argv contains spaces", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const comspec = process.env.ComSpec ?? "cmd.exe";
-
-    existsSyncMock.mockReturnValue(true);
 
     spawnMock.mockImplementation(
       (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
