@@ -22,6 +22,8 @@ import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { resolveUserPath, shortenHomeInString, shortenHomePath } from "../utils.js";
+import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
+import { getPluginsCommandSecretTargetIds } from "./command-secret-targets.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import {
@@ -377,8 +379,18 @@ export function registerPluginsCli(program: Command) {
     .option("--json", "Print JSON")
     .option("--enabled", "Only show enabled plugins", false)
     .option("--verbose", "Show detailed entries", false)
-    .action((opts: PluginsListOptions) => {
-      const report = buildPluginStatusReport();
+    .action(async (opts: PluginsListOptions) => {
+      const sourceConfig = loadConfig();
+      const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+        config: sourceConfig,
+        commandName: "plugins list",
+        targetIds: getPluginsCommandSecretTargetIds(),
+        mode: "summary",
+      });
+      for (const entry of diagnostics) {
+        defaultRuntime.log(`[secrets] ${entry}`);
+      }
+      const report = buildPluginStatusReport({ config: resolvedConfig });
       const list = opts.enabled
         ? report.plugins.filter((p) => p.status === "loaded")
         : report.plugins;

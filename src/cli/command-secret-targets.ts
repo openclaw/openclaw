@@ -29,6 +29,7 @@ const COMMAND_SECRET_TARGETS = {
     "agents.defaults.memorySearch.remote.",
     "agents.list[].memorySearch.remote.",
   ]),
+  plugins: idsByPrefix(["channels."]),
 } as const;
 
 function toTargetIdSet(values: readonly string[]): Set<string> {
@@ -57,4 +58,8 @@ export function getAgentRuntimeCommandSecretTargetIds(): Set<string> {
 
 export function getStatusCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(COMMAND_SECRET_TARGETS.status);
+}
+
+export function getPluginsCommandSecretTargetIds(): Set<string> {
+  return toTargetIdSet(COMMAND_SECRET_TARGETS.plugins);
 }
