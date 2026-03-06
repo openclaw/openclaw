@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **OpenClawDreams** — A reflection and dream cycle engine that synthesizes agent-operator interactions into encrypted long-term memory using AES-256. Gives OpenClaw agents a background "dream" state for higher-order insight and continuity.
+  npm: `openclawdreams`
+  repo: `https://github.com/RogueCtrl/OpenClawDreams`
+  install: `openclaw plugins install openclawdreams`
