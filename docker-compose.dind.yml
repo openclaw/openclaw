@@ -1,0 +1,60 @@
+## Docker-in-Docker (DinD) sandbox overlay for Docker Desktop / macOS / Windows.
+##
+## Use this when the Gateway runs inside a container and the default
+## docker.sock mount causes "Mounts denied" errors (Docker Desktop
+## virtualizes host paths, so bind-mount paths inside the Gateway
+## container don't exist on the host filesystem).
+##
+## Usage:
+##   docker compose -f docker-compose.yml -f docker-compose.dind.yml up -d
+##
+## How it works:
+##   A dedicated Docker daemon (DinD) runs as a sidecar. The Gateway talks
+##   to it via DOCKER_HOST=tcp://dind:2375. Both share the openclaw-state
+##   volume so sandbox bind-mount paths resolve correctly inside the DinD.
+##
+## Prerequisites:
+##   - Gateway image must include Docker CLI (docker-ce-cli).
+##     Build with: --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1
+##     Or use docker-setup.sh with OPENCLAW_SANDBOX=1.
+##   - The sandbox image (openclaw-sandbox:bookworm-slim) must be built
+##     inside the DinD daemon. After first start, run:
+##       DOCKER_HOST=tcp://localhost:2375 scripts/sandbox-setup.sh
+##     Or use a startup script that builds it automatically.
+##   - Set agents.defaults.sandbox.mode in openclaw.json to enable sandbox.
+##   - Set agents.defaults.sandbox.docker.network to "bridge" (DinD default).
+
+services:
+  dind:
+    image: docker:dind
+    privileged: true
+    restart: unless-stopped
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+      - dind-storage:/var/lib/docker
+    networks:
+      - openclaw-dind
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  openclaw-gateway:
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+    depends_on:
+      dind:
+        condition: service_healthy
+    networks:
+      - openclaw-dind
+
+volumes:
+  dind-storage:
+
+networks:
+  openclaw-dind:
+    driver: bridge
