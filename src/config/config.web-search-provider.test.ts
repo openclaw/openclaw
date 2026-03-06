@@ -48,6 +48,32 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts ark provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "ark",
+        providerConfig: {
+          apiKey: "test-ark-key",
+          baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+          model: "doubao-seed-1-6-250615",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts ark provider with no extra config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "ark",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("web search provider auto-detection", () => {
@@ -63,6 +89,9 @@ describe("web search provider auto-detection", () => {
     delete process.env.XAI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
+    delete process.env.ARK_API_KEY;
+    delete process.env.VOLCENGINE_API_KEY;
+    delete process.env.VOLCANO_ENGINE_API_KEY;
   });
 
   afterEach(() => {
@@ -129,5 +158,35 @@ describe("web search provider auto-detection", () => {
         typeof resolveSearchProvider
       >[0]),
     ).toBe("gemini");
+  });
+
+  it("auto-detects ark when only ARK_API_KEY is set", () => {
+    process.env.ARK_API_KEY = "test-ark-key";
+    expect(resolveSearchProvider({})).toBe("ark");
+  });
+
+  it("auto-detects ark when only VOLCENGINE_API_KEY is set", () => {
+    process.env.VOLCENGINE_API_KEY = "test-volc-key";
+    expect(resolveSearchProvider({})).toBe("ark");
+  });
+
+  it("auto-detects ark when only VOLCANO_ENGINE_API_KEY is set", () => {
+    process.env.VOLCANO_ENGINE_API_KEY = "test-volcano-key";
+    expect(resolveSearchProvider({})).toBe("ark");
+  });
+
+  it("explicit ark provider always wins", () => {
+    process.env.BRAVE_API_KEY = "test-brave-key";
+    expect(
+      resolveSearchProvider({ provider: "ark" } as unknown as Parameters<
+        typeof resolveSearchProvider
+      >[0]),
+    ).toBe("ark");
+  });
+
+  it("follows priority order — brave wins over ark", () => {
+    process.env.BRAVE_API_KEY = "test-brave-key";
+    process.env.ARK_API_KEY = "test-ark-key";
+    expect(resolveSearchProvider({})).toBe("brave");
   });
 });
