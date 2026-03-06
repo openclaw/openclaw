@@ -717,6 +717,12 @@ async function readDoc(client: Lark.Client, docToken: string) {
   if (contentRes.code !== undefined && contentRes.code !== 0) {
     throw new Error(contentRes.msg);
   }
+  if (infoRes.code !== undefined && infoRes.code !== 0) {
+    throw new Error(infoRes.msg);
+  }
+  if (blocksRes.code !== undefined && blocksRes.code !== 0) {
+    throw new Error(blocksRes.msg);
+  }
 
   const blocks = blocksRes.data?.items ?? [];
   const blockCounts: Record<string, number> = {};
