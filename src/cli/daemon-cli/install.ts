@@ -48,8 +48,28 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    fail(`Gateway service check failed: ${String(err)}`);
-    return;
+    // Service check failed — likely because service doesn't exist yet (expected state).
+    // Distinguish between "systemctl unavailable" (blocking) and "service not found" (OK).
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const normalized = errMsg.toLowerCase();
+    
+    // These patterns indicate systemctl itself is unavailable → block installation
+    const systemctlUnavailable =
+      normalized.includes("systemctl not found") ||
+      normalized.includes("spawn systemctl enoent") ||
+      normalized.includes("spawn systemctl eacces");
+    
+    if (systemctlUnavailable) {
+      fail(`Gateway service check failed: ${errMsg}`);
+      return;
+    }
+    
+    // All other errors (e.g., "not-found", "could not be found") are expected
+    // when the service doesn't exist yet → proceed with installation.
+    // Log the error for debugging but don't block.
+    if (!json) {
+      defaultRuntime.log(`Service not found (expected for fresh install): ${errMsg}`);
+    }
   }
   if (loaded) {
     if (!opts.force) {

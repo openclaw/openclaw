@@ -254,4 +254,37 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
     expect(actionState.warnings.some((warning) => warning.includes("Auto-generated"))).toBe(true);
   });
+
+  it("proceeds with installation when service check fails due to service not found", async () => {
+    // Simulate fresh install: service.isLoaded() throws "not-found" error
+    service.isLoaded.mockRejectedValue(
+      new Error("systemctl is-enabled unavailable: not-found"),
+    );
+    randomTokenMock.mockReturnValue("minted-token");
+
+    await runDaemonInstall({ json: true });
+
+    // Should NOT fail
+    expect(actionState.failed).toEqual([]);
+    // Should proceed with installation
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    // Should log the service-not-found message (but not block)
+    expect(runtimeLogs).toEqual([]);  // json mode suppresses logs
+  });
+
+  it("blocks installation when systemctl itself is unavailable", async () => {
+    // Simulate systemctl not installed
+    service.isLoaded.mockRejectedValue(
+      new Error("spawn systemctl ENOENT"),
+    );
+
+    await runDaemonInstall({ json: false });
+
+    // Should fail
+    expect(actionState.failed).toHaveLength(1);
+    expect(actionState.failed[0]?.message).toContain("Gateway service check failed");
+    expect(actionState.failed[0]?.message).toContain("spawn systemctl ENOENT");
+    // Should NOT proceed with installation
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
 });
