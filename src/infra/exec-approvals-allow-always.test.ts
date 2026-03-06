@@ -178,6 +178,44 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(third.allowlistSatisfied).toBe(false);
   });
 
+  it("does not treat inline shell commands as persisted script paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const scriptsDir = path.join(dir, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const script = path.join(scriptsDir, "save_crystal.sh");
+    fs.writeFileSync(script, "echo ok\n");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "bash scripts/save_crystal.sh",
+      secondCommand: "bash -lc 'scripts/save_crystal.sh'",
+      env,
+      persistedPattern: script,
+    });
+  });
+
+  it("does not treat stdin shell mode as a persisted script path", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const scriptsDir = path.join(dir, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const script = path.join(scriptsDir, "save_crystal.sh");
+    fs.writeFileSync(script, "echo ok\n");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "bash scripts/save_crystal.sh",
+      secondCommand: "bash -s scripts/save_crystal.sh",
+      env,
+      persistedPattern: script,
+    });
+  });
+
   it("does not persist broad shell binaries when no inner command can be derived", () => {
     const patterns = resolveAllowAlwaysPatterns({
       segments: [

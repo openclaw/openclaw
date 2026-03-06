@@ -223,10 +223,14 @@ function evaluateSegments(
         ? { ...segment.resolution, resolvedPath: candidatePath }
         : segment.resolution;
     const executableMatch = matchAllowlist(params.allowlist, candidateResolution);
-    const shellScriptCandidatePath = resolveShellWrapperScriptCandidatePath({
-      segment,
-      cwd: params.cwd,
-    });
+    const inlineCommand = extractShellWrapperInlineCommand(segment.argv);
+    const shellScriptCandidatePath =
+      inlineCommand === null
+        ? resolveShellWrapperScriptCandidatePath({
+            segment,
+            cwd: params.cwd,
+          })
+        : undefined;
     const shellScriptMatch = shellScriptCandidatePath
       ? matchAllowlist(params.allowlist, {
           rawExecutable: shellScriptCandidatePath,
@@ -376,6 +380,12 @@ function resolveShellWrapperScriptCandidatePath(params: {
       break;
     }
     if (token === "-c" || token === "--command") {
+      return undefined;
+    }
+    if (/^-[^-]*c[^-]*$/i.test(token)) {
+      return undefined;
+    }
+    if (token === "-s" || /^-[^-]*s[^-]*$/i.test(token)) {
       return undefined;
     }
     if (SHELL_WRAPPER_OPTIONS_WITH_VALUE.has(token)) {
