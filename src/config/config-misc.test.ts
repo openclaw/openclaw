@@ -339,8 +339,8 @@ describe("config paths", () => {
     setConfigValueAtPath(root, parsed.path, "http://localhost:8080");
     expect(getConfigValueAtPath(root, parsed.path)).toBe("http://localhost:8080");
     const inner = (root as Record<string, Record<string, Record<string, unknown>>>).models
-      ?.providers?.["llama.cpp"];
-    expect(inner?.baseUrl).toBe("http://localhost:8080");
+      ?.providers?.["llama.cpp"] as Record<string, unknown> | undefined;
+    expect(inner?.["baseUrl"]).toBe("http://localhost:8080");
     expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
     expect(getConfigValueAtPath(root, parsed.path)).toBeUndefined();
   });
