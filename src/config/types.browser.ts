@@ -7,6 +7,8 @@ export type BrowserProfileConfig = {
   driver?: "openclaw" | "extension";
   /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
   attachOnly?: boolean;
+  /** Start Chrome headless for this profile (overrides global browser.headless). Default: false */
+  headless?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
 };

@@ -153,6 +153,30 @@ describe("browser config", () => {
     expect(remote?.attachOnly).toBe(true);
   });
 
+  it("inherits headless from global browser config when profile override is not set", () => {
+    const resolved = resolveBrowserConfig({
+      headless: true,
+      profiles: {
+        localhost: { cdpPort: 9222, color: "#0066CC" },
+      },
+    });
+
+    const localhost = resolveProfile(resolved, "localhost");
+    expect(localhost?.headless).toBe(true);
+  });
+
+  it("allows profile headless to override global browser headless", () => {
+    const resolved = resolveBrowserConfig({
+      headless: true,
+      profiles: {
+        localhost: { cdpPort: 9222, headless: false, color: "#0066CC" },
+      },
+    });
+
+    const localhost = resolveProfile(resolved, "localhost");
+    expect(localhost?.headless).toBe(false);
+  });
+
   it("uses base protocol for profiles with only cdpPort", () => {
     const resolved = resolveBrowserConfig({
       cdpUrl: "https://example.com:9443",
