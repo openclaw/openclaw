@@ -467,4 +467,23 @@ describe("handleControlUiHttpRequest", () => {
       },
     });
   });
+
+  it("rejects hardlinked asset files for custom/resolved roots (security boundary)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const assetsDir = path.join(tmp, "assets");
+        await fs.mkdir(assetsDir, { recursive: true });
+        await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
+        await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
+        const { res, end, handled } = runControlUiRequest({
+          url: "/assets/app.hl.js",
+          method: "GET",
+          rootPath: tmp,
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(404);
+        expect(end).toHaveBeenCalledWith("Not Found");
+      },
+    });
+  });
 });
