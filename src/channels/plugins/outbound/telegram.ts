@@ -117,11 +117,24 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     };
 
     if (mediaUrls.length === 0) {
-      const result = await send(to, text, {
-        ...payloadOpts,
-        buttons: telegramData?.buttons,
-      });
-      return { channel: "telegram", ...result };
+      const chunks = markdownToTelegramHtmlChunks(text, 4000);
+      if (chunks.length <= 1) {
+        const result = await send(to, text, {
+          ...payloadOpts,
+          buttons: telegramData?.buttons,
+        });
+        return { channel: "telegram", ...result };
+      }
+      let finalResult: Awaited<ReturnType<typeof send>> | undefined;
+      for (let i = 0; i < chunks.length; i++) {
+        const isLast = i === chunks.length - 1;
+        finalResult = await send(to, chunks[i], {
+          ...payloadOpts,
+          textMode: "html" as const,
+          ...(isLast ? { buttons: telegramData?.buttons } : {}),
+        });
+      }
+      return { channel: "telegram", ...(finalResult ?? { messageId: "unknown", chatId: to }) };
     }
 
     // Telegram allows reply_markup on media; attach buttons only to first send.

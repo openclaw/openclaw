@@ -139,4 +139,71 @@ describe("telegramOutbound", () => {
     expect(secondCallOpts?.buttons).toBeUndefined();
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "123" });
   });
+
+  it("chunks long sendPayload text into multiple messages with buttons on last", async () => {
+    const sendTelegram = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "tg-c1", chatId: "123" })
+      .mockResolvedValueOnce({ messageId: "tg-c2", chatId: "123" });
+    const sendPayload = telegramOutbound.sendPayload;
+    expect(sendPayload).toBeDefined();
+
+    const longText = "A".repeat(5000);
+    const payload: ReplyPayload = {
+      text: longText,
+      channelData: {
+        telegram: {
+          buttons: [[{ text: "OK", callback_data: "ok" }]],
+        },
+      },
+    };
+
+    const result = await sendPayload!({
+      cfg: {},
+      to: "123",
+      text: "",
+      payload,
+      mediaLocalRoots: [],
+      accountId: "default",
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const firstCallOpts = sendTelegram.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(firstCallOpts?.buttons).toBeUndefined();
+    const lastCallOpts = sendTelegram.mock.calls[sendTelegram.mock.calls.length - 1]?.[2] as Record<
+      string,
+      unknown
+    >;
+    expect(lastCallOpts?.buttons).toEqual([[{ text: "OK", callback_data: "ok" }]]);
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-c2", chatId: "123" });
+  });
+
+  it("does not chunk short sendPayload text", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-s1", chatId: "123" });
+    const sendPayload = telegramOutbound.sendPayload;
+
+    const payload: ReplyPayload = {
+      text: "short message",
+      channelData: {
+        telegram: {
+          buttons: [[{ text: "OK", callback_data: "ok" }]],
+        },
+      },
+    };
+
+    await sendPayload!({
+      cfg: {},
+      to: "123",
+      text: "",
+      payload,
+      mediaLocalRoots: [],
+      accountId: "default",
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    const opts = sendTelegram.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(opts?.buttons).toEqual([[{ text: "OK", callback_data: "ok" }]]);
+  });
 });

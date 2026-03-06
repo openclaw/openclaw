@@ -1216,6 +1216,59 @@ describe("reactMessageTelegram", () => {
       }),
     );
   });
+
+  it("chunks text-only messages exceeding 4000 chars into multiple sends", async () => {
+    const chatId = "123";
+    const longText = "A".repeat(5000);
+
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 80, chat: { id: chatId } })
+      .mockResolvedValueOnce({ message_id: 81, chat: { id: chatId } });
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+
+    const res = await sendMessageTelegram(chatId, longText, { token: "tok", api });
+
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(res.messageId).toBe("81");
+  });
+
+  it("sends short text-only messages in a single call", async () => {
+    const chatId = "123";
+    const shortText = "hello world";
+
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 82, chat: { id: chatId } });
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+
+    const res = await sendMessageTelegram(chatId, shortText, { token: "tok", api });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(res.messageId).toBe("82");
+  });
+
+  it("attaches reply_markup only to last chunk when chunking with buttons", async () => {
+    const chatId = "123";
+    const longText = "B".repeat(5000);
+
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 83, chat: { id: chatId } })
+      .mockResolvedValueOnce({ message_id: 84, chat: { id: chatId } });
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+
+    const res = await sendMessageTelegram(chatId, longText, {
+      token: "tok",
+      api,
+      buttons: [[{ text: "OK", callback_data: "ok" }]],
+    });
+
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const firstCallArgs = sendMessage.mock.calls[0];
+    expect(firstCallArgs?.[2]?.reply_markup).toBeUndefined();
+    const lastCallArgs = sendMessage.mock.calls[sendMessage.mock.calls.length - 1];
+    expect(lastCallArgs?.[2]?.reply_markup).toBeDefined();
+    expect(res.messageId).toBe("84");
+  });
 });
 
 describe("sendStickerTelegram", () => {
