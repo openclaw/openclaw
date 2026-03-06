@@ -448,6 +448,7 @@ export type PluginHookBeforePromptBuildResult = {
 };
 
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
+  "actions",
   "systemPrompt",
   "prependContext",
   "prependSystemContext",
