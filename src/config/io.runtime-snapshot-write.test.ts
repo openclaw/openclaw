@@ -61,4 +61,77 @@ describe("runtime config snapshot writes", () => {
       }
     });
   });
+
+  it("refreshes the runtime snapshot after writes so follow-up reads see persisted changes", async () => {
+    await withTempHome("openclaw-config-runtime-write-refresh-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const sourceConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              models: [],
+            },
+          },
+        },
+      };
+      const runtimeConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "sk-runtime-resolved",
+              models: [],
+            },
+          },
+        },
+      };
+      const nextRuntimeConfig: OpenClawConfig = {
+        ...runtimeConfig,
+        gateway: { auth: { mode: "token" as const } },
+      };
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf8");
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        expect(loadConfig().gateway?.auth).toBeUndefined();
+
+        await writeConfigFile(nextRuntimeConfig);
+
+        expect(loadConfig().gateway?.auth).toEqual({ mode: "token" });
+        expect(loadConfig().models?.providers?.openai?.apiKey).toBeDefined();
+
+        let persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+          gateway?: { auth?: unknown };
+          models?: { providers?: { openai?: { apiKey?: unknown } } };
+        };
+        expect(persisted.gateway?.auth).toEqual({ mode: "token" });
+        // Post-write secret-ref: apiKey must stay as source ref (not plaintext).
+        expect(persisted.models?.providers?.openai?.apiKey).toEqual({
+          source: "env",
+          provider: "default",
+          id: "OPENAI_API_KEY",
+        });
+
+        // Follow-up write: runtimeConfigSourceSnapshot must be restored so second write
+        // still runs secret-preservation merge-patch and keeps apiKey as ref (not plaintext).
+        await writeConfigFile(loadConfig());
+        persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+          gateway?: { auth?: unknown };
+          models?: { providers?: { openai?: { apiKey?: unknown } } };
+        };
+        expect(persisted.models?.providers?.openai?.apiKey).toEqual({
+          source: "env",
+          provider: "default",
+          id: "OPENAI_API_KEY",
+        });
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
 });

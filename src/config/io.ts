@@ -1386,9 +1386,10 @@ export async function writeConfigFile(
 ): Promise<void> {
   const io = createConfigIO();
   let nextCfg = cfg;
-  if (runtimeConfigSnapshot && runtimeConfigSourceSnapshot) {
-    const runtimePatch = createMergePatch(runtimeConfigSnapshot, cfg);
-    nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
+  const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
+  if (hadBothSnapshots) {
+    const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
+    nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
   }
   const sameConfigPath =
     options.expectedConfigPath === undefined || options.expectedConfigPath === io.configPath;
@@ -1396,4 +1397,15 @@ export async function writeConfigFile(
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
   });
+  // Keep follow-up loadConfig() in sync with the just-persisted config (fixes race where a
+  // second connection's agents.update fails with "agent not found" after agents.create).
+  clearRuntimeConfigSnapshot();
+  if (hadBothSnapshots) {
+    // Refresh both snapshots from disk so follow-up reads get normalized config and
+    // subsequent writes still get secret-preservation merge-patch (hadBothSnapshots stays true).
+    const fresh = loadConfig();
+    setRuntimeConfigSnapshot(fresh, nextCfg);
+  }
+  // When we had no snapshot (or only one), do not set a new one: leave callers reading from
+  // disk/cache so external/manual edits to openclaw.json remain visible (no stale snapshot).
 }
