@@ -84,6 +84,7 @@ describe("chutes-models", () => {
 
     const mockFetch = vi.fn().mockImplementation((url, init) => {
       if (init?.headers?.Authorization === "Bearer test-token-error") {
+        // pragma: allowlist secret
         return Promise.resolve({
           ok: false,
           status: 401,
