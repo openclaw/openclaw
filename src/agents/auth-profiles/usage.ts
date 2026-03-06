@@ -107,7 +107,10 @@ export function resolveProfilesUnavailableReason(params: {
       recordedReason = true;
     }
     if (!recordedReason) {
-      addScore("rate_limit", 1);
+      // Default to auth when a profile is in cooldown but has no recorded failure reason.
+      // Previously defaulted to "rate_limit", causing 401 auth errors to be misreported
+      // as "API rate limit reached" (#34792).
+      addScore("auth", 1);
     }
   }
 
