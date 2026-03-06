@@ -141,6 +141,7 @@ describe("routeReply", () => {
       cfg: {} as never,
     });
     expect(res.ok).toBe(true);
+    expect(res.sent).toBe(false);
     expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
   });
 
@@ -153,6 +154,7 @@ describe("routeReply", () => {
       cfg: {} as never,
     });
     expect(res.ok).toBe(true);
+    expect(res.sent).toBe(false);
     expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
   });
 
@@ -165,6 +167,7 @@ describe("routeReply", () => {
       cfg: {} as never,
     });
     expect(res.ok).toBe(true);
+    expect(res.sent).toBe(false);
     expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
   });
 
@@ -177,9 +180,28 @@ describe("routeReply", () => {
       cfg: {} as never,
     });
     expect(res.ok).toBe(true);
+    expect(res.sent).toBe(true);
     expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
       "channel:C123",
       `${SILENT_REPLY_TOKEN} -- (why am I here?)`,
+      expect.any(Object),
+    );
+  });
+
+  it("returns sent=true when message is successfully sent", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const res = await routeReply({
+      payload: { text: "hello world" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.sent).toBe(true);
+    expect(res.messageId).toBeDefined();
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      "hello world",
       expect.any(Object),
     );
   });

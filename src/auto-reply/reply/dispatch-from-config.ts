@@ -315,7 +315,7 @@ export async function dispatchReplyFromConfig(params: {
           cfg,
         });
         queuedFinal = result.ok;
-        if (result.ok) {
+        if (result.sent) {
           routedFinalCount += 1;
         }
         if (!result.ok) {
@@ -502,7 +502,7 @@ export async function dispatchReplyFromConfig(params: {
           );
         }
         queuedFinal = result.ok || queuedFinal;
-        if (result.ok) {
+        if (result.sent) {
           routedFinalCount += 1;
         }
       } else {
@@ -547,7 +547,7 @@ export async function dispatchReplyFromConfig(params: {
               cfg,
             });
             queuedFinal = result.ok || queuedFinal;
-            if (result.ok) {
+            if (result.sent) {
               routedFinalCount += 1;
             }
             if (!result.ok) {

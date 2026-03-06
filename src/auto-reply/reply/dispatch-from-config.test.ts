@@ -1550,4 +1550,46 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
   });
+
+  it("only increments routedFinalCount when routeReply returns sent=true", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+    });
+
+    // Mock routeReply to return sent=false for specific payloads
+    mocks.routeReply.mockImplementation(async (params: unknown) => {
+      const p = params as { payload: ReplyPayload };
+      // Return sent=false for payloads marked with skip flag
+      if (p.payload.text?.includes("__SKIP__")) {
+        return { ok: true, sent: false };
+      }
+      return { ok: true, sent: true, messageId: "mock" };
+    });
+
+    const replyResolver = async () =>
+      [
+        { text: "__SKIP__ this one" }, // Should not count
+        { text: "Valid reply" }, // Should count
+      ] satisfies ReplyPayload[];
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    // Verify routeReply was called
+    expect(mocks.routeReply).toHaveBeenCalled();
+    // Should have called routeReply twice (once per reply)
+    expect(mocks.routeReply).toHaveBeenCalledTimes(2);
+    // counts.final should only include the valid reply (sent=true)
+    expect(result.counts.final).toBe(1);
+  });
 });

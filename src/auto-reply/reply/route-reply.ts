@@ -42,6 +42,8 @@ export type RouteReplyParams = {
 export type RouteReplyResult = {
   /** Whether the reply was sent successfully. */
   ok: boolean;
+  /** Whether the reply was actually sent (false if skipped due to empty/suppressed payload). */
+  sent: boolean;
   /** Optional message ID from the provider. */
   messageId?: string;
   /** Error message if the send failed. */
@@ -59,7 +61,7 @@ export type RouteReplyResult = {
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
   const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
   if (shouldSuppressReasoningPayload(payload)) {
-    return { ok: true };
+    return { ok: true, sent: false };
   }
   const normalizedChannel = normalizeMessageChannel(channel);
   const resolvedAgentId = params.sessionKey
@@ -83,7 +85,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     responsePrefix,
   });
   if (!normalized) {
-    return { ok: true };
+    return { ok: true, sent: false };
   }
 
   let text = normalized.text ?? "";
@@ -96,7 +98,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
 
   // Skip empty replies.
   if (!text.trim() && mediaUrls.length === 0) {
-    return { ok: true };
+    return { ok: true, sent: false };
   }
 
   if (channel === INTERNAL_MESSAGE_CHANNEL) {
@@ -150,11 +152,12 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     });
 
     const last = results.at(-1);
-    return { ok: true, messageId: last?.messageId };
+    return { ok: true, sent: true, messageId: last?.messageId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
       ok: false,
+      sent: false,
       error: `Failed to route reply to ${channel}: ${message}`,
     };
   }
