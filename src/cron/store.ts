@@ -60,6 +60,52 @@ async function setSecureFileMode(filePath: string): Promise<void> {
   await fs.promises.chmod(filePath, 0o600).catch(() => undefined);
 }
 
+async function syncFile(filePath: string): Promise<void> {
+  const handle = await fs.promises.open(filePath, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+function isUnsupportedFsyncError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return (
+    code === "EINVAL" ||
+    code === "ENOTSUP" ||
+    code === "ENOSYS" ||
+    code === "EISDIR" ||
+    code === "EPERM" ||
+    code === "EBADF"
+  );
+}
+
+async function syncDirectory(dirPath: string): Promise<void> {
+  if (process.platform === "win32") {
+    return;
+  }
+  const handle = await fs.promises.open(dirPath, "r").catch((err) => {
+    if (isUnsupportedFsyncError(err)) {
+      return null;
+    }
+    throw err;
+  });
+  if (!handle) {
+    return;
+  }
+  try {
+    await handle.sync().catch((err) => {
+      if (isUnsupportedFsyncError(err)) {
+        return;
+      }
+      throw err;
+    });
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
 export async function saveCronStore(
   storePath: string,
   store: CronStoreFile,
@@ -89,7 +135,13 @@ export async function saveCronStore(
     return;
   }
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
+  const tmpHandle = await fs.promises.open(tmp, "w", 0o600);
+  try {
+    await tmpHandle.writeFile(json, { encoding: "utf-8" });
+    await tmpHandle.sync();
+  } finally {
+    await tmpHandle.close().catch(() => undefined);
+  }
   await setSecureFileMode(tmp);
   if (previous !== null && !opts?.skipBackup) {
     try {
@@ -102,6 +154,8 @@ export async function saveCronStore(
   }
   await renameWithRetry(tmp, storePath);
   await setSecureFileMode(storePath);
+  await syncFile(storePath);
+  await syncDirectory(storeDir);
   serializedStoreCache.set(storePath, json);
 }
 
