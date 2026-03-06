@@ -147,6 +147,7 @@ export function createSlackMessageHandler(params: {
         return;
       }
       if (seenMessageKey) {
+        pruneAppMentionRetryKeys(Date.now());
         if (last.opts.source === "app_mention") {
           // If app_mention wins the race and dispatches first, drop the later message dispatch.
           appMentionDispatchedKeys.set(seenMessageKey, Date.now() + APP_MENTION_RETRY_TTL_MS);
