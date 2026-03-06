@@ -185,6 +185,7 @@ interface OllamaChatResponse {
   message: {
     role: "assistant";
     content: string;
+    thinking?: string;
     reasoning?: string;
     tool_calls?: OllamaToolCall[];
   };
@@ -323,10 +324,10 @@ export function buildAssistantMessage(
 ): AssistantMessage {
   const content: (TextContent | ToolCall)[] = [];
 
-  // Qwen 3 (and potentially other reasoning models) may return their final
-  // answer in a `reasoning` field with an empty `content`. Fall back to
-  // `reasoning` so the response isn't silently dropped.
-  const text = response.message.content || response.message.reasoning || "";
+  // Some models return the answer in `thinking` (Ollama native API), while
+  // others use `reasoning`. Fall back to both when `content` is empty.
+  const text =
+    response.message.content || response.message.thinking || response.message.reasoning || "";
   if (text) {
     content.push({ type: "text", text });
   }
@@ -468,15 +469,20 @@ export function createOllamaStreamFn(
 
         const reader = response.body.getReader();
         let accumulatedContent = "";
+        let accumulatedThinking = "";
+        let accumulatedReasoning = "";
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
 
         for await (const chunk of parseNdjsonStream(reader)) {
           if (chunk.message?.content) {
             accumulatedContent += chunk.message.content;
+          } else if (chunk.message?.thinking) {
+            // Ollama native thinking models may emit text in `thinking`.
+            accumulatedThinking += chunk.message.thinking;
           } else if (chunk.message?.reasoning) {
-            // Qwen 3 reasoning mode: content may be empty, output in reasoning
-            accumulatedContent += chunk.message.reasoning;
+            // Backward compatibility for models that emit `reasoning`.
+            accumulatedReasoning += chunk.message.reasoning;
           }
 
           // Ollama sends tool_calls in intermediate (done:false) chunks,
@@ -495,7 +501,8 @@ export function createOllamaStreamFn(
           throw new Error("Ollama API stream ended without a final response");
         }
 
-        finalResponse.message.content = accumulatedContent;
+        finalResponse.message.content =
+          accumulatedContent || accumulatedThinking || accumulatedReasoning;
         if (accumulatedToolCalls.length > 0) {
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }
