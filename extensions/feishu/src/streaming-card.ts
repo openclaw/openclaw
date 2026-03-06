@@ -128,8 +128,9 @@ export function mergeStreamingText(
       return `${previous}${next.slice(overlap)}`;
     }
   }
-  // Fallback for fragmented partial chunks: append as-is to avoid losing tokens.
-  return `${previous}${next}`;
+  // For ambiguous non-overlapping partials, prefer replacement over blind
+  // append so we do not duplicate already-visible prefixes in the card.
+  return next;
 }
 
 export function resolveStreamingCardSendMode(options?: StreamingStartOptions) {
