@@ -103,6 +103,15 @@ export async function resolveMatrixTargets(params: {
       }
       continue;
     }
+    // Matrix room IDs start with "!" followed by a localpart and server
+    // (e.g. "!xyz:matrix.org"). Like "@user:server" for users, these are
+    // fully-qualified opaque identifiers that can be used directly without
+    // a directory lookup. Passing them to listMatrixDirectoryGroupsLive
+    // would query by alias/name and may return the wrong room.
+    if (trimmed.startsWith("!") && trimmed.includes(":")) {
+      results.push({ input, resolved: true, id: trimmed });
+      continue;
+    }
     try {
       const matches = await listMatrixDirectoryGroupsLive({
         cfg: params.cfg,

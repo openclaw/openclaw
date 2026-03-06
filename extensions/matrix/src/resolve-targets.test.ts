@@ -47,6 +47,23 @@ describe("resolveMatrixTargets (users)", () => {
     expect(result?.note).toMatch(/use full Matrix ID/i);
   });
 
+  it("resolves full Matrix room ID (!localpart:server) directly without directory lookup", async () => {
+    // Room IDs starting with "!" are opaque identifiers — they must be passed
+    // through verbatim, not queried against the directory (which searches by
+    // alias/name and may return the wrong room, e.g. #general instead of the
+    // intended cron-log room).
+    const [result] = await resolveMatrixTargets({
+      cfg: {},
+      inputs: ["!cron-log-room-id:matrix.example.org"],
+      kind: "group",
+    });
+
+    expect(result?.resolved).toBe(true);
+    expect(result?.id).toBe("!cron-log-room-id:matrix.example.org");
+    // No directory lookup should have been made.
+    expect(listMatrixDirectoryGroupsLive).not.toHaveBeenCalled();
+  });
+
   it("prefers exact group matches over first partial result", async () => {
     const matches: ChannelDirectoryEntry[] = [
       { kind: "group", id: "!one:example.org", name: "General", handle: "#general" },
