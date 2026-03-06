@@ -3,7 +3,8 @@ import path from "node:path";
 import dotenv from "dotenv";
 import { resolveConfigDir } from "../utils.js";
 
-const ENV_REFERENCE_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
+const ENV_REFERENCE_PATTERN =
+  /(?<!\\)\$\{([A-Za-z_][A-Za-z0-9_]*)\}|(?<!\\)\$([A-Za-z_][A-Za-z0-9_]*)/g;
 
 function expandEnvReferences(
   parsed: Record<string, string>,
@@ -29,10 +30,12 @@ function expandEnvReferences(
     }
 
     resolving.add(key);
-    const expanded = raw.replace(ENV_REFERENCE_PATTERN, (_, braced, bare) => {
-      const name = typeof braced === "string" && braced.length > 0 ? braced : bare;
-      return resolveValue(name) ?? "";
-    });
+    const expanded = raw
+      .replace(ENV_REFERENCE_PATTERN, (_, braced, bare) => {
+        const name = typeof braced === "string" && braced.length > 0 ? braced : bare;
+        return resolveValue(name) ?? "";
+      })
+      .replace(/\\(?=\$)/g, "");
     resolving.delete(key);
     resolved[key] = expanded;
     return expanded;

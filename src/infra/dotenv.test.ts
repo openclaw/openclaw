@@ -188,4 +188,26 @@ describe("loadDotEnv", () => {
       });
     });
   });
+
+  it("preserves escaped dollar literals without expanding them", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          "ESCAPED_BARE=abc\\$TOKEN\nESCAPED_BRACED=abc\\${TOKEN}\nDOUBLE=abc\\\\$TOKEN\n",
+        );
+        process.chdir(cwdDir);
+        delete process.env.ESCAPED_BARE;
+        delete process.env.ESCAPED_BRACED;
+        delete process.env.DOUBLE;
+        delete process.env.TOKEN;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.ESCAPED_BARE).toBe("abc$TOKEN");
+        expect(process.env.ESCAPED_BRACED).toBe("abc${TOKEN}");
+        expect(process.env.DOUBLE).toBe("abc\\$TOKEN");
+      });
+    });
+  });
 });
