@@ -339,37 +339,37 @@ export type PluginHookName =
   | "gateway_start"
   | "gateway_stop";
 
-export const PLUGIN_HOOK_NAMES = [
-  "before_model_resolve",
-  "before_prompt_build",
-  "before_agent_start",
-  "llm_input",
-  "llm_output",
-  "agent_end",
-  "before_compaction",
-  "after_compaction",
-  "before_reset",
-  "message_received",
-  "message_sending",
-  "message_sent",
-  "before_tool_call",
-  "after_tool_call",
-  "tool_result_persist",
-  "before_message_write",
-  "session_start",
-  "session_end",
-  "subagent_spawning",
-  "subagent_delivery_target",
-  "subagent_spawned",
-  "subagent_ended",
-  "gateway_start",
-  "gateway_stop",
-] as const satisfies readonly PluginHookName[];
+const pluginHookNameMap = {
+  before_model_resolve: true,
+  before_prompt_build: true,
+  before_agent_start: true,
+  llm_input: true,
+  llm_output: true,
+  agent_end: true,
+  before_compaction: true,
+  after_compaction: true,
+  before_reset: true,
+  message_received: true,
+  message_sending: true,
+  message_sent: true,
+  message_transcribed: true,
+  before_tool_call: true,
+  after_tool_call: true,
+  tool_result_persist: true,
+  before_message_write: true,
+  session_start: true,
+  session_end: true,
+  subagent_spawning: true,
+  subagent_delivery_target: true,
+  subagent_spawned: true,
+  subagent_ended: true,
+  gateway_start: true,
+  gateway_stop: true,
+} as const satisfies Record<PluginHookName, true>;
 
-type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
-type AssertAllPluginHookNamesListed = MissingPluginHookNames extends never ? true : never;
-const assertAllPluginHookNamesListed: AssertAllPluginHookNamesListed = true;
-void assertAllPluginHookNamesListed;
+export const PLUGIN_HOOK_NAMES = Object.freeze(
+  Object.keys(pluginHookNameMap) as PluginHookName[],
+) as readonly PluginHookName[];
 
 const pluginHookNameSet = new Set<PluginHookName>(PLUGIN_HOOK_NAMES);
 
