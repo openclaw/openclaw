@@ -619,6 +619,26 @@ export function resolveAttemptFsWorkspaceOnly(params: {
   });
 }
 
+export function buildEmbeddedHookContext(params: {
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  workspaceDir?: string;
+  messageProvider?: string;
+  messageChannel?: string;
+  trigger?: string;
+}): PluginHookAgentContext {
+  return {
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    messageProvider: params.messageProvider ?? undefined,
+    trigger: params.trigger,
+    channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+  };
+}
+
 function normalizePromptBuildHookActions(
   result: PluginHookBeforePromptBuildResult | undefined,
 ): PluginHookPromptAction[] {
@@ -1253,13 +1273,15 @@ export async function runEmbeddedAttempt(
         : truncated;
 
       // Run before_prompt_build hooks (after session load, before AgentSession is created).
-      const hookCtx = {
+      const hookCtx = buildEmbeddedHookContext({
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         workspaceDir: params.workspaceDir,
-        messageProvider: params.messageProvider ?? undefined,
-      };
+        messageProvider: params.messageProvider,
+        messageChannel: params.messageChannel,
+        trigger: params.trigger,
+      });
       promptHookResult = await resolvePromptBuildHookResult({
         prompt: params.prompt,
         messages: preparedMessages,
@@ -1815,13 +1837,15 @@ export async function runEmbeddedAttempt(
                   historyMessages: activeSession.messages,
                   imagesCount: imageResult.images.length,
                 },
-                {
+                buildEmbeddedHookContext({
                   agentId: sessionAgentId,
                   sessionKey: params.sessionKey,
                   sessionId: params.sessionId,
                   workspaceDir: params.workspaceDir,
-                  messageProvider: params.messageProvider ?? undefined,
-                },
+                  messageProvider: params.messageProvider,
+                  messageChannel: params.messageChannel,
+                  trigger: params.trigger,
+                }),
               )
               .catch((err) => {
                 log.warn(`llm_input hook failed: ${String(err)}`);
@@ -1958,13 +1982,15 @@ export async function runEmbeddedAttempt(
                 error: promptError ? describeUnknownError(promptError) : undefined,
                 durationMs: Date.now() - promptStartedAt,
               },
-              {
+              buildEmbeddedHookContext({
                 agentId: sessionAgentId,
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
                 workspaceDir: params.workspaceDir,
-                messageProvider: params.messageProvider ?? undefined,
-              },
+                messageProvider: params.messageProvider,
+                messageChannel: params.messageChannel,
+                trigger: params.trigger,
+              }),
             )
             .catch((err) => {
               log.warn(`agent_end hook failed: ${err}`);
@@ -2018,13 +2044,15 @@ export async function runEmbeddedAttempt(
               lastAssistant,
               usage: getUsageTotals(),
             },
-            {
+            buildEmbeddedHookContext({
               agentId: sessionAgentId,
               sessionKey: params.sessionKey,
               sessionId: params.sessionId,
               workspaceDir: params.workspaceDir,
-              messageProvider: params.messageProvider ?? undefined,
-            },
+              messageProvider: params.messageProvider,
+              messageChannel: params.messageChannel,
+              trigger: params.trigger,
+            }),
           )
           .catch((err) => {
             log.warn(`llm_output hook failed: ${String(err)}`);
