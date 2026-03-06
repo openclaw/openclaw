@@ -2,7 +2,14 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  deriveInboundMessageHookContext,
+  toInternalMessageReceivedContext,
+  toPluginMessageContext,
+  toPluginMessageReceivedEvent,
+} from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   logMessageProcessed,
@@ -12,7 +19,7 @@ import {
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -158,6 +165,7 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   const sessionStoreEntry = resolveSessionStoreEntry(ctx, cfg);
+  const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
@@ -167,79 +175,31 @@ export async function dispatchReplyFromConfig(params: {
     typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
   const messageIdForHook =
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  const content =
-    typeof ctx.BodyForCommands === "string"
-      ? ctx.BodyForCommands
-      : typeof ctx.RawBody === "string"
-        ? ctx.RawBody
-        : typeof ctx.Body === "string"
-          ? ctx.Body
-          : "";
-  const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
-  const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+  const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
+  const { isGroup, groupId } = hookContext;
 
   // Trigger plugin hooks (fire-and-forget)
   if (hookRunner?.hasHooks("message_received")) {
-    void hookRunner
-      .runMessageReceived(
-        {
-          from: ctx.From ?? "",
-          content,
-          timestamp,
-          metadata: {
-            to: ctx.To,
-            provider: ctx.Provider,
-            surface: ctx.Surface,
-            threadId: ctx.MessageThreadId,
-            originatingChannel: ctx.OriginatingChannel,
-            originatingTo: ctx.OriginatingTo,
-            messageId: messageIdForHook,
-            senderId: ctx.SenderId,
-            senderName: ctx.SenderName,
-            senderUsername: ctx.SenderUsername,
-            senderE164: ctx.SenderE164,
-            guildId: ctx.GroupSpace,
-            channelName: ctx.GroupChannel,
-          },
-        },
-        {
-          channelId,
-          accountId: ctx.AccountId,
-          conversationId,
-        },
-      )
-      .catch((err) => {
-        logVerbose(`dispatch-from-config: message_received plugin hook failed: ${String(err)}`);
-      });
+    fireAndForgetHook(
+      hookRunner.runMessageReceived(
+        toPluginMessageReceivedEvent(hookContext),
+        toPluginMessageContext(hookContext),
+      ),
+      "dispatch-from-config: message_received plugin hook failed",
+    );
   }
 
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
   if (sessionKey) {
-    void triggerInternalHook(
-      createInternalHookEvent("message", "received", sessionKey, {
-        from: ctx.From ?? "",
-        content,
-        timestamp,
-        channelId,
-        accountId: ctx.AccountId,
-        conversationId,
-        messageId: messageIdForHook,
-        metadata: {
-          to: ctx.To,
-          provider: ctx.Provider,
-          surface: ctx.Surface,
-          threadId: ctx.MessageThreadId,
-          senderId: ctx.SenderId,
-          senderName: ctx.SenderName,
-          senderUsername: ctx.SenderUsername,
-          senderE164: ctx.SenderE164,
-          guildId: ctx.GroupSpace,
-          channelName: ctx.GroupChannel,
-        },
-      }),
-    ).catch((err) => {
-      logVerbose(`dispatch-from-config: message_received internal hook failed: ${String(err)}`);
-    });
+    fireAndForgetHook(
+      triggerInternalHook(
+        createInternalHookEvent("message", "received", sessionKey, {
+          ...toInternalMessageReceivedContext(hookContext),
+          timestamp,
+        }),
+      ),
+      "dispatch-from-config: message_received internal hook failed",
+    );
   }
 
   // Check if we should route replies to originating channel instead of dispatcher.
@@ -249,9 +209,12 @@ export async function dispatchReplyFromConfig(params: {
   // flow when the provider handles its own messages.
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
-  const originatingChannel = ctx.OriginatingChannel;
+  const originatingChannel = normalizeMessageChannel(ctx.OriginatingChannel);
   const originatingTo = ctx.OriginatingTo;
-  const currentSurface = (ctx.Surface ?? ctx.Provider)?.toLowerCase();
+  const providerChannel = normalizeMessageChannel(ctx.Provider);
+  const surfaceChannel = normalizeMessageChannel(ctx.Surface);
+  // Prefer provider channel because surface may carry origin metadata in relayed flows.
+  const currentSurface = providerChannel ?? surfaceChannel;
   const shouldRouteToOriginating = Boolean(
     isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface,
   );
@@ -288,6 +251,8 @@ export async function dispatchReplyFromConfig(params: {
       cfg,
       abortSignal,
       mirror,
+      isGroup,
+      groupId,
     });
     if (!result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
@@ -313,6 +278,8 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          isGroup,
+          groupId,
         });
         queuedFinal = result.ok;
         if (result.ok) {
@@ -362,7 +329,7 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       cfg,
       dispatcher,
-      sessionKey,
+      sessionKey: acpDispatchSessionKey,
       inboundAudio,
       sessionTtsAuto,
       ttsChannel,
@@ -371,6 +338,7 @@ export async function dispatchReplyFromConfig(params: {
       originatingTo,
       shouldSendToolSummaries,
       bypassForCommand: bypassAcpForCommand,
+      onReplyStart: params.replyOptions?.onReplyStart,
       recordProcessed,
       markIdle,
     });
@@ -467,6 +435,32 @@ export async function dispatchReplyFromConfig(params: {
       cfg,
     );
 
+    if (ctx.AcpDispatchTailAfterReset === true) {
+      // Command handling prepared a trailing prompt after ACP in-place reset.
+      // Route that tail through ACP now (same turn) instead of embedded dispatch.
+      ctx.AcpDispatchTailAfterReset = false;
+      const acpTailDispatch = await tryDispatchAcpReply({
+        ctx,
+        cfg,
+        dispatcher,
+        sessionKey: acpDispatchSessionKey,
+        inboundAudio,
+        sessionTtsAuto,
+        ttsChannel,
+        shouldRouteToOriginating,
+        originatingChannel,
+        originatingTo,
+        shouldSendToolSummaries,
+        bypassForCommand: false,
+        onReplyStart: params.replyOptions?.onReplyStart,
+        recordProcessed,
+        markIdle,
+      });
+      if (acpTailDispatch) {
+        return acpTailDispatch;
+      }
+    }
+
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
 
     let queuedFinal = false;
@@ -495,6 +489,8 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          isGroup,
+          groupId,
         });
         if (!result.ok) {
           logVerbose(
@@ -545,6 +541,8 @@ export async function dispatchReplyFromConfig(params: {
               accountId: ctx.AccountId,
               threadId: ctx.MessageThreadId,
               cfg,
+              isGroup,
+              groupId,
             });
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {

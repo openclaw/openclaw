@@ -76,19 +76,26 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
   }
   next.abortedLastRun = result.meta.aborted ?? false;
+  if (result.meta.systemPromptReport) {
+    next.systemPromptReport = result.meta.systemPromptReport;
+  }
   if (hasNonzeroUsage(usage)) {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
-    const totalTokens =
-      deriveSessionTotalTokens({
-        usage,
-        contextTokens,
-        promptTokens,
-      }) ?? input;
+    const totalTokens = deriveSessionTotalTokens({
+      usage,
+      contextTokens,
+      promptTokens,
+    });
     next.inputTokens = input;
     next.outputTokens = output;
-    next.totalTokens = totalTokens;
-    next.totalTokensFresh = true;
+    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+      next.totalTokens = totalTokens;
+      next.totalTokensFresh = true;
+    } else {
+      next.totalTokens = undefined;
+      next.totalTokensFresh = false;
+    }
     next.cacheRead = usage.cacheRead ?? 0;
     next.cacheWrite = usage.cacheWrite ?? 0;
   }

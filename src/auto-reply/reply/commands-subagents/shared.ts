@@ -21,6 +21,13 @@ import {
   formatTokenUsageDisplay,
   truncateLine,
 } from "../../../shared/subagents-format.js";
+import {
+  isDiscordSurface,
+  isTelegramSurface,
+  resolveCommandSurfaceChannel,
+  resolveDiscordAccountId,
+  resolveChannelAccountId,
+} from "../channel-context.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
   formatRunLabel,
@@ -28,8 +35,17 @@ import {
   resolveSubagentTargetFromRuns,
   type SubagentTargetResolution,
 } from "../subagents-utils.js";
+import { resolveTelegramConversationId } from "../telegram-context.js";
 
 export { extractAssistantText, stripToolMessages };
+export {
+  isDiscordSurface,
+  isTelegramSurface,
+  resolveCommandSurfaceChannel,
+  resolveDiscordAccountId,
+  resolveChannelAccountId,
+  resolveTelegramConversationId,
+};
 
 export const COMMAND = "/subagents";
 export const COMMAND_KILL = "/kill";
@@ -267,24 +283,6 @@ export type FocusTargetResolution = {
   label?: string;
 };
 
-export function isDiscordSurface(params: SubagentsCommandParams): boolean {
-  const channel =
-    params.ctx.OriginatingChannel ??
-    params.command.channel ??
-    params.ctx.Surface ??
-    params.ctx.Provider;
-  return (
-    String(channel ?? "")
-      .trim()
-      .toLowerCase() === "discord"
-  );
-}
-
-export function resolveDiscordAccountId(params: SubagentsCommandParams): string {
-  const accountId = typeof params.ctx.AccountId === "string" ? params.ctx.AccountId.trim() : "";
-  return accountId || "default";
-}
-
 export function resolveDiscordChannelIdForFocus(
   params: SubagentsCommandParams,
 ): string | undefined {
@@ -372,7 +370,8 @@ export function buildSubagentsHelp() {
     "- /focus <subagent-label|session-key|session-id|session-label>",
     "- /unfocus",
     "- /agents",
-    "- /session ttl <duration|off>",
+    "- /session idle <duration|off>",
+    "- /session max-age <duration|off>",
     "- /kill <id|#|all>",
     "- /steer <id|#> <message>",
     "- /tell <id|#> <message>",
