@@ -3,14 +3,16 @@ import {
   clearInternalHooks,
   createInternalHookEvent,
   registerInternalHook,
+  triggerBeforeSendInternalHook,
   triggerInternalHook,
   type InternalHookEvent,
+  type MessageBeforeSendHookEvent,
 } from "./internal-hooks.js";
 
 type ActionCase = {
   label: string;
   key: string;
-  action: "received" | "transcribed" | "preprocessed" | "sent";
+  action: "received" | "transcribed" | "preprocessed" | "sent" | "beforeSend";
   context: Record<string, unknown>;
   assertContext: (context: Record<string, unknown>) => void;
 };
@@ -102,6 +104,26 @@ const actionCases: ActionCase[] = [
       expect(context.channelId).toBe("discord");
       expect(context.conversationId).toBe("channel:C123");
       expect(context.threadId).toBe("thread-abc");
+    },
+  },
+  {
+    label: "message:beforeSend",
+    key: "message:beforeSend",
+    action: "beforeSend",
+    context: {
+      to: "user:789",
+      content: "Outbound message",
+      channelId: "telegram",
+      conversationId: "chat:456",
+      isGroup: false,
+      suppress: false,
+    },
+    assertContext: (context) => {
+      expect(context.to).toBe("user:789");
+      expect(context.content).toBe("Outbound message");
+      expect(context.channelId).toBe("telegram");
+      expect(context.conversationId).toBe("chat:456");
+      expect(context.suppress).toBe(false);
     },
   },
 ];
@@ -232,6 +254,102 @@ describe("message hooks", () => {
         triggerInternalHook(createInternalHookEvent("message", "sent", "s1", { content: "reply" })),
       ).resolves.not.toThrow();
       expect(asyncFailHandler).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("message:beforeSend hook", () => {
+    function makeBeforeSendEvent(content = "Hello world"): MessageBeforeSendHookEvent {
+      return createInternalHookEvent("message", "beforeSend", "session-bs", {
+        to: "user:42",
+        content,
+        channelId: "telegram",
+        conversationId: "chat:1",
+        suppress: false,
+      }) as MessageBeforeSendHookEvent;
+    }
+
+    it("returns original content when no mutation occurs", async () => {
+      registerInternalHook("message:beforeSend", (_event) => {
+        // no-op handler
+      });
+      const event = makeBeforeSendEvent("No change");
+      const result = await triggerBeforeSendInternalHook(event);
+      expect(result.content).toBe("No change");
+      expect(result.suppress).toBe(false);
+    });
+
+    it("returns mutated content when a handler updates event.context.content", async () => {
+      registerInternalHook("message:beforeSend", (event) => {
+        event.context.content = "🔏 " + (event.context.content as string);
+      });
+      const event = makeBeforeSendEvent("Original text");
+      const result = await triggerBeforeSendInternalHook(event);
+      expect(result.content).toBe("🔏 Original text");
+      expect(result.suppress).toBe(false);
+    });
+
+    it("returns suppress=true when a handler sets event.context.suppress", async () => {
+      registerInternalHook("message:beforeSend", (event) => {
+        event.context.suppress = true;
+      });
+      const event = makeBeforeSendEvent("Sensitive data");
+      const result = await triggerBeforeSendInternalHook(event);
+      expect(result.suppress).toBe(true);
+    });
+
+    it("allows multiple handlers to chain mutations", async () => {
+      registerInternalHook("message:beforeSend", (event) => {
+        event.context.content = (event.context.content as string) + " [sig1]";
+      });
+      registerInternalHook("message:beforeSend", (event) => {
+        event.context.content = (event.context.content as string) + " [sig2]";
+      });
+      const event = makeBeforeSendEvent("Base");
+      const result = await triggerBeforeSendInternalHook(event);
+      expect(result.content).toBe("Base [sig1] [sig2]");
+    });
+
+    it("is fail-open: a throwing handler does not prevent delivery", async () => {
+      registerInternalHook("message:beforeSend", (_event) => {
+        throw new Error("Handler exploded");
+      });
+      const event = makeBeforeSendEvent("Safe message");
+      const result = await triggerBeforeSendInternalHook(event);
+      // Should resolve without throwing and return the original content.
+      expect(result.content).toBe("Safe message");
+      expect(result.suppress).toBe(false);
+    });
+
+    it("respects timeout: resolves before slow handler finishes", async () => {
+      vi.useFakeTimers();
+      const slowHandler = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, 60_000); // 60 s — never finishes within timeout
+          }),
+      );
+      registerInternalHook("message:beforeSend", slowHandler);
+
+      const event = makeBeforeSendEvent("Timeout test");
+      const resultPromise = triggerBeforeSendInternalHook(event, 100 /* ms */);
+
+      // Advance fake timers past the hook timeout.
+      await vi.advanceTimersByTimeAsync(200);
+      const result = await resultPromise;
+
+      expect(result.content).toBe("Timeout test");
+      expect(result.suppress).toBe(false);
+      vi.useRealTimers();
+    });
+
+    it("general 'message' handler also fires for beforeSend events", async () => {
+      const generalHandler = vi.fn();
+      registerInternalHook("message", generalHandler);
+
+      const event = makeBeforeSendEvent("broadcast");
+      await triggerBeforeSendInternalHook(event);
+
+      expect(generalHandler).toHaveBeenCalledOnce();
     });
   });
 

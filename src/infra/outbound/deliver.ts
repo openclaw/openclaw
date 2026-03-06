@@ -19,7 +19,13 @@ import {
 } from "../../config/sessions.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  createInternalHookEvent,
+  getRegisteredEventKeys,
+  triggerBeforeSendInternalHook,
+  triggerInternalHook,
+  type MessageBeforeSendHookEvent,
+} from "../../hooks/internal-hooks.js";
 import {
   buildCanonicalSentMessageHookContext,
   toInternalMessageSentContext,
@@ -461,6 +467,69 @@ async function applyMessageSendingHook(params: {
   }
 }
 
+/**
+ * Fire the internal `message:beforeSend` hook for a single outbound payload.
+ *
+ * - Handlers may mutate `content` and/or set `suppress`.
+ * - Runs with a 5 s timeout; fail-open on errors or timeout.
+ * - Returns `cancelled: true` when any handler requests suppression.
+ */
+async function applyBeforeSendInternalHook(params: {
+  sessionKey: string;
+  payload: ReplyPayload;
+  payloadSummary: NormalizedOutboundPayload;
+  to: string;
+  channel: Exclude<OutboundChannel, "none">;
+  accountId?: string;
+  isGroup?: boolean;
+  groupId?: string;
+}): Promise<{
+  cancelled: boolean;
+  payload: ReplyPayload;
+  payloadSummary: NormalizedOutboundPayload;
+}> {
+  try {
+    const event = createInternalHookEvent("message", "beforeSend", params.sessionKey, {
+      to: params.to,
+      content: params.payloadSummary.text,
+      channelId: params.channel,
+      accountId: params.accountId ?? undefined,
+      conversationId: params.to,
+      isGroup: params.isGroup,
+      groupId: params.groupId,
+      suppress: false,
+    }) as MessageBeforeSendHookEvent;
+
+    const result = await triggerBeforeSendInternalHook(event);
+
+    if (result.suppress) {
+      log.info(
+        `message:beforeSend hook suppressed outbound payload to ${params.to} on ${params.channel}`,
+      );
+      return { cancelled: true, payload: params.payload, payloadSummary: params.payloadSummary };
+    }
+
+    if (result.content === params.payloadSummary.text) {
+      // No mutation — return originals unchanged.
+      return { cancelled: false, payload: params.payload, payloadSummary: params.payloadSummary };
+    }
+
+    // Content was mutated — propagate to payload.
+    const mutatedPayload: ReplyPayload = { ...params.payload, text: result.content };
+    return {
+      cancelled: false,
+      payload: mutatedPayload,
+      payloadSummary: { ...params.payloadSummary, text: result.content },
+    };
+  } catch (err) {
+    // Fail-open: log and proceed with original content.
+    log.error(
+      `message:beforeSend hook threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return { cancelled: false, payload: params.payload, payloadSummary: params.payloadSummary };
+  }
+}
+
 export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
@@ -677,6 +746,10 @@ async function deliverOutboundPayloadsCore(
     mirrorGroupId,
   });
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  // Check once whether any internal message:beforeSend handlers are registered.
+  const hasBeforeSendInternalHooks =
+    sessionKeyForInternalHooks != null &&
+    getRegisteredEventKeys().some((k) => k === "message" || k === "message:beforeSend");
   if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
       "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
@@ -705,8 +778,27 @@ async function deliverOutboundPayloadsCore(
       if (hookResult.cancelled) {
         continue;
       }
-      const effectivePayload = hookResult.payload;
+      let effectivePayload = hookResult.payload;
       payloadSummary = hookResult.payloadSummary;
+
+      // Run message:beforeSend internal hook (may mutate content or suppress)
+      if (hasBeforeSendInternalHooks) {
+        const beforeSendResult = await applyBeforeSendInternalHook({
+          sessionKey: sessionKeyForInternalHooks,
+          payload: effectivePayload,
+          payloadSummary,
+          to,
+          channel,
+          accountId,
+          isGroup: mirrorIsGroup,
+          groupId: mirrorGroupId,
+        });
+        if (beforeSendResult.cancelled) {
+          continue;
+        }
+        effectivePayload = beforeSendResult.payload;
+        payloadSummary = beforeSendResult.payloadSummary;
+      }
 
       params.onPayload?.(payloadSummary);
       const sendOverrides = {

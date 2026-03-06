@@ -97,6 +97,39 @@ export type MessageSentHookEvent = InternalHookEvent & {
   context: MessageSentHookContext;
 };
 
+export type MessageBeforeSendHookContext = {
+  /** Recipient identifier */
+  to: string;
+  /**
+   * Message content — handlers MAY mutate this field to change what actually
+   * gets sent.  Read it back after all handlers complete; the delivery path
+   * will use whatever value is present.
+   */
+  content: string;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId: string;
+  /** Provider account ID for multi-account setups */
+  accountId?: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Whether this message is being sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier, if applicable */
+  groupId?: string;
+  /**
+   * Set to `true` inside a handler to cancel delivery of this message
+   * entirely.  All handlers still run (within the timeout window), but the
+   * message will not be sent if any handler sets this flag.
+   */
+  suppress?: boolean;
+};
+
+export type MessageBeforeSendHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "beforeSend";
+  context: MessageBeforeSendHookContext;
+};
+
 export type MessageTranscribedHookContext = {
   /** Sender identifier (e.g., phone number, user ID) */
   from?: string;
@@ -417,6 +450,74 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
     hasStringContextField(context, "channelId") &&
     hasBooleanContextField(context, "success")
   );
+}
+
+/**
+ * Default timeout (ms) for the `message:beforeSend` hook.
+ *
+ * If registered handlers collectively take longer than this, the hook run is
+ * abandoned and the message is sent with whatever mutations were applied up
+ * to that point (fail-open).
+ */
+export const BEFORE_SEND_HOOK_TIMEOUT_MS = 5_000;
+
+/**
+ * Fire the `message:beforeSend` hook and wait for all handlers, with a hard
+ * timeout to avoid blocking outbound delivery forever.
+ *
+ * Semantics:
+ * - Handlers may mutate `event.context.content` to change what gets sent.
+ * - Handlers may set `event.context.suppress = true` to cancel delivery.
+ * - All handlers run sequentially (same as `triggerInternalHook`), but the
+ *   entire run is raced against `timeoutMs` (default 5 s).
+ * - If the timeout fires first, any mutations that have already been applied
+ *   are preserved; the message is still sent (fail-open).
+ * - If a handler throws, the error is logged and the next handler runs
+ *   (standard `triggerInternalHook` behaviour).
+ *
+ * @returns `{ suppress, content }` — the final suppress flag and (potentially
+ *   mutated) content that the delivery path should use.
+ */
+export async function triggerBeforeSendInternalHook(
+  event: MessageBeforeSendHookEvent,
+  timeoutMs: number = BEFORE_SEND_HOOK_TIMEOUT_MS,
+): Promise<{ suppress: boolean; content: string }> {
+  const originalContent = event.context.content;
+
+  let timedOut = false;
+  const timeoutPromise = new Promise<void>((resolve) =>
+    setTimeout(() => {
+      timedOut = true;
+      resolve();
+    }, timeoutMs),
+  );
+
+  await Promise.race([triggerInternalHook(event), timeoutPromise]);
+
+  if (timedOut) {
+    log.warn(
+      `message:beforeSend hook timed out after ${timeoutMs}ms; proceeding with current context state`,
+    );
+  }
+
+  return {
+    suppress: event.context.suppress === true,
+    content:
+      typeof event.context.content === "string" ? event.context.content : String(originalContent),
+  };
+}
+
+export function isMessageBeforeSendEvent(
+  event: InternalHookEvent,
+): event is MessageBeforeSendHookEvent {
+  if (!isHookEventTypeAndAction(event, "message", "beforeSend")) {
+    return false;
+  }
+  const context = getHookContext<MessageBeforeSendHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return hasStringContextField(context, "to") && hasStringContextField(context, "channelId");
 }
 
 export function isMessageTranscribedEvent(
