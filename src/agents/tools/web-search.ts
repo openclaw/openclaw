@@ -641,15 +641,24 @@ function resolveKimiConfig(search?: WebSearchConfig): KimiConfig {
 }
 
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
-  const fromConfig = normalizeApiKey(kimi?.apiKey);
+  const apiKey = kimi?.apiKey;
+  // Handle both string and SecretRef - dont normalize non-string values
+  const fromConfig =
+    apiKey !== undefined && typeof apiKey === "string"
+      ? normalizeSecretInput(apiKey)
+      : apiKey;
   if (fromConfig) {
     return fromConfig;
   }
-  const fromEnvKimi = normalizeApiKey(process.env.KIMI_API_KEY);
+  const fromEnvKimiRaw = process.env.KIMI_API_KEY;
+  const fromEnvKimi =
+    fromEnvKimiRaw !== undefined ? normalizeSecretInput(fromEnvKimiRaw) : undefined;
   if (fromEnvKimi) {
     return fromEnvKimi;
   }
-  const fromEnvMoonshot = normalizeApiKey(process.env.MOONSHOT_API_KEY);
+  const fromEnvMoonshotRaw = process.env.MOONSHOT_API_KEY;
+  const fromEnvMoonshot =
+    fromEnvMoonshotRaw !== undefined ? normalizeSecretInput(fromEnvMoonshotRaw) : undefined;
   return fromEnvMoonshot || undefined;
 }
 
