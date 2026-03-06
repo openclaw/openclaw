@@ -10,7 +10,7 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message" | "cron";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -181,6 +181,31 @@ export type MessagePreprocessedHookEvent = InternalHookEvent & {
   type: "message";
   action: "preprocessed";
   context: MessagePreprocessedHookContext;
+};
+
+// ============================================================================
+// Cron Hook Events
+// ============================================================================
+
+export type CronHookAction = "added" | "updated" | "removed" | "started" | "finished";
+
+export type CronHookContext = {
+  jobId: string;
+  jobName?: string;
+  schedule?: Record<string, unknown>;
+  status?: string;
+  error?: string;
+  summary?: string;
+  durationMs?: number;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
+};
+
+export type CronHookEvent = InternalHookEvent & {
+  type: "cron";
+  action: CronHookAction;
+  context: CronHookContext;
 };
 
 export interface InternalHookEvent {

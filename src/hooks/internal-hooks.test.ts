@@ -474,4 +474,67 @@ describe("hooks", () => {
       expect(keys).toEqual([]);
     });
   });
+
+  describe("cron hooks", () => {
+    it("should trigger cron:started handler", async () => {
+      const handler = vi.fn();
+      registerInternalHook("cron:started", handler);
+
+      const event = createInternalHookEvent("cron", "started", "cron:daily-digest", {
+        jobId: "daily-digest",
+        status: "ok",
+      });
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+    });
+
+    it("should trigger cron:finished handler with telemetry context", async () => {
+      const handler = vi.fn();
+      registerInternalHook("cron:finished", handler);
+
+      const event = createInternalHookEvent("cron", "finished", "cron:daily-digest", {
+        jobId: "daily-digest",
+        status: "ok",
+        durationMs: 5000,
+        summary: "Digest sent successfully",
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+      });
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+      expect(handler.mock.calls[0][0].context.durationMs).toBe(5000);
+    });
+
+    it("should trigger general cron handler for all cron actions", async () => {
+      const handler = vi.fn();
+      registerInternalHook("cron", handler);
+
+      for (const action of ["added", "updated", "removed", "started", "finished"]) {
+        const event = createInternalHookEvent("cron", action, `cron:job-${action}`, {
+          jobId: `job-${action}`,
+        });
+        await triggerInternalHook(event);
+      }
+
+      expect(handler).toHaveBeenCalledTimes(5);
+    });
+
+    it("should trigger cron:finished with error context", async () => {
+      const handler = vi.fn();
+      registerInternalHook("cron:finished", handler);
+
+      const event = createInternalHookEvent("cron", "finished", "cron:failing-job", {
+        jobId: "failing-job",
+        status: "error",
+        error: "LLM provider timeout",
+        durationMs: 30000,
+      });
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+      expect(handler.mock.calls[0][0].context.error).toBe("LLM provider timeout");
+    });
+  });
 });
