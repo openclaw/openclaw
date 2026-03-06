@@ -26,7 +26,7 @@ const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
 
-function resolveOpenAICodexGpt53FallbackModel(
+function resolveOpenAICodexForwardCompatModel(
   provider: string,
   modelId: string,
   modelRegistry: ModelRegistry,
@@ -50,6 +50,8 @@ function resolveOpenAICodexGpt53FallbackModel(
       ...template,
       id: trimmedModelId,
       name: trimmedModelId,
+      reasoning: facts.reasoning,
+      input: [...facts.input],
       ...(typeof facts.contextWindow === "number" ? { contextWindow: facts.contextWindow } : {}),
       ...(typeof facts.maxTokens === "number" ? { maxTokens: facts.maxTokens } : {}),
     } as Model<Api>);
@@ -260,10 +262,10 @@ export function resolveModel(
         modelRegistry,
       };
     }
-    // Codex gpt-5.3 forward-compat fallback must be checked BEFORE the generic providerCfg fallback.
+    // Codex forward-compat fallback must be checked BEFORE the generic providerCfg fallback.
     // Otherwise, if cfg.models.providers["openai-codex"] is configured, the generic fallback fires
     // with api: "openai-responses" instead of the correct "openai-codex-responses".
-    const codexForwardCompat = resolveOpenAICodexGpt53FallbackModel(
+    const codexForwardCompat = resolveOpenAICodexForwardCompatModel(
       provider,
       modelId,
       modelRegistry,
