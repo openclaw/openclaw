@@ -98,7 +98,7 @@ function mergeVisibleHistory(state: ChatState, incoming: unknown[]): unknown[] {
     return incoming;
   }
 
-  return [...incoming, ...optimisticUsers].sort((a, b) => {
+  return [...incoming, ...optimisticUsers].toSorted((a, b) => {
     const left = getMessageTimestamp(a) ?? Number.MAX_SAFE_INTEGER;
     const right = getMessageTimestamp(b) ?? Number.MAX_SAFE_INTEGER;
     return left - right;
