@@ -8,6 +8,7 @@ import {
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
+import { augmentKnownForwardCompatModels } from "../../agents/model-forward-compat.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -99,7 +100,7 @@ export async function loadModelRegistry(cfg: OpenClawConfig) {
   const agentDir = resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);
-  const models = registry.getAll();
+  const models = augmentKnownForwardCompatModels(registry.getAll());
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
 

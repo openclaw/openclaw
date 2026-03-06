@@ -5,11 +5,16 @@ import { normalizeModelCompat } from "./model-compat.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
+const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_GPT54_MODEL_IDS = new Set([OPENAI_GPT_54_MODEL_ID, OPENAI_GPT_54_PRO_MODEL_ID]);
 const OPENAI_GPT54_TEMPLATE_MODEL_IDS = ["gpt-5.2", "gpt-5.1", "gpt-5"] as const;
+const OPENAI_GPT54_CONTEXT_WINDOW = 1_050_000;
+const OPENAI_GPT54_MAX_TOKENS = 128_000;
+const OPENAI_CODEX_SPARK_CONTEXT_WINDOW = 272_000;
+const OPENAI_CODEX_SPARK_MAX_TOKENS = 128_000;
 
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
@@ -50,6 +55,94 @@ function cloneFirstTemplateModel(params: {
     } as Model<Api>);
   }
   return undefined;
+}
+
+function buildOpenAIGpt54FallbackModel(modelId: string, template?: Model<Api> | null): Model<Api> {
+  return normalizeModelCompat({
+    ...template,
+    id: modelId,
+    name: modelId,
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text", "image"],
+    cost:
+      modelId.toLowerCase() === OPENAI_GPT_54_PRO_MODEL_ID
+        ? { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 }
+        : { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+    contextWindow: OPENAI_GPT54_CONTEXT_WINDOW,
+    maxTokens: OPENAI_GPT54_MAX_TOKENS,
+  } as Model<Api>);
+}
+
+function buildOpenAICodexSparkFallbackModel(template?: Model<Api> | null): Model<Api> {
+  return normalizeModelCompat({
+    ...template,
+    id: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+    name: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    baseUrl: "https://chatgpt.com/backend-api",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: template?.cost ?? { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+    contextWindow: template?.contextWindow ?? OPENAI_CODEX_SPARK_CONTEXT_WINDOW,
+    maxTokens: template?.maxTokens ?? OPENAI_CODEX_SPARK_MAX_TOKENS,
+  } as Model<Api>);
+}
+
+export function augmentKnownForwardCompatModels(models: Model<Api>[]): Model<Api>[] {
+  const next = [...models];
+  const existing = new Set(
+    next.map((model) => `${normalizeProviderId(model.provider)}::${model.id.trim().toLowerCase()}`),
+  );
+  const getKey = (provider: string, id: string) =>
+    `${normalizeProviderId(provider)}::${id.trim().toLowerCase()}`;
+  const hasProvider = (provider: string) =>
+    next.some((model) => normalizeProviderId(model.provider) === provider);
+
+  if (hasProvider("openai")) {
+    const openAiTemplate =
+      next.find(
+        (model) =>
+          normalizeProviderId(model.provider) === "openai" &&
+          [...OPENAI_GPT54_TEMPLATE_MODEL_IDS].includes(
+            model.id.trim().toLowerCase() as (typeof OPENAI_GPT54_TEMPLATE_MODEL_IDS)[number],
+          ),
+      ) ?? null;
+    for (const modelId of OPENAI_GPT54_MODEL_IDS) {
+      const key = getKey("openai", modelId);
+      if (existing.has(key)) {
+        continue;
+      }
+      next.push(buildOpenAIGpt54FallbackModel(modelId, openAiTemplate));
+      existing.add(key);
+    }
+  }
+
+  const codexBaseTemplate =
+    next.find(
+      (model) =>
+        normalizeProviderId(model.provider) === "openai-codex" &&
+        model.id.trim().toLowerCase() === OPENAI_CODEX_GPT_53_MODEL_ID,
+    ) ??
+    next.find(
+      (model) =>
+        normalizeProviderId(model.provider) === "openai-codex" &&
+        [...OPENAI_CODEX_TEMPLATE_MODEL_IDS].includes(
+          model.id.trim().toLowerCase() as (typeof OPENAI_CODEX_TEMPLATE_MODEL_IDS)[number],
+        ),
+    ) ??
+    null;
+  if (codexBaseTemplate) {
+    const sparkKey = getKey("openai-codex", OPENAI_CODEX_GPT_53_SPARK_MODEL_ID);
+    if (!existing.has(sparkKey)) {
+      next.push(buildOpenAICodexSparkFallbackModel(codexBaseTemplate));
+    }
+  }
+
+  return next;
 }
 
 const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
@@ -126,21 +219,7 @@ function resolveOpenAIGpt54ForwardCompatModel(
     return template;
   }
 
-  return normalizeModelCompat({
-    id: trimmedModelId,
-    name: trimmedModelId,
-    api: "openai-responses",
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    reasoning: true,
-    input: ["text", "image"],
-    cost:
-      lowerModelId === OPENAI_GPT_54_PRO_MODEL_ID
-        ? { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 }
-        : { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-    contextWindow: 1_050_000,
-    maxTokens: 128_000,
-  } as Model<Api>);
+  return buildOpenAIGpt54FallbackModel(trimmedModelId);
 }
 
 function resolveAnthropic46ForwardCompatModel(params: {
