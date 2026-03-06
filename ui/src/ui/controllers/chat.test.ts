@@ -534,6 +534,51 @@ describe("loadChatHistory", () => {
     // text takes precedence — "real reply" is NOT silent, so message is kept.
     expect(state.chatMessages).toHaveLength(1);
   });
+
+  it("preserves optimistic user messages while an active run reloads partial history", async () => {
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "Run a tool for me" }],
+      timestamp: 200,
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "Working..." }], timestamp: 250 }],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatMessages: [optimisticUser],
+      chatRunId: "run-1",
+      chatStreamStartedAt: 200,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      optimisticUser,
+      { role: "assistant", content: [{ type: "text", text: "Working..." }], timestamp: 250 },
+    ]);
+  });
+
+  it("does not preserve optimistic user messages once no run is active", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "Working..." }], timestamp: 250 }],
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatMessages: [{ role: "user", content: [{ type: "text", text: "Run a tool for me" }], timestamp: 200 }],
+      chatRunId: null,
+      chatStreamStartedAt: null,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "Working..." }], timestamp: 250 },
+    ]);
+  });
 });
 
 describe("loadChatHistory", () => {
