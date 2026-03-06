@@ -41,7 +41,11 @@ describe("loadModelCatalog", () => {
       expect(first).toEqual([]);
 
       const second = await loadModelCatalog({ config: cfg });
-      expect(second).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+      expect(second).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }),
+        ]),
+      );
       expect(getCallCount()).toBe(2);
       expect(warnSpy).toHaveBeenCalledTimes(1);
     } finally {
@@ -77,7 +81,11 @@ describe("loadModelCatalog", () => {
       );
 
       const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-      expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+      expect(result).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }),
+        ]),
+      );
       expect(warnSpy).toHaveBeenCalledTimes(1);
     } finally {
       setLoggerOverride(null);
@@ -112,6 +120,39 @@ describe("loadModelCatalog", () => {
     const spark = result.find((entry) => entry.id === "gpt-5.3-codex-spark");
     expect(spark?.name).toBe("gpt-5.3-codex-spark");
     expect(spark?.reasoning).toBe(true);
+  });
+
+  it("adds openai/gpt-5.4 and openai/gpt-5.4-pro when an older openai model exists", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5.2",
+        provider: "openai",
+        name: "GPT-5.2",
+        reasoning: true,
+        contextWindow: 400000,
+        input: ["text", "image"],
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        reasoning: true,
+        contextWindow: 1_050_000,
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-pro",
+        name: "GPT-5.4 Pro",
+        reasoning: true,
+        contextWindow: 1_050_000,
+      }),
+    );
   });
 
   it("merges configured models for opted-in non-pi-native providers", async () => {
