@@ -1179,7 +1179,9 @@ export function applyExtraParamsToAgent(
 
   const parallelToolCalls = resolveParallelToolCalls(merged);
   if (parallelToolCalls !== undefined) {
-    log.debug(`applying parallel_tool_calls=${parallelToolCalls} for ${provider}/${modelId}`);
+    log.debug(
+      `configuring parallel_tool_calls wrapper=${parallelToolCalls} for ${provider}/${modelId}`,
+    );
     agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, parallelToolCalls);
   }
 
