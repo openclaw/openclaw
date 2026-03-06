@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
@@ -79,11 +80,12 @@ describe("session tool-result guard TTL behavior", () => {
     const messages = sm
       .getEntries()
       .filter((e) => e.type === "message")
-      .map((e) => (e as { message: Record<string, unknown> }).message);
+      .map((e) => (e as unknown as { message: AgentMessage }).message);
 
     expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult", "assistant"]);
-    expect(messages[1].toolCallId).toBe("call_1");
-    expect(messages[1].isError).toBe(true);
+    const synthetic = messages[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(synthetic.toolCallId).toBe("call_1");
+    expect(synthetic.isError).toBe(true);
     vi.useRealTimers();
   });
 });
