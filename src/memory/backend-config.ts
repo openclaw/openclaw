@@ -329,20 +329,17 @@ function resolveDefaultCollections(
 /**
  * Resolve Cortex Memory backend configuration.
  */
-function resolveCortexConfig(
-  raw?: MemoryCortexConfig,
-  agentId?: string,
-): ResolvedCortexConfig {
+function resolveCortexConfig(raw?: MemoryCortexConfig, agentId?: string): ResolvedCortexConfig {
   const serviceUrl = raw?.serviceUrl?.trim() || DEFAULT_CORTEX_SERVICE_URL;
   const tenant = raw?.tenant?.trim() || agentId || DEFAULT_CORTEX_TENANT;
   const apiKey = raw?.apiKey?.trim() || undefined;
   const timeoutMs = resolveTimeoutMs(raw?.timeoutMs, DEFAULT_CORTEX_TIMEOUT_MS);
-  const maxResults = raw?.maxResults && raw.maxResults > 0 
-    ? Math.floor(raw.maxResults) 
-    : DEFAULT_CORTEX_MAX_RESULTS;
-  const minScore = typeof raw?.minScore === "number" && raw.minScore >= 0 && raw.minScore <= 1
-    ? raw.minScore
-    : DEFAULT_CORTEX_MIN_SCORE;
+  const maxResults =
+    raw?.maxResults && raw.maxResults > 0 ? Math.floor(raw.maxResults) : DEFAULT_CORTEX_MAX_RESULTS;
+  const minScore =
+    typeof raw?.minScore === "number" && raw.minScore >= 0 && raw.minScore <= 1
+      ? raw.minScore
+      : DEFAULT_CORTEX_MIN_SCORE;
   const scope = raw?.scope || DEFAULT_CORTEX_SCOPE;
   const autoCreateSession = raw?.autoCreateSession !== false;
   const autoExtract = raw?.autoExtract !== false;

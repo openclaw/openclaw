@@ -13,16 +13,16 @@ export type MemoryConfig = {
 
 /**
  * Cortex Memory backend configuration.
- * 
+ *
  * Cortex Memory is a high-performance, persistent, and intelligent long-term memory system
  * that gives AI agents the ability to remember, learn, and personalize interactions across sessions.
- * 
+ *
  * Features:
  * - Three-tier memory hierarchy (L0 Abstract → L1 Overview → L2 Detail)
  * - Virtual filesystem with cortex:// URI scheme
  * - Vector-based semantic search via Qdrant
  * - Multi-tenancy support with isolated memory spaces
- * 
+ *
  * @see https://github.com/sopaco/cortex-mem
  */
 export type MemoryCortexConfig = {
@@ -31,38 +31,38 @@ export type MemoryCortexConfig = {
    * Default: "http://localhost:8085"
    */
   serviceUrl?: string;
-  
+
   /**
    * Tenant identifier for memory isolation.
    * Each tenant has completely isolated memory spaces.
    * Default: "default"
    */
   tenant?: string;
-  
+
   /**
    * API key for authenticating with the Cortex Memory service.
    * Optional - set if the service requires authentication.
    */
   apiKey?: string;
-  
+
   /**
    * Request timeout in milliseconds for Cortex Memory API calls.
    * Default: 30000 (30 seconds)
    */
   timeoutMs?: number;
-  
+
   /**
    * Maximum number of search results to return.
    * Default: 10
    */
   maxResults?: number;
-  
+
   /**
    * Minimum relevance score threshold for search results (0.0-1.0).
    * Default: 0.4
    */
   minScore?: number;
-  
+
   /**
    * Search scope: "session", "user", or "agent".
    * - session: Search within conversation sessions
@@ -71,13 +71,13 @@ export type MemoryCortexConfig = {
    * Default: "session"
    */
   scope?: MemoryCortexSearchScope;
-  
+
   /**
    * Whether to automatically create sessions when adding messages.
    * Default: true
    */
   autoCreateSession?: boolean;
-  
+
   /**
    * Whether to automatically extract memories when sessions are closed.
    * Default: true

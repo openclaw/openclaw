@@ -1,14 +1,15 @@
 /**
  * Cortex Memory backend implementation for OpenClaw.
- * 
+ *
  * This module provides integration with Cortex Memory, a high-performance,
  * persistent, and intelligent long-term memory system for AI agents.
- * 
+ *
  * @see https://github.com/sopaco/cortex-mem
  */
 
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { ResolvedCortexConfig, ResolvedMemoryBackendConfig } from "./backend-config.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -16,7 +17,6 @@ import type {
   MemorySearchResult,
   MemorySource,
 } from "./types.js";
-import type { ResolvedCortexConfig, ResolvedMemoryBackendConfig } from "./backend-config.js";
 
 const log = createSubsystemLogger("memory:cortex");
 
@@ -63,7 +63,7 @@ type CortexTenantsResponse = {
 
 /**
  * Cortex Memory Manager - implements MemorySearchManager interface.
- * 
+ *
  * Communicates with cortex-mem-service via REST API to provide:
  * - Semantic vector search with L0/L1/L2 weighted scoring
  * - Session management with automatic memory extraction
@@ -114,7 +114,7 @@ export class CortexMemoryManager implements MemorySearchManager {
 
   /**
    * Search memories using Cortex Memory's semantic vector search.
-   * 
+   *
    * Uses weighted L0/L1/L2 scoring for optimal relevance:
    * - L0 (Abstract): ~100 tokens, fast positioning (20% weight)
    * - L1 (Overview): ~500-2000 tokens, structured summary (30% weight)
@@ -167,7 +167,7 @@ export class CortexMemoryManager implements MemorySearchManager {
     try {
       const response = await this.fetchApi<{ content: string; uri: string }>(
         `/api/v2/filesystem/read/${encodeURIComponent(uri)}`,
-        { method: "GET" }
+        { method: "GET" },
       );
 
       let content = response.content;
@@ -274,13 +274,10 @@ export class CortexMemoryManager implements MemorySearchManager {
 
     const requestBody: CortexSessionMessageRequest = { role, content };
 
-    const response = await this.fetchApi<{ uri: string }>(
-      `/api/v2/sessions/${threadId}/messages`,
-      {
-        method: "POST",
-        body: JSON.stringify(requestBody),
-      }
-    );
+    const response = await this.fetchApi<{ uri: string }>(`/api/v2/sessions/${threadId}/messages`, {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    });
 
     return response.uri;
   }
@@ -333,11 +330,13 @@ export class CortexMemoryManager implements MemorySearchManager {
    * List all sessions.
    */
   async listSessions(): Promise<Array<{ threadId: string; status: string; createdAt: string }>> {
-    const response = await this.fetchApi<{ sessions: Array<{
-      thread_id: string;
-      status: string;
-      created_at: string;
-    }> }>("/api/v2/sessions", { method: "GET" });
+    const response = await this.fetchApi<{
+      sessions: Array<{
+        thread_id: string;
+        status: string;
+        created_at: string;
+      }>;
+    }>("/api/v2/sessions", { method: "GET" });
 
     return response.sessions.map((s) => ({
       threadId: s.thread_id,
@@ -350,10 +349,9 @@ export class CortexMemoryManager implements MemorySearchManager {
    * List available tenants.
    */
   async listTenants(): Promise<string[]> {
-    const response = await this.fetchApi<CortexTenantsResponse>(
-      "/api/v2/tenants/tenants",
-      { method: "GET" }
-    );
+    const response = await this.fetchApi<CortexTenantsResponse>("/api/v2/tenants/tenants", {
+      method: "GET",
+    });
     return response.tenants;
   }
 
@@ -409,11 +407,11 @@ export class CortexMemoryManager implements MemorySearchManager {
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(
-          `Cortex API error: ${response.status} ${response.statusText} - ${errorText}`
+          `Cortex API error: ${response.status} ${response.statusText} - ${errorText}`,
         );
       }
 
-      return await response.json() as T;
+      return (await response.json()) as T;
     } finally {
       clearTimeout(timeoutId);
     }

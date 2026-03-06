@@ -9,7 +9,7 @@ global.fetch = mockFetch;
 
 describe("CortexMemoryManager", () => {
   const mockConfig: OpenClawConfig = {};
-  
+
   const mockCortexConfig: ResolvedCortexConfig = {
     serviceUrl: "http://localhost:8085",
     tenant: "test-tenant",
@@ -258,7 +258,7 @@ describe("CortexMemoryManager", () => {
         "http://localhost:8085/api/v2/sessions",
         expect.objectContaining({
           method: "POST",
-        })
+        }),
       );
     });
 
@@ -319,7 +319,7 @@ describe("CortexMemoryManager", () => {
         expect.stringContaining("/close"),
         expect.objectContaining({
           method: "POST",
-        })
+        }),
       );
     });
   });
