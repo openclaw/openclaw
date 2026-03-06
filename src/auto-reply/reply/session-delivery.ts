@@ -50,6 +50,9 @@ export function resolveLastChannelRaw(params: {
   sessionKey?: string;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+  // For main sessions with internal message channels (webchat/control-ui), always return
+  // the internal channel - never fall back to a persisted external channel from
+  // a previous interaction that would route replies to the wrong place.
   if (originatingChannel === INTERNAL_MESSAGE_CHANNEL && isMainSessionKey(params.sessionKey)) {
     return params.originatingChannelRaw;
   }
