@@ -1099,7 +1099,17 @@ extension MenuSessionsInjector {
     // MARK: - Width + placement
 
     private func findInsertIndex(in menu: NSMenu) -> Int? {
-        // Insert right before the separator above "Send Heartbeats".
+        // Insert before the separator above "Settings…" so sessions appear
+        // after the toggles and action buttons, keeping controls always visible
+        // regardless of how many active sessions are present.
+        if let settingsIdx = menu.items.firstIndex(where: { $0.title.hasPrefix("Settings") }) {
+            if let sepIdx = menu.items[..<settingsIdx].lastIndex(where: { $0.isSeparatorItem }) {
+                return sepIdx
+            }
+            return settingsIdx
+        }
+
+        // Fallback: before the separator above "Send Heartbeats".
         if let idx = menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }) {
             if let sepIdx = menu.items[..<idx].lastIndex(where: { $0.isSeparatorItem }) {
                 return sepIdx
@@ -1116,6 +1126,14 @@ extension MenuSessionsInjector {
     }
 
     private func findNodesInsertIndex(in menu: NSMenu) -> Int? {
+        // Mirror the sessions insert position so nodes appear in the same section.
+        if let settingsIdx = menu.items.firstIndex(where: { $0.title.hasPrefix("Settings") }) {
+            if let sepIdx = menu.items[..<settingsIdx].lastIndex(where: { $0.isSeparatorItem }) {
+                return sepIdx
+            }
+            return settingsIdx
+        }
+
         if let idx = menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }) {
             if let sepIdx = menu.items[..<idx].lastIndex(where: { $0.isSeparatorItem }) {
                 return sepIdx
