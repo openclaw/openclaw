@@ -142,6 +142,24 @@ export function createTelegramActionGate(params: {
   });
 }
 
+export type TelegramPollActionGateState = {
+  sendMessageEnabled: boolean;
+  pollEnabled: boolean;
+  enabled: boolean;
+};
+
+export function resolveTelegramPollActionGateState(
+  isActionEnabled: (key: keyof TelegramActionConfig, defaultValue?: boolean) => boolean,
+): TelegramPollActionGateState {
+  const sendMessageEnabled = isActionEnabled("sendMessage");
+  const pollEnabled = isActionEnabled("poll");
+  return {
+    sendMessageEnabled,
+    pollEnabled,
+    enabled: sendMessageEnabled && pollEnabled,
+  };
+}
+
 export function resolveTelegramAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;

@@ -17,6 +17,7 @@ import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { POLL_CREATION_PARAM_DEFS, POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -271,12 +272,8 @@ function buildFetchSchema() {
   };
 }
 
-function buildPollSchema() {
-  return {
-    pollQuestion: Type.Optional(Type.String()),
-    pollOption: Type.Optional(Type.Array(Type.String())),
-    pollDurationHours: Type.Optional(Type.Number()),
-    pollMulti: Type.Optional(Type.Boolean()),
+function buildPollSchema(options?: { includeTelegramExtras?: boolean }) {
+  const props: Record<string, unknown> = {
     pollId: Type.Optional(Type.String()),
     pollOptionId: Type.Optional(
       Type.String({
@@ -306,6 +303,27 @@ function buildPollSchema() {
       ),
     ),
   };
+  for (const name of POLL_CREATION_PARAM_NAMES) {
+    const def = POLL_CREATION_PARAM_DEFS[name];
+    if (def.telegramOnly && !options?.includeTelegramExtras) {
+      continue;
+    }
+    switch (def.kind) {
+      case "string":
+        props[name] = Type.Optional(Type.String());
+        break;
+      case "stringArray":
+        props[name] = Type.Optional(Type.Array(Type.String()));
+        break;
+      case "number":
+        props[name] = Type.Optional(Type.Number());
+        break;
+      case "boolean":
+        props[name] = Type.Optional(Type.Boolean());
+        break;
+    }
+  }
+  return props;
 }
 
 function buildChannelTargetSchema() {
@@ -425,13 +443,14 @@ function buildMessageToolSchemaProps(options: {
   includeButtons: boolean;
   includeCards: boolean;
   includeComponents: boolean;
+  includeTelegramPollExtras: boolean;
 }) {
   return {
     ...buildRoutingSchema(),
     ...buildSendSchema(options),
     ...buildReactionSchema(),
     ...buildFetchSchema(),
-    ...buildPollSchema(),
+    ...buildPollSchema({ includeTelegramExtras: options.includeTelegramPollExtras }),
     ...buildChannelTargetSchema(),
     ...buildStickerSchema(),
     ...buildThreadSchema(),
@@ -445,7 +464,12 @@ function buildMessageToolSchemaProps(options: {
 
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],
-  options: { includeButtons: boolean; includeCards: boolean; includeComponents: boolean },
+  options: {
+    includeButtons: boolean;
+    includeCards: boolean;
+    includeComponents: boolean;
+    includeTelegramPollExtras: boolean;
+  },
 ) {
   const props = buildMessageToolSchemaProps(options);
   return Type.Object({
@@ -458,6 +482,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
   includeButtons: true,
   includeCards: true,
   includeComponents: true,
+  includeTelegramPollExtras: true,
 });
 
 type MessageToolOptions = {
@@ -519,6 +544,16 @@ function resolveIncludeComponents(params: {
   return listChannelSupportedActions({ cfg: params.cfg, channel: "discord" }).length > 0;
 }
 
+function resolveIncludeTelegramPollExtras(params: {
+  cfg: OpenClawConfig;
+  currentChannelProvider?: string;
+}): boolean {
+  return listChannelSupportedActions({
+    cfg: params.cfg,
+    channel: "telegram",
+  }).includes("poll");
+}
+
 function buildMessageToolSchema(params: {
   cfg: OpenClawConfig;
   currentChannelProvider?: string;
@@ -533,10 +568,12 @@ function buildMessageToolSchema(params: {
     ? supportsChannelMessageCardsForChannel({ cfg: params.cfg, channel: currentChannel })
     : supportsChannelMessageCards(params.cfg);
   const includeComponents = resolveIncludeComponents(params);
+  const includeTelegramPollExtras = resolveIncludeTelegramPollExtras(params);
   return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
     includeButtons,
     includeCards,
     includeComponents,
+    includeTelegramPollExtras,
   });
 }
 

@@ -166,6 +166,24 @@ const createTelegramSendPluginRegistration = () => ({
   }),
 });
 
+const createTelegramPollPluginRegistration = () => ({
+  pluginId: "telegram",
+  source: "test",
+  plugin: createStubPlugin({
+    id: "telegram",
+    label: "Telegram",
+    actions: {
+      listActions: () => ["poll"],
+      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
+        return await handleTelegramAction(
+          { action, to: params.to, accountId: accountId ?? undefined },
+          cfg,
+        );
+      }) as unknown as NonNullable<ChannelPlugin["actions"]>["handleAction"],
+    },
+  }),
+});
+
 const { messageCommand } = await import("./message.js");
 
 describe("messageCommand", () => {
@@ -464,6 +482,36 @@ describe("messageCommand", () => {
       expect.objectContaining({
         action: "poll",
         to: "channel:123456789",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("routes telegram polls through message action", async () => {
+    await setRegistry(
+      createTestRegistry([
+        {
+          ...createTelegramPollPluginRegistration(),
+        },
+      ]),
+    );
+    const deps = makeDeps();
+    await messageCommand(
+      {
+        action: "poll",
+        channel: "telegram",
+        target: "123456789",
+        pollQuestion: "Ship it?",
+        pollOption: ["Yes", "No"],
+        pollDurationSeconds: 120,
+      },
+      deps,
+      runtime,
+    );
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "poll",
+        to: "123456789",
       }),
       expect.any(Object),
     );

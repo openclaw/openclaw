@@ -10,6 +10,7 @@ title: "Polls"
 
 ## Supported channels
 
+- Telegram
 - WhatsApp (web channel)
 - Discord
 - MS Teams (Adaptive Cards)
@@ -17,6 +18,13 @@ title: "Polls"
 ## CLI
 
 ```bash
+# Telegram
+openclaw message poll --channel telegram --target 123456789 \
+  --poll-question "Ship it?" --poll-option "Yes" --poll-option "No"
+openclaw message poll --channel telegram --target -1001234567890:topic:42 \
+  --poll-question "Pick a time" --poll-option "10am" --poll-option "2pm" \
+  --poll-duration-seconds 300
+
 # WhatsApp
 openclaw message poll --target +15555550123 \
   --poll-question "Lunch today?" --poll-option "Yes" --poll-option "No" --poll-option "Maybe"
@@ -36,9 +44,11 @@ openclaw message poll --channel msteams --target conversation:19:abc@thread.tacv
 
 Options:
 
-- `--channel`: `whatsapp` (default), `discord`, or `msteams`
+- `--channel`: `whatsapp` (default), `telegram`, `discord`, or `msteams`
 - `--poll-multi`: allow selecting multiple options
 - `--poll-duration-hours`: Discord-only (defaults to 24 when omitted)
+- `--poll-duration-seconds`: Telegram-only (5-600 seconds)
+- `--poll-anonymous` / `--poll-public`: Telegram-only poll visibility
 
 ## Gateway RPC
 
@@ -51,11 +61,14 @@ Params:
 - `options` (string[], required)
 - `maxSelections` (number, optional)
 - `durationHours` (number, optional)
+- `durationSeconds` (number, optional, Telegram-only)
+- `isAnonymous` (boolean, optional, Telegram-only)
 - `channel` (string, optional, default: `whatsapp`)
 - `idempotencyKey` (string, required)
 
 ## Channel differences
 
+- Telegram: 2-10 options. Supports forum topics via `threadId` or `:topic:` targets. Uses `durationSeconds` instead of `durationHours`, limited to 5-600 seconds. Supports anonymous and public polls.
 - WhatsApp: 2-12 options, `maxSelections` must be within option count, ignores `durationHours`.
 - Discord: 2-10 options, `durationHours` clamped to 1-768 hours (default 24). `maxSelections > 1` enables multi-select; Discord does not support a strict selection count.
 - MS Teams: Adaptive Card polls (OpenClaw-managed). No native poll API; `durationHours` is ignored.
@@ -63,6 +76,10 @@ Params:
 ## Agent tool (Message)
 
 Use the `message` tool with `poll` action (`to`, `pollQuestion`, `pollOption`, optional `pollMulti`, `pollDurationHours`, `channel`).
+
+For Telegram, the tool also accepts `pollDurationSeconds`, `pollAnonymous`, and `pollPublic`.
+
+Use `action: "poll"` for poll creation. Poll fields passed with `action: "send"` are rejected.
 
 Note: Discord has no “pick exactly N” mode; `pollMulti` maps to multi-select.
 Teams polls are rendered as Adaptive Cards and require the gateway to stay online
