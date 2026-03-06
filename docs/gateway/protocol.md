@@ -182,6 +182,7 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 
 - When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.
 - Operator clients resolve by calling `exec.approval.resolve` (requires `operator.approvals` scope).
+- For `host=node`, `exec.approval.request` must include `systemRunPlan` (canonical `argv`/`cwd`/`rawCommand`/session metadata). Requests missing `systemRunPlan` are rejected.
 
 ## Versioning
 
