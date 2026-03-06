@@ -1,8 +1,16 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 // @ts-expect-error — .mjs has no type declarations; tested via runtime assertions below.
-import { extractField, groupByItem, parseRef } from "../../scripts/bw-exec-resolver.mjs";
+import {
+  extractField,
+  groupByItem,
+  parseRef,
+  resolveSecrets,
+  runBw,
+} from "../../scripts/bw-exec-resolver.mjs";
 
 const SCRIPT_PATH = path.resolve(import.meta.dirname, "../../scripts/bw-exec-resolver.mjs");
 
@@ -33,6 +41,29 @@ function runScript(
     );
     child.stdin?.end(input);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Helper: create a fake bw script that returns canned responses
+// ---------------------------------------------------------------------------
+
+function createMockBwScript(tmpDir: string, responseMap: Record<string, string>): string {
+  const scriptPath = path.join(tmpDir, "bw");
+  // Build a Node script that reads args, looks up response, writes to stdout
+  const cases = Object.entries(responseMap)
+    .map(
+      ([key, value]) =>
+        `  if (args.includes("${key}")) { process.stdout.write(${JSON.stringify(value)}); process.exit(0); }`,
+    )
+    .join("\n");
+  const script = `#!/usr/bin/env node
+const args = process.argv.slice(2).filter(a => a !== "--nointeraction" && a !== "--raw");
+${cases}
+process.stderr.write("Not found.");
+process.exit(1);
+`;
+  fs.writeFileSync(scriptPath, script, { mode: 0o755 });
+  return tmpDir;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,6 +231,192 @@ describe("groupByItem", () => {
       { id: "my-item", field: "password" },
       { id: "my-item/username", field: "username" },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runBw — tested via e2e with a mock bw script
+// ---------------------------------------------------------------------------
+
+describe("runBw", () => {
+  const cleanupDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of cleanupDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    cleanupDirs.length = 0;
+  });
+
+  it("rejects when bw is not found", async () => {
+    const originalPath = process.env.PATH;
+    process.env.PATH = "/nonexistent";
+    try {
+      await expect(runBw(["status"])).rejects.toThrow();
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveSecrets — e2e with mock bw script
+// ---------------------------------------------------------------------------
+
+describe("resolveSecrets (e2e with mock bw)", () => {
+  const cleanupDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of cleanupDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    cleanupDirs.length = 0;
+  });
+
+  it("returns empty values and errors for empty ids", async () => {
+    const result = await resolveSecrets([]);
+    expect(result.values).toEqual({});
+    expect(result.errors).toEqual({});
+  });
+
+  it("resolves single item password via mock bw", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bw-test-"));
+    cleanupDirs.push(tmpDir);
+    const item = JSON.stringify({
+      id: "abc",
+      name: "anthropic-key",
+      type: 1,
+      login: { password: "sk-ant-secret", username: "user@test.com", uris: [] },
+      notes: null,
+      fields: [],
+    });
+    createMockBwScript(tmpDir, { "anthropic-key": item });
+
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${tmpDir}:${process.env.PATH}`;
+    try {
+      const result = await resolveSecrets(["anthropic-key/password"]);
+      expect(result.values["anthropic-key/password"]).toBe("sk-ant-secret");
+      expect(result.errors).toEqual({});
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("resolves multiple fields from same item via mock bw", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bw-test-"));
+    cleanupDirs.push(tmpDir);
+    const item = JSON.stringify({
+      id: "abc",
+      name: "my-creds",
+      type: 1,
+      login: { password: "secret123", username: "admin", uris: [{ uri: "https://example.com" }] },
+      notes: "important",
+      fields: [{ name: "api-key", value: "key-xyz", type: 0 }],
+    });
+    createMockBwScript(tmpDir, { "my-creds": item });
+
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${tmpDir}:${process.env.PATH}`;
+    try {
+      const result = await resolveSecrets([
+        "my-creds/password",
+        "my-creds/username",
+        "my-creds/notes",
+        "my-creds/uri",
+        "my-creds/api-key",
+      ]);
+      expect(result.values["my-creds/password"]).toBe("secret123");
+      expect(result.values["my-creds/username"]).toBe("admin");
+      expect(result.values["my-creds/notes"]).toBe("important");
+      expect(result.values["my-creds/uri"]).toBe("https://example.com");
+      expect(result.values["my-creds/api-key"]).toBe("key-xyz");
+      expect(result.errors).toEqual({});
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("reports per-id error for missing field", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bw-test-"));
+    cleanupDirs.push(tmpDir);
+    const item = JSON.stringify({
+      id: "abc",
+      name: "minimal",
+      type: 1,
+    });
+    createMockBwScript(tmpDir, { minimal: item });
+
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${tmpDir}:${process.env.PATH}`;
+    try {
+      const result = await resolveSecrets(["minimal/password"]);
+      expect(result.values["minimal/password"]).toBeUndefined();
+      expect(result.errors["minimal/password"]).toBeDefined();
+      expect(result.errors["minimal/password"].message).toContain("not found");
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("reports per-id error when item does not exist", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bw-test-"));
+    cleanupDirs.push(tmpDir);
+    createMockBwScript(tmpDir, {});
+
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${tmpDir}:${process.env.PATH}`;
+    try {
+      const result = await resolveSecrets(["nonexistent/password"]);
+      expect(result.values["nonexistent/password"]).toBeUndefined();
+      expect(result.errors["nonexistent/password"]).toBeDefined();
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("resolves items from multiple different items", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bw-test-"));
+    cleanupDirs.push(tmpDir);
+    const itemA = JSON.stringify({
+      id: "a",
+      name: "item-a",
+      type: 1,
+      login: { password: "pw-a", username: null, uris: [] },
+    });
+    const itemB = JSON.stringify({
+      id: "b",
+      name: "item-b",
+      type: 1,
+      login: { password: "pw-b", username: null, uris: [] },
+    });
+    createMockBwScript(tmpDir, { "item-a": itemA, "item-b": itemB });
+
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${tmpDir}:${process.env.PATH}`;
+    try {
+      const result = await resolveSecrets(["item-a/password", "item-b/password"]);
+      expect(result.values["item-a/password"]).toBe("pw-a");
+      expect(result.values["item-b/password"]).toBe("pw-b");
+      expect(result.errors).toEqual({});
+    } finally {
+      process.env.PATH = originalPath;
+    }
   });
 });
 
