@@ -223,7 +223,7 @@ function normalizeSessionTarget(raw: unknown) {
     return undefined;
   }
   const trimmed = raw.trim().toLowerCase();
-  if (trimmed === "main" || trimmed === "isolated") {
+  if (trimmed === "main" || trimmed === "isolated" || trimmed === "reuse") {
     return trimmed;
   }
   return undefined;

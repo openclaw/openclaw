@@ -490,7 +490,11 @@ export async function ensureLoaded(
       payloadRecord && typeof payloadRecord.kind === "string" ? payloadRecord.kind : "";
     const normalizedSessionTarget =
       typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
-    if (normalizedSessionTarget === "main" || normalizedSessionTarget === "isolated") {
+    if (
+      normalizedSessionTarget === "main" ||
+      normalizedSessionTarget === "isolated" ||
+      normalizedSessionTarget === "reuse"
+    ) {
       if (raw.sessionTarget !== normalizedSessionTarget) {
         raw.sessionTarget = normalizedSessionTarget;
         mutated = true;
