@@ -48,6 +48,7 @@ type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
   openaiWsWarmup?: boolean;
+  toolChoice?: unknown;
 };
 
 /**
@@ -128,6 +129,11 @@ function createStreamFnWithExtraParams(
   }
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
+  }
+  if (extraParams.toolChoice !== undefined) {
+    streamParams.toolChoice = extraParams.toolChoice;
+  } else if (extraParams.tool_choice !== undefined) {
+    streamParams.toolChoice = extraParams.tool_choice;
   }
   const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
@@ -288,6 +294,196 @@ function shouldEnableOpenAIResponsesServerCompaction(
   return model.provider === "openai";
 }
 
+function shouldApplySub2apiCodexCompat(model: {
+  api?: unknown;
+  provider?: unknown;
+  id?: unknown;
+}): boolean {
+  if (typeof model.api !== "string" || typeof model.provider !== "string") {
+    return false;
+  }
+  const provider = model.provider.toLowerCase();
+  if (provider !== "sub2api" && !provider.startsWith("sub2api-")) {
+    return false;
+  }
+  // Keep codex-responses behavior unchanged (store=false); this compat layer is
+  // only for sub2api passthrough on openai-responses.
+  if (model.api !== "openai-responses") {
+    return false;
+  }
+  if (typeof model.id !== "string") {
+    return false;
+  }
+  return /codex|gpt-5\.2/i.test(model.id);
+}
+
+function extractTextFromContentBlocks(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const blocks: string[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const text = (item as { text?: unknown }).text;
+    if (typeof text === "string" && text.trim()) {
+      blocks.push(text.trim());
+    }
+  }
+  return blocks;
+}
+
+function isRsReference(value: unknown): boolean {
+  return typeof value === "string" && /^rs_/i.test(value);
+}
+
+function sanitizeSub2apiCodexInput(input: unknown, instructionParts: string[]): unknown {
+  if (!Array.isArray(input)) {
+    return input;
+  }
+  const normalized: unknown[] = [];
+
+  for (const rawEntry of input) {
+    if (isRsReference(rawEntry)) {
+      continue;
+    }
+    if (!rawEntry || typeof rawEntry !== "object") {
+      normalized.push(rawEntry);
+      continue;
+    }
+
+    const entry = rawEntry as {
+      id?: unknown;
+      type?: unknown;
+      role?: unknown;
+      content?: unknown;
+      [key: string]: unknown;
+    };
+
+    if (isRsReference(entry.id)) {
+      continue;
+    }
+    if (typeof entry.type === "string" && /item_reference/i.test(entry.type)) {
+      continue;
+    }
+
+    const role = typeof entry.role === "string" ? entry.role : "";
+    if (role === "developer" || role === "system") {
+      if (typeof entry.content === "string" && entry.content.trim()) {
+        instructionParts.push(entry.content.trim());
+      } else {
+        const blocks = extractTextFromContentBlocks(entry.content);
+        if (blocks.length > 0) {
+          instructionParts.push(blocks.join("\n"));
+        }
+      }
+      continue;
+    }
+
+    if (role !== "assistant") {
+      normalized.push(entry);
+      continue;
+    }
+
+    if (typeof entry.content === "string") {
+      normalized.push({
+        ...entry,
+        content: [{ type: "output_text", text: entry.content }],
+      });
+      continue;
+    }
+
+    if (!Array.isArray(entry.content)) {
+      normalized.push(entry);
+      continue;
+    }
+
+    const content = entry.content
+      .map((rawPart) => {
+        if (!rawPart || typeof rawPart !== "object") {
+          return rawPart;
+        }
+        const part = rawPart as {
+          id?: unknown;
+          type?: unknown;
+          text?: unknown;
+          [key: string]: unknown;
+        };
+        if (isRsReference(part.id)) {
+          return null;
+        }
+        if (typeof part.type === "string" && /item_reference/i.test(part.type)) {
+          return null;
+        }
+        if (part.type === "input_text") {
+          return { ...part, type: "output_text" };
+        }
+        if (part.type === "text") {
+          return { type: "output_text", text: typeof part.text === "string" ? part.text : "" };
+        }
+        return part;
+      })
+      .filter((part) => part != null);
+
+    if (content.length > 0 || hasMeaningfulAssistantNonContentFields(entry)) {
+      normalized.push({
+        ...entry,
+        content,
+      });
+    }
+  }
+
+  return normalized;
+}
+
+function hasMeaningfulAssistantNonContentFields(entry: { [key: string]: unknown }): boolean {
+  return Object.entries(entry).some(
+    ([key, value]) =>
+      key !== "id" && key !== "type" && key !== "role" && key !== "content" && value != null,
+  );
+}
+
+function hasUsableTools(tools: unknown): boolean {
+  if (!Array.isArray(tools)) {
+    return false;
+  }
+  return tools.some((tool) => tool && typeof tool === "object");
+}
+
+function normalizeRequiredToolChoiceWhenNoTools(payloadObj: {
+  tools?: unknown;
+  tool_choice?: unknown;
+}): void {
+  if (hasUsableTools(payloadObj.tools)) {
+    return;
+  }
+
+  if (payloadObj.tool_choice === "required") {
+    payloadObj.tool_choice = "auto";
+    return;
+  }
+
+  if (
+    payloadObj.tool_choice &&
+    typeof payloadObj.tool_choice === "object" &&
+    !Array.isArray(payloadObj.tool_choice)
+  ) {
+    const toolChoiceObj = payloadObj.tool_choice as Record<string, unknown>;
+    if (toolChoiceObj.type === "required") {
+      payloadObj.tool_choice = { ...toolChoiceObj, type: "auto" };
+    }
+  }
+}
+
+function isStoreSupportedForModel(model: { compat?: unknown }): boolean {
+  if (!model.compat || typeof model.compat !== "object") {
+    return true;
+  }
+  const supportsStore = (model.compat as { supportsStore?: unknown }).supportsStore;
+  return supportsStore !== false;
+}
+
 function createOpenAIResponsesContextManagementWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -296,22 +492,39 @@ function createOpenAIResponsesContextManagementWrapper(
   return (model, context, options) => {
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
-    if (!forceStore && !useServerCompaction) {
+    const sub2apiCodexCompat = shouldApplySub2apiCodexCompat(model);
+    if (!forceStore && !useServerCompaction && !sub2apiCodexCompat) {
       return underlying(model, context, options);
     }
 
-    const compactThreshold =
-      parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
-      resolveOpenAIResponsesCompactThreshold(model);
+    const compactThreshold = useServerCompaction
+      ? (parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
+        resolveOpenAIResponsesCompactThreshold(model))
+      : undefined;
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          if (forceStore) {
+          const supportsStore = isStoreSupportedForModel(model);
+          const payloadObj = payload as {
+            store?: unknown;
+            previous_response_id?: unknown;
+            include?: unknown;
+            prompt_cache_key?: unknown;
+            max_output_tokens?: unknown;
+            reasoning?: unknown;
+            instructions?: unknown;
+            input?: unknown;
+            tools?: unknown;
+            tool_choice?: unknown;
+            context_management?: unknown;
+          };
+
+          if ((forceStore || sub2apiCodexCompat) && supportsStore) {
             payloadObj.store = true;
           }
+
           if (useServerCompaction && payloadObj.context_management === undefined) {
             payloadObj.context_management = [
               {
@@ -320,6 +533,26 @@ function createOpenAIResponsesContextManagementWrapper(
               },
             ];
           }
+
+          if (sub2apiCodexCompat) {
+            delete payloadObj.previous_response_id;
+            delete payloadObj.include;
+            delete payloadObj.prompt_cache_key;
+            delete payloadObj.max_output_tokens;
+            delete payloadObj.reasoning;
+            normalizeRequiredToolChoiceWhenNoTools(payloadObj);
+
+            const instructionParts: string[] = [];
+            if (typeof payloadObj.instructions === "string" && payloadObj.instructions.trim()) {
+              instructionParts.push(payloadObj.instructions.trim());
+            }
+
+            payloadObj.input = sanitizeSub2apiCodexInput(payloadObj.input, instructionParts);
+            const mergedInstructions = instructionParts.join("\n\n").trim();
+            payloadObj.instructions = mergedInstructions || "You are a helpful assistant.";
+          }
+
+          logFinalOpenAIResponsesPayload(model, payloadObj);
         }
         originalOnPayload?.(payload);
       },
@@ -533,6 +766,297 @@ type PayloadMessage = {
   role?: string;
   content?: unknown;
 };
+
+type OpenAIResponsesInputItem = {
+  type: "message";
+  role: "user" | "assistant";
+  content: Array<{ type: "input_text" | "output_text"; text: string }>;
+};
+
+type NormalizeMessagesToResponsesInputResult = {
+  input: OpenAIResponsesInputItem[];
+  lossless: boolean;
+};
+
+type DebugOpenAIResponsesInputSummary = {
+  count: number;
+  itemTypes: string[];
+  roles: string[];
+};
+
+function summarizeOpenAIResponsesInput(input: unknown): DebugOpenAIResponsesInputSummary {
+  if (!Array.isArray(input)) {
+    return {
+      count: 0,
+      itemTypes: [],
+      roles: [],
+    };
+  }
+
+  const itemTypes = new Set<string>();
+  const roles = new Set<string>();
+  for (const entry of input) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const typedEntry = entry as Record<string, unknown>;
+    if (typeof typedEntry.type === "string" && typedEntry.type.trim()) {
+      itemTypes.add(typedEntry.type);
+    }
+    if (typeof typedEntry.role === "string" && typedEntry.role.trim()) {
+      roles.add(typedEntry.role);
+    }
+  }
+
+  return {
+    count: input.length,
+    itemTypes: [...itemTypes].toSorted(),
+    roles: [...roles].toSorted(),
+  };
+}
+
+function logFinalOpenAIResponsesPayload(
+  model: { api?: unknown; provider?: unknown; id?: unknown },
+  payloadObj: Record<string, unknown>,
+): void {
+  if (model.api !== "openai-responses" || !log.isEnabled("debug")) {
+    return;
+  }
+
+  const provider = typeof model.provider === "string" ? model.provider : "";
+  const modelId = typeof model.id === "string" ? model.id : "";
+  const inputSummary = summarizeOpenAIResponsesInput(payloadObj.input);
+  const messageCount = Array.isArray(payloadObj.messages) ? payloadObj.messages.length : 0;
+  const toolsCount = Array.isArray(payloadObj.tools) ? payloadObj.tools.length : 0;
+  const instructions =
+    typeof payloadObj.instructions === "string" ? payloadObj.instructions.trim() : "";
+
+  log.debug("final OpenAI Responses payload", {
+    provider,
+    modelId,
+    stream: payloadObj.stream,
+    store: payloadObj.store,
+    hasInstructions: instructions.length > 0,
+    instructionsChars: instructions.length,
+    hasInputArray: Array.isArray(payloadObj.input),
+    inputCount: inputSummary.count,
+    inputItemTypes: inputSummary.itemTypes,
+    inputRoles: inputSummary.roles,
+    hasMessages: Array.isArray(payloadObj.messages),
+    messageCount,
+    toolsCount,
+    toolChoice: payloadObj.tool_choice,
+    hasPreviousResponseId:
+      typeof payloadObj.previous_response_id === "string" &&
+      payloadObj.previous_response_id.trim().length > 0,
+    hasContextManagement: payloadObj.context_management !== undefined,
+    consoleMessage:
+      `final OpenAI Responses payload: provider=${provider} ` +
+      `model=${modelId} stream=${String(payloadObj.stream)} ` +
+      `instructions=${instructions.length > 0 ? "yes" : "no"} ` +
+      `input=${Array.isArray(payloadObj.input) ? `array(${inputSummary.count})` : typeof payloadObj.input} ` +
+      `messages=${Array.isArray(payloadObj.messages) ? messageCount : 0}`,
+  });
+}
+
+function shouldApplySub2apiGpt52PayloadCompat(params: {
+  api?: unknown;
+  provider: string;
+  modelId: string;
+}): boolean {
+  if (params.api !== undefined && params.api !== "openai-responses") {
+    return false;
+  }
+  const provider = params.provider.trim().toLowerCase();
+  const modelId = params.modelId.trim().toLowerCase();
+  return provider.startsWith("sub2api") && (modelId === "gpt-5.2" || modelId === "gpt-5.4");
+}
+
+function extractPlainTextFromMessageContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const chunks: string[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    const text = (part as Record<string, unknown>).text;
+    if (typeof text === "string" && text.trim()) {
+      chunks.push(text);
+    }
+  }
+  return chunks.join("\n").trim();
+}
+
+function hasMeaningfulMessageData(msg: PayloadMessage): boolean {
+  if (typeof msg.content === "string") {
+    return msg.content.trim().length > 0;
+  }
+  if (Array.isArray(msg.content)) {
+    return msg.content.length > 0;
+  }
+  if (msg.content != null) {
+    return true;
+  }
+  return Object.entries(msg).some(
+    ([key, value]) => key !== "role" && key !== "content" && value != null,
+  );
+}
+
+function hasNonTextMessageContent(content: unknown): boolean {
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  for (const part of content) {
+    if (!part || typeof part !== "object") {
+      return true;
+    }
+    const block = part as Record<string, unknown>;
+    const blockType = typeof block.type === "string" ? block.type.toLowerCase() : "";
+    const text = block.text;
+    const hasText = typeof text === "string" && text.trim().length > 0;
+    const isTextBlockType =
+      blockType === "" ||
+      blockType === "text" ||
+      blockType === "input_text" ||
+      blockType === "output_text";
+    if (!hasText || !isTextBlockType) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function normalizeMessagesToResponsesInput(
+  messages: PayloadMessage[],
+): NormalizeMessagesToResponsesInputResult {
+  const normalized: OpenAIResponsesInputItem[] = [];
+  let lossless = true;
+  for (const msg of messages) {
+    const role = (msg.role ?? "").toLowerCase();
+    if (role === "system" || role === "developer") {
+      continue;
+    }
+    if (role !== "user" && role !== "assistant") {
+      if (hasMeaningfulMessageData(msg)) {
+        lossless = false;
+      }
+      continue;
+    }
+    const text = extractPlainTextFromMessageContent(msg.content).trim();
+    if (!text) {
+      if (hasMeaningfulMessageData(msg)) {
+        lossless = false;
+      }
+      continue;
+    }
+    if (hasNonTextMessageContent(msg.content)) {
+      lossless = false;
+    }
+    normalized.push({
+      type: "message",
+      role,
+      content: [{ type: role === "assistant" ? "output_text" : "input_text", text }],
+    });
+  }
+  return { input: normalized, lossless };
+}
+
+function normalizeSub2apiGpt52Payload(payloadObj: Record<string, unknown>): void {
+  // sub2api gpt-5.x rejects these fields on /v1/responses.
+  delete payloadObj.previous_response_id;
+  delete payloadObj.max_output_tokens;
+
+  const messages = Array.isArray(payloadObj.messages)
+    ? (payloadObj.messages as PayloadMessage[])
+    : undefined;
+
+  if (
+    (typeof payloadObj.instructions !== "string" || !payloadObj.instructions.trim()) &&
+    messages
+  ) {
+    const instructionText = messages
+      .filter((msg) => {
+        const role = (msg.role ?? "").toLowerCase();
+        return role === "system" || role === "developer";
+      })
+      .map((msg) => extractPlainTextFromMessageContent(msg.content))
+      .filter((text) => text.trim().length > 0)
+      .join("\n\n")
+      .trim();
+    payloadObj.instructions = instructionText || "You are a helpful assistant.";
+  }
+
+  if (!Array.isArray(payloadObj.input) && messages) {
+    const normalizedInput = normalizeMessagesToResponsesInput(messages);
+    if (normalizedInput.input.length > 0) {
+      payloadObj.input = normalizedInput.input;
+    }
+    if (Array.isArray(payloadObj.input) && normalizedInput.lossless) {
+      delete payloadObj.messages;
+    }
+  } else if (Array.isArray(payloadObj.input) && messages) {
+    const normalizedInput = normalizeMessagesToResponsesInput(messages);
+    if (normalizedInput.lossless) {
+      delete payloadObj.messages;
+    }
+  }
+
+  if (payloadObj.stream !== true) {
+    payloadObj.stream = true;
+  }
+}
+
+function createSub2apiGpt52PayloadCompatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (
+          payload &&
+          typeof payload === "object" &&
+          model.api === "openai-responses" &&
+          typeof model.provider === "string" &&
+          typeof model.id === "string" &&
+          shouldApplySub2apiGpt52PayloadCompat({
+            api: model.api,
+            provider: model.provider,
+            modelId: model.id,
+          })
+        ) {
+          const payloadObj = payload as Record<string, unknown>;
+          normalizeSub2apiGpt52Payload(payloadObj);
+
+          if (payloadObj.input == null) {
+            const contextMessages = Array.isArray((context as { messages?: unknown[] }).messages)
+              ? ((context as { messages?: PayloadMessage[] }).messages ?? [])
+              : [];
+            const normalizedInput = normalizeMessagesToResponsesInput(contextMessages);
+            if (normalizedInput.input.length > 0) {
+              payloadObj.input = normalizedInput.input;
+            }
+          }
+
+          if (typeof payloadObj.instructions !== "string" || !payloadObj.instructions.trim()) {
+            const contextSystemPrompt = (context as { systemPrompt?: unknown }).systemPrompt;
+            if (typeof contextSystemPrompt === "string" && contextSystemPrompt.trim()) {
+              payloadObj.instructions = contextSystemPrompt;
+            } else if (!Array.isArray(payloadObj.input)) {
+              payloadObj.instructions = "You are a helpful assistant.";
+            }
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
 
 /**
  * Inject cache_control into the system message for OpenRouter Anthropic models.
@@ -1147,6 +1671,11 @@ export function applyExtraParamsToAgent(
   if (openAIServiceTier) {
     log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
     agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
+  }
+
+  if (shouldApplySub2apiGpt52PayloadCompat({ provider, modelId })) {
+    log.debug(`applying sub2api gpt-5.2 payload compatibility wrapper for ${provider}/${modelId}`);
+    agent.streamFn = createSub2apiGpt52PayloadCompatWrapper(agent.streamFn);
   }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
