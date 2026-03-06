@@ -122,25 +122,29 @@ export async function resolveSystemNodePath(
   return null;
 }
 
-export async function resolveSystemNodeInfo(params: {
-  env?: Record<string, string | undefined>;
-  platform?: NodeJS.Platform;
-  execFile?: ExecFileAsync;
-}): Promise<SystemNodeInfo | null> {
-  const env = params.env ?? process.env;
-  const platform = params.platform ?? process.platform;
-  const systemNode = await resolveSystemNodePath(env, platform);
-  if (!systemNode) {
-    return null;
-  }
-
-  const version = await resolveNodeVersion(systemNode, params.execFile ?? execFileAsync);
-  return {
-    path: systemNode,
-    version,
-    supported: isSupportedNodeVersion(version),
-  };
-}
+    export async function resolveSystemNodeInfo(params: {
+      env?: Record<string, string | undefined>;
+      platform?: NodeJS.Platform;
+      execFile?: ExecFileAsync;
+    }): Promise<SystemNodeInfo | null> {
+      const env = params.env ?? process.env;
+      const platform = params.platform ?? process.platform;
+      let systemNode = await resolveSystemNodePath(env, platform);
+      if (!systemNode) {
+        return null;
+      }
+    
+      // Resolve versioned Homebrew paths (e.g. Cellar/...) to stable symlinks.
+      // This prevents the daemon from breaking when Node is upgraded.
+      systemNode = await resolveStableNodePath(systemNode);
+    
+      const version = await resolveNodeVersion(systemNode, params.execFile ?? execFileAsync);
+      return {
+        path: systemNode,
+        version,
+        supported: isSupportedNodeVersion(version),
+      };
+    }
 
 export function renderSystemNodeWarning(
   systemNode: SystemNodeInfo | null,
