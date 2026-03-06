@@ -903,6 +903,9 @@ export type PluginHookGatewayStopEvent = {
 // Use attemptIndex to distinguish initial assembly (0) from retries (1+).
 // Use loop_iteration_start/end for per-turn tracking within an attempt.
 export type PluginHookContextAssembledEvent = {
+  /** Stable run identifier — same across all attempts within one user-visible run.
+   *  Use for run-level deduplication when context_assembled fires multiple times. */
+  runId?: string;
   systemPrompt: string;
   /** The effective user prompt for this turn (after hook modifications). */
   prompt: string;
