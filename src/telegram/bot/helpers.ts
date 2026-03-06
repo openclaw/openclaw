@@ -280,18 +280,34 @@ export function buildGroupLabel(msg: Message, chatId: number | string, messageTh
   return `group:${chatId}${topicSuffix}`;
 }
 
-export function hasBotMention(msg: Message, botUsername: string) {
+export function hasBotMention(msg: Message, botUsername: string, botId?: number) {
   const text = (msg.text ?? msg.caption ?? "").toLowerCase();
   if (text.includes(`@${botUsername}`)) {
     return true;
   }
   const entities = msg.entities ?? msg.caption_entities ?? [];
   for (const ent of entities) {
-    if (ent.type !== "mention") {
+    if (ent.type === "mention") {
+      const slice = (msg.text ?? msg.caption ?? "").slice(ent.offset, ent.offset + ent.length);
+      if (slice.toLowerCase() === `@${botUsername}`) {
+        return true;
+      }
       continue;
     }
-    const slice = (msg.text ?? msg.caption ?? "").slice(ent.offset, ent.offset + ent.length);
-    if (slice.toLowerCase() === `@${botUsername}`) {
+    if (ent.type === "text_mention" && botId != null) {
+      const mentionedUser = (ent as typeof ent & { user?: { id?: number } }).user;
+      if (mentionedUser?.id === botId) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function hasAnyMentionEntity(msg: Message): boolean {
+  const entities = msg.entities ?? msg.caption_entities ?? [];
+  for (const ent of entities) {
+    if (ent.type === "mention" || ent.type === "text_mention") {
       return true;
     }
   }
