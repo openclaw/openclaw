@@ -1,4 +1,6 @@
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
+import { collectConfigServiceEnvVars } from "../../config/env-vars.js";
+import { buildServiceEnvironment } from "../../daemon/service-env.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
@@ -33,6 +35,97 @@ async function resolveGatewayRestartPort() {
 
   const portFromArgs = parsePortFromArgs(command?.programArguments);
   return portFromArgs ?? resolveGatewayPort(loadConfig(), mergedEnv);
+}
+
+function normalizeServiceEnvironment(
+  env: Record<string, string | undefined> | undefined,
+): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  if (!env) {
+    return normalized;
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    normalized[key] = trimmed;
+  }
+  return normalized;
+}
+
+function areServiceEnvironmentsEqual(
+  left: Record<string, string | undefined> | undefined,
+  right: Record<string, string | undefined> | undefined,
+): boolean {
+  const a = normalizeServiceEnvironment(left);
+  const b = normalizeServiceEnvironment(right);
+  const aKeys = Object.keys(a).toSorted();
+  const bKeys = Object.keys(b).toSorted();
+  if (aKeys.length !== bKeys.length) {
+    return false;
+  }
+  for (let i = 0; i < aKeys.length; i += 1) {
+    const key = aKeys[i];
+    if (key !== bKeys[i]) {
+      return false;
+    }
+    if (a[key] !== b[key]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function maybeRefreshLaunchAgentEnvironment(params: {
+  service: ReturnType<typeof resolveGatewayService>;
+  port: number;
+  json: boolean;
+  warnings: string[];
+}): Promise<void> {
+  if (params.service.label !== "LaunchAgent") {
+    return;
+  }
+
+  const command = await params.service.readCommand(process.env).catch(() => null);
+  if (!command?.programArguments?.length) {
+    return;
+  }
+
+  const cfg = loadConfig();
+  const serviceEnvironment = buildServiceEnvironment({
+    env: process.env as Record<string, string | undefined>,
+    port: params.port,
+    token: command.environment?.OPENCLAW_GATEWAY_TOKEN,
+  });
+  const refreshedEnvironment: Record<string, string | undefined> = {
+    ...collectConfigServiceEnvVars(cfg),
+    ...serviceEnvironment,
+  };
+
+  if (areServiceEnvironmentsEqual(command.environment, refreshedEnvironment)) {
+    return;
+  }
+
+  const silentStdout = { write: () => true } as unknown as NodeJS.WritableStream;
+  try {
+    await params.service.install({
+      env: process.env as Record<string, string | undefined>,
+      stdout: silentStdout,
+      programArguments: command.programArguments,
+      workingDirectory: command.workingDirectory,
+      environment: refreshedEnvironment,
+    });
+  } catch (err) {
+    const warning = `Failed to refresh LaunchAgent environment before restart: ${String(err)}`;
+    params.warnings.push(warning);
+    if (!params.json) {
+      defaultRuntime.log(theme.warn(warning));
+    }
+  }
 }
 
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
@@ -82,6 +175,14 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     renderStartHints: renderGatewayServiceStartHints,
     opts,
     checkTokenDrift: true,
+    preRestartCheck: async ({ warnings }) => {
+      await maybeRefreshLaunchAgentEnvironment({
+        service,
+        port: restartPort,
+        json,
+        warnings,
+      });
+    },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       let health = await waitForGatewayHealthyRestart({
         service,

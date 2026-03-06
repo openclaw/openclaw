@@ -123,4 +123,21 @@ describe("runServiceRestart token drift", () => {
     const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
     expect(payload.warnings).toBeUndefined();
   });
+
+  it("runs preRestartCheck only when service is loaded", async () => {
+    const preRestartCheck = vi.fn().mockResolvedValue(undefined);
+    service.isLoaded.mockResolvedValueOnce(false);
+
+    const restarted = await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      preRestartCheck,
+    });
+
+    expect(restarted).toBe(false);
+    expect(preRestartCheck).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+  });
 });

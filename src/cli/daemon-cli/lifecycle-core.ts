@@ -30,6 +30,13 @@ type RestartPostCheckContext = {
   fail: (message: string, hints?: string[]) => void;
 };
 
+type RestartPreCheckContext = {
+  json: boolean;
+  stdout: Writable;
+  warnings: string[];
+  fail: (message: string, hints?: string[]) => void;
+};
+
 async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
   if (process.platform !== "linux") {
     return hints;
@@ -252,6 +259,7 @@ export async function runServiceRestart(params: {
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
+  preRestartCheck?: (ctx: RestartPreCheckContext) => Promise<void>;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
@@ -315,6 +323,9 @@ export async function runServiceRestart(params: {
   }
 
   try {
+    if (params.preRestartCheck) {
+      await params.preRestartCheck({ json, stdout, warnings, fail });
+    }
     await params.service.restart({ env: process.env, stdout });
     if (params.postRestartCheck) {
       await params.postRestartCheck({ json, stdout, warnings, fail });

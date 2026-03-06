@@ -16,12 +16,15 @@ type RestartPostCheckContext = {
 
 type RestartParams = {
   opts?: { json?: boolean };
+  preRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
 };
 
 const service = {
   readCommand: vi.fn(),
   restart: vi.fn(),
+  install: vi.fn(),
+  label: "LaunchAgent",
 };
 
 const runServiceRestart = vi.fn();
@@ -30,14 +33,25 @@ const terminateStaleGatewayPids = vi.fn();
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
 const resolveGatewayPort = vi.fn(() => 18789);
 const loadConfig = vi.fn(() => ({}));
+const collectConfigServiceEnvVars = vi.fn(() => ({}));
+const buildServiceEnvironment = vi.fn(() => ({
+  OPENCLAW_GATEWAY_PORT: "18789",
+  OPENCLAW_GATEWAY_TOKEN: "tok",
+}));
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
   resolveGatewayPort,
 }));
+vi.mock("../../config/env-vars.js", () => ({
+  collectConfigServiceEnvVars: (...args: unknown[]) => collectConfigServiceEnvVars(...args),
+}));
 
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => service,
+}));
+vi.mock("../../daemon/service-env.js", () => ({
+  buildServiceEnvironment: (...args: unknown[]) => buildServiceEnvironment(...args),
 }));
 
 vi.mock("./restart-health.js", () => ({
@@ -65,16 +79,24 @@ describe("runDaemonRestart health checks", () => {
   beforeEach(() => {
     service.readCommand.mockClear();
     service.restart.mockClear();
+    service.install.mockClear();
     runServiceRestart.mockClear();
     waitForGatewayHealthyRestart.mockClear();
     terminateStaleGatewayPids.mockClear();
     renderRestartDiagnostics.mockClear();
     resolveGatewayPort.mockClear();
     loadConfig.mockClear();
+    collectConfigServiceEnvVars.mockClear();
+    buildServiceEnvironment.mockClear();
+    service.label = "LaunchAgent";
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
-      environment: {},
+      workingDirectory: "/tmp/openclaw",
+      environment: {
+        OPENCLAW_GATEWAY_PORT: "18789",
+        OPENCLAW_GATEWAY_TOKEN: "tok",
+      },
     });
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
@@ -83,11 +105,15 @@ describe("runDaemonRestart health checks", () => {
         err.hints = hints;
         throw err;
       };
-      await params.postRestartCheck?.({
+      const context = {
         json: Boolean(params.opts?.json),
         stdout: process.stdout,
         warnings: [],
         fail,
+      };
+      await params.preRestartCheck?.(context);
+      await params.postRestartCheck?.({
+        ...context,
       });
       return true;
     });
@@ -132,5 +158,73 @@ describe("runDaemonRestart health checks", () => {
     });
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes launch agent env before restart when config env changes", async () => {
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
+      workingDirectory: "/tmp/openclaw",
+      environment: {
+        OPENCLAW_GATEWAY_PORT: "18789",
+        OPENCLAW_GATEWAY_TOKEN: "tok",
+        MAIL_API_KEY: "old",
+      },
+    });
+    collectConfigServiceEnvVars.mockReturnValueOnce({ MAIL_API_KEY: "new" });
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(true);
+    expect(service.install).toHaveBeenCalledTimes(1);
+    expect(service.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        programArguments: ["openclaw", "gateway", "--port", "18789"],
+        environment: expect.objectContaining({
+          MAIL_API_KEY: "new",
+          OPENCLAW_GATEWAY_PORT: "18789",
+          OPENCLAW_GATEWAY_TOKEN: "tok",
+        }),
+      }),
+    );
+  });
+
+  it("skips env refresh when not using launch agent service", async () => {
+    service.label = "systemd";
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(true);
+    expect(service.install).not.toHaveBeenCalled();
+  });
+
+  it("skips launch agent env refresh when plist env already matches", async () => {
+    collectConfigServiceEnvVars.mockReturnValueOnce({});
+    buildServiceEnvironment.mockReturnValueOnce({
+      OPENCLAW_GATEWAY_PORT: "18789",
+      OPENCLAW_GATEWAY_TOKEN: "tok",
+    });
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(true);
+    expect(service.install).not.toHaveBeenCalled();
   });
 });
