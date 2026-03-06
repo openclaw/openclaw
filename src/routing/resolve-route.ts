@@ -72,17 +72,6 @@ function normalizeId(value: unknown): string {
   return "";
 }
 
-function matchesAccountId(match: string | undefined, actual: string): boolean {
-  const trimmed = (match ?? "").trim();
-  if (!trimmed) {
-    return actual === DEFAULT_ACCOUNT_ID;
-  }
-  if (trimmed === "*") {
-    return true;
-  }
-  return normalizeAccountId(trimmed) === actual;
-}
-
 export function buildAgentSessionKey(params: {
   agentId: string;
   channel: string;
@@ -160,17 +149,6 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
   return lookup.fallbackDefaultAgentId;
 }
 
-function matchesChannel(
-  match: { channel?: string | undefined } | undefined,
-  channel: string,
-): boolean {
-  const key = normalizeToken(match?.channel);
-  if (!key) {
-    return false;
-  }
-  return key === channel;
-}
-
 type NormalizedPeerConstraint =
   | { state: "none" }
   | { state: "invalid" }
@@ -187,6 +165,7 @@ type NormalizedBindingMatch = {
 type EvaluatedBinding = {
   binding: ReturnType<typeof listBindings>[number];
   match: NormalizedBindingMatch;
+  order: number;
 };
 
 type BindingScope = {
@@ -198,6 +177,7 @@ type BindingScope = {
 
 type EvaluatedBindingsCache = {
   bindingsRef: OpenClawConfig["bindings"];
+  byChannel: Map<string, EvaluatedBindingsByChannel>;
   byChannelAccount: Map<string, EvaluatedBinding[]>;
   byChannelAccountIndex: Map<string, EvaluatedBindingsIndex>;
 };
@@ -223,6 +203,101 @@ type EvaluatedBindingsIndex = {
   byAccount: EvaluatedBinding[];
   byChannel: EvaluatedBinding[];
 };
+
+type EvaluatedBindingsByChannel = {
+  byAccount: Map<string, EvaluatedBinding[]>;
+  byAnyAccount: EvaluatedBinding[];
+};
+
+function resolveAccountPatternKey(accountPattern: string): string {
+  if (!accountPattern.trim()) {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  return normalizeAccountId(accountPattern);
+}
+
+function buildEvaluatedBindingsByChannel(
+  cfg: OpenClawConfig,
+): Map<string, EvaluatedBindingsByChannel> {
+  const byChannel = new Map<string, EvaluatedBindingsByChannel>();
+  let order = 0;
+  for (const binding of listBindings(cfg)) {
+    if (!binding || typeof binding !== "object") {
+      continue;
+    }
+    const channel = normalizeToken(binding.match?.channel);
+    if (!channel) {
+      continue;
+    }
+    const match = normalizeBindingMatch(binding.match);
+    const evaluated: EvaluatedBinding = {
+      binding,
+      match,
+      order,
+    };
+    order += 1;
+    let bucket = byChannel.get(channel);
+    if (!bucket) {
+      bucket = {
+        byAccount: new Map<string, EvaluatedBinding[]>(),
+        byAnyAccount: [],
+      };
+      byChannel.set(channel, bucket);
+    }
+    if (match.accountPattern === "*") {
+      bucket.byAnyAccount.push(evaluated);
+      continue;
+    }
+    const accountKey = resolveAccountPatternKey(match.accountPattern);
+    const existing = bucket.byAccount.get(accountKey);
+    if (existing) {
+      existing.push(evaluated);
+      continue;
+    }
+    bucket.byAccount.set(accountKey, [evaluated]);
+  }
+  return byChannel;
+}
+
+function mergeEvaluatedBindingsInSourceOrder(
+  accountScoped: EvaluatedBinding[],
+  anyAccount: EvaluatedBinding[],
+): EvaluatedBinding[] {
+  if (accountScoped.length === 0) {
+    return anyAccount;
+  }
+  if (anyAccount.length === 0) {
+    return accountScoped;
+  }
+  const merged: EvaluatedBinding[] = [];
+  let accountIdx = 0;
+  let anyIdx = 0;
+  while (accountIdx < accountScoped.length && anyIdx < anyAccount.length) {
+    const accountBinding = accountScoped[accountIdx];
+    const anyBinding = anyAccount[anyIdx];
+    if (
+      (accountBinding?.order ?? Number.MAX_SAFE_INTEGER) <=
+      (anyBinding?.order ?? Number.MAX_SAFE_INTEGER)
+    ) {
+      if (accountBinding) {
+        merged.push(accountBinding);
+      }
+      accountIdx += 1;
+      continue;
+    }
+    if (anyBinding) {
+      merged.push(anyBinding);
+    }
+    anyIdx += 1;
+  }
+  if (accountIdx < accountScoped.length) {
+    merged.push(...accountScoped.slice(accountIdx));
+  }
+  if (anyIdx < anyAccount.length) {
+    merged.push(...anyAccount.slice(anyIdx));
+  }
+  return merged;
+}
 
 function pushToIndexMap(
   map: Map<string, EvaluatedBinding[]>,
@@ -331,6 +406,7 @@ function getEvaluatedBindingsForChannelAccount(
       ? existing
       : {
           bindingsRef,
+          byChannel: buildEvaluatedBindingsByChannel(cfg),
           byChannelAccount: new Map<string, EvaluatedBinding[]>(),
           byChannelAccountIndex: new Map<string, EvaluatedBindingsIndex>(),
         };
@@ -344,18 +420,10 @@ function getEvaluatedBindingsForChannelAccount(
     return hit;
   }
 
-  const evaluated: EvaluatedBinding[] = listBindings(cfg).flatMap((binding) => {
-    if (!binding || typeof binding !== "object") {
-      return [];
-    }
-    if (!matchesChannel(binding.match, channel)) {
-      return [];
-    }
-    if (!matchesAccountId(binding.match?.accountId, accountId)) {
-      return [];
-    }
-    return [{ binding, match: normalizeBindingMatch(binding.match) }];
-  });
+  const channelBindings = cache.byChannel.get(channel);
+  const accountScoped = channelBindings?.byAccount.get(accountId) ?? [];
+  const anyAccount = channelBindings?.byAnyAccount ?? [];
+  const evaluated = mergeEvaluatedBindingsInSourceOrder(accountScoped, anyAccount);
 
   cache.byChannelAccount.set(cacheKey, evaluated);
   cache.byChannelAccountIndex.set(cacheKey, buildEvaluatedBindingsIndex(evaluated));
