@@ -1,4 +1,5 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
+import { recordChannelActivity } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention.js";
@@ -279,6 +280,7 @@ export async function sendMessageFeishu(
   params: SendFeishuMessageParams,
 ): Promise<FeishuSendResult> {
   const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
+  const resolvedAccountId = resolveFeishuAccount({ cfg, accountId }).accountId;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
     cfg,
@@ -311,16 +313,36 @@ export async function sendMessageFeishu(
       if (!isWithdrawnReplyError(err)) {
         throw err;
       }
-      return sendFallbackDirect(client, directParams, "Feishu send failed");
+      const result = await sendFallbackDirect(client, directParams, "Feishu send failed");
+      recordChannelActivity({
+        channel: "feishu",
+        accountId: resolvedAccountId,
+        direction: "outbound",
+      });
+      return result;
     }
     if (shouldFallbackFromReplyTarget(response)) {
-      return sendFallbackDirect(client, directParams, "Feishu send failed");
+      const result = await sendFallbackDirect(client, directParams, "Feishu send failed");
+      recordChannelActivity({
+        channel: "feishu",
+        accountId: resolvedAccountId,
+        direction: "outbound",
+      });
+      return result;
     }
     assertFeishuMessageApiSuccess(response, "Feishu reply failed");
-    return toFeishuSendResult(response, receiveId);
+    const result = toFeishuSendResult(response, receiveId);
+    recordChannelActivity({
+      channel: "feishu",
+      accountId: resolvedAccountId,
+      direction: "outbound",
+    });
+    return result;
   }
 
-  return sendFallbackDirect(client, directParams, "Feishu send failed");
+  const result = await sendFallbackDirect(client, directParams, "Feishu send failed");
+  recordChannelActivity({ channel: "feishu", accountId: resolvedAccountId, direction: "outbound" });
+  return result;
 }
 
 export type SendFeishuCardParams = {
@@ -335,6 +357,7 @@ export type SendFeishuCardParams = {
 
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
   const { cfg, to, card, replyToMessageId, replyInThread, accountId } = params;
+  const resolvedAccountId = resolveFeishuAccount({ cfg, accountId }).accountId;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const content = JSON.stringify(card);
 
@@ -355,16 +378,36 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
       if (!isWithdrawnReplyError(err)) {
         throw err;
       }
-      return sendFallbackDirect(client, directParams, "Feishu card send failed");
+      const result = await sendFallbackDirect(client, directParams, "Feishu card send failed");
+      recordChannelActivity({
+        channel: "feishu",
+        accountId: resolvedAccountId,
+        direction: "outbound",
+      });
+      return result;
     }
     if (shouldFallbackFromReplyTarget(response)) {
-      return sendFallbackDirect(client, directParams, "Feishu card send failed");
+      const result = await sendFallbackDirect(client, directParams, "Feishu card send failed");
+      recordChannelActivity({
+        channel: "feishu",
+        accountId: resolvedAccountId,
+        direction: "outbound",
+      });
+      return result;
     }
     assertFeishuMessageApiSuccess(response, "Feishu card reply failed");
-    return toFeishuSendResult(response, receiveId);
+    const result = toFeishuSendResult(response, receiveId);
+    recordChannelActivity({
+      channel: "feishu",
+      accountId: resolvedAccountId,
+      direction: "outbound",
+    });
+    return result;
   }
 
-  return sendFallbackDirect(client, directParams, "Feishu card send failed");
+  const result = await sendFallbackDirect(client, directParams, "Feishu card send failed");
+  recordChannelActivity({ channel: "feishu", accountId: resolvedAccountId, direction: "outbound" });
+  return result;
 }
 
 export async function updateCardFeishu(params: {

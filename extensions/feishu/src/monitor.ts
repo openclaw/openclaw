@@ -13,11 +13,27 @@ import {
   stopFeishuMonitorState,
 } from "./monitor.state.js";
 
+export type FeishuGatewayStatusPatch = {
+  connected?: boolean;
+  lastEventAt?: number | null;
+  lastInboundAt?: number | null;
+  lastOutboundAt?: number | null;
+};
+
+export type FeishuGatewayStatusSink = (patch: FeishuGatewayStatusPatch) => void;
+
+export type FeishuRunStateMachine = {
+  onRunStart: () => void;
+  onRunEnd: () => void;
+};
+
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   accountId?: string;
+  statusSink?: FeishuGatewayStatusSink;
+  runStateMachine?: FeishuRunStateMachine;
 };
 
 export {
@@ -46,6 +62,8 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
       account,
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
+      statusSink: opts.statusSink,
+      runStateMachine: opts.runStateMachine,
     });
   }
 
@@ -83,6 +101,8 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
         botOpenIdSource: { kind: "prefetched", botOpenId, botName },
+        statusSink: opts.statusSink,
+        runStateMachine: opts.runStateMachine,
       }),
     );
   }
