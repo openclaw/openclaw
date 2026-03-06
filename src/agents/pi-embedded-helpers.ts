@@ -30,6 +30,7 @@ export {
   isCompactionFailureError,
   isContextOverflowError,
   isLikelyContextOverflowError,
+  isRoleOrderingConflictError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
   isImageDimensionErrorMessage,

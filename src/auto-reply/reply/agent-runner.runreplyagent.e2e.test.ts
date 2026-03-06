@@ -1422,7 +1422,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("returns friendly message for role ordering errors thrown as exceptions", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-      throw new Error("400 Incorrect role information");
+      throw new Error('messages: roles must alternate between "user" and "assistant"');
     });
 
     const { run } = createMinimalRun({});

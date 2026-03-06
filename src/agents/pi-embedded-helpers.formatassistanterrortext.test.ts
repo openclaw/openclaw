@@ -63,10 +63,17 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("/new");
   });
   it("handles JSON-wrapped role errors", () => {
-    const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
+    const msg = makeAssistantError(
+      '{"error":{"message":"messages: roles must alternate between \\"user\\" and \\"assistant\\""}}',
+    );
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("Message ordering conflict");
-    expect(result).not.toContain("400");
+    expect(result).not.toContain("roles must alternate");
+  });
+  it("does not misclassify generic role information errors", () => {
+    const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
+    const result = formatAssistantErrorText(msg);
+    expect(result).not.toContain("Message ordering conflict");
   });
   it("suppresses raw error JSON payloads that are not otherwise classified", () => {
     const msg = makeAssistantError(

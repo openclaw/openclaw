@@ -44,6 +44,7 @@ import {
   parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
+  isRoleOrderingConflictError,
   isTimeoutErrorMessage,
   pickFallbackThinkingLevel,
   type FailoverReason,
@@ -1086,7 +1087,7 @@ export async function runEmbeddedPiAgent(
               continue;
             }
             // Handle role ordering errors with a user-friendly message
-            if (/incorrect role information|roles must alternate/i.test(errorText)) {
+            if (isRoleOrderingConflictError(errorText)) {
               return {
                 payloads: [
                   {

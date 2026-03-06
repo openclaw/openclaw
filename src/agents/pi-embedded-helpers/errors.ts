@@ -189,6 +189,11 @@ const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
 const TRANSIENT_HTTP_ERROR_CODES = new Set([500, 502, 503, 504, 521, 522, 523, 524, 529]);
+const ROLE_ALTERNATION_RE = /\broles?\s+must\s+alternate\b/i;
+const ROLE_ORDERING_HINT_RE = /\bincorrect role information\b/i;
+const ROLE_USER_ASSISTANT_PAIR_RE = /\bbetween\s+["']user["']\s+and\s+["']assistant["']\b/i;
+const ROLE_SEQUENCE_RE =
+  /\bmessages?\b[\s\S]{0,80}\b(?:role|roles?)\b[\s\S]{0,80}\b(?:alternate|order|sequence)\b/i;
 const HTTP_ERROR_HINTS = [
   "error",
   "bad request",
@@ -217,6 +222,19 @@ function extractLeadingHttpStatus(raw: string): { code: number; rest: string } |
     return null;
   }
   return { code, rest: (match[2] ?? "").trim() };
+}
+
+export function isRoleOrderingConflictError(errorMessage?: string): boolean {
+  if (!errorMessage) {
+    return false;
+  }
+  if (ROLE_ALTERNATION_RE.test(errorMessage)) {
+    return true;
+  }
+  if (!ROLE_ORDERING_HINT_RE.test(errorMessage)) {
+    return false;
+  }
+  return ROLE_USER_ASSISTANT_PAIR_RE.test(errorMessage) || ROLE_SEQUENCE_RE.test(errorMessage);
 }
 
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
@@ -564,11 +582,7 @@ export function formatAssistantErrorText(
   }
 
   // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
-  if (
-    /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
-      raw,
-    )
-  ) {
+  if (isRoleOrderingConflictError(raw)) {
     return (
       "Message ordering conflict - please try again. " +
       "If this persists, use /new to start a fresh session."
@@ -626,7 +640,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
   // Otherwise we risk swallowing legitimate assistant text that merely *mentions* these errors.
   if (errorContext) {
-    if (/incorrect role information|roles must alternate/i.test(trimmed)) {
+    if (isRoleOrderingConflictError(trimmed)) {
       return (
         "Message ordering conflict - please try again. " +
         "If this persists, use /new to start a fresh session."

@@ -23,8 +23,16 @@ describe("sanitizeUserFacingText", () => {
   );
 
   it("sanitizes role ordering errors", () => {
-    const result = sanitizeUserFacingText("400 Incorrect role information", { errorContext: true });
+    const result = sanitizeUserFacingText(
+      'messages: roles must alternate between "user" and "assistant"',
+      { errorContext: true },
+    );
     expect(result).toContain("Message ordering conflict");
+  });
+
+  it("does not rewrite generic role information errors", () => {
+    const text = "400 Incorrect role information";
+    expect(sanitizeUserFacingText(text, { errorContext: true })).toBe(text);
   });
 
   it("sanitizes HTTP status errors with error hints", () => {
