@@ -638,7 +638,8 @@ async function collectMediaImagesFromTextBlock(
 }
 
 /** Regex to extract absolute image paths from a shell command string. */
-const IMAGE_PATH_IN_COMMAND_RE = /(?:^|\s)(\/[^\s'"`;|&>]+\.(?:png|jpe?g|gif|webp))(?![^\s'"`;|&>])/gi;
+const IMAGE_PATH_IN_COMMAND_RE =
+  /(?:^|\s)(\/[^\s'"`;|&>]+\.(?:png|jpe?g|gif|webp))(?![^\s'"`;|&>])/gi;
 
 /** Known image-viewer command patterns (view-image skill, common CLIs). */
 const IMAGE_VIEWER_CMD_RE =
