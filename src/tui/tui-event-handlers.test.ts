@@ -212,6 +212,24 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).toHaveBeenCalledWith("hello", "run-alias");
   });
 
+  it("accepts chat events when event session key is missing", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: {
+        currentSessionKey: "agent:main:main",
+        activeChatRunId: null,
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-missing-session",
+      state: "delta",
+      message: { content: "hello" },
+    } as ChatEvent);
+
+    expect(state.activeChatRunId).toBe("run-missing-session");
+    expect(chatLog.updateAssistant).toHaveBeenCalledWith("hello", "run-missing-session");
+  });
+
   it("does not cross-match canonical session keys from different agents", () => {
     const { chatLog, handleChatEvent } = createHandlersHarness({
       state: {
@@ -277,6 +295,22 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(chatLog.startTool).toHaveBeenCalledWith("tc-final", "session_status", undefined);
     expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("refreshes history for local runs when final event has no message", () => {
+    const { state, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+    const runId = "run-local-empty-final";
+    noteLocalRunId(runId);
+
+    handleChatEvent({
+      runId,
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    } as ChatEvent);
+
+    expect(loadHistory).toHaveBeenCalled();
   });
 
   it("ignores lifecycle updates for non-active runs in the same session", () => {
