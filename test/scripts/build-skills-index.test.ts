@@ -34,9 +34,7 @@ describe("build-skills-index.mjs", () => {
     );
     await fs.symlink(actualSkillDir, linkedSkillDir);
 
-    await execFileAsync("node", ["scripts/build-skills-index.mjs", skillsRoot], {
-      cwd: "/Users/knox/repos/openclaw",
-    });
+    await execFileAsync("node", ["scripts/build-skills-index.mjs", skillsRoot]);
 
     const index = JSON.parse(
       await fs.readFile(path.join(skillsRoot, "skills-index.json"), "utf-8"),
