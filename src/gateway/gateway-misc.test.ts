@@ -17,9 +17,9 @@ import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-r
 import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
-import * as sessionUtils from "./session-utils.js";
 import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import * as sessionUtils from "./session-utils.js";
 
 function makeControlUiResponse() {
   const res = {
