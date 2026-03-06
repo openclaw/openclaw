@@ -95,6 +95,25 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(result.detail).toContain("spawn failed");
   });
 
+  it("returns supervised when launchd kickstart times out (ETIMEDOUT) to avoid degraded state (#36822)", () => {
+    setPlatform("darwin");
+    process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    triggerOpenClawRestartMock.mockReturnValue({
+      ok: false,
+      method: "launchctl",
+      detail: "spawnSync launchctl ETIMEDOUT",
+    });
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    // ETIMEDOUT means launchctl timed out but the restart may be in-flight.
+    // Return "supervised" so the gateway exits cleanly and launchd KeepAlive
+    // restarts it, rather than falling back to a degraded in-process restart.
+    expect(result.mode).toBe("supervised");
+    expect(result.detail).toContain("ETIMEDOUT");
+  });
+
   it("does not schedule kickstart on non-darwin platforms", () => {
     setPlatform("linux");
     process.env.INVOCATION_ID = "abc123";
