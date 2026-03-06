@@ -1,7 +1,8 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
+import { log } from "./pi-embedded-runner/logger.js";
 
 describe("resolveExtraParams", () => {
   it("returns undefined with no model config", () => {
@@ -755,6 +756,36 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("websocket");
   });
 
+  it("passes configured websocket transport through stream options for openai-codex gpt-5.4", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.4": {
+              params: {
+                transport: "websocket",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.4",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("websocket");
+  });
+
   it("defaults Codex transport to auto (WebSocket-first)", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
@@ -1153,6 +1184,179 @@ describe("applyExtraParamsToAgent", () => {
       } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(true);
+  });
+
+  it("injects configured OpenAI service_tier into Responses payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {
+                params: {
+                  serviceTier: "priority",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload.service_tier).toBe("priority");
+  });
+
+  it("preserves caller-provided service_tier values", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {
+                params: {
+                  serviceTier: "priority",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        service_tier: "default",
+      },
+    });
+    expect(payload.service_tier).toBe("default");
+  });
+
+  it("does not inject service_tier for non-openai providers", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "azure-openai-responses",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "azure-openai-responses/gpt-5.4": {
+                params: {
+                  serviceTier: "priority",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-5.4",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload).not.toHaveProperty("service_tier");
+  });
+
+  it("does not inject service_tier for proxied openai base URLs", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {
+                params: {
+                  serviceTier: "priority",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://proxy.example.com/v1",
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload).not.toHaveProperty("service_tier");
+  });
+
+  it("does not inject service_tier for openai provider routed to Azure base URLs", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {
+                params: {
+                  serviceTier: "priority",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload).not.toHaveProperty("service_tier");
+  });
+
+  it("warns and skips service_tier injection for invalid serviceTier values", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "openai",
+        applyModelId: "gpt-5.4",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.4": {
+                  params: {
+                    serviceTier: "invalid",
+                  },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "openai-responses",
+          provider: "openai",
+          id: "gpt-5.4",
+          baseUrl: "https://api.openai.com/v1",
+        } as unknown as Model<"openai-responses">,
+      });
+
+      expect(payload).not.toHaveProperty("service_tier");
+      expect(warnSpy).toHaveBeenCalledWith("ignoring invalid OpenAI service tier param: invalid");
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("does not force store for OpenAI Responses routed through non-OpenAI base URLs", () => {
