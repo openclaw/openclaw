@@ -263,6 +263,7 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
+    rejectHardlinks: false, // Allow hardlinks for pnpm-installed control-ui assets
   });
   if (!opened.ok) {
     if (opened.reason === "io") {
