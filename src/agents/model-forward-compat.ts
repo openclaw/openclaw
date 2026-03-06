@@ -11,7 +11,7 @@ const OPENAI_CODEX_FORWARD_COMPAT_MODEL_IDS = new Set([
   OPENAI_CODEX_GPT_54_MODEL_ID,
   OPENAI_CODEX_GPT_53_MODEL_ID,
 ]);
-const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
+const OPENAI_CODEX_TEMPLATE_MODEL_IDS = [OPENAI_CODEX_GPT_53_MODEL_ID, "gpt-5.2-codex"] as const;
 const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_GPT54_MODEL_IDS = new Set([OPENAI_GPT_54_MODEL_ID, OPENAI_GPT_54_PRO_MODEL_ID]);
@@ -228,13 +228,6 @@ function resolveOpenAIGpt54ForwardCompatModel(
     trimmedModelId,
     templateIds: [...OPENAI_GPT54_TEMPLATE_MODEL_IDS],
     modelRegistry,
-    patch: {
-      api: "openai-responses",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_050_000,
-      maxTokens: 128_000,
-    },
   });
   if (template) {
     return buildOpenAIGpt54FallbackModel(trimmedModelId, template);

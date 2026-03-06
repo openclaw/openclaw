@@ -16,6 +16,7 @@ import {
   mockGoogleGeminiCliProTemplateModel,
   mockOpenAITemplateModel,
   mockOpenAICodexTemplateModel,
+  mockOpenAICodex53TemplateModel,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
 
@@ -53,6 +54,14 @@ describe("pi embedded model e2e smoke", () => {
 
   it("builds an openai-codex forward-compat fallback for gpt-5.4", () => {
     mockOpenAICodexTemplateModel();
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
+  });
+
+  it("builds openai-codex gpt-5.4 fallback from gpt-5.3 template metadata", () => {
+    mockOpenAICodex53TemplateModel();
 
     const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
     expect(result.error).toBeUndefined();

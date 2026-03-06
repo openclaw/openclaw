@@ -25,6 +25,12 @@ export const OPENAI_CODEX_TEMPLATE_MODEL = {
   maxTokens: 128000,
 };
 
+export const OPENAI_CODEX_53_TEMPLATE_MODEL = {
+  ...OPENAI_CODEX_TEMPLATE_MODEL,
+  id: "gpt-5.3-codex",
+  name: "GPT-5.3 Codex",
+};
+
 export const OPENAI_TEMPLATE_MODEL = {
   id: "gpt-5.2",
   name: "GPT-5.2",
@@ -43,6 +49,14 @@ export function mockOpenAICodexTemplateModel(): void {
     provider: "openai-codex",
     modelId: "gpt-5.2-codex",
     templateModel: OPENAI_CODEX_TEMPLATE_MODEL,
+  });
+}
+
+export function mockOpenAICodex53TemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "openai-codex",
+    modelId: "gpt-5.3-codex",
+    templateModel: OPENAI_CODEX_53_TEMPLATE_MODEL,
   });
 }
 
