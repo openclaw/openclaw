@@ -10,6 +10,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
@@ -82,6 +83,14 @@ export function createGatewayTool(opts?: {
       if (action === "restart") {
         if (!isRestartEnabled(opts?.config)) {
           throw new Error("Gateway restart is disabled (commands.restart=false).");
+        }
+        if (isCronSessionKey(opts?.agentSessionKey)) {
+          throw new Error(
+            "Gateway restart is not allowed from cron/isolated sessions. " +
+              "A restart would terminate the session's WebSocket connection mid-run, " +
+              "leaving the job stuck or causing a restart loop. " +
+              "Schedule a separate one-shot job or use the main session instead.",
+          );
         }
         const sessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
