@@ -189,6 +189,7 @@ Docs: https://docs.openclaw.ai
 - Memory/flush default prompt: ban timestamped variant filenames during default memory flush runs so durable notes stay in the canonical daily `memory/YYYY-MM-DD.md` file. (#34951) thanks @zerone0x.
 - Agents/reply delivery timing: flush embedded Pi block replies before waiting on compaction retries so already-generated assistant replies reach channels before compaction wait completes. (#35489) thanks @Sid-Qin.
 - Agents/gateway config guidance: stop exposing `config.schema` through the agent `gateway` tool, remove prompt/docs guidance that told agents to call it, and keep agents on `config.get` plus `config.patch`/`config.apply` for config changes. (#7382) thanks @kakuteki.
+- Kilocode/proxy-provider hardening: keep valid gateway models when earlier duplicate entries are malformed, and always strip legacy `reasoning_effort` on Kilocode/OpenRouter proxy paths even when nested reasoning injection is skipped for `kilo/auto` or `x-ai/*`. (#32352) Thanks @pandemicsyn and @vincentkoc.
 
 ## 2026.3.2
 
