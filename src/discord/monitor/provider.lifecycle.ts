@@ -67,8 +67,9 @@ export async function runDiscordGatewayLifecycle(params: {
         return;
       }
       const at = Date.now();
-      const error = new Error(
-        `discord reconnect watchdog timeout after ${RECONNECT_STALL_TIMEOUT_MS}ms`,
+      const error = Object.assign(
+        new Error(`discord reconnect watchdog timeout after ${RECONNECT_STALL_TIMEOUT_MS}ms`),
+        { __reconnectStallTimeout: true },
       );
       pushStatus({
         connected: false,
@@ -323,7 +324,12 @@ export async function runDiscordGatewayLifecycle(params: {
       },
     });
   } catch (err) {
-    if (!sawDisallowedIntents && !params.isDisallowedIntentsError(err)) {
+    const isReconnectStall =
+      err instanceof Error &&
+      (err as { __reconnectStallTimeout?: boolean }).__reconnectStallTimeout;
+    if (isReconnectStall) {
+      params.runtime.log?.(`discord: reconnect stall resolved; channel will auto-restart`);
+    } else if (!sawDisallowedIntents && !params.isDisallowedIntentsError(err)) {
       throw err;
     }
   } finally {

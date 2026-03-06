@@ -371,7 +371,7 @@ describe("runDiscordGatewayLifecycle", () => {
       emitter.emit("debug", "WebSocket connection closed with code 1006");
 
       await vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000);
-      await expect(lifecyclePromise).rejects.toThrow("reconnect watchdog timeout");
+      await expect(lifecyclePromise).resolves.toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
