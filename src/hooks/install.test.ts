@@ -409,6 +409,28 @@ describe("installHooksFromNpmSpec", () => {
       actualIntegrity: "sha512-new",
     });
   });
+
+  it("rejects bare npm specs that resolve to prerelease versions", async () => {
+    const run = vi.mocked(runCommandWithTimeout);
+    mockNpmPackMetadataResult(run, {
+      id: "@openclaw/test-hooks@0.0.2-beta.1",
+      name: "@openclaw/test-hooks",
+      version: "0.0.2-beta.1",
+      filename: "test-hooks-0.0.2-beta.1.tgz",
+      integrity: "sha512-beta",
+      shasum: "betashasum",
+    });
+
+    const result = await installHooksFromNpmSpec({
+      spec: "@openclaw/test-hooks",
+      logger: { info: () => {}, warn: () => {} },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("prerelease version 0.0.2-beta.1");
+      expect(result.error).toContain('"@openclaw/test-hooks@beta"');
+    }
+  });
 });
 
 describe("gmail watcher", () => {
