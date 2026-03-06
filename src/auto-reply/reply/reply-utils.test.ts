@@ -141,6 +141,26 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("suppresses JSON action-only NO_REPLY payloads", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: '{"action":"NO_REPLY"}' },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("keeps media when JSON action-only NO_REPLY payload is returned", () => {
+    const result = normalizeReplyPayload({
+      text: '{"action":"NO_REPLY"}',
+      mediaUrl: "https://example.com/file.png",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("");
+    expect(result!.mediaUrl).toBe("https://example.com/file.png");
+  });
+
   it("strips NO_REPLY but keeps media payload", () => {
     const result = normalizeReplyPayload({
       text: "NO_REPLY",

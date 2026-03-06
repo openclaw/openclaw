@@ -25,6 +25,23 @@ export type NormalizeReplyOptions = {
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
+function isSilentReplyActionObject(text: string, silentToken: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return false;
+    }
+    const action = (parsed as { action?: unknown }).action;
+    return typeof action === "string" && action.trim().toUpperCase() === silentToken.toUpperCase();
+  } catch {
+    return false;
+  }
+}
+
 export function normalizeReplyPayload(
   payload: ReplyPayload,
   opts: NormalizeReplyOptions = {},
@@ -42,6 +59,13 @@ export function normalizeReplyPayload(
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
   if (text && isSilentReplyText(text, silentToken)) {
+    if (!hasMedia && !hasChannelData) {
+      opts.onSkip?.("silent");
+      return null;
+    }
+    text = "";
+  }
+  if (text && isSilentReplyActionObject(text, silentToken)) {
     if (!hasMedia && !hasChannelData) {
       opts.onSkip?.("silent");
       return null;
