@@ -78,8 +78,8 @@ configure_api_key() {
   if [ -n "$api_key" ]; then
     openclaw config set plugins.entries.openfinclaw.config.skillApiKey "$api_key"
     
-    read -p "Enter Skill Server URL [http://192.168.31.202:3000]: " base_url
-    base_url="${base_url:-http://192.168.31.202:3000}"
+    read -p "Enter Skill Server URL [https://hub.openfinclaw.ai]: " base_url
+    base_url="${base_url:-https://hub.openfinclaw.ai}"
     
     openclaw config set plugins.entries.openfinclaw.config.skillApiUrl "$base_url"
     echo ""

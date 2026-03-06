@@ -41,7 +41,7 @@ When the user talks about **publishing a strategy**, **submitting a skill**, **c
 
 The plugin requires configuration:
 
-- `skillApiUrl`: Server URL (default: `http://192.168.31.202:3000`)
+- `skillApiUrl`: Server URL (default: `https://hub.openfinclaw.ai`)
 - `skillApiKey`: API key with `fch_` prefix (68 chars)
 
 Configure via:

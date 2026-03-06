@@ -39,7 +39,7 @@ function resolveConfig(api: OpenClawPluginApi): SkillApiConfig {
   const baseUrl =
     (typeof raw?.skillApiUrl === "string" ? raw.skillApiUrl : undefined) ??
     readEnv(["SKILL_API_URL", "SKILL_API_BASE_URL"]) ??
-    "http://192.168.31.202:3000";
+    "https://hub.openfinclaw.ai";
   const apiKey =
     (typeof raw?.skillApiKey === "string" ? raw.skillApiKey : undefined) ??
     readEnv(["SKILL_API_KEY"]);

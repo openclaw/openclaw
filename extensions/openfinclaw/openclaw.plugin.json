@@ -9,8 +9,8 @@
     "properties": {
       "skillApiUrl": {
         "type": "string",
-        "description": "Skill API base URL (e.g. http://192.168.31.202:3000). No trailing slash.",
-        "default": "http://192.168.31.202:3000"
+        "description": "Skill API base URL (e.g. https://hub.openfinclaw.ai). No trailing slash.",
+        "default": "https://hub.openfinclaw.ai"
       },
       "skillApiKey": {
         "type": "string",
@@ -29,7 +29,7 @@
     "skillApiKey": { "label": "Skill API Key", "sensitive": true },
     "skillApiUrl": {
       "label": "Skill Server URL",
-      "placeholder": "http://192.168.31.202:3000"
+      "placeholder": "https://hub.openfinclaw.ai"
     }
   }
 }

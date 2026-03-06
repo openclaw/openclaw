@@ -35,15 +35,15 @@ After installation, configure your API key:
 # Get your API key at https://hub.openfinclaw.ai
 openclaw config set plugins.entries.openfinclaw.config.skillApiKey YOUR_API_KEY
 
-# Optional: modify server URL (default: http://192.168.31.202:3000)
-openclaw config set plugins.entries.openfinclaw.config.skillApiUrl http://192.168.31.202:3000
+# Optional: modify server URL (default: https://hub.openfinclaw.ai)
+openclaw config set plugins.entries.openfinclaw.config.skillApiUrl https://hub.openfinclaw.ai
 ```
 
 Or use environment variables:
 
 ```bash
 export SKILL_API_KEY=YOUR_API_KEY
-export SKILL_API_URL=http://192.168.31.202:3000
+export SKILL_API_URL=https://hub.openfinclaw.ai
 ```
 
 ### Configuration Options
@@ -51,7 +51,7 @@ export SKILL_API_URL=http://192.168.31.202:3000
 | Config Key         | Environment Variable       | Description                      | Default                      |
 | ------------------ | -------------------------- | -------------------------------- | ---------------------------- |
 | `skillApiKey`      | `SKILL_API_KEY`            | API key (fch\_ prefix, 68 chars) | Required                     |
-| `skillApiUrl`      | `SKILL_API_URL`            | Skill server URL                 | `http://192.168.31.202:3000` |
+| `skillApiUrl`      | `SKILL_API_URL`            | Skill server URL                 | `https://hub.openfinclaw.ai` |
 | `requestTimeoutMs` | `SKILL_REQUEST_TIMEOUT_MS` | Request timeout in milliseconds  | `60000`                      |
 
 ## Skills

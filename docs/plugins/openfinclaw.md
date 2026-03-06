@@ -32,14 +32,14 @@ openclaw plugins install @openfinclaw/openfinclaw
 openclaw config set plugins.entries.openfinclaw.config.skillApiKey YOUR_API_KEY
 
 # 可选：修改服务器地址
-openclaw config set plugins.entries.openfinclaw.config.skillApiUrl http://192.168.31.202:3000
+openclaw config set plugins.entries.openfinclaw.config.skillApiUrl https://hub.openfinclaw.ai
 ```
 
 ### 方式二：环境变量
 
 ```bash
 export SKILL_API_KEY=YOUR_API_KEY
-export SKILL_API_URL=http://192.168.31.202:3000
+export SKILL_API_URL=https://hub.openfinclaw.ai
 ```
 
 ### 方式三：直接编辑配置文件
@@ -53,7 +53,7 @@ export SKILL_API_URL=http://192.168.31.202:3000
       "openfinclaw": {
         "enabled": true,
         "config": {
-          "skillApiUrl": "http://192.168.31.202:3000",
+          "skillApiUrl": "https://hub.openfinclaw.ai",
           "skillApiKey": "fch_xxxxxxxx"
         }
       }
@@ -67,7 +67,7 @@ export SKILL_API_URL=http://192.168.31.202:3000
 | 配置项             | 说明                               | 默认值                       |
 | ------------------ | ---------------------------------- | ---------------------------- |
 | `skillApiKey`      | API Key（以 `fch_` 开头，68 字符） | 无（必需）                   |
-| `skillApiUrl`      | Skill Server 地址                  | `http://192.168.31.202:3000` |
+| `skillApiUrl`      | Skill Server 地址                  | `https://hub.openfinclaw.ai` |
 | `requestTimeoutMs` | 请求超时（毫秒）                   | `60000`                      |
 
 ### 环境变量
