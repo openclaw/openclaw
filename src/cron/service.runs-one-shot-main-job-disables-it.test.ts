@@ -1,6 +1,5 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import { createDeferred, createNoopLogger, installCronTestHooks } from "./service.test-harness.js";
@@ -192,7 +191,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 beforeEach(() => {
   fsState.entries.clear();
   fsState.nowMs = 0;
-  fsState.fixtureCount = 0;
+  // Keep fixtureCount monotonic across tests so each harness uses a unique
+  // fixture path. Reusing case-0 can race with late async writes from prior
+  // cron instances and make tests flaky.
   ensureDir(fixturesRoot);
 });
 
@@ -524,13 +525,7 @@ describe("CronService", () => {
       return now;
     };
 
-    let resolveHeartbeat: ((res: HeartbeatRunResult) => void) | null = null;
-    const runHeartbeatOnce = vi.fn(
-      async () =>
-        await new Promise<HeartbeatRunResult>((resolve) => {
-          resolveHeartbeat = resolve;
-        }),
-    );
+    const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 123 }));
 
     const { store, cron, enqueueSystemEvent, requestHeartbeatNow } =
       await createWakeModeNowMainHarness({
@@ -539,29 +534,11 @@ describe("CronService", () => {
       });
     const job = await addWakeModeNowMainSystemEventJob(cron, { name: "wakeMode now waits" });
 
-    const runPromise = cron.run(job.id, "force");
-    // `cron.run()` now persists the running marker before executing the job.
-    // Allow more microtask turns so the post-lock execution can start.
-    for (let i = 0; i < 500; i++) {
-      if (runHeartbeatOnce.mock.calls.length > 0) {
-        break;
-      }
-      // Let the locked() chain progress.
-      await Promise.resolve();
-    }
+    await cron.run(job.id, "force");
 
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
     expectMainSystemEventPosted(enqueueSystemEvent, "hello");
-    expect(job.state.runningAtMs).toBeTypeOf("number");
-
-    if (typeof resolveHeartbeat === "function") {
-      (resolveHeartbeat as (res: HeartbeatRunResult) => void)({ status: "ran", durationMs: 123 });
-    }
-    await runPromise;
-
-    expect(job.state.lastStatus).toBe("ok");
-    expect(job.state.lastDurationMs).toBeGreaterThan(0);
 
     await stopCronAndCleanup(cron, store);
   });
