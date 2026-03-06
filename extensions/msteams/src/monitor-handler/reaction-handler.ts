@@ -190,9 +190,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
     const reactionTypes = reactions.map((r) => reactionEmoji(r.type)).join(", ");
     const directionLabel = direction === "added" ? "reacted" : "removed reaction";
     const targetLabel = replyToId ? ` on message ${replyToId}` : "";
-    const chatLabel = isDirectMessage
-      ? `Teams DM`
-      : `Teams ${conversationType}`;
+    const chatLabel = isDirectMessage ? `Teams DM` : `Teams ${conversationType}`;
 
     const summary = `${chatLabel}: ${senderName} ${directionLabel} ${reactionTypes}${targetLabel}`;
 
