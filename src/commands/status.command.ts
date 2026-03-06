@@ -1,4 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig, resolveGatewayPort } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
@@ -64,6 +66,15 @@ function resolvePairingRecoveryContext(params: {
   return { requestId: requestId || null };
 }
 
+async function loadStatusSecurityAuditConfig() {
+  const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
+    config: loadConfig(),
+    commandName: "status",
+    targetIds: getStatusCommandSecretTargetIds(),
+  });
+  return resolvedConfig;
+}
+
 export async function statusCommand(
   opts: {
     json?: boolean;
@@ -83,12 +94,13 @@ export async function statusCommand(
   const [scan, securityAudit] = opts.json
     ? await Promise.all([
         scanStatus({ json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
-        runSecurityAudit({
-          config: loadConfig(),
-          deep: false,
-          includeFilesystem: true,
-          includeChannelSecurity: true,
-        }),
+        (async () =>
+          await runSecurityAudit({
+            config: await loadStatusSecurityAuditConfig(),
+            deep: false,
+            includeFilesystem: true,
+            includeChannelSecurity: true,
+          }))(),
       ])
     : [
         await scanStatus({ json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
@@ -100,7 +112,7 @@ export async function statusCommand(
           },
           async () =>
             await runSecurityAudit({
-              config: loadConfig(),
+              config: await loadStatusSecurityAuditConfig(),
               deep: false,
               includeFilesystem: true,
               includeChannelSecurity: true,

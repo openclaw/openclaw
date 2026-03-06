@@ -147,6 +147,12 @@ async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>):
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn().mockReturnValue({ session: {} }),
+  resolveCommandSecretRefsViaGateway: vi
+    .fn()
+    .mockImplementation(async ({ config }: { config: unknown }) => ({
+      resolvedConfig: config,
+      diagnostics: [],
+    })),
   loadSessionStore: vi.fn().mockReturnValue({
     "+1000": createDefaultSessionStoreEntry(),
   }),
@@ -349,6 +355,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
     loadConfig: mocks.loadConfig,
   };
 });
+vi.mock("../cli/command-secret-gateway.js", () => ({
+  resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
+}));
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({
     label: "LaunchAgent",
@@ -393,6 +402,13 @@ describe("statusCommand", () => {
   afterEach(() => {
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({ session: {} });
+    mocks.resolveCommandSecretRefsViaGateway.mockReset();
+    mocks.resolveCommandSecretRefsViaGateway.mockImplementation(
+      async ({ config }: { config: unknown }) => ({
+        resolvedConfig: config,
+        diagnostics: [],
+      }),
+    );
   });
 
   it("prints JSON when requested", async () => {
@@ -417,6 +433,32 @@ describe("statusCommand", () => {
     expect(payload.securityAudit.summary.warn).toBe(1);
     expect(payload.gatewayService.label).toBe("LaunchAgent");
     expect(payload.nodeService.label).toBe("LaunchAgent");
+  });
+
+  it("uses SecretRef-resolved config for status security audit", async () => {
+    const resolvedConfig = {
+      session: {},
+      channels: {
+        telegram: {
+          botToken: "123456:resolved-token",
+        },
+      },
+    };
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig,
+      diagnostics: [],
+    });
+
+    await statusCommand({ json: true }, runtime as never);
+
+    expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: resolvedConfig,
+        deep: false,
+        includeFilesystem: true,
+        includeChannelSecurity: true,
+      }),
+    );
   });
 
   it("surfaces unknown usage when totalTokens is missing", async () => {
