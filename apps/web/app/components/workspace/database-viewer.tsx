@@ -170,7 +170,9 @@ export function DuckDBMissing() {
       <button
         type="button"
         onClick={() => {
-          window.location.href = "/?send=" + encodeURIComponent("install duckdb");
+          const params = new URLSearchParams(window.location.search);
+          params.set("send", "install duckdb");
+          window.location.href = `/?${params.toString()}`;
         }}
         className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
         style={{

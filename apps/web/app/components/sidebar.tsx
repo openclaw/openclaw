@@ -216,7 +216,9 @@ function WorkspaceSection({ tree, onRefresh }: { tree: TreeNode[]; onRefresh: ()
   const handleSelect = useCallback((node: TreeNode) => {
     // Navigate to workspace page for actionable items
     if (node.type === "object" || node.type === "document" || node.type === "file" || node.type === "database" || node.type === "report") {
-      window.location.href = `/?path=${encodeURIComponent(node.path)}`;
+      const params = new URLSearchParams(window.location.search);
+      params.set("path", node.path);
+      window.location.href = `/?${params.toString()}`;
     }
   }, []);
 
