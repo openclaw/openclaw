@@ -82,6 +82,33 @@ describe("version resolution", () => {
     });
   });
 
+  it("resolves version from openclaw-cli package name", async () => {
+    await withTempDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw-cli", version: "2026.3.2" });
+      const moduleUrl = await ensureModuleFixture(root);
+      expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBe("2026.3.2");
+    });
+  });
+
+  it("skips 'dev' placeholder version in package.json and build-info", async () => {
+    await withTempDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw", version: "dev" });
+      await writeJsonFixture(root, "build-info.json", { version: "dev" });
+      const moduleUrl = await ensureModuleFixture(root);
+      expectVersionMetadataToBeMissing(moduleUrl);
+    });
+  });
+
+  it("uses envVersion when module metadata is unavailable", () => {
+    expect(
+      resolveBinaryVersion({
+        moduleUrl: "not-a-valid-url",
+        envVersion: "2026.3.2",
+        fallback: "0.0.0",
+      }),
+    ).toBe("2026.3.2");
+  });
+
   it("ignores non-openclaw package and blank build-info versions", async () => {
     await withTempDir(async (root) => {
       await writeJsonFixture(root, "package.json", { name: "other-package", version: "9.9.9" });

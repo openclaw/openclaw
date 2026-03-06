@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 
 declare const __OPENCLAW_VERSION__: string | undefined;
-const CORE_PACKAGE_NAME = "openclaw";
+const CORE_PACKAGE_NAMES = new Set(["openclaw", "openclaw-cli"]);
 
 const PACKAGE_JSON_CANDIDATES = [
   "../package.json",
@@ -30,7 +30,10 @@ function readVersionFromJsonCandidates(
         if (!version) {
           continue;
         }
-        if (opts.requirePackageName && parsed.name !== CORE_PACKAGE_NAME) {
+        if (opts.requirePackageName && !CORE_PACKAGE_NAMES.has(parsed.name ?? "")) {
+          continue;
+        }
+        if (version === "dev") {
           continue;
         }
         return version;
@@ -75,12 +78,13 @@ export function resolveBinaryVersion(params: {
   moduleUrl: string;
   injectedVersion?: string;
   bundledVersion?: string;
+  envVersion?: string;
   fallback?: string;
 }): string {
   return (
     firstNonEmpty(params.injectedVersion) ||
     resolveVersionFromModuleUrl(params.moduleUrl) ||
-    firstNonEmpty(params.bundledVersion) ||
+    firstNonEmpty(params.bundledVersion, params.envVersion) ||
     params.fallback ||
     "0.0.0"
   );
@@ -125,4 +129,5 @@ export const VERSION = resolveBinaryVersion({
   moduleUrl: import.meta.url,
   injectedVersion: typeof __OPENCLAW_VERSION__ === "string" ? __OPENCLAW_VERSION__ : undefined,
   bundledVersion: process.env.OPENCLAW_BUNDLED_VERSION,
+  envVersion: process.env.OPENCLAW_VERSION,
 });
