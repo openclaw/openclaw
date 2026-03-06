@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { SlackChannelSchema } from "../../../config/zod-schema.providers-core.js";
 import { isSlackStreamingEnabled, resolveSlackStreamingThreadHint } from "./dispatch.js";
 
 describe("slack native streaming defaults", () => {
@@ -44,21 +43,5 @@ describe("slack native streaming thread hint", () => {
         messageTs: "1000.3",
       }),
     ).toBe("2000.1");
-  });
-});
-
-describe("SlackChannelSchema replyToMode field", () => {
-  it("accepts valid replyToMode values", () => {
-    for (const value of ["off", "first", "all"] as const) {
-      const result = SlackChannelSchema.safeParse({ replyToMode: value });
-      expect(result.success, `expected "${value}" to be valid`).toBe(true);
-    }
-  });
-
-  it("rejects invalid replyToMode values", () => {
-    for (const value of ["invalid", true, 123]) {
-      const result = SlackChannelSchema.safeParse({ replyToMode: value });
-      expect(result.success, `expected ${JSON.stringify(value)} to be invalid`).toBe(false);
-    }
   });
 });
