@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+import type { ToolCallLike } from "./tool-call-id.js";
+import { extractToolResultId } from "./tool-call-id.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_-]+$/;
@@ -130,6 +131,29 @@ function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
     next.input = nextInput;
   }
   return next as RawToolCallBlock;
+}
+
+function toRepairableToolCall(
+  block: RawToolCallBlock,
+  allowedToolNames: Set<string> | null,
+): ToolCallLike | null {
+  if (
+    !hasToolCallInput(block) ||
+    !hasToolCallId(block) ||
+    !hasToolCallName(block, allowedToolNames)
+  ) {
+    return null;
+  }
+
+  const id = trimNonEmptyString(block.id);
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    name: trimNonEmptyString(block.name),
+  };
 }
 
 function makeMissingToolResult(params: {
@@ -327,6 +351,28 @@ export function sanitizeToolCallInputs(
   return repairToolCallInputs(messages, options).messages;
 }
 
+export function extractRepairableToolCallsFromAssistant(
+  message: Extract<AgentMessage, { role: "assistant" }>,
+  options?: ToolCallInputRepairOptions,
+): ToolCallLike[] {
+  if (!Array.isArray(message.content)) {
+    return [];
+  }
+
+  const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
+  const toolCalls: ToolCallLike[] = [];
+  for (const block of message.content) {
+    if (!isRawToolCallBlock(block)) {
+      continue;
+    }
+    const next = toRepairableToolCall(block, allowedToolNames);
+    if (next) {
+      toolCalls.push(next);
+    }
+  }
+  return toolCalls;
+}
+
 export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {
   return repairToolUseResultPairing(messages).messages;
 }
@@ -390,19 +436,11 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
 
     const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
 
-    // Skip tool call extraction for aborted or errored assistant messages.
-    // When stopReason is "error" or "aborted", the tool_use blocks may be incomplete
-    // (e.g., partialJson: true) and should not have synthetic tool_results created.
-    // Creating synthetic results for incomplete tool calls causes API 400 errors:
-    // "unexpected tool_use_id found in tool_result blocks"
-    // See: https://github.com/openclaw/openclaw/issues/4597
-    const stopReason = (assistant as { stopReason?: string }).stopReason;
-    if (stopReason === "error" || stopReason === "aborted") {
-      out.push(msg);
-      continue;
-    }
-
-    const toolCalls = extractToolCallsFromAssistant(assistant);
+    // Repair is based on structural completeness, not stopReason alone.
+    // Interrupted assistant turns can still contain fully-formed persisted tool calls
+    // that need synthetic tool results to keep the transcript valid, while partial
+    // streamed fragments are ignored here because they fail the structural checks.
+    const toolCalls = extractRepairableToolCallsFromAssistant(assistant);
     if (toolCalls.length === 0) {
       out.push(msg);
       continue;
