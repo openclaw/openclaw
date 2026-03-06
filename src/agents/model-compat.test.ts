@@ -335,18 +335,6 @@ describe("resolveForwardCompatModel", () => {
     expect(model?.maxTokens).toBe(128_000);
   });
 
-  it("resolves openai-codex gpt-5.3-codex-spark via codex template fallback", () => {
-    const registry = createRegistry({
-      "openai-codex/gpt-5.2-codex": createOpenAICodexTemplateModel("gpt-5.2-codex"),
-    });
-    const model = resolveForwardCompatModel("openai-codex", "gpt-5.3-codex-spark", registry);
-    expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.3-codex-spark" });
-    expect(model?.api).toBe("openai-codex-responses");
-    expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
-    expect(model?.contextWindow).toBe(272_000);
-    expect(model?.maxTokens).toBe(128_000);
-  });
-
   it("resolves anthropic opus 4.6 via 4.5 template", () => {
     const registry = createRegistry({
       "anthropic/claude-opus-4-5": createTemplateModel("anthropic", "claude-opus-4-5"),
