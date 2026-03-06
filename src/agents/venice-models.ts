@@ -60,7 +60,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text"],
     contextWindow: 131072,
-    maxTokens: 8192,
+    maxTokens: 4096,
     privacy: "private",
   },
   {
@@ -165,7 +165,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text", "image"],
     contextWindow: 131072,
-    maxTokens: 8192,
+    maxTokens: 4096,
     privacy: "private",
   },
 
@@ -340,6 +340,7 @@ interface VeniceModelSpec {
     supportsVision: boolean;
     supportsFunctionCalling: boolean;
   };
+  maxCompletionTokens?: number;
 }
 
 interface VeniceModel {
@@ -488,7 +489,7 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
           input: hasVision ? ["text", "image"] : ["text"],
           cost: VENICE_DEFAULT_COST,
           contextWindow: apiModel.model_spec.availableContextTokens || 128000,
-          maxTokens: 8192,
+          maxTokens: apiModel.model_spec.maxCompletionTokens || 8192,
           // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
           compat: {
             supportsUsageInStreaming: false,
