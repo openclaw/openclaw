@@ -68,7 +68,7 @@ final class DeepLinkHandler {
         case let .agent(link):
             await self.handleAgent(link: link, originalURL: url)
         case .gateway:
-            break
+            deepLinkLogger.debug("gateway deep link received but not yet handled")
         }
     }
 

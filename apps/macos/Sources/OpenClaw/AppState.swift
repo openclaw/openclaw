@@ -164,6 +164,14 @@ final class AppState {
         }
     }
 
+    var replyNotificationsEnabled: Bool {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.replyNotificationsEnabled, forKey: replyNotificationsEnabledKey)
+            }
+        }
+    }
+
     var connectionMode: ConnectionMode {
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }
@@ -269,6 +277,12 @@ final class AppState {
         } else {
             self.heartbeatsEnabled = true
             UserDefaults.standard.set(true, forKey: heartbeatsEnabledKey)
+        }
+        if let storedReplyNotifs = UserDefaults.standard.object(forKey: replyNotificationsEnabledKey) as? Bool {
+            self.replyNotificationsEnabled = storedReplyNotifs
+        } else {
+            self.replyNotificationsEnabled = true
+            UserDefaults.standard.set(true, forKey: replyNotificationsEnabledKey)
         }
         if let storedOverride = UserDefaults.standard.string(forKey: iconOverrideKey),
            let selection = IconOverrideSelection(rawValue: storedOverride)

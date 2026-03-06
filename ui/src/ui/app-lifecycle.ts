@@ -51,6 +51,8 @@ export function handleConnected(host: LifecycleHost) {
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
   attachThemeListener(host as unknown as Parameters<typeof attachThemeListener>[0]);
   window.addEventListener("popstate", host.popStateHandler);
+  // Request browser notification permission early so reply notifications work.
+  void import("./reply-notifications.ts").then((m) => m.requestNotificationPermission());
   void bootstrapReady.finally(() => {
     if (host.connectGeneration !== connectGeneration) {
       return;
