@@ -458,15 +458,7 @@ export async function findExtraGatewayServices(
       if (isOpenClawGatewayTaskName(name)) {
         continue;
       }
-      const lowerName = name.toLowerCase();
-      const lowerCommand = task.taskToRun?.toLowerCase() ?? "";
-      let marker: Marker | null = null;
-      for (const candidate of EXTRA_MARKERS) {
-        if (lowerName.includes(candidate) || lowerCommand.includes(candidate)) {
-          marker = candidate;
-          break;
-        }
-      }
+      const marker = detectMarker(`${name}\n${task.taskToRun ?? ""}`, env);
       if (!marker) {
         continue;
       }
