@@ -1000,6 +1000,73 @@ function createGoogleThinkingPayloadWrapper(
   };
 }
 
+// APIs that use OpenAI-completions-style parallel tool call semantics.
+// Only these APIs send (or respect) the `parallel_tool_calls` field.
+const PARALLEL_TOOL_CALLS_APIS = new Set([
+  "openai-completions",
+  "openai-responses",
+  "openai-codex-responses",
+]);
+
+function resolveParallelToolCallsParam(
+  extraParams: Record<string, unknown> | undefined,
+): boolean | undefined {
+  // Support both snake_case and camelCase config keys.
+  const raw =
+    extraParams != null && Object.prototype.hasOwnProperty.call(extraParams, "parallel_tool_calls")
+      ? extraParams.parallel_tool_calls
+      : extraParams != null &&
+          Object.prototype.hasOwnProperty.call(extraParams, "parallelToolCalls")
+        ? extraParams.parallelToolCalls
+        : undefined;
+
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (typeof raw !== "boolean") {
+    const rawSummary = typeof raw === "string" ? raw : typeof raw;
+    log.warn(`ignoring invalid parallel_tool_calls param: ${rawSummary}`);
+    return undefined;
+  }
+  return raw;
+}
+
+/**
+ * Create a streamFn wrapper that controls the `parallel_tool_calls` field in
+ * request payloads.
+ *
+ * When `inject` is true: sets `parallel_tool_calls: true` in the payload
+ * (opt-in; only applies to compatible API types).
+ * When `inject` is false: removes `parallel_tool_calls` from the payload
+ * (opt-out; prevents 400 errors on providers that reject this field).
+ */
+function createParallelToolCallsWrapper(
+  baseStreamFn: StreamFn | undefined,
+  inject: boolean,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!PARALLEL_TOOL_CALLS_APIS.has(model.api as string)) {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (inject) {
+            payloadObj.parallel_tool_calls = true;
+          } else {
+            delete payloadObj.parallel_tool_calls;
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Create a streamFn wrapper that injects tool_stream=true for Z.AI providers.
  *
@@ -1142,6 +1209,28 @@ export function applyExtraParamsToAgent(
   // Guard Google payloads against invalid negative thinking budgets emitted by
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
+  // Handle `parallel_tool_calls` compatibility.
+  // pi-ai's openai-codex-responses.js hardcodes `parallel_tool_calls: true`, but
+  // many OpenAI-compatible providers reject this field with 400 errors (e.g. NVIDIA
+  // NIM with moonshotai/kimi-k2.5: "This model only supports single tool-calls at once!").
+  //
+  // Resolution order:
+  // 1. If user explicitly configures `params.parallel_tool_calls` (or `parallelToolCalls`),
+  //    apply that value.
+  // 2. Otherwise, for non-codex providers, strip the field to prevent 400 errors from
+  //    providers that don't support it.
+  const configuredParallelToolCalls = resolveParallelToolCallsParam(merged);
+  if (configuredParallelToolCalls !== undefined) {
+    log.debug(
+      `applying configured parallel_tool_calls=${configuredParallelToolCalls} for ${provider}/${modelId}`,
+    );
+    agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, configuredParallelToolCalls);
+  } else if (provider !== "openai-codex") {
+    // Strip parallel_tool_calls for all non-codex providers (it's only meaningful
+    // for the OpenAI Codex endpoint and causes 400s on strict OpenAI-compat APIs).
+    agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, false);
+  }
 
   const openAIServiceTier = resolveOpenAIServiceTier(merged);
   if (openAIServiceTier) {
