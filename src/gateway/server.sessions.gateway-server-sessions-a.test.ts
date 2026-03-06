@@ -863,6 +863,40 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.delete emits internal archived hook when transcript is archived", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-subagent", "hello");
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:worker": {
+          sessionId: "sess-subagent",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "agent:main:subagent:worker",
+    });
+
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session",
+        action: "archived",
+        sessionKey: "agent:main:subagent:worker",
+        context: expect.objectContaining({
+          archiveReason: "deleted",
+          previousSessionEntry: expect.objectContaining({ sessionId: "sess-subagent" }),
+        }),
+      }),
+    );
+
+    ws.close();
+  });
+
   test("sessions.delete can skip lifecycle hooks while still unbinding thread bindings", async () => {
     const { dir } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-subagent", "hello");

@@ -242,6 +242,38 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Captured before reset");
   });
 
+  it("creates memory file with session content on session:archived", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "archived-session.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "Keep this archived context" },
+        { role: "assistant", content: "Archived and saved" },
+      ]),
+    });
+
+    const event = createHookEvent("session", "archived", "agent:main:telegram:direct:123", {
+      cfg: {
+        agents: { defaults: { workspace: tempDir } },
+      } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "archived-123", sessionFile },
+      sessionEntry: { sessionId: "archived-123", sessionFile },
+      archiveReason: "reset",
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files).toHaveLength(1);
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+    expect(memoryContent).toContain("user: Keep this archived context");
+    expect(memoryContent).toContain("assistant: Archived and saved");
+  });
+
   it("filters out non-message entries (tool calls, system)", async () => {
     // Create session with mixed entry types
     const sessionContent = createMockSessionContent([

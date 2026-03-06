@@ -614,6 +614,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             reason: "deleted",
           })
         : [];
+    if (deleted && archived.length > 0 && entry) {
+      await triggerInternalHook(
+        createInternalHookEvent("session", "archived", target.canonicalKey ?? key, {
+          cfg,
+          sessionEntry: entry,
+          previousSessionEntry: entry,
+          archiveReason: "deleted",
+          archiveSource: "gateway:sessions.delete",
+          archived,
+        }),
+      );
+    }
     if (deleted) {
       const emitLifecycleHooks = p.emitLifecycleHooks !== false;
       await emitSessionUnboundLifecycleEvent({
