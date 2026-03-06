@@ -21,8 +21,6 @@ export type TtsModelOverrideConfig = {
   allowNormalization?: boolean;
   /** Allow model-provided seed override. */
   allowSeed?: boolean;
-  /** Allow model-provided instructions override (OpenAI gpt-4o-mini-tts). */
-  allowInstructions?: boolean;
 };
 
 export type TtsConfig = {

@@ -191,7 +191,6 @@ export const TtsConfigSchema = z
         allowVoiceSettings: z.boolean().optional(),
         allowNormalization: z.boolean().optional(),
         allowSeed: z.boolean().optional(),
-        allowInstructions: z.boolean().optional(),
       })
       .strict()
       .optional(),
