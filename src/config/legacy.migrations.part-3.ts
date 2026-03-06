@@ -440,7 +440,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
 
       // Removed: showUsage (replaced conceptually by repeatSuppression, but not a direct mapping)
       if (stream.showUsage !== undefined) {
-        changes.push("Removed acp.stream.showUsage (no replacement in v2026.3.3).");
+        changes.push(
+          "Removed acp.stream.showUsage (no direct replacement; see acp.stream.repeatSuppression for similar functionality in v2026.3.3).",
+        );
         delete stream.showUsage;
       }
 
