@@ -30,14 +30,20 @@ final class TalkOverlayController {
         self.ensureWindow()
         self.hostingView?.rootView = TalkOverlayView(controller: self)
         let target = self.targetFrame()
+
+        // Avoid taking an inout access to the whole `model` struct while the
+        // view reads sibling fields (phase/paused/level) during render.
+        // That exclusivity conflict can crash when Talk mode restores on launch.
+        var isVisible = self.model.isVisible
         OverlayPanelFactory.present(
             window: self.window,
-            isVisible: &self.model.isVisible,
+            isVisible: &isVisible,
             target: target)
         { window in
             window.setFrame(target, display: true)
             window.orderFrontRegardless()
         }
+        self.model.isVisible = isVisible
     }
 
     func dismiss() {
