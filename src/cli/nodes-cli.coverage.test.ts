@@ -15,6 +15,8 @@ type NodeInvokeCall = {
 
 let lastNodeInvokeCall: NodeInvokeCall | null = null;
 let lastApprovalRequestCall: { params?: Record<string, unknown> } | null = null;
+let nodeCommands: string[] | undefined = ["system.run", "system.run.prepare"];
+let prepareUnsupportedAtRuntime = false;
 
 const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
   if (opts.method === "node.list") {
@@ -24,6 +26,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
           nodeId: "mac-1",
           displayName: "Mac",
           platform: "macos",
+          commands: nodeCommands,
           caps: ["canvas"],
           connected: true,
           permissions: { screenRecording: true },
@@ -35,6 +38,11 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
     lastNodeInvokeCall = opts;
     const command = opts.params?.command;
     if (command === "system.run.prepare") {
+      if (prepareUnsupportedAtRuntime || !nodeCommands?.includes("system.run.prepare")) {
+        throw new Error(
+          'node command not allowed: the node (platform: macOS 26.2.0) does not support "system.run.prepare"',
+        );
+      }
       const params = (opts.params?.params ?? {}) as {
         command?: unknown[];
         rawCommand?: unknown;
@@ -78,7 +86,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
 
 const randomIdempotencyKey = vi.fn(() => "rk_test");
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { defaultRuntime, resetRuntimeCapture, runtimeErrors } = createCliRuntimeCapture();
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
@@ -125,6 +133,8 @@ describe("nodes-cli coverage", () => {
     randomIdempotencyKey.mockClear();
     lastNodeInvokeCall = null;
     lastApprovalRequestCall = null;
+    nodeCommands = ["system.run", "system.run.prepare"];
+    prepareUnsupportedAtRuntime = false;
   });
 
   it("invokes system.run with parsed params", async () => {
@@ -205,6 +215,100 @@ describe("nodes-cli coverage", () => {
       agentId: "main",
       sessionKey: null,
     });
+  });
+
+  it("falls back to direct system.run when node lacks system.run.prepare", async () => {
+    nodeCommands = ["system.run", "system.which"];
+
+    const invoke = await runNodesCommand([
+      "nodes",
+      "run",
+      "--node",
+      "mac-1",
+      "--cwd",
+      "/tmp",
+      "--invoke-timeout",
+      "5000",
+      "echo",
+      "hi",
+    ]);
+
+    expect(invoke).toBeTruthy();
+    const invokeCalls = callGateway.mock.calls
+      .map((call) => call[0])
+      .filter((call) => call.method === "node.invoke");
+    expect(invokeCalls.map((call) => call.params?.command)).toEqual(["system.run"]);
+    expect(invoke?.params?.command).toBe("system.run");
+    expect(invoke?.params?.params).toEqual({
+      command: ["echo", "hi"],
+      rawCommand: null,
+      cwd: "/tmp",
+      env: undefined,
+      timeoutMs: undefined,
+      needsScreenRecording: false,
+      agentId: "main",
+      approved: true,
+      approvalDecision: "allow-once",
+      runId: expect.any(String),
+    });
+    const approval = getApprovalRequestCall();
+    expect(approval?.params?.["commandArgv"]).toEqual(["echo", "hi"]);
+    expect(approval?.params?.["systemRunPlan"]).toEqual({
+      argv: ["echo", "hi"],
+      cwd: "/tmp",
+      rawCommand: null,
+      agentId: "main",
+      sessionKey: null,
+    });
+  });
+
+  it("falls back when runtime rejects system.run.prepare despite advertised support", async () => {
+    prepareUnsupportedAtRuntime = true;
+
+    const invoke = await runNodesCommand([
+      "nodes",
+      "run",
+      "--node",
+      "mac-1",
+      "--cwd",
+      "/tmp",
+      "echo",
+      "hi",
+    ]);
+
+    expect(invoke).toBeTruthy();
+    const invokeCalls = callGateway.mock.calls
+      .map((call) => call[0])
+      .filter((call) => call.method === "node.invoke");
+    expect(invokeCalls.map((call) => call.params?.command)).toEqual([
+      "system.run.prepare",
+      "system.run",
+    ]);
+    const approval = getApprovalRequestCall();
+    expect(approval?.params?.["systemRunPlan"]).toEqual({
+      argv: ["echo", "hi"],
+      cwd: "/tmp",
+      rawCommand: null,
+      agentId: "main",
+      sessionKey: null,
+    });
+  });
+
+  it("fails before approval when node does not support system.run", async () => {
+    nodeCommands = ["system.which"];
+
+    await expect(
+      runNodesCommand(["nodes", "run", "--node", "mac-1", "echo", "hi"]),
+    ).rejects.toThrow("__exit__:1");
+
+    const invokeCalls = callGateway.mock.calls
+      .map((call) => call[0])
+      .filter((call) => call.method === "node.invoke");
+    expect(invokeCalls).toHaveLength(0);
+    expect(getApprovalRequestCall()).toBeNull();
+    expect(runtimeErrors.join("\n")).toContain(
+      "system.run requires a companion app or node host; the selected node does not support system.run.",
+    );
   });
 
   it("invokes system.notify with provided fields", async () => {
