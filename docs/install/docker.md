@@ -126,9 +126,9 @@ daemon that shares a volume with the Gateway. Sandbox containers are created
 inside the DinD daemon where paths are consistent.
 
 ```
-Gateway container ──(DOCKER_HOST=tcp://dind:2375)──▶ DinD container
-       │                                                    │
-       └── openclaw-state volume (shared) ──────────────────┘
+Gateway container ──(DOCKER_HOST=tcp://dind:2376, TLS)──▶ DinD container
+       │                                                          │
+       └── openclaw-state volume (shared) ────────────────────────┘
 ```
 
 Example `docker-compose.yml`:
@@ -136,14 +136,16 @@ Example `docker-compose.yml`:
 ```yaml
 services:
   dind:
-    image: docker:dind
+    image: docker:27-dind
     privileged: true
     restart: unless-stopped
     environment:
-      DOCKER_TLS_CERTDIR: ""
+      DOCKER_TLS_CERTDIR: /certs
     volumes:
       - openclaw-state:/home/node/.openclaw
       - dind-storage:/var/lib/docker
+      - dind-certs-ca:/certs/ca
+      - dind-certs-client:/certs/client
     networks:
       - openclaw-net
     healthcheck:
@@ -156,12 +158,15 @@ services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     environment:
-      DOCKER_HOST: tcp://dind:2375
+      DOCKER_HOST: tcp://dind:2376
+      DOCKER_TLS_VERIFY: "1"
+      DOCKER_CERT_PATH: /certs/client
     depends_on:
       dind:
         condition: service_healthy
     volumes:
       - openclaw-state:/home/node/.openclaw
+      - dind-certs-client:/certs/client:ro
     networks:
       - openclaw-net
     # ... rest of your gateway config
@@ -169,6 +174,8 @@ services:
 volumes:
   openclaw-state:
   dind-storage:
+  dind-certs-ca:
+  dind-certs-client:
 
 networks:
   openclaw-net:
@@ -183,17 +190,26 @@ Key points:
   bind-mount paths resolve correctly inside the DinD daemon.
 - `dind-storage` persists the DinD daemon's image cache across restarts (avoids
   rebuilding the sandbox image every time).
-- Set `agents.defaults.sandbox.docker.network` to `"bridge"` (the DinD daemon's
-  default network) since the default `"none"` prevents network access inside
-  the sandbox.
+- Only if sandbox containers need network access (for example, `setupCommand`
+  installs packages), set `agents.defaults.sandbox.docker.network` to `"bridge"`
+  (the DinD daemon's default network). Otherwise, keep the default `"none"` for
+  a tighter security posture. In the DinD context `"bridge"` connects sandbox
+  containers to the DinD daemon's internal network, which can reach the internet.
 - The sandbox image (`openclaw-sandbox:bookworm-slim`) must be built inside the
-  DinD daemon. Run `scripts/sandbox-setup.sh` with `DOCKER_HOST=tcp://dind:2375`
-  after the DinD container is healthy, or build it in a startup script.
+  DinD daemon. After the DinD container is healthy, run:
+
+  ```bash
+  docker compose exec openclaw-gateway scripts/sandbox-setup.sh
+  ```
+
+  The gateway already has `DOCKER_HOST` and TLS cert env vars set, so the build
+  targets the DinD daemon automatically.
 
 Security note: `privileged: true` on the DinD container grants elevated host
 access. This is required for nested Docker and is standard for DinD deployments.
-Keep the DinD container on an internal network and restrict access to the
-Gateway only.
+Keep the DinD container on an isolated internal network. The example above
+enables TLS (`DOCKER_TLS_CERTDIR=/certs`) so only clients with the shared
+certificate can talk to the DinD daemon.
 
 ### Automation/CI (non-interactive, no TTY noise)
 
