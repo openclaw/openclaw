@@ -12,6 +12,7 @@ const log = createSubsystemLogger("compaction");
 export const BASE_CHUNK_RATIO = 0.4;
 export const MIN_CHUNK_RATIO = 0.15;
 export const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
+export const COMPACTION_SUMMARY_ATTEMPT_TIMEOUT_MS = 45_000;
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const DEFAULT_PARTS = 2;
 const MERGE_SUMMARIES_INSTRUCTIONS = [
@@ -234,15 +235,15 @@ async function summarizeChunks(params: {
   for (const chunk of chunks) {
     summary = await retryAsync(
       () =>
-        generateSummary(
-          chunk,
-          params.model,
-          params.reserveTokens,
-          params.apiKey,
-          params.signal,
-          effectiveInstructions,
-          summary,
-        ),
+        generateSummaryWithAttemptTimeout({
+          messages: chunk,
+          model: params.model,
+          reserveTokens: params.reserveTokens,
+          apiKey: params.apiKey,
+          signal: params.signal,
+          customInstructions: effectiveInstructions,
+          previousSummary: summary,
+        }),
       {
         attempts: 3,
         minDelayMs: 500,
@@ -255,6 +256,55 @@ async function summarizeChunks(params: {
   }
 
   return summary ?? DEFAULT_SUMMARY_FALLBACK;
+}
+
+async function generateSummaryWithAttemptTimeout(params: {
+  messages: AgentMessage[];
+  model: NonNullable<ExtensionContext["model"]>;
+  reserveTokens: number;
+  apiKey: string;
+  signal: AbortSignal;
+  customInstructions?: string;
+  previousSummary?: string;
+}): Promise<string> {
+  const controller = new AbortController();
+  const timeoutMs = COMPACTION_SUMMARY_ATTEMPT_TIMEOUT_MS;
+  let timedOut = false;
+
+  const abortWithParentSignal = () => {
+    controller.abort(params.signal.reason);
+  };
+
+  if (params.signal.aborted) {
+    abortWithParentSignal();
+  } else {
+    params.signal.addEventListener("abort", abortWithParentSignal, { once: true });
+  }
+
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await generateSummary(
+      params.messages,
+      params.model,
+      params.reserveTokens,
+      params.apiKey,
+      controller.signal,
+      params.customInstructions,
+      params.previousSummary,
+    );
+  } catch (error) {
+    if (timedOut && error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Compaction summary request timed out after ${timeoutMs}ms.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    params.signal.removeEventListener("abort", abortWithParentSignal);
+  }
 }
 
 /**

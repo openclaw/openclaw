@@ -4,6 +4,10 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import * as piCodingAgent from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { retryAsync } from "../infra/retry.js";
+import {
+  COMPACTION_SUMMARY_ATTEMPT_TIMEOUT_MS,
+  summarizeWithFallback,
+} from "./compaction.js";
 
 // Mock the external generateSummary function
 vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
@@ -154,6 +158,48 @@ describe("compaction retry integration", () => {
     expect(delays[0]).toBe(500);
     expect(delays[1]).toBe(1000);
 
+    vi.useRealTimers();
+  });
+
+  it("times out stalled summary attempts and falls back instead of hanging", async () => {
+    vi.useFakeTimers();
+    mockGenerateSummary.mockImplementation(
+      (_messages, _model, _reserveTokens, _apiKey, signal) =>
+        new Promise<string>((_resolve, reject) => {
+          const rejectAbort = () => {
+            const abortError = new Error("aborted");
+            abortError.name = "AbortError";
+            reject(abortError);
+          };
+          if (signal.aborted) {
+            rejectAbort();
+            return;
+          }
+          signal.addEventListener("abort", rejectAbort, { once: true });
+        }),
+    );
+
+    const resultPromise = summarizeWithFallback({
+      messages: [
+        {
+          role: "user",
+          content: "x".repeat(800),
+          timestamp: 1,
+        } satisfies UserMessage,
+      ],
+      model: testModel,
+      apiKey: "test-api-key",
+      signal: new AbortController().signal,
+      reserveTokens: 1000,
+      maxChunkTokens: 1000,
+      contextWindow: 100,
+    });
+
+    await vi.advanceTimersByTimeAsync(COMPACTION_SUMMARY_ATTEMPT_TIMEOUT_MS * 3 + 10_000);
+    const result = await resultPromise;
+
+    expect(result).toContain("Summary unavailable due to size limits.");
+    expect(mockGenerateSummary).toHaveBeenCalledTimes(3);
     vi.useRealTimers();
   });
 });
