@@ -352,10 +352,7 @@ export function createAgentEventHandler({
               }
             : undefined,
       };
-      // Suppress webchat broadcast for heartbeat runs when showOk is false
-      if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
-        broadcast("chat", payload);
-      }
+      broadcast("chat", payload);
       nodeSendToSession(sessionKey, "chat", payload);
       return;
     }
