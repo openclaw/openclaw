@@ -336,8 +336,8 @@ export async function runEmbeddedPiAgent(
         channelId: params.messageChannel ?? params.messageProvider ?? undefined,
         // Identity fields for trust-aware hooks (before_model_resolve, before_agent_start)
         sourceProvider: params.sourceProvider ?? undefined,
-        senderId: params.senderId ?? undefined,
-        senderName: params.senderName ?? undefined,
+        senderId: params.senderId ?? null,
+        senderName: params.senderName ?? null,
         senderIsOwner: params.senderIsOwner ?? undefined,
         groupId: params.groupId ?? null,
         spawnedBy: params.spawnedBy ?? null,
