@@ -37,6 +37,16 @@ describe("models-config", () => {
                   contextWindow: 1048576,
                   maxTokens: 65536,
                 },
+                {
+                  id: "gemini-3-flash-lite",
+                  name: "Gemini 3 Flash Lite",
+                  api: "google-generative-ai",
+                  reasoning: false,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1048576,
+                  maxTokens: 65536,
+                },
               ],
             },
           },
@@ -49,7 +59,11 @@ describe("models-config", () => {
         providers: Record<string, { models: Array<{ id: string }> }>;
       }>();
       const ids = parsed.providers.google?.models?.map((model) => model.id);
-      expect(ids).toEqual(["gemini-3-pro-preview", "gemini-3-flash-preview"]);
+      expect(ids).toEqual([
+        "gemini-3-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3-flash-lite-preview",
+      ]);
     });
   });
 });

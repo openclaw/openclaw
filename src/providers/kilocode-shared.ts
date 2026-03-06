@@ -68,6 +68,14 @@ export const KILOCODE_MODEL_CATALOG: KilocodeModelCatalogEntry[] = [
     maxTokens: 65535,
   },
   {
+    id: "google/gemini-3-flash-lite-preview",
+    name: "Gemini 3 Flash Lite Preview",
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 1048576,
+    maxTokens: 65535,
+  },
+  {
     id: "x-ai/grok-code-fast-1",
     name: "Grok Code Fast 1",
     reasoning: true,
