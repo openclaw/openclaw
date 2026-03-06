@@ -192,7 +192,7 @@ describe("applyJobPatch", () => {
   });
 
   it("rejects webhook delivery without a valid http(s) target URL", () => {
-    const expectedError = "cron webhook delivery requires delivery.to to be a valid http(s) URL";
+    const expectedError = "cron webhook delivery rejected:";
     const cases = [
       { name: "no delivery update", patch: { enabled: true } satisfies CronJobPatch },
       {

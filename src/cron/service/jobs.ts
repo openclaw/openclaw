@@ -21,7 +21,7 @@ import type {
   CronPayload,
   CronPayloadPatch,
 } from "../types.js";
-import { normalizeHttpWebhookUrl } from "../webhook-url.js";
+import { validateHttpWebhookUrl, normalizeHttpWebhookUrl } from "../webhook-url.js";
 import {
   normalizeOptionalAgentId,
   normalizeOptionalSessionKey,
@@ -181,11 +181,13 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
     return;
   }
   if (job.delivery.mode === "webhook") {
-    const target = normalizeHttpWebhookUrl(job.delivery.to);
-    if (!target) {
-      throw new Error("cron webhook delivery requires delivery.to to be a valid http(s) URL");
+    const result = validateHttpWebhookUrl(job.delivery.to);
+    if (!result.ok) {
+      throw new Error(
+        `cron webhook delivery rejected: ${result.reason} (delivery.to must be a valid http(s) URL)`,
+      );
     }
-    job.delivery.to = target;
+    job.delivery.to = result.url;
     return;
   }
   if (job.sessionTarget !== "isolated") {
