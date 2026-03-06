@@ -9,6 +9,7 @@ vi.mock("node:child_process", () => ({
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
+  isSystemdServiceEnabled,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
   restartSystemdService,
@@ -39,6 +40,21 @@ describe("systemd availability", () => {
       cb(err, "", "");
     });
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(false);
+  });
+
+  it("treats unavailable systemd user bus as service not enabled", async () => {
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = new Error("Failed to connect to bus") as Error & {
+        stderr?: string;
+        code?: number;
+      };
+      err.stderr = "Failed to connect to bus";
+      err.code = 1;
+      cb(err, "", "");
+    });
+
+    await expect(isSystemdServiceEnabled({ env: {} })).resolves.toBe(false);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 });
 

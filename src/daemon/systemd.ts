@@ -312,7 +312,10 @@ export async function restartSystemdService({
 }
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
-  await assertSystemdAvailable();
+  const available = await isSystemdUserServiceAvailable();
+  if (!available) {
+    return false;
+  }
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
