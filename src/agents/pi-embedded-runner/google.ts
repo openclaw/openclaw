@@ -15,6 +15,7 @@ import {
   formatAssistantErrorForTranscript,
   isCompactionFailureError,
   isGoogleModelApi,
+  parseApiErrorInfo,
   isRawApiErrorPayload,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
@@ -207,6 +208,25 @@ function normalizeAssistantErrorContent(params: {
   normalizedError: string;
   rawError?: string;
 }): unknown {
+  const shouldReplaceAssistantErrorText = (text: string): boolean => {
+    const hasRawError =
+      typeof params.rawError === "string" &&
+      params.rawError.length > 0 &&
+      text.includes(params.rawError);
+    const lowerText = text.toLowerCase();
+    const looksLikeRawErrorPayload =
+      isRawApiErrorPayload(text) ||
+      parseApiErrorInfo(text) !== null ||
+      lowerText.includes("<!doctype html") ||
+      lowerText.includes("<html");
+    return hasRawError || looksLikeRawErrorPayload;
+  };
+
+  if (typeof params.content === "string") {
+    return shouldReplaceAssistantErrorText(params.content)
+      ? params.normalizedError
+      : params.content;
+  }
   if (!Array.isArray(params.content)) {
     return params.content;
   }
@@ -220,15 +240,7 @@ function normalizeAssistantErrorContent(params: {
       return block;
     }
     const text = typed.text;
-    const hasRawError =
-      typeof params.rawError === "string" &&
-      params.rawError.length > 0 &&
-      text.includes(params.rawError);
-    const looksLikeRawErrorPayload =
-      text.length > 280 &&
-      (isRawApiErrorPayload(text) || text.toLowerCase().includes("<!doctype html"));
-    const shouldReplace = hasRawError || looksLikeRawErrorPayload;
-    if (!shouldReplace) {
+    if (!shouldReplaceAssistantErrorText(text)) {
       return block;
     }
     changed = true;
@@ -238,6 +250,10 @@ function normalizeAssistantErrorContent(params: {
     };
   });
   return changed ? next : params.content;
+}
+
+function stripRepeatedTranscriptSuffix(text: string): string {
+  return text.replace(/\s+\(repeated x\d+\)$/i, "");
 }
 
 function addRepeatedSuffixWithCap(params: {
@@ -283,7 +299,7 @@ function sanitizeAssistantErrorsForTranscript(messages: AgentMessage[]): AgentMe
     }
 
     const normalized = formatAssistantErrorForTranscript(rawError);
-    const fingerprint = normalized.toLowerCase();
+    const fingerprint = stripRepeatedTranscriptSuffix(normalized).toLowerCase();
     let normalizedForMessage = normalized;
     if (fingerprint === previousFingerprint) {
       repeatedCount += 1;

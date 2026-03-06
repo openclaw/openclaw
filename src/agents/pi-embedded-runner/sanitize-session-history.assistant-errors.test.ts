@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
+import { formatAssistantErrorForTranscript } from "../pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { sanitizeSessionHistory } from "./google.js";
 
@@ -74,6 +75,68 @@ describe("sanitizeSessionHistory assistant error sanitization", () => {
     expect(assistant.content?.[0]?.text).toBe(partialLegitText);
   });
 
+  it("rewrites string-shaped assistant content when it still contains a raw error payload", async () => {
+    const sm = SessionManager.inMemory();
+    const rawError =
+      '500 {"type":"error","error":{"type":"server_error","message":"Oops"},"request_id":"req_abc"}';
+
+    const messages: AgentMessage[] = [
+      makeAssistantMessageFixture({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: rawError,
+      }) as unknown as AgentMessage,
+    ];
+
+    const sanitized = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-codex-responses",
+      provider: "openai",
+      modelId: "gpt-5.3-codex",
+      sessionManager: sm,
+      sessionId: "test",
+    });
+
+    const assistant = sanitized[0] as AgentMessage & {
+      errorMessage?: string;
+      content?: string;
+    };
+
+    const normalized = formatAssistantErrorForTranscript(rawError);
+    expect(assistant.errorMessage).toBe(normalized);
+    expect(assistant.content).toBe(normalized);
+  });
+
+  it("rewrites pretty-printed payload blocks even when the compact raw error string differs", async () => {
+    const sm = SessionManager.inMemory();
+    const rawError =
+      '500 {"type":"error","error":{"type":"server_error","message":"Oops"},"request_id":"req_abc"}';
+    const prettyPrinted = `500 {\n  "type": "error",\n  "error": {\n    "type": "server_error",\n    "message": "Oops"\n  },\n  "request_id": "req_abc"\n}`;
+
+    const messages: AgentMessage[] = [
+      makeAssistantMessageFixture({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: prettyPrinted }],
+      }) as unknown as AgentMessage,
+    ];
+
+    const sanitized = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-codex-responses",
+      provider: "openai",
+      modelId: "gpt-5.3-codex",
+      sessionManager: sm,
+      sessionId: "test",
+    });
+
+    const assistant = sanitized[0] as AgentMessage & {
+      content?: Array<{ type?: string; text?: string }>;
+    };
+
+    expect(assistant.content?.[0]?.text).toBe(formatAssistantErrorForTranscript(rawError));
+  });
+
   it("caps repeated suffix variants to keep transcript errors bounded", async () => {
     const sm = SessionManager.inMemory();
     const rawError = `boom:${"x".repeat(600)}`;
@@ -136,6 +199,50 @@ describe("sanitizeSessionHistory assistant error sanitization", () => {
     );
     expect(second.errorMessage).toBe(
       "The AI service is temporarily overloaded. Please try again in a moment. (repeated x2)",
+    );
+  });
+
+  it("continues counting repeated errors across later replay passes", async () => {
+    const sm = SessionManager.inMemory();
+    const rawError =
+      '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_abc"}';
+
+    const firstPass = await sanitizeSessionHistory({
+      messages: [
+        makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: rawError,
+        }) as unknown as AgentMessage,
+        makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: rawError,
+        }) as unknown as AgentMessage,
+      ],
+      modelApi: "openai-codex-responses",
+      provider: "openai",
+      modelId: "gpt-5.3-codex",
+      sessionManager: sm,
+      sessionId: "test",
+    });
+
+    const secondPass = await sanitizeSessionHistory({
+      messages: [
+        ...firstPass,
+        makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: rawError,
+        }) as unknown as AgentMessage,
+      ],
+      modelApi: "openai-codex-responses",
+      provider: "openai",
+      modelId: "gpt-5.3-codex",
+      sessionManager: sm,
+      sessionId: "test",
+    });
+
+    const third = secondPass[2] as { errorMessage?: string };
+    expect(third.errorMessage).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment. (repeated x3)",
     );
   });
 });
