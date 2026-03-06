@@ -8,6 +8,7 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { CronDeliveryStatus, CronRunStatus, CronUsageSummary } from "../cron/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export type InternalHookEventType =
@@ -51,26 +52,20 @@ export type GatewayStartupHookEvent = InternalHookEvent & {
 
 export type CronHookContext = {
   jobId: string;
-  status?: "ok" | "error" | "skipped";
+  status?: CronRunStatus;
   error?: string;
   summary?: string;
   nextRunAtMs?: number;
   runAtMs?: number;
   durationMs?: number;
   delivered?: boolean;
-  deliveryStatus?: string;
+  deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
   sessionId?: string;
   sessionKey?: string;
   model?: string;
   provider?: string;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    total_tokens?: number;
-    cache_read_tokens?: number;
-    cache_write_tokens?: number;
-  };
+  usage?: CronUsageSummary;
 };
 
 export type CronHookEvent = InternalHookEvent & {
