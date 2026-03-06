@@ -327,7 +327,26 @@ jobs:
           pre-commit run zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        run: pre-commit run --all-files pnpm-audit-prod
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            pre-commit run --all-files pnpm-audit-prod
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            pre-commit run --all-files pnpm-audit-prod
+            exit 0
+          fi
+
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if ! git diff --name-only "$BASE" HEAD | grep -Eq '(^|/)package\.json$|^pnpm-lock\.yaml$|^pnpm-workspace\.yaml$'; then
+            echo "No dependency manifest changes detected; skipping pnpm audit on this PR."
+            exit 0
+          fi
+
+          pre-commit run --all-files pnpm-audit-prod
 
   checks-windows:
     needs: [docs-scope, changed-scope]
