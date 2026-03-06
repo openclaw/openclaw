@@ -1,0 +1,25 @@
+{
+  "id": "dispatch-channel",
+  "name": "Dispatch Channel",
+  "description": "Dispatch channel plugin — connects OpenClaw to DispatchApp via Supabase Realtime",
+  "version": "0.1.0",
+  "channels": ["dispatch"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "supabaseUrl": {
+        "type": "string",
+        "description": "Supabase project URL"
+      },
+      "supabaseServiceKey": {
+        "type": "string",
+        "description": "Supabase service role key"
+      },
+      "defaultUserId": {
+        "type": "string",
+        "description": "Default user UUID for routing messages"
+      }
+    }
+  }
+}
