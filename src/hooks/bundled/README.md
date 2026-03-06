@@ -8,7 +8,7 @@ This directory contains hooks that ship with OpenClaw. These hooks are automatic
 
 Automatically saves session context to memory when you issue `/new` or `/reset`.
 
-**Events**: `command:new`, `command:reset`
+**Events**: `command:new`, `command:reset`, `session:deleted`
 **What it does**: Creates a dated memory file with LLM-generated slug based on conversation content.
 **Output**: `<workspace>/memory/YYYY-MM-DD-slug.md` (defaults to `~/.openclaw/workspace`)
 
@@ -167,6 +167,7 @@ Currently supported events:
 - **command**: All command events
 - **command:new**: `/new` command specifically
 - **command:reset**: `/reset` command
+- **session:deleted**: session cleanup/deletion lifecycle event
 - **command:stop**: `/stop` command
 - **agent:bootstrap**: Before workspace bootstrap files are injected
 - **gateway:startup**: Gateway startup (after channels start)

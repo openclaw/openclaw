@@ -168,17 +168,21 @@ async function findPreviousSessionFile(params: {
 }
 
 /**
- * Save session context to memory when /new or /reset command is triggered
+ * Save session context to memory when /new, /reset, or session deletion is triggered
  */
 const saveSessionToMemory: HookHandler = async (event) => {
-  // Only trigger on reset/new commands
-  const isResetCommand = event.action === "new" || event.action === "reset";
-  if (event.type !== "command" || !isResetCommand) {
+  const isResetCommand =
+    event.type === "command" && (event.action === "new" || event.action === "reset");
+  const isSessionDeleteEvent = event.type === "session" && event.action === "deleted";
+  if (!isResetCommand && !isSessionDeleteEvent) {
     return;
   }
 
   try {
-    log.debug("Hook triggered for reset/new command", { action: event.action });
+    log.debug("Hook triggered for session memory save", {
+      type: event.type,
+      action: event.action,
+    });
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
@@ -200,7 +204,11 @@ const saveSessionToMemory: HookHandler = async (event) => {
       unknown
     >;
     const currentSessionId = sessionEntry.sessionId as string;
-    let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
+    const archivedFiles = Array.isArray(context.archived)
+      ? context.archived.filter((value): value is string => typeof value === "string")
+      : [];
+    let currentSessionFile =
+      (sessionEntry.sessionFile as string) || archivedFiles.find((file) => file.endsWith(".jsonl"));
 
     // If sessionFile is empty or looks like a new/reset file, try to find the previous session file.
     if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
