@@ -158,6 +158,8 @@ export type DiscordChannelEdit = {
   locked?: boolean;
   autoArchiveDuration?: number;
   availableTags?: DiscordForumTag[];
+  /** Tag IDs to apply to a forum thread/post (PATCH applied_tags). */
+  appliedTags?: string[];
 };
 
 export type DiscordChannelMove = {
