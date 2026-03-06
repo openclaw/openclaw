@@ -39,6 +39,9 @@ apps/shared/OpenClawKit/Package.resolved
 bin/
 bin/clawdbot-mac
 bin/docs-list
+# un-ignore tracked orchestrator scripts living under a bin/ directory
+!skills/coder-swarm/scripts/orchestrator/bin/
+!skills/coder-swarm/scripts/orchestrator/bin/*.sh
 apps/macos/.build-local/
 apps/macos/.swiftpm/
 apps/shared/MoltbotKit/.swiftpm/
@@ -121,3 +124,4 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+.agent-task.md

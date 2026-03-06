@@ -134,6 +134,7 @@ check_ci() {
 }
 
 HOOK_BASE_URL="${HOOK_BASE_URL:-https://beelink2.tailcd0984.ts.net/hooks}"
+GATEWAY_URL="${GATEWAY_URL:-http://localhost:18789}"
 
 resolve_hook_token() {
     if [[ -n "${CLAWD_TOKEN:-}" ]]; then
@@ -148,6 +149,19 @@ resolve_hook_token() {
     fi
 
     echo ""
+}
+
+# Notify watching sessions via the gateway's swarm.notifyWatchers RPC.
+# Idempotent: the gateway tracks 'notified' flags and skips re-delivery.
+# event: prCreated | completed
+notify_watchers() {
+    local task_id="$1"
+    local event="$2"
+
+    curl -s -X POST "$GATEWAY_URL" \
+        -H "Content-Type: application/json" \
+        -d "{\"type\":\"req\",\"id\":\"notify-${task_id}-${event}\",\"method\":\"swarm.notifyWatchers\",\"params\":{\"taskId\":\"${task_id}\",\"event\":\"${event}\"}}" \
+        >/dev/null 2>&1 || true
 }
 
 # Send human notification via MCP hook + machine event via swarm-events hook
@@ -203,49 +217,54 @@ for task_id in $TASKS; do
     # Check if tmux session is still alive
     if ! check_session "$host" "$tmux_session"; then
         log "  Session died - checking if work was completed..."
-        
+
         # Check if PR was created
         pr_number=$(check_pr "$repo" "$branch")
-        
+
         if [[ -n "$pr_number" && "$pr_number" != "null" ]]; then
             log "  Found PR #$pr_number"
             update_task_status "$task_id" "done" "$pr_number" "Session completed, PR created"
-            
+            notify_watchers "$task_id" "prCreated"
+            notify_watchers "$task_id" "completed"
+
             if [[ "$NOTIFY" == "true" ]]; then
                 notify "✅ Agent task completed: $description\nPR #$pr_number ready for review" "normal" "$task_id" "$agent"
             fi
         else
             log "  No PR found - marking as failed"
             update_task_status "$task_id" "failed" "" "Session died without creating PR"
-            
+            notify_watchers "$task_id" "completed"
+
             if [[ "$NOTIFY" == "true" ]]; then
                 notify "⚠️ Agent task failed: $description\nSession died without creating PR" "high" "$task_id" "$agent"
             fi
         fi
         continue
     fi
-    
+
     # Session still alive - check if PR exists
     pr_number=$(check_pr "$repo" "$branch")
-    
+
     if [[ -n "$pr_number" && "$pr_number" != "null" ]]; then
         log "  PR #$pr_number exists, checking CI..."
-        
-        # Update task with PR number if not already set
+
+        # Update task with PR number if not already set; notify watchers on first detection
         current_pr=$(echo "$task_json" | jq -r '.pr // empty')
         if [[ -z "$current_pr" ]]; then
             update_task_status "$task_id" "running" "$pr_number"
+            notify_watchers "$task_id" "prCreated"
         fi
-        
+
         # Check CI status
         ci_status=$(check_ci "$repo" "$pr_number")
-        
+
         case "$ci_status" in
             "SUCCESS")
                 log "  CI passed!"
                 update_task_checks "$task_id" "ciPassed" "true"
                 update_task_status "$task_id" "done" "$pr_number" "CI passed, ready for review"
-                
+                notify_watchers "$task_id" "completed"
+
                 if [[ "$NOTIFY" == "true" ]]; then
                     notify "✅ Agent task ready: $description\nPR #$pr_number - CI passed" "normal" "$task_id" "$agent"
                 fi
@@ -263,6 +282,7 @@ for task_id in $TASKS; do
         if agent_finished_but_session_open "$host" "$tmux_session" "$worktree"; then
             log "  Agent appears finished (shell prompt + completion markers)"
             update_task_status "$task_id" "done" "" "Agent finished in tmux; no PR detected yet"
+            notify_watchers "$task_id" "completed"
 
             if [[ "$NOTIFY" == "true" ]]; then
                 notify "✅ Agent task finished: $description\nNo PR detected yet. Review worktree: $worktree" "normal" "$task_id" "$agent"

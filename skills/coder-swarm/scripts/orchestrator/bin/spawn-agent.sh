@@ -16,6 +16,7 @@ TASK_DESC=""
 TASK_FILE=""
 TASK_B64=""
 BRANCH_PREFIX="agent-task"
+WATCHERS="[]"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -40,6 +41,10 @@ while [[ $# -gt 0 ]]; do
             HOST="$2"
             shift 2
             ;;
+        --watchers)
+            WATCHERS="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -57,7 +62,7 @@ fi
 
 if [[ -z "$TASK_DESC" ]]; then
     echo "Error: --task or --task-file required"
-    echo "Usage: spawn-agent.sh --task 'description' --repo /abs/path [--task-file /path/to/prompt.txt] [--agent codex|claude|gemini] [--host local|mac-mini|beelink2|auto]"
+    echo "Usage: spawn-agent.sh --task 'description' --repo /abs/path [--task-file /path/to/prompt.txt] [--agent codex|claude|gemini] [--host local|mac-mini|beelink2|auto] [--watchers '[{\"type\":\"session\",\"sessionKey\":\"agent:main:main\"}]']"
     exit 1
 fi
 
@@ -212,8 +217,8 @@ SPAWN_SCRIPT="${SPAWN_SCRIPT//__TASK_B64__/$TASK_B64}"
 # Execute spawn on target host
 execute_on_host "$SPAWN_SCRIPT"
 
-# Add to task registry
-add_task "$TASK_ID" "$AGENT" "$REPO_PATH" "$BRANCH_NAME" "$WORKTREE_DIR" "$HOST" "$TMUX_SESSION" "$TASK_DESC"
+# Add to task registry (including optional watchers)
+add_task "$TASK_ID" "$AGENT" "$REPO_PATH" "$BRANCH_NAME" "$WORKTREE_DIR" "$HOST" "$TMUX_SESSION" "$TASK_DESC" "$WATCHERS"
 
 echo "==> Task registered: $TASK_ID"
 echo "    Monitor: $SCRIPT_DIR/check-agents.sh"
