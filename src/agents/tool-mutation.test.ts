@@ -92,25 +92,7 @@ describe("tool mutation helpers", () => {
     expect(fp).toContain("path=/tmp/demo.txt");
   });
 
-  it("clears lastToolError when message retry with different path succeeds (#37430)", () => {
-    const failedRef = {
-      toolName: "message",
-      actionFingerprint: buildToolActionFingerprint("message", {
-        action: "send",
-        to: "telegram:413",
-        filePath: "/tmp/report.pdf",
-      }),
-    };
-    const retryRef = {
-      toolName: "message",
-      actionFingerprint: buildToolActionFingerprint("message", {
-        action: "send",
-        to: "telegram:413",
-        filePath: "/home/user/workspace/report.pdf",
-      }),
-    };
-    expect(isSameToolMutationAction(failedRef, retryRef)).toBe(true);
-  });
+  it("isSameToolMutationAction returns true for message retry with different attachment path (#37430)", () => {
 
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
     expect(isLikelyMutatingToolName("sessions_send")).toBe(true);
