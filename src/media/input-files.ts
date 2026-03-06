@@ -234,10 +234,12 @@ async function normalizeInputImage(params: {
   mimeType?: string;
   limits: InputImageLimits;
 }): Promise<InputImageContent> {
-  const sourceMime =
-    normalizeMimeType(await detectMime({ buffer: params.buffer, headerMime: params.mimeType })) ??
-    normalizeMimeType(params.mimeType) ??
-    "application/octet-stream";
+  const declaredMime = normalizeMimeType(params.mimeType) ?? "application/octet-stream";
+  const sourceMime = HEIC_INPUT_IMAGE_MIMES.has(declaredMime)
+    ? (normalizeMimeType(
+        await detectMime({ buffer: params.buffer, headerMime: params.mimeType }),
+      ) ?? declaredMime)
+    : declaredMime;
   if (!params.limits.allowedMimes.has(sourceMime)) {
     throw new Error(`Unsupported image MIME type: ${sourceMime}`);
   }
