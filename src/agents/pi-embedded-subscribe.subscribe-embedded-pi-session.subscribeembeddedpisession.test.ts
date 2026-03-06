@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   THINKING_TAG_CASES,
+  createSubscribedSessionHarness,
   createStubSessionHarness,
   emitAssistantLifecycleErrorAndEnd,
   emitMessageStartAndEndForAssistantText,
@@ -103,6 +104,32 @@ describe("subscribeEmbeddedPiSession", () => {
       result: params.result,
     });
   }
+
+  it("treats media-only messaging sends as messaging delivery", async () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+    });
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-media-1",
+      args: { action: "send", to: "+1555", media: "file:///tmp/reply.png" },
+    });
+    await Promise.resolve();
+
+    emit({
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-media-1",
+      isError: false,
+      result: { ok: true },
+    });
+    await Promise.resolve();
+
+    expect(subscription.getMessagingToolSentMediaUrls()).toContain("file:///tmp/reply.png");
+    expect(subscription.didSendViaMessagingTool()).toBe(true);
+  });
 
   it.each(THINKING_TAG_CASES)(
     "streams <%s> reasoning via onReasoningStream without leaking into final text",
