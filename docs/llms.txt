@@ -1,0 +1,87 @@
+# OpenClaw
+
+> OpenClaw is a self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, Signal, and more to AI coding agents. Run a single Gateway process on your own machine and message your AI assistant from anywhere.
+
+AI agents: every page on this site is available as clean Markdown by appending `.md` to the URL (e.g. `https://docs.openclaw.ai/tools/skills.md`). Use the Markdown versions to reduce token use and improve parsing accuracy. This file (`/llms.txt`) lists the key sections; `/llms-full.txt` contains all page content in a single file.
+
+## Getting Started
+
+- [Overview](https://docs.openclaw.ai/index.md)
+- [Getting started](https://docs.openclaw.ai/start/getting-started.md)
+- [Quickstart](https://docs.openclaw.ai/start/quickstart.md)
+- [Installation overview](https://docs.openclaw.ai/install/index.md)
+- [Docker](https://docs.openclaw.ai/install/docker.md)
+- [VPS / self-hosted](https://docs.openclaw.ai/vps.md)
+- [Setup wizard](https://docs.openclaw.ai/start/wizard.md)
+
+## Channels
+
+- [Channels overview](https://docs.openclaw.ai/channels/index.md)
+- [Telegram](https://docs.openclaw.ai/channels/telegram.md)
+- [Discord](https://docs.openclaw.ai/channels/discord.md)
+- [WhatsApp](https://docs.openclaw.ai/channels/whatsapp.md)
+- [iMessage / Bluebubbles](https://docs.openclaw.ai/channels/bluebubbles.md)
+- [Signal](https://docs.openclaw.ai/channels/signal.md)
+- [Slack](https://docs.openclaw.ai/channels/slack.md)
+- [Pairing](https://docs.openclaw.ai/channels/pairing.md)
+- [Group messages](https://docs.openclaw.ai/channels/group-messages.md)
+- [Channel routing](https://docs.openclaw.ai/channels/channel-routing.md)
+
+## Agents
+
+- [Agent overview](https://docs.openclaw.ai/pi.md)
+- [Architecture](https://docs.openclaw.ai/concepts/architecture.md)
+- [Agent loop](https://docs.openclaw.ai/concepts/agent-loop.md)
+- [Sessions](https://docs.openclaw.ai/concepts/session.md)
+- [Multi-agent](https://docs.openclaw.ai/concepts/multi-agent.md)
+- [Memory & compaction](https://docs.openclaw.ai/concepts/compaction.md)
+- [System prompt](https://docs.openclaw.ai/concepts/system-prompt.md)
+- [Context](https://docs.openclaw.ai/concepts/context.md)
+- [Agent workspace](https://docs.openclaw.ai/concepts/agent-workspace.md)
+- [Streaming](https://docs.openclaw.ai/concepts/streaming.md)
+- [Queue](https://docs.openclaw.ai/concepts/queue.md)
+
+## Tools
+
+- [Tools overview](https://docs.openclaw.ai/tools/index.md)
+- [Skills](https://docs.openclaw.ai/tools/skills.md)
+- [Creating skills](https://docs.openclaw.ai/tools/creating-skills.md)
+- [Skills configuration](https://docs.openclaw.ai/tools/skills-config.md)
+- [Slash commands](https://docs.openclaw.ai/tools/slash-commands.md)
+- [Exec (shell)](https://docs.openclaw.ai/tools/exec.md)
+- [Browser](https://docs.openclaw.ai/tools/browser.md)
+- [Subagents](https://docs.openclaw.ai/tools/subagents.md)
+- [Apply patch](https://docs.openclaw.ai/tools/apply-patch.md)
+- [Loop detection](https://docs.openclaw.ai/tools/loop-detection.md)
+- [Brave search](https://docs.openclaw.ai/brave-search.md)
+
+## Models & Providers
+
+- [Providers overview](https://docs.openclaw.ai/providers/index.md)
+- [Model catalog](https://docs.openclaw.ai/providers/models.md)
+- [Model providers](https://docs.openclaw.ai/concepts/model-providers.md)
+- [Model failover](https://docs.openclaw.ai/concepts/model-failover.md)
+
+## Configuration
+
+- [Gateway configuration](https://docs.openclaw.ai/gateway/configuration.md)
+- [Configuration reference](https://docs.openclaw.ai/reference/configuration.md)
+- [Nodes](https://docs.openclaw.ai/nodes/index.md)
+- [Automation / hooks](https://docs.openclaw.ai/automation/hooks.md)
+- [Cron jobs](https://docs.openclaw.ai/automation/cron-jobs.md)
+
+## Platforms
+
+- [macOS](https://docs.openclaw.ai/platforms/mac/index.md)
+- [Linux](https://docs.openclaw.ai/platforms/linux/index.md)
+- [Windows](https://docs.openclaw.ai/platforms/windows/index.md)
+- [Raspberry Pi / Pi](https://docs.openclaw.ai/pi.md)
+
+## Reference
+
+- [CLI reference](https://docs.openclaw.ai/cli/index.md)
+- [API / RPC](https://docs.openclaw.ai/reference/rpc.md)
+- [Security](https://docs.openclaw.ai/security/index.md)
+- [Troubleshooting](https://docs.openclaw.ai/help/index.md)
+- [Testing](https://docs.openclaw.ai/reference/test.md)
+- [Changelog](https://docs.openclaw.ai/reference/changelog.md)
