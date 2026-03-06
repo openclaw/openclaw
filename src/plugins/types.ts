@@ -1886,8 +1886,11 @@ export type PluginHookGatewayStopEvent = {
 // ============================================================================
 
 // context_assembled hook (void — parallel)
-// Fires once per run before the first LLM call with the initial context snapshot.
-// Use loop_iteration_start/end for per-turn tracking within multi-turn runs.
+// Fires once per attempt before the first LLM call with the assembled context.
+// The outer run loop may retry (overflow compaction, auth refresh, tool result
+// truncation), producing a new attempt with different context each time.
+// Use attemptIndex to distinguish initial assembly (0) from retries (1+).
+// Use loop_iteration_start/end for per-turn tracking within an attempt.
 export type PluginHookContextAssembledEvent = {
   systemPrompt: string;
   /** The effective user prompt for this turn (after hook modifications). */

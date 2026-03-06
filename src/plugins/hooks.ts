@@ -913,9 +913,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run context_assembled hook.
-   * Fires when the full context (system prompt + messages) is assembled,
-   * before the first LLM call. Gives plugins a census of what the model
-   * will see. Runs in parallel (fire-and-forget).
+   * Fires once per attempt when the full context is assembled, before the
+   * first LLM call. May fire multiple times per run if the outer runner
+   * retries (overflow compaction, auth refresh). Use event.attemptIndex
+   * to distinguish initial (0) from retry (1+) assemblies.
+   * Runs in parallel (fire-and-forget).
    */
   async function runContextAssembled(
     event: PluginHookContextAssembledEvent,
