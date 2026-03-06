@@ -1063,6 +1063,76 @@ describe("sessions tools", () => {
     }
   });
 
+  it("subagents steer clears rate limit after dispatch failure so retry can succeed immediately", async () => {
+    resetSubagentRegistryForTests();
+    let agentCallCount = 0;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        if (agentCallCount === 1) {
+          throw new Error("gateway unavailable");
+        }
+        return { runId: "run-steer-retry" };
+      }
+      return {};
+    });
+    addSubagentRunForTests({
+      runId: "run-steer-fail",
+      childSessionKey: "agent:main:subagent:steer-fail",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "prepare delivery summary",
+      cleanup: "keep",
+      createdAt: Date.now() - 60_000,
+      startedAt: Date.now() - 60_000,
+    });
+
+    const loadSessionStoreSpy = vi
+      .spyOn(sessionsModule, "loadSessionStore")
+      .mockImplementation(() => ({
+        "agent:main:subagent:steer-fail": {
+          sessionId: "child-session-steer-fail",
+          updatedAt: Date.now(),
+        },
+      }));
+
+    try {
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:main:main",
+      }).find((candidate) => candidate.name === "subagents");
+      expect(tool).toBeDefined();
+      if (!tool) {
+        throw new Error("missing subagents tool");
+      }
+
+      const failed = await tool.execute("call-subagents-steer-fail", {
+        action: "steer",
+        target: "1",
+        message: "retry immediately after failure",
+      });
+      const failedDetails = failed.details as { status?: string; error?: string };
+      expect(failedDetails.status).toBe("error");
+      expect(failedDetails.error).toContain("gateway unavailable");
+
+      const retried = await tool.execute("call-subagents-steer-retry", {
+        action: "steer",
+        target: "1",
+        message: "retry immediately after failure",
+      });
+      const retriedDetails = retried.details as { status?: string; runId?: string };
+      expect(retriedDetails.status).toBe("accepted");
+      expect(retriedDetails.runId).toBe("run-steer-retry");
+
+      const trackedRuns = listSubagentRunsForRequester("agent:main:main");
+      expect(trackedRuns).toHaveLength(1);
+      expect(trackedRuns[0].runId).toBe("run-steer-retry");
+      expect(trackedRuns[0].endedAt).toBeUndefined();
+    } finally {
+      loadSessionStoreSpy.mockRestore();
+    }
+  });
+
   it("subagents numeric targets follow active-first list ordering", async () => {
     resetSubagentRegistryForTests();
     addSubagentRunForTests({
