@@ -224,6 +224,42 @@ describe("AcpxRuntime", () => {
     });
   });
 
+  it("maps acpx permission-denied exits to actionable guidance", async () => {
+    const runtime = sharedFixture?.runtime;
+    expect(runtime).toBeDefined();
+    if (!runtime) {
+      throw new Error("shared runtime fixture missing");
+    }
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:permission-denied",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    const events = [];
+    for await (const event of runtime.runTurn({
+      handle,
+      text: "permission-denied",
+      mode: "prompt",
+      requestId: "req-perm",
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("Permission denied by ACP runtime (acpx)."),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("approve-reads, approve-all, deny-all"),
+      }),
+    );
+  });
+
   it("supports cancel and close using encoded runtime handle state", async () => {
     const { runtime, logPath, config } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
@@ -376,5 +412,52 @@ describe("AcpxRuntime", () => {
     expect(report.ok).toBe(false);
     expect(report.code).toBe("ACP_BACKEND_UNAVAILABLE");
     expect(report.installCommand).toContain("acpx");
+  });
+
+  it("falls back to 'sessions new' when 'sessions ensure' returns no session IDs", async () => {
+    process.env.MOCK_ACPX_ENSURE_EMPTY = "1";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:claude:acp:fallback-test",
+        agent: "claude",
+        mode: "persistent",
+      });
+      expect(handle.backend).toBe("acpx");
+      expect(handle.acpxRecordId).toBe("rec-agent:claude:acp:fallback-test");
+      expect(handle.agentSessionId).toBe("inner-agent:claude:acp:fallback-test");
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
+      expect(logs.some((entry) => entry.kind === "new")).toBe(true);
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_EMPTY;
+    }
+  });
+
+  it("fails with ACP_SESSION_INIT_FAILED when both ensure and new omit session IDs", async () => {
+    process.env.MOCK_ACPX_ENSURE_EMPTY = "1";
+    process.env.MOCK_ACPX_NEW_EMPTY = "1";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+
+      await expect(
+        runtime.ensureSession({
+          sessionKey: "agent:claude:acp:fallback-fail",
+          agent: "claude",
+          mode: "persistent",
+        }),
+      ).rejects.toMatchObject({
+        code: "ACP_SESSION_INIT_FAILED",
+        message: expect.stringContaining("neither 'sessions ensure' nor 'sessions new'"),
+      });
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
+      expect(logs.some((entry) => entry.kind === "new")).toBe(true);
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_EMPTY;
+      delete process.env.MOCK_ACPX_NEW_EMPTY;
+    }
   });
 });
