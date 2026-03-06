@@ -87,6 +87,17 @@ const SNIPPET_MAX_CHARS = 700;
 
 const log = createSubsystemLogger("memory");
 
+// Singleton pool cache: one PostgresMemoryIndexManager per (agentId, connection) pair.
+// Prevents multiple unclosed Pool instances accumulating across calls within a run.
+const instanceCache = new Map<string, PostgresMemoryIndexManager>();
+
+function resolveInstanceCacheKey(agentId: string, poolCfg: PoolConfig): string {
+  const conn =
+    poolCfg.connectionString ??
+    `${poolCfg.host ?? "localhost"}:${poolCfg.port ?? 5432}/${poolCfg.database ?? ""}@${poolCfg.user ?? ""}`;
+  return `${agentId}|${conn}`;
+}
+
 const vectorLiteral = (embedding: number[]): string =>
   `[${embedding.map((value) => Number(value).toFixed(8)).join(",")}]`;
 
@@ -146,6 +157,7 @@ export class PostgresMemoryIndexManager {
   private openAi?: OpenAiEmbeddingClient;
   private gemini?: GeminiEmbeddingClient;
   private providerKey: string;
+  private readonly cacheKey?: string;
   private dirty = false;
   private closed = false;
   private vectorDims?: number;
@@ -169,6 +181,15 @@ export class PostgresMemoryIndexManager {
     if (!settings || settings.store.driver !== "postgres") {
       return null;
     }
+
+    // Return cached instance if still open — avoids creating a new Pool per call.
+    const poolCfg = resolvePgPoolConfig({ config: cfg, settings });
+    const cacheKey = resolveInstanceCacheKey(agentId, poolCfg);
+    const cached = instanceCache.get(cacheKey);
+    if (cached && !cached.closed) {
+      return cached;
+    }
+
     const providerResult = await createEmbeddingProvider({
       config: cfg,
       agentDir: resolveAgentDir(cfg, agentId),
@@ -178,7 +199,7 @@ export class PostgresMemoryIndexManager {
       fallback: settings.fallback,
       local: settings.local,
     });
-    return new PostgresMemoryIndexManager({
+    const instance = new PostgresMemoryIndexManager({
       cfg,
       agentId,
       settings,
@@ -188,7 +209,17 @@ export class PostgresMemoryIndexManager {
       fallbackReason: providerResult.fallbackReason,
       openAi: providerResult.openAi,
       gemini: providerResult.gemini,
+      cacheKey,
     });
+    instanceCache.set(cacheKey, instance);
+    return instance;
+  }
+
+  /** Close and evict all cached instances (e.g. on process shutdown or in tests). */
+  static async closeAll(): Promise<void> {
+    const entries = [...instanceCache.values()];
+    instanceCache.clear();
+    await Promise.allSettled(entries.map((m) => m.close()));
   }
 
   private constructor(params: {
@@ -201,6 +232,7 @@ export class PostgresMemoryIndexManager {
     fallbackReason?: string;
     openAi?: OpenAiEmbeddingClient;
     gemini?: GeminiEmbeddingClient;
+    cacheKey?: string;
   }) {
     this.cfg = params.cfg;
     this.agentId = params.agentId;
@@ -211,6 +243,7 @@ export class PostgresMemoryIndexManager {
     this.fallbackReason = params.fallbackReason;
     this.openAi = params.openAi;
     this.gemini = params.gemini;
+    this.cacheKey = params.cacheKey;
     this.workspaceDir = resolveAgentWorkspaceDir(this.cfg, this.agentId);
     this.sources = new Set(params.settings.sources);
     this.schema = resolveSchema(params.settings);
@@ -533,6 +566,9 @@ export class PostgresMemoryIndexManager {
       return;
     }
     this.closed = true;
+    if (this.cacheKey) {
+      instanceCache.delete(this.cacheKey);
+    }
     await this.pool.end();
   }
 
