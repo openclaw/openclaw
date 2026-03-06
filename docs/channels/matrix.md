@@ -148,6 +148,9 @@ python3 scripts/matrix_verify.py
 
 The script performs interactive SAS emoji verification between your Matrix
 client and the bot device.
+
+Make sure the gateway has started at least once with E2EE enabled before
+running the script (the gateway creates the device keys on first startup).
 </Warning>
 
 ## Multi-account

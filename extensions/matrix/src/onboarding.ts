@@ -364,11 +364,8 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
 
     if (enableEncryption) {
       prompter.note(
-        "After setup, verify the bot device by running:\n" +
-          "  python3 -m venv .venv && source .venv/bin/activate\n" +
-          "  pip install requests cryptography\n" +
-          "  python3 scripts/matrix_verify.py\n" +
-          "This performs SAS emoji verification so the bot can decrypt E2EE rooms.",
+        "After setup, verify the bot device for E2EE.\n" +
+          "See: https://docs.openclaw.ai/channels/matrix#device-verification",
       );
     }
 
