@@ -744,6 +744,37 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("does not treat non-timeout errors containing 'timed out' as retryable", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        const child = createMockChild({ autoClose: false });
+        queueMicrotask(() => {
+          child.stderr.emit("data", "search query timed out unexpectedly");
+          child.closeWith(1);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "status" });
+    // The error message contains "timed out" but lacks the timedOut property,
+    // so it should NOT be retried and should propagate immediately.
+    await expect(manager.sync({ reason: "manual" })).rejects.toThrow("timed out");
+    await manager.close();
+  });
+
   it("rebuilds managed collections once when qmd update fails with null-byte ENOTDIR", async () => {
     cfg = {
       ...cfg,
@@ -1523,11 +1554,174 @@ describe("QmdMemoryManager", () => {
     const searchAndQueryCalls = spawnMock.mock.calls
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "search" || args[0] === "query");
-    expect(searchAndQueryCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
-    ]);
+    // With parallel execution, both collections attempt search concurrently,
+    // both fail with "unknown flag", then the fallback retries all with query.
+    const searchCalls = searchAndQueryCalls.filter((args: string[]) => args[0] === "search");
+    const queryCalls = searchAndQueryCalls.filter((args: string[]) => args[0] === "query");
+    expect(searchCalls).toEqual(
+      expect.arrayContaining([
+        ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
+        ["search", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
+      ]),
+    );
+    expect(queryCalls).toEqual(
+      expect.arrayContaining([
+        ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
+        ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
+      ]),
+    );
+    await manager.close();
+  });
+
+  it("launches all collection queries concurrently", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "alpha" },
+            { path: path.join(workspaceDir, "b"), pattern: "**/*.md", name: "beta" },
+            { path: path.join(workspaceDir, "c"), pattern: "**/*.md", name: "gamma" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    const pendingChildren: MockChild[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        pendingChildren.push(child);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const searchPromise = manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+
+    // Yield to let all spawn calls fire
+    await new Promise((r) => setTimeout(r, 50));
+
+    // All 3 collections should have been spawned before any closed
+    expect(pendingChildren.length).toBe(3);
+
+    // Now close them all with results
+    for (const child of pendingChildren) {
+      emitAndClose(child, "stdout", "[]");
+    }
+
+    await searchPromise;
+    await manager.close();
+  });
+
+  it("returns results from successful collections when one times out", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          limits: { timeoutMs: 200 },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "good" },
+            { path: path.join(workspaceDir, "b"), pattern: "**/*.md", name: "stuck" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const collectionFlag = args.indexOf("-c");
+        const collectionName = collectionFlag >= 0 ? args[collectionFlag + 1] : "";
+        if (collectionName === "stuck-main") {
+          // This one never closes — will time out
+          return createMockChild({ autoClose: false });
+        }
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            { docid: "doc1", score: 0.9, content: "hello", collection: "good-main" },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: { prepare: (query: string) => { all: (arg: unknown) => unknown }; close: () => void };
+    };
+    inner.db = {
+      prepare: (_query: string) => ({
+        all: (arg: unknown) => {
+          if (typeof arg === "string" && arg.startsWith("doc1")) {
+            return [{ collection: "good-main", path: "test.md" }];
+          }
+          return [];
+        },
+      }),
+      close: () => {},
+    };
+
+    const results = await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+
+    // Should get results from the good collection despite stuck timing out
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    await manager.close();
+  });
+
+  it("re-throws non-timeout errors even when other collections succeed", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "good" },
+            { path: path.join(workspaceDir, "b"), pattern: "**/*.md", name: "broken" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const collectionFlag = args.indexOf("-c");
+        const collectionName = collectionFlag >= 0 ? args[collectionFlag + 1] : "";
+        if (collectionName === "broken-main") {
+          // Simulate a spawn/permission failure (non-timeout error)
+          const child = createMockChild({ autoClose: false });
+          process.nextTick(() => child.emit("error", new Error("spawn EACCES")));
+          return child;
+        }
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            { docid: "doc1", score: 0.9, content: "hello", collection: "good-main" },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    await expect(
+      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow("spawn EACCES");
     await manager.close();
   });
 
