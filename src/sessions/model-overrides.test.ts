@@ -74,6 +74,7 @@ describe("applyModelOverrideToSessionEntry", () => {
       model: "gpt-5.2",
       providerOverride: "openai",
       modelOverride: "gpt-5.2",
+      contextTokens: 200_000,
     };
 
     const result = applyModelOverrideToSessionEntry({
@@ -87,6 +88,7 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(result.updated).toBe(false);
     expect(entry.modelProvider).toBe("openai");
     expect(entry.model).toBe("gpt-5.2");
+    expect(entry.contextTokens).toBe(200_000);
     expect(entry.updatedAt).toBe(before);
   });
 
