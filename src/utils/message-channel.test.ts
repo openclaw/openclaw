@@ -29,7 +29,19 @@ describe("message-channel", () => {
   });
 
   it("reports markdown capability for known channels", () => {
-    const capable = ["slack", "telegram", "signal", "discord", "googlechat", "matrix", "msteams", "whatsapp", "feishu", "tui", "webchat"];
+    const capable = [
+      "slack",
+      "telegram",
+      "signal",
+      "discord",
+      "googlechat",
+      "matrix",
+      "msteams",
+      "whatsapp",
+      "feishu",
+      "tui",
+      "webchat",
+    ];
     for (const ch of capable) {
       expect(isMarkdownCapableMessageChannel(ch), ch).toBe(true);
     }
