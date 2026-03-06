@@ -24,19 +24,20 @@ export async function waitForDiscordGatewayStop(
   const emitter = gateway?.emitter;
   return await new Promise<void>((resolve, reject) => {
     let settled = false;
-    const cleanup = () => {
-      abortSignal?.removeEventListener("abort", onAbort);
-      emitter?.removeListener("error", onGatewayErrorEvent);
-    };
     const finishResolve = () => {
       if (settled) {
         return;
       }
       settled = true;
-      cleanup();
+      // Remove abort listener first, but keep the error listener alive across
+      // gateway.disconnect() so Carbon's synchronous "max reconnect attempts"
+      // error (emitted when maxAttempts=0 is set before shutdown) is absorbed
+      // rather than crashing Node with an unhandled 'error' event.
+      abortSignal?.removeEventListener("abort", onAbort);
       try {
         gateway?.disconnect?.();
       } finally {
+        emitter?.removeListener("error", onGatewayErrorEvent);
         resolve();
       }
     };
@@ -45,10 +46,11 @@ export async function waitForDiscordGatewayStop(
         return;
       }
       settled = true;
-      cleanup();
+      abortSignal?.removeEventListener("abort", onAbort);
       try {
         gateway?.disconnect?.();
       } finally {
+        emitter?.removeListener("error", onGatewayErrorEvent);
         reject(err);
       }
     };
@@ -56,6 +58,12 @@ export async function waitForDiscordGatewayStop(
       finishResolve();
     };
     const onGatewayErrorEvent = (err: unknown) => {
+      // If already settled (e.g. shutting down), absorb the error silently so
+      // Carbon's reconnect-exhausted error during intentional disconnect does
+      // not surface as an unhandled rejection or spurious onGatewayError call.
+      if (settled) {
+        return;
+      }
       onGatewayError?.(err);
       const shouldStop = shouldStopOnError?.(err) ?? true;
       if (shouldStop) {
