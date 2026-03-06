@@ -41,6 +41,27 @@ const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
 describe("failover-error", () => {
   it("infers failover reason from HTTP status", () => {
     expect(resolveFailoverReasonFromError({ status: 402 })).toBe("billing");
+    // Anthropic Claude Max plan surfaces rate limits as HTTP 402 (#30484)
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "HTTP 402: request reached organization usage limit, try again later",
+      }),
+    ).toBe("rate_limit");
+    // Explicit billing messages on 402 stay classified as billing
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "insufficient credits — please top up your account",
+      }),
+    ).toBe("billing");
+    // Ambiguous "quota exceeded" + billing signal → billing wins
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "HTTP 402: You have exceeded your current quota. Please add more credits.",
+      }),
+    ).toBe("billing");
     expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe("rate_limit");
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
