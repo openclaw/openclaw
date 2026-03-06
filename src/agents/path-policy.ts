@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
 
 type RelativePathOptions = {
@@ -8,15 +9,14 @@ type RelativePathOptions = {
   includeRootInError?: boolean;
 };
 
-function normalizeWindowsPathForComparison(input: string): string {
-  let normalized = path.win32.normalize(input);
-  if (normalized.startsWith("\\\\?\\")) {
-    normalized = normalized.slice(4);
-    if (normalized.toUpperCase().startsWith("UNC\\")) {
-      normalized = `\\\\${normalized.slice(4)}`;
-    }
-  }
-  return normalized.replaceAll("/", "\\").toLowerCase();
+function throwPathEscapesBoundary(params: {
+  options?: RelativePathOptions;
+  rootResolved: string;
+  candidate: string;
+}): never {
+  const boundary = params.options?.boundaryLabel ?? "workspace root";
+  const suffix = params.options?.includeRootInError ? ` (${params.rootResolved})` : "";
+  throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
 }
 
 function toRelativePathUnderRoot(params: {
@@ -39,14 +39,18 @@ function toRelativePathUnderRoot(params: {
       if (params.options?.allowRoot) {
         return "";
       }
-      const boundary = params.options?.boundaryLabel ?? "workspace root";
-      const suffix = params.options?.includeRootInError ? ` (${rootResolved})` : "";
-      throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
+      throwPathEscapesBoundary({
+        options: params.options,
+        rootResolved,
+        candidate: params.candidate,
+      });
     }
     if (relative.startsWith("..") || path.win32.isAbsolute(relative)) {
-      const boundary = params.options?.boundaryLabel ?? "workspace root";
-      const suffix = params.options?.includeRootInError ? ` (${rootResolved})` : "";
-      throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
+      throwPathEscapesBoundary({
+        options: params.options,
+        rootResolved,
+        candidate: params.candidate,
+      });
     }
     return relative;
   }
@@ -58,14 +62,18 @@ function toRelativePathUnderRoot(params: {
     if (params.options?.allowRoot) {
       return "";
     }
-    const boundary = params.options?.boundaryLabel ?? "workspace root";
-    const suffix = params.options?.includeRootInError ? ` (${rootResolved})` : "";
-    throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
+    throwPathEscapesBoundary({
+      options: params.options,
+      rootResolved,
+      candidate: params.candidate,
+    });
   }
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    const boundary = params.options?.boundaryLabel ?? "workspace root";
-    const suffix = params.options?.includeRootInError ? ` (${rootResolved})` : "";
-    throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
+    throwPathEscapesBoundary({
+      options: params.options,
+      rootResolved,
+      candidate: params.candidate,
+    });
   }
   return relative;
 }

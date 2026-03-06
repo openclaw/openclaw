@@ -11,7 +11,7 @@ function normalizeChannel(value?: string) {
   return value?.trim().toLowerCase() ?? undefined;
 }
 
-function passthroughPluginAutoEnable(config: unknown) {
+function applyPluginAutoEnableForTests(config: unknown) {
   return { config, changes: [] as unknown[] };
 }
 
@@ -36,12 +36,14 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => TEST_WORKSPACE_ROOT,
 }));
 
-vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: ({ config }: { config: unknown }) => passthroughPluginAutoEnable(config),
-}));
-
 vi.mock("../../plugins/loader.js", () => ({
   loadOpenClawPlugins: mocks.loadOpenClawPlugins,
+}));
+
+vi.mock("../../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable(args: { config: unknown }) {
+    return applyPluginAutoEnableForTests(args.config);
+  },
 }));
 
 import { setActivePluginRegistry } from "../../plugins/runtime.js";

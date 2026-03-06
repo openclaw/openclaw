@@ -19,6 +19,7 @@ import type {
 } from "./tts.js";
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
+export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 const OPENAI_STREAM_FORMAT_SNIFF_BYTES = 64;
 
@@ -30,6 +31,14 @@ function normalizeElevenLabsBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
     return DEFAULT_ELEVENLABS_BASE_URL;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+function normalizeOpenAITtsBaseUrl(baseUrl?: string): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return DEFAULT_OPENAI_BASE_URL;
   }
   return trimmed.replace(/\/+$/, "");
 }
@@ -101,7 +110,7 @@ function parseNumberValue(value: string): number | undefined {
 export function parseTtsDirectives(
   text: string,
   policy: ResolvedTtsModelOverrides,
-  options?: { openaiBaseUrl?: string },
+  openaiBaseUrl?: string,
 ): TtsDirectiveParseResult {
   if (!policy.enabled) {
     return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
@@ -172,7 +181,7 @@ export function parseTtsDirectives(
             if (!policy.allowVoice) {
               break;
             }
-            if (isValidOpenAIVoice(rawValue, options?.openaiBaseUrl)) {
+            if (isValidOpenAIVoice(rawValue, openaiBaseUrl)) {
               overrides.openai = { ...overrides.openai, voice: rawValue };
             } else {
               warnings.push(`invalid OpenAI voice "${rawValue}"`);
@@ -201,36 +210,7 @@ export function parseTtsDirectives(
             if (!policy.allowModelId) {
               break;
             }
-            if (
-              key === "elevenlabs_model" ||
-              key === "elevenlabsmodel" ||
-              key === "modelid" ||
-              key === "model_id"
-            ) {
-              overrides.elevenlabs = { ...overrides.elevenlabs, modelId: rawValue };
-              break;
-            }
-            if (key === "openai_model" || key === "openaimodel") {
-              if (isValidOpenAIModel(rawValue, options?.openaiBaseUrl)) {
-                overrides.openai = { ...overrides.openai, model: rawValue };
-              } else {
-                warnings.push(`invalid OpenAI model "${rawValue}"`);
-              }
-              break;
-            }
-            if (selectedProvider === "elevenlabs") {
-              overrides.elevenlabs = { ...overrides.elevenlabs, modelId: rawValue };
-              break;
-            }
-            if (selectedProvider === "openai") {
-              if (isValidOpenAIModel(rawValue, options?.openaiBaseUrl)) {
-                overrides.openai = { ...overrides.openai, model: rawValue };
-              } else {
-                warnings.push(`invalid OpenAI model "${rawValue}"`);
-              }
-              break;
-            }
-            if (isValidOpenAIModel(rawValue, options?.openaiBaseUrl)) {
+            if (isValidOpenAIModel(rawValue, openaiBaseUrl)) {
               overrides.openai = { ...overrides.openai, model: rawValue };
             } else {
               overrides.elevenlabs = { ...overrides.elevenlabs, modelId: rawValue };
@@ -451,16 +431,15 @@ const DEFAULT_OPENAI_TTS_BASE_URL = "https://api.openai.com/v1";
  *
  * Note: Read at runtime (not module load) to support config.env loading.
  */
-function getOpenAITtsBaseUrl(baseUrl?: string): string {
-  return (
-    baseUrl?.trim() ||
-    process.env.OPENAI_TTS_BASE_URL?.trim() ||
-    DEFAULT_OPENAI_TTS_BASE_URL
-  ).replace(/\/+$/, "");
+function getOpenAITtsBaseUrl(): string {
+  return normalizeOpenAITtsBaseUrl(process.env.OPENAI_TTS_BASE_URL);
 }
 
 function isCustomOpenAIEndpoint(baseUrl?: string): boolean {
-  return getOpenAITtsBaseUrl(baseUrl) !== DEFAULT_OPENAI_TTS_BASE_URL;
+  if (baseUrl != null) {
+    return normalizeOpenAITtsBaseUrl(baseUrl) !== DEFAULT_OPENAI_BASE_URL;
+  }
+  return getOpenAITtsBaseUrl() !== DEFAULT_OPENAI_BASE_URL;
 }
 export const OPENAI_TTS_VOICES = [
   "alloy",
@@ -489,25 +468,6 @@ export function isValidOpenAIModel(model: string, baseUrl?: string): boolean {
     return true;
   }
   return OPENAI_TTS_MODELS.includes(model as (typeof OPENAI_TTS_MODELS)[number]);
-}
-
-function supportsOpenAIStreaming(model: string, baseUrl?: string): boolean {
-  return isCustomOpenAIEndpoint(baseUrl) || OPENAI_TTS_MODELS_WITH_STREAMING.has(model);
-}
-
-function isUnsupportedInstructionsApiError(error: Error): boolean {
-  const normalized = error.message.toLowerCase();
-  const hasUnsupportedSignal =
-    normalized.includes("unsupported") ||
-    normalized.includes("not supported") ||
-    normalized.includes("unknown parameter") ||
-    normalized.includes("unrecognized request argument");
-
-  return (
-    (normalized.includes("instruction") && hasUnsupportedSignal) ||
-    normalized.includes("extra inputs are not permitted") ||
-    normalized.includes("additional properties are not allowed")
-  );
 }
 
 export function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is OpenAiTtsVoice {
@@ -868,6 +828,7 @@ export async function elevenLabsTTS(params: {
 export async function openaiTTS(params: {
   text: string;
   apiKey: string;
+  baseUrl: string;
   model: string;
   voice: string;
   responseFormat?: OpenAiTtsResponseFormat;
@@ -878,23 +839,8 @@ export async function openaiTTS(params: {
   streamFormat?: OpenAiTtsStreamFormat;
   streamFallbackToBuffered?: boolean;
   timeoutMs: number;
-  baseUrl?: string;
-}): Promise<{ audioBuffer: Buffer; outputFormat: OpenAiTtsResponseFormat }> {
-  const {
-    text,
-    apiKey,
-    model,
-    voice,
-    responseFormat,
-    speed,
-    instructions,
-    instructionsExplicit = false,
-    stream,
-    streamFormat,
-    streamFallbackToBuffered = true,
-    timeoutMs,
-    baseUrl,
-  } = params;
+}): Promise<Buffer> {
+  const { text, apiKey, baseUrl, model, voice, responseFormat, timeoutMs } = params;
 
   if (!isValidOpenAIModel(model, baseUrl)) {
     throw new Error(`Invalid model: ${model}`);
@@ -921,31 +867,20 @@ export async function openaiTTS(params: {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const makeRequest = async (
-      enableStream: boolean,
-      includeInstructions: boolean,
-      signal: AbortSignal = controller.signal,
-    ): Promise<Response> =>
-      fetch(`${getOpenAITtsBaseUrl(baseUrl)}/audio/speech`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          input: text,
-          voice,
-          ...(responseFormat != null ? { response_format: responseFormat } : {}),
-          ...(speed != null ? { speed } : {}),
-          ...(includeInstructions && normalizedInstructions
-            ? { instructions: normalizedInstructions }
-            : {}),
-          ...(enableStream ? { stream: true } : {}),
-          ...(enableStream && streamFormat ? { stream_format: streamFormat } : {}),
-        }),
-        signal,
-      });
+    const response = await fetch(`${baseUrl}/audio/speech`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: text,
+        voice,
+        response_format: responseFormat,
+      }),
+      signal: controller.signal,
+    });
 
     const requestWithUnsupportedInstructionsRetry = async (
       enableStream: boolean,

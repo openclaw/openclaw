@@ -94,7 +94,7 @@ Discord voice can override the same shape at `channels.discord.voice.tts` (merge
       },
       openai: {
         apiKey: "openai_api_key",
-        baseUrl: "https://api.openai.com/v1", // optional; also supports custom OpenAI-compatible endpoints
+        baseUrl: "https://api.openai.com/v1",
         model: "gpt-4o-mini-tts",
         voice: "alloy",
         responseFormat: "mp3", // mp3 | opus | aac | flac | wav | pcm
@@ -238,6 +238,9 @@ Then run:
   - OpenClaw playback supports `audio`.
   - `sse` is exposed for compatibility but currently rejected by playback/runtime paths with a clear error.
 - `elevenlabs.baseUrl`: override ElevenLabs API base URL.
+- `openai.baseUrl`: override the OpenAI TTS endpoint.
+  - Resolution order: `messages.tts.openai.baseUrl` -> `OPENAI_TTS_BASE_URL` -> `https://api.openai.com/v1`
+  - Non-default values are treated as OpenAI-compatible TTS endpoints, so custom model and voice names are accepted.
 - `elevenlabs.voiceSettings`:
   - `stability`, `similarityBoost`, `style`: `0..1`
   - `useSpeakerBoost`: `true|false`

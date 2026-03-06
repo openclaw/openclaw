@@ -48,6 +48,24 @@ describe("sessions", () => {
     return { storePath };
   }
 
+  function expectedBot1FallbackSessionPath() {
+    return path.join(
+      path.resolve("/different/state"),
+      "agents",
+      "bot1",
+      "sessions",
+      "sess-1.jsonl",
+    );
+  }
+
+  function buildMainSessionEntry(overrides: Record<string, unknown> = {}) {
+    return {
+      sessionId: "sess-1",
+      updatedAt: 123,
+      ...overrides,
+    };
+  }
+
   async function createAgentSessionsLayout(label: string): Promise<{
     stateDir: string;
     mainStorePath: string;
@@ -198,30 +216,21 @@ describe("sessions", () => {
 
   it("updateLastRoute persists channel and target", async () => {
     const mainSessionKey = "agent:main:main";
-    const dir = await createCaseDir("updateLastRoute");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [mainSessionKey]: {
-            sessionId: "sess-1",
-            updatedAt: 123,
-            systemSent: true,
-            thinkingLevel: "low",
-            responseUsage: "on",
-            queueDebounceMs: 1234,
-            reasoningLevel: "on",
-            elevatedLevel: "on",
-            authProfileOverride: "auth-1",
-            compactionCount: 2,
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute",
+      entries: {
+        [mainSessionKey]: buildMainSessionEntry({
+          systemSent: true,
+          thinkingLevel: "low",
+          responseUsage: "on",
+          queueDebounceMs: 1234,
+          reasoningLevel: "on",
+          elevatedLevel: "on",
+          authProfileOverride: "auth-1",
+          compactionCount: 2,
+        }),
+      },
+    });
 
     await updateLastRoute({
       storePath,
@@ -251,9 +260,10 @@ describe("sessions", () => {
 
   it("updateLastRoute prefers explicit deliveryContext", async () => {
     const mainSessionKey = "agent:main:main";
-    const dir = await createCaseDir("updateLastRoute");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "{}", "utf-8");
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute",
+      entries: {},
+    });
 
     await updateLastRoute({
       storePath,
@@ -281,30 +291,21 @@ describe("sessions", () => {
 
   it("updateLastRoute clears threadId when explicit route omits threadId", async () => {
     const mainSessionKey = "agent:main:main";
-    const dir = await createCaseDir("updateLastRoute");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [mainSessionKey]: {
-            sessionId: "sess-1",
-            updatedAt: 123,
-            deliveryContext: {
-              channel: "telegram",
-              to: "222",
-              threadId: "42",
-            },
-            lastChannel: "telegram",
-            lastTo: "222",
-            lastThreadId: "42",
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute",
+      entries: {
+        [mainSessionKey]: buildMainSessionEntry({
+          deliveryContext: {
+            channel: "telegram",
+            to: "222",
+            threadId: "42",
           },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+          lastChannel: "telegram",
+          lastTo: "222",
+          lastThreadId: "42",
+        }),
+      },
+    });
 
     await updateLastRoute({
       storePath,
@@ -325,9 +326,10 @@ describe("sessions", () => {
 
   it("updateLastRoute records origin + group metadata when ctx is provided", async () => {
     const sessionKey = "agent:main:whatsapp:group:123@g.us";
-    const dir = await createCaseDir("updateLastRoute");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "{}", "utf-8");
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute",
+      entries: {},
+    });
 
     await updateLastRoute({
       storePath,
@@ -605,9 +607,7 @@ describe("sessions", () => {
         { sessionFile: path.join(unsafe, "passwd") },
         { agentId: "bot1" },
       );
-      expect(sessionFile).toBe(
-        path.join(path.resolve("/different/state"), "agents", "bot1", "sessions", "sess-1.jsonl"),
-      );
+      expect(sessionFile).toBe(expectedBot1FallbackSessionPath());
     });
   });
 
@@ -627,9 +627,7 @@ describe("sessions", () => {
         { sessionFile: nested },
         { agentId: "bot1" },
       );
-      expect(sessionFile).toBe(
-        path.join(path.resolve("/different/state"), "agents", "bot1", "sessions", "sess-1.jsonl"),
-      );
+      expect(sessionFile).toBe(expectedBot1FallbackSessionPath());
     });
   });
 
@@ -684,7 +682,7 @@ describe("sessions", () => {
     });
 
     const createDeferred = <T>() => {
-      let resolve!: (value: T) => void;
+      let resolve!: (value: T | PromiseLike<T>) => void;
       let reject!: (reason?: unknown) => void;
       const promise = new Promise<T>((res, rej) => {
         resolve = res;

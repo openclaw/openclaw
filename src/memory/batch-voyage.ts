@@ -36,6 +36,29 @@ export const VOYAGE_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
 const VOYAGE_BATCH_COMPLETION_WINDOW = "12h";
 const VOYAGE_BATCH_MAX_REQUESTS = 50000;
 
+async function assertVoyageResponseOk(res: Response, context: string): Promise<void> {
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${context}: ${res.status} ${text}`);
+  }
+}
+
+function buildVoyageBatchRequest<T>(params: {
+  client: VoyageEmbeddingClient;
+  path: string;
+  onResponse: (res: Response) => Promise<T>;
+}) {
+  const baseUrl = normalizeBatchBaseUrl(params.client);
+  return {
+    url: `${baseUrl}/${params.path}`,
+    ssrfPolicy: params.client.ssrfPolicy,
+    init: {
+      headers: buildBatchHeaders(params.client, { json: true }),
+    },
+    onResponse: params.onResponse,
+  };
+}
+
 async function submitVoyageBatch(params: {
   client: VoyageEmbeddingClient;
   requests: VoyageBatchRequest[];
@@ -74,21 +97,16 @@ async function fetchVoyageBatchStatus(params: {
   client: VoyageEmbeddingClient;
   batchId: string;
 }): Promise<VoyageBatchStatus> {
-  const baseUrl = normalizeBatchBaseUrl(params.client);
-  return await withRemoteHttpResponse({
-    url: `${baseUrl}/batches/${params.batchId}`,
-    ssrfPolicy: params.client.ssrfPolicy,
-    init: {
-      headers: buildBatchHeaders(params.client, { json: true }),
-    },
-    onResponse: async (res) => {
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`voyage batch status failed: ${res.status} ${text}`);
-      }
-      return (await res.json()) as VoyageBatchStatus;
-    },
-  });
+  return await withRemoteHttpResponse(
+    buildVoyageBatchRequest({
+      client: params.client,
+      path: `batches/${params.batchId}`,
+      onResponse: async (res) => {
+        await assertVoyageResponseOk(res, "voyage batch status failed");
+        return (await res.json()) as VoyageBatchStatus;
+      },
+    }),
+  );
 }
 
 async function readVoyageBatchError(params: {
@@ -96,30 +114,25 @@ async function readVoyageBatchError(params: {
   errorFileId: string;
 }): Promise<string | undefined> {
   try {
-    const baseUrl = normalizeBatchBaseUrl(params.client);
-    return await withRemoteHttpResponse({
-      url: `${baseUrl}/files/${params.errorFileId}/content`,
-      ssrfPolicy: params.client.ssrfPolicy,
-      init: {
-        headers: buildBatchHeaders(params.client, { json: true }),
-      },
-      onResponse: async (res) => {
-        if (!res.ok) {
+    return await withRemoteHttpResponse(
+      buildVoyageBatchRequest({
+        client: params.client,
+        path: `files/${params.errorFileId}/content`,
+        onResponse: async (res) => {
+          await assertVoyageResponseOk(res, "voyage batch error file content failed");
           const text = await res.text();
-          throw new Error(`voyage batch error file content failed: ${res.status} ${text}`);
-        }
-        const text = await res.text();
-        if (!text.trim()) {
-          return undefined;
-        }
-        const lines = text
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean)
-          .map((line) => JSON.parse(line) as VoyageBatchOutputLine);
-        return extractBatchErrorMessage(lines);
-      },
-    });
+          if (!text.trim()) {
+            return undefined;
+          }
+          const lines = text
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as VoyageBatchOutputLine);
+          return extractBatchErrorMessage(lines);
+        },
+      }),
+    );
   } catch (err) {
     return formatUnavailableBatchError(err);
   }

@@ -3,7 +3,6 @@ import { isReadHttpMethod } from "./control-ui-http-utils.js";
 export type ControlUiRequestClassification =
   | { kind: "not-control-ui" }
   | { kind: "not-found" }
-  | { kind: "method-not-allowed" }
   | { kind: "redirect"; location: string }
   | { kind: "serve" };
 
@@ -36,7 +35,7 @@ export function classifyControlUiRequest(params: {
     return { kind: "not-control-ui" };
   }
   if (!isReadHttpMethod(method)) {
-    return { kind: "method-not-allowed" };
+    return { kind: "not-control-ui" };
   }
   if (pathname === basePath) {
     return { kind: "redirect", location: `${basePath}/${search}` };

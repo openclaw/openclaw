@@ -210,8 +210,10 @@ function createBoundThreadBindingManager(params: {
   targetSessionKey: string;
   agentId: string;
 }): ThreadBindingManager {
+  const baseManager = createNoopThreadBindingManager(params.accountId);
+  const now = Date.now();
   return {
-    accountId: params.accountId,
+    ...baseManager,
     getIdleTimeoutMs: () => 24 * 60 * 60 * 1000,
     getMaxAgeMs: () => 0,
     getByThreadId: (threadId: string) =>
@@ -224,20 +226,12 @@ function createBoundThreadBindingManager(params: {
             targetSessionKey: params.targetSessionKey,
             agentId: params.agentId,
             boundBy: "system",
-            boundAt: Date.now(),
-            lastActivityAt: Date.now(),
+            boundAt: now,
+            lastActivityAt: now,
             idleTimeoutMs: 24 * 60 * 60 * 1000,
             maxAgeMs: 0,
           }
-        : undefined,
-    getBySessionKey: () => undefined,
-    listBySessionKey: () => [],
-    listBindings: () => [],
-    touchThread: () => null,
-    bindTarget: async () => null,
-    unbindThread: () => null,
-    unbindBySessionKey: () => [],
-    stop: () => {},
+        : baseManager.getByThreadId(threadId),
   };
 }
 

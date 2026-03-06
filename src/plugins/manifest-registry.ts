@@ -46,7 +46,8 @@ export type PluginManifestRegistry = {
 
 const registryCache = new Map<string, { expiresAt: number; registry: PluginManifestRegistry }>();
 
-const DEFAULT_MANIFEST_CACHE_MS = 200;
+// Keep a short cache window to collapse bursty reloads during startup flows.
+const DEFAULT_MANIFEST_CACHE_MS = 1000;
 
 export function clearPluginManifestRegistryCache(): void {
   registryCache.clear();
@@ -167,7 +168,8 @@ export function loadPluginManifestRegistry(params: {
   const realpathCache = new Map<string, string>();
 
   for (const candidate of candidates) {
-    const manifestRes = loadPluginManifest(candidate.rootDir);
+    const rejectHardlinks = candidate.origin !== "bundled";
+    const manifestRes = loadPluginManifest(candidate.rootDir, rejectHardlinks);
     if (!manifestRes.ok) {
       diagnostics.push({
         level: "error",

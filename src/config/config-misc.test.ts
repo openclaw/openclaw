@@ -48,6 +48,38 @@ describe("ui.seamColor", () => {
   });
 });
 
+describe("plugins.entries.*.hooks.allowPromptInjection", () => {
+  it("accepts boolean values", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowPromptInjection: false,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects non-boolean values", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowPromptInjection: "no",
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("web search provider config", () => {
   it("accepts kimi provider and config", () => {
     const res = validateConfigObject(
@@ -176,6 +208,21 @@ describe("cron webhook schema", () => {
         enabled: true,
         webhook: "https://example.invalid/legacy-cron-webhook",
         webhookToken: "secret-token",
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts cron.webhookToken SecretRef values", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        webhook: "https://example.invalid/legacy-cron-webhook",
+        webhookToken: {
+          source: "env",
+          provider: "default",
+          id: "CRON_WEBHOOK_TOKEN",
+        },
       },
     });
 

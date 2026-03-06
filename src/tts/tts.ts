@@ -15,6 +15,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import type {
   OpenAiTtsResponseFormat,
   OpenAiTtsStreamFormat,
@@ -30,6 +31,7 @@ import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
+  DEFAULT_OPENAI_BASE_URL,
   edgeTTS,
   elevenLabsTTS,
   inferEdgeExtension,
@@ -127,7 +129,7 @@ export type ResolvedTtsConfig = {
   };
   openai: {
     apiKey?: string;
-    baseUrl?: string;
+    baseUrl: string;
     model: string;
     voice: string;
     instructions?: string;
@@ -351,7 +353,10 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     summaryModel: raw.summaryModel?.trim() || undefined,
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
     elevenlabs: {
-      apiKey: raw.elevenlabs?.apiKey,
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.elevenlabs?.apiKey,
+        path: "messages.tts.elevenlabs.apiKey",
+      }),
       baseUrl: raw.elevenlabs?.baseUrl?.trim() || DEFAULT_ELEVENLABS_BASE_URL,
       voiceId: raw.elevenlabs?.voiceId ?? DEFAULT_ELEVENLABS_VOICE_ID,
       modelId: raw.elevenlabs?.modelId ?? DEFAULT_ELEVENLABS_MODEL_ID,
@@ -372,8 +377,16 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       },
     },
     openai: {
-      apiKey: raw.openai?.apiKey,
-      baseUrl: raw.openai?.baseUrl?.trim() || undefined,
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.openai?.apiKey,
+        path: "messages.tts.openai.apiKey",
+      }),
+      // Config > env var > default; strip trailing slashes for consistency.
+      baseUrl: (
+        raw.openai?.baseUrl?.trim() ||
+        process.env.OPENAI_TTS_BASE_URL?.trim() ||
+        DEFAULT_OPENAI_BASE_URL
+      ).replace(/\/+$/, ""),
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
       instructions: raw.openai?.instructions?.trim() || undefined,
@@ -1026,15 +1039,10 @@ export async function textToSpeech(params: {
         const openaiResult = await openaiTTS({
           text: params.text,
           apiKey,
-          baseUrl: openaiSettings.baseUrl,
-          model: openaiSettings.model,
-          voice: openaiSettings.voice,
-          responseFormat: openaiSettings.responseFormat,
-          speed: openaiSettings.speed,
-          instructions: openaiSettings.instructions,
-          instructionsExplicit: openaiSettings.instructionsExplicit,
-          stream: openaiSettings.stream,
-          streamFormat: openaiSettings.streamFormat,
+          baseUrl: config.openai.baseUrl,
+          model: openaiModelOverride ?? config.openai.model,
+          voice: openaiVoiceOverride ?? config.openai.voice,
+          responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
         });
         audioBuffer = openaiResult.audioBuffer;
@@ -1325,9 +1333,9 @@ export async function textToSpeechTelephony(params: {
       const openaiResult = await openaiTTS({
         text: params.text,
         apiKey,
-        baseUrl: openaiSettings.baseUrl,
-        model: openaiSettings.model,
-        voice: openaiSettings.voice,
+        baseUrl: config.openai.baseUrl,
+        model: config.openai.model,
+        voice: config.openai.voice,
         responseFormat: output.format,
         speed: openaiSettings.speed,
         instructions: openaiSettings.instructions,
@@ -1373,9 +1381,7 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   const text = params.payload.text ?? "";
-  const directives = parseTtsDirectives(text, config.modelOverrides, {
-    openaiBaseUrl: config.openai.baseUrl,
-  });
+  const directives = parseTtsDirectives(text, config.modelOverrides, config.openai.baseUrl);
   if (directives.warnings.length > 0) {
     logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
   }

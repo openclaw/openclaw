@@ -159,6 +159,14 @@ describe("buildGatewayReloadPlan", () => {
     );
   });
 
+  it("restarts heartbeat when agents.defaults.models allowlist changes", () => {
+    const plan = buildGatewayReloadPlan(["agents.defaults.models"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.hotReasons).toContain("agents.defaults.models");
+    expect(plan.noopPaths).toEqual([]);
+  });
+
   it("hot-reloads health monitor when channelHealthCheckMinutes changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.channelHealthCheckMinutes"]);
     expect(plan.restartGateway).toBe(false);
@@ -187,6 +195,53 @@ describe("buildGatewayReloadPlan", () => {
   it("defaults unknown paths to restart", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);
+  });
+
+  it.each([
+    {
+      path: "gateway.channelHealthCheckMinutes",
+      expectRestartGateway: false,
+      expectHotPath: "gateway.channelHealthCheckMinutes",
+      expectRestartHealthMonitor: true,
+    },
+    {
+      path: "hooks.gmail.account",
+      expectRestartGateway: false,
+      expectHotPath: "hooks.gmail.account",
+      expectRestartGmailWatcher: true,
+      expectReloadHooks: true,
+    },
+    {
+      path: "gateway.remote.url",
+      expectRestartGateway: false,
+      expectNoopPath: "gateway.remote.url",
+    },
+    {
+      path: "unknownField",
+      expectRestartGateway: true,
+      expectRestartReason: "unknownField",
+    },
+  ])("classifies reload path: $path", (testCase) => {
+    const plan = buildGatewayReloadPlan([testCase.path]);
+    expect(plan.restartGateway).toBe(testCase.expectRestartGateway);
+    if (testCase.expectHotPath) {
+      expect(plan.hotReasons).toContain(testCase.expectHotPath);
+    }
+    if (testCase.expectNoopPath) {
+      expect(plan.noopPaths).toContain(testCase.expectNoopPath);
+    }
+    if (testCase.expectRestartReason) {
+      expect(plan.restartReasons).toContain(testCase.expectRestartReason);
+    }
+    if (testCase.expectRestartHealthMonitor) {
+      expect(plan.restartHealthMonitor).toBe(true);
+    }
+    if (testCase.expectRestartGmailWatcher) {
+      expect(plan.restartGmailWatcher).toBe(true);
+    }
+    if (testCase.expectReloadHooks) {
+      expect(plan.reloadHooks).toBe(true);
+    }
   });
 });
 
