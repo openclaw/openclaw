@@ -330,6 +330,7 @@ export async function setVeniceApiKey(
 
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-5";
 export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
+export const QINIU_DEFAULT_MODEL_REF = "qiniu/deepseek-r1";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R1";
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
@@ -357,6 +358,17 @@ export async function setXiaomiApiKey(
   upsertAuthProfile({
     profileId: "xiaomi:default",
     credential: buildApiKeyCredential("xiaomi", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+export async function setQiniuApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "qiniu:default",
+    credential: buildApiKeyCredential("qiniu", key, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
