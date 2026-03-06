@@ -13,6 +13,7 @@ import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
+import { parseFenceSpans } from "../../markdown/fences.js";
 import { MEDIA_IMAGE_LINE_RE, normalizeMediaSource } from "../../media/parse.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -504,15 +505,24 @@ const MIME_BY_EXT: Record<string, string> = {
 
 function extractMediaImagePaths(text: string): string[] {
   const paths: string[] = [];
+  // Skip MEDIA: lines inside fenced code blocks (mirrors splitMediaFromOutput).
+  const hasFences = /^[`~]{3,}/m.test(text);
+  const fenceSpans = hasFences ? parseFenceSpans(text) : [];
+  let offset = 0;
   for (const line of text.split("\n")) {
-    const match = line.match(MEDIA_IMAGE_LINE_RE);
-    if (match?.[1]) {
-      // Normalize file:// URIs to bare paths (mirrors TUI's getMediaPaths).
-      const raw = normalizeMediaSource(match[1].trim());
-      if (raw && path.isAbsolute(raw) && !raw.includes("\0")) {
-        paths.push(raw);
+    const insideFence =
+      hasFences && fenceSpans.some((s) => offset >= s.start && offset < s.end);
+    if (!insideFence) {
+      const match = line.match(MEDIA_IMAGE_LINE_RE);
+      if (match?.[1]) {
+        // Normalize file:// URIs to bare paths (mirrors TUI's getMediaPaths).
+        const raw = normalizeMediaSource(match[1].trim());
+        if (raw && path.isAbsolute(raw) && !raw.includes("\0")) {
+          paths.push(raw);
+        }
       }
     }
+    offset += line.length + 1; // +1 for newline
   }
   return paths;
 }
