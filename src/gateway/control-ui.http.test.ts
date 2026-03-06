@@ -146,6 +146,28 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves index.html when control-ui files are hardlinked", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const hardlinkSource = path.join(tmp, "index-source.html");
+        const hardlinkTarget = path.join(tmp, "index.html");
+        await fs.writeFile(hardlinkSource, "<html>pnpm-hardlink</html>\n");
+        await fs.rm(hardlinkTarget);
+        await fs.link(hardlinkSource, hardlinkTarget);
+
+        const { res, end, handled } = runControlUiRequest({
+          url: "/",
+          method: "GET",
+          rootPath: tmp,
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("<html>pnpm-hardlink</html>\n");
+      },
+    });
+  });
+
   it("serves bootstrap config JSON", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {

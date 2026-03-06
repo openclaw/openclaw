@@ -263,6 +263,10 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
+    // Package managers like pnpm install files as hardlinks in the global store.
+    // Control UI assets are trusted package files under a validated root path, so
+    // hardlink rejection would incorrectly 404 valid installs.
+    rejectHardlinks: false,
   });
   if (!opened.ok) {
     if (opened.reason === "io") {
