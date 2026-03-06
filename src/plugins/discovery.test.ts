@@ -310,31 +310,34 @@ describe("discoverOpenClawPlugins", () => {
     expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
   });
 
-  it.runIf(process.platform !== "win32")("discovers symlinked plugin directories (#36754)", async () => {
-    // Simulates: ln -s ~/my-plugin ~/.openclaw/extensions/my-plugin
-    // Dirent.isDirectory() returns false for symlinks, so without the fix
-    // symlinked plugin directories are silently skipped during discovery.
-    const stateDirSym = makeTempDir();
-    const realPlugin = path.join(stateDirSym, "real-plugin");
-    fs.mkdirSync(realPlugin, { recursive: true });
-    writePluginPackageManifest({
-      packageDir: realPlugin,
-      packageName: "@openclaw/symlinked",
-      extensions: ["./index.ts"],
-    });
-    fs.writeFileSync(path.join(realPlugin, "index.ts"), "export default function () {}", "utf-8");
+  it.runIf(process.platform !== "win32")(
+    "discovers symlinked plugin directories (#36754)",
+    async () => {
+      // Simulates: ln -s ~/my-plugin ~/.openclaw/extensions/my-plugin
+      // Dirent.isDirectory() returns false for symlinks, so without the fix
+      // symlinked plugin directories are silently skipped during discovery.
+      const stateDirSym = makeTempDir();
+      const realPlugin = path.join(stateDirSym, "real-plugin");
+      fs.mkdirSync(realPlugin, { recursive: true });
+      writePluginPackageManifest({
+        packageDir: realPlugin,
+        packageName: "@openclaw/symlinked",
+        extensions: ["./index.ts"],
+      });
+      fs.writeFileSync(path.join(realPlugin, "index.ts"), "export default function () {}", "utf-8");
 
-    const extDir = path.join(stateDirSym, "extensions");
-    fs.mkdirSync(extDir, { recursive: true });
-    try {
-      fs.symlinkSync(realPlugin, path.join(extDir, "symlinked"), "dir");
-    } catch {
-      return; // skip on filesystems that do not support symlinks
-    }
+      const extDir = path.join(stateDirSym, "extensions");
+      fs.mkdirSync(extDir, { recursive: true });
+      try {
+        fs.symlinkSync(realPlugin, path.join(extDir, "symlinked"), "dir");
+      } catch {
+        return; // skip on filesystems that do not support symlinks
+      }
 
-    const result = await discoverWithStateDir(stateDirSym, {});
-    expect(result.candidates.some((c) => c.idHint === "symlinked")).toBe(true);
-  });
+      const result = await discoverWithStateDir(stateDirSym, {});
+      expect(result.candidates.some((c) => c.idHint === "symlinked")).toBe(true);
+    },
+  );
 
   it.runIf(process.platform !== "win32")("blocks world-writable plugin paths", async () => {
     const stateDir = makeTempDir();
