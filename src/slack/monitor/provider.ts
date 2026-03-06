@@ -433,6 +433,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       ctx.botUserId = botUserId;
       ctx.teamId = teamId;
       ctx.apiAppId = apiAppId;
+      // Flush buffered events now that identity guards are populated. Any events
+      // that arrived in the window between WebSocket open and auth.test completion
+      // will be processed with correct botUserId/teamId/apiAppId values.
+      muxReceiver?.setAuthReady();
       // Keep the function alive until abort — without this, control falls
       // through to the finally block which calls app.stop() immediately.
       if (opts.abortSignal && !opts.abortSignal.aborted) {

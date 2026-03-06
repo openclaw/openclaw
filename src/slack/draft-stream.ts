@@ -1,3 +1,4 @@
+import type { WebClient } from "@slack/web-api";
 import { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
 import { sendMessageSlack } from "./send.js";
@@ -17,7 +18,12 @@ export type SlackDraftStream = {
 
 export function createSlackDraftStream(params: {
   target: string;
-  token: string;
+  /** Bot token for outbound Slack API calls. When omitted, `client` must be
+   *  provided (e.g. in mux mode where the app.client is a mux proxy). */
+  token?: string;
+  /** Pre-built WebClient to use instead of resolving via `token`. Takes
+   *  precedence over `token` when provided (required in mux-only configs). */
+  client?: WebClient;
   accountId?: string;
   maxChars?: number;
   throttleMs?: number;
@@ -61,12 +67,14 @@ export function createSlackDraftStream(params: {
       if (streamChannelId && streamMessageId) {
         await edit(streamChannelId, streamMessageId, trimmed, {
           token: params.token,
+          client: params.client,
           accountId: params.accountId,
         });
         return;
       }
       const sent = await send(params.target, trimmed, {
         token: params.token,
+        client: params.client,
         accountId: params.accountId,
         threadTs: params.resolveThreadTs?.(),
       });
@@ -110,6 +118,7 @@ export function createSlackDraftStream(params: {
     try {
       await remove(channelId, messageId, {
         token: params.token,
+        client: params.client,
         accountId: params.accountId,
       });
     } catch (err) {

@@ -93,6 +93,8 @@ describe("MuxReceiver", () => {
     });
 
     await receiver.start();
+    // Mark auth as ready so buffered events are flushed and processed.
+    receiver.setAuthReady();
     await vi.waitFor(() => expect(processEvent).toHaveBeenCalledTimes(1));
 
     const event = processEvent.mock.calls[0][0];

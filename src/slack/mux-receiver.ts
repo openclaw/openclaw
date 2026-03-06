@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
@@ -70,6 +70,10 @@ export class MuxReceiver {
   private pending = new Map<string, PendingApiCall>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private resolvedToken: string | null = null;
+  /** Buffer events received before auth identity is initialized so that
+   *  self-message and workspace/app mismatch guards are never bypassed. */
+  private authReady = false;
+  private pendingEvents: MuxSlackEvent[] = [];
 
   private readonly mux: SlackMuxConfig;
   private readonly runtime: RuntimeEnv | undefined;
@@ -82,6 +86,20 @@ export class MuxReceiver {
   /** Called by Bolt's App constructor. */
   init(app: BoltApp): void {
     this.app = app;
+  }
+
+  /** Signal that auth identity is initialized. Flushes any buffered events
+   *  that arrived during the startup window between WebSocket open and the
+   *  completion of auth.test. */
+  setAuthReady(): void {
+    if (this.authReady) {
+      return;
+    }
+    this.authReady = true;
+    const buffered = this.pendingEvents.splice(0);
+    for (const event of buffered) {
+      this.handleSlackEvent(event);
+    }
   }
 
   async start(): Promise<void> {
@@ -256,7 +274,13 @@ export class MuxReceiver {
 
     switch (msg.type) {
       case "slack_event":
-        this.handleSlackEvent(msg);
+        if (!this.authReady) {
+          // Buffer events until auth identity is initialized to ensure
+          // self-message and workspace/app filtering guards are populated.
+          this.pendingEvents.push(msg);
+        } else {
+          this.handleSlackEvent(msg);
+        }
         break;
       case "slack_api_response":
         this.handleApiResponse(msg);
@@ -341,7 +365,6 @@ export class MuxReceiver {
     const hash = createHash("md5").update(mcpServerUrl).digest("hex");
     const cacheBase = join(homedir(), ".mcp-auth");
 
-    const { readdir } = await import("node:fs/promises");
     let dirs: string[];
     try {
       dirs = await readdir(cacheBase);
