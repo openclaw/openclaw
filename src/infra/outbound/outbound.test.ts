@@ -384,7 +384,8 @@ describe("delivery-queue", () => {
 
       expect(result.recovered).toBe(0);
       expect(result.failed).toBe(0);
-      expect(result.deferredBackoff).toBe(1);
+      expect(result.deferredBackoff).toBe(0);
+      expect(result.deferredTransient).toBe(1);
 
       const entries = await loadPendingDeliveries(tmpDir);
       expect(entries).toHaveLength(1);

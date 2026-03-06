@@ -56,6 +56,7 @@ export type RecoverySummary = {
   failed: number;
   skippedMaxRetries: number;
   deferredBackoff: number;
+  deferredTransient: number;
 };
 
 function resolveQueueDir(stateDir?: string): string {
@@ -309,7 +310,7 @@ export async function recoverPendingDeliveries(opts: {
 }): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
-    return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
+    return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0, deferredTransient: 0 };
   }
 
   // Process oldest first.
@@ -323,6 +324,7 @@ export async function recoverPendingDeliveries(opts: {
   let failed = 0;
   let skippedMaxRetries = 0;
   let deferredBackoff = 0;
+  let deferredTransient = 0;
 
   for (const entry of pending) {
     const now = Date.now();
@@ -375,7 +377,7 @@ export async function recoverPendingDeliveries(opts: {
       const errMsg = err instanceof Error ? err.message : String(err);
 
       if (isTransientStartupDeliveryError(entry.channel, errMsg)) {
-        deferredBackoff += 1;
+        deferredTransient += 1;
         try {
           await noteDeliveryAttemptNoRetry(entry.id, errMsg, opts.stateDir);
         } catch {
@@ -406,9 +408,9 @@ export async function recoverPendingDeliveries(opts: {
   }
 
   opts.log.info(
-    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skippedMaxRetries} skipped (max retries), ${deferredBackoff} deferred (backoff)`,
+    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skippedMaxRetries} skipped (max retries), ${deferredBackoff} deferred (backoff), ${deferredTransient} deferred (startup/transient)`,
   );
-  return { recovered, failed, skippedMaxRetries, deferredBackoff };
+  return { recovered, failed, skippedMaxRetries, deferredBackoff, deferredTransient };
 }
 
 export { MAX_RETRIES };
