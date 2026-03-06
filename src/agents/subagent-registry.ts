@@ -1219,6 +1219,9 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       });
 
       if (wait?.status === "timeout") {
+        if (!subagentRuns.has(runId)) {
+          return;
+        }
         const elapsedMs = Date.now() - startedAt;
         if (elapsedMs >= nextProgressAt - startedAt) {
           defaultRuntime.log(
