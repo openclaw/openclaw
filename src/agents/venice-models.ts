@@ -60,7 +60,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text"],
     contextWindow: 131072,
-    maxTokens: 8192,
+    maxTokens: 4096,
     privacy: "private",
   },
   {
@@ -69,7 +69,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text"],
     contextWindow: 131072,
-    maxTokens: 8192,
+    maxTokens: 4096,
     privacy: "private",
   },
   {
@@ -78,7 +78,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text"],
     contextWindow: 131072,
-    maxTokens: 8192,
+    maxTokens: 16384,
     privacy: "private",
   },
 
@@ -89,7 +89,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text"],
     contextWindow: 131072,
-    maxTokens: 8192,
+    maxTokens: 16384,
     privacy: "private",
   },
   {
@@ -98,7 +98,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text"],
     contextWindow: 131072,
-    maxTokens: 8192,
+    maxTokens: 16384,
     privacy: "private",
   },
   {
@@ -107,7 +107,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text"],
     contextWindow: 262144,
-    maxTokens: 8192,
+    maxTokens: 65536,
     privacy: "private",
   },
   {
@@ -116,7 +116,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text"],
     contextWindow: 262144,
-    maxTokens: 8192,
+    maxTokens: 16384,
     privacy: "private",
   },
   {
@@ -125,7 +125,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text", "image"],
     contextWindow: 262144,
-    maxTokens: 8192,
+    maxTokens: 16384,
     privacy: "private",
   },
   {
@@ -134,7 +134,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text"],
     contextWindow: 32768,
-    maxTokens: 8192,
+    maxTokens: 4096,
     privacy: "private",
   },
 
@@ -145,7 +145,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text"],
     contextWindow: 163840,
-    maxTokens: 8192,
+    maxTokens: 32768,
     privacy: "private",
   },
 
@@ -156,7 +156,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text"],
     contextWindow: 32768,
-    maxTokens: 8192,
+    maxTokens: 4096,
     privacy: "private",
   },
   {
@@ -165,7 +165,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text", "image"],
     contextWindow: 131072,
-    maxTokens: 8192,
+    maxTokens: 4096,
     privacy: "private",
   },
 
@@ -176,7 +176,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text", "image"],
     contextWindow: 202752,
-    maxTokens: 8192,
+    maxTokens: 16384,
     privacy: "private",
   },
   {
@@ -185,7 +185,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: false,
     input: ["text"],
     contextWindow: 131072,
-    maxTokens: 8192,
+    maxTokens: 16384,
     privacy: "private",
   },
   {
@@ -194,7 +194,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text"],
     contextWindow: 202752,
-    maxTokens: 8192,
+    maxTokens: 16384,
     privacy: "private",
   },
 
@@ -210,7 +210,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 202752,
-    maxTokens: 8192,
+    maxTokens: 32768,
     privacy: "anonymized",
   },
   {
@@ -219,7 +219,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 202752,
-    maxTokens: 8192,
+    maxTokens: 64000,
     privacy: "anonymized",
   },
 
@@ -230,7 +230,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text"],
     contextWindow: 262144,
-    maxTokens: 8192,
+    maxTokens: 65536,
     privacy: "anonymized",
   },
   {
@@ -239,7 +239,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 262144,
-    maxTokens: 8192,
+    maxTokens: 65536,
     privacy: "anonymized",
   },
 
@@ -250,7 +250,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 202752,
-    maxTokens: 8192,
+    maxTokens: 32768,
     privacy: "anonymized",
   },
   {
@@ -259,7 +259,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 262144,
-    maxTokens: 8192,
+    maxTokens: 65536,
     privacy: "anonymized",
   },
 
@@ -270,7 +270,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 262144,
-    maxTokens: 8192,
+    maxTokens: 30000,
     privacy: "anonymized",
   },
   {
@@ -279,7 +279,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text"],
     contextWindow: 262144,
-    maxTokens: 8192,
+    maxTokens: 16384,
     privacy: "anonymized",
   },
 
@@ -290,7 +290,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text"],
     contextWindow: 262144,
-    maxTokens: 8192,
+    maxTokens: 65536,
     privacy: "anonymized",
   },
   {
@@ -299,7 +299,7 @@ export const VENICE_MODEL_CATALOG = [
     reasoning: true,
     input: ["text"],
     contextWindow: 202752,
-    maxTokens: 8192,
+    maxTokens: 16384,
     privacy: "anonymized",
   },
 ] as const;
@@ -335,6 +335,7 @@ interface VeniceModelSpec {
   name: string;
   privacy: "private" | "anonymized";
   availableContextTokens: number;
+  maxCompletionTokens?: number;
   capabilities: {
     supportsReasoning: boolean;
     supportsVision: boolean;
@@ -481,6 +482,12 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
 
         const hasVision = apiModel.model_spec.capabilities.supportsVision;
 
+        const maxCompletionTokens = apiModel.model_spec.maxCompletionTokens;
+        const maxTokens =
+          typeof maxCompletionTokens === "number" && maxCompletionTokens > 0
+            ? maxCompletionTokens
+            : 4096;
+
         models.push({
           id: apiModel.id,
           name: apiModel.model_spec.name || apiModel.id,
@@ -488,7 +495,7 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
           input: hasVision ? ["text", "image"] : ["text"],
           cost: VENICE_DEFAULT_COST,
           contextWindow: apiModel.model_spec.availableContextTokens || 128000,
-          maxTokens: 8192,
+          maxTokens,
           // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
           compat: {
             supportsUsageInStreaming: false,
