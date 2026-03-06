@@ -1,6 +1,7 @@
 import {
   installLaunchAgent,
   isLaunchAgentLoaded,
+  loadExistingLaunchAgent,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
   restartLaunchAgent,
@@ -59,6 +60,13 @@ export type GatewayService = {
   uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
   stop: (args: GatewayServiceControlArgs) => Promise<void>;
   restart: (args: GatewayServiceControlArgs) => Promise<void>;
+  /**
+   * Re-register and start a service that was stopped (unregistered from the
+   * service manager) but whose service definition file (plist / unit / task)
+   * still exists on disk.  Throws if the file is missing.
+   * Optional: only implemented where the underlying OS supports it.
+   */
+  load?: (args: GatewayServiceControlArgs) => Promise<void>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
   readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime>;
@@ -74,6 +82,7 @@ export function resolveGatewayService(): GatewayService {
       uninstall: uninstallLaunchAgent,
       stop: stopLaunchAgent,
       restart: restartLaunchAgent,
+      load: loadExistingLaunchAgent,
       isLoaded: isLaunchAgentLoaded,
       readCommand: readLaunchAgentProgramArguments,
       readRuntime: readLaunchAgentRuntime,

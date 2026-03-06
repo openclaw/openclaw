@@ -124,3 +124,81 @@ describe("runServiceRestart token drift", () => {
     expect(payload.warnings).toBeUndefined();
   });
 });
+
+describe("runServiceStart — load on not-loaded service", () => {
+  let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
+
+  const loadMock = vi.fn();
+
+  const serviceWithLoad = {
+    ...service,
+    load: loadMock,
+  };
+
+  beforeAll(async () => {
+    ({ runServiceStart } = await import("./lifecycle-core.js"));
+  });
+
+  beforeEach(() => {
+    runtimeLogs.length = 0;
+    service.isLoaded.mockReset();
+    service.restart.mockReset();
+    loadMock.mockReset();
+    vi.unstubAllEnvs();
+  });
+
+  it("calls load() and emits started when service is not loaded but load succeeds", async () => {
+    service.isLoaded
+      .mockResolvedValueOnce(false) // initial isLoaded check
+      .mockResolvedValueOnce(true); // post-load isLoaded check
+    loadMock.mockResolvedValue(undefined);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service: serviceWithLoad,
+      renderStartHints: () => ["openclaw gateway install"],
+      opts: { json: true },
+    });
+
+    expect(loadMock).toHaveBeenCalledTimes(1);
+    expect(service.restart).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((l) => l.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string };
+    expect(payload.result).toBe("started");
+  });
+
+  it("falls back to not-loaded hint when load() throws (plist missing)", async () => {
+    service.isLoaded.mockResolvedValueOnce(false);
+    loadMock.mockRejectedValue(new Error("No LaunchAgent plist found"));
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service: serviceWithLoad,
+      renderStartHints: () => ["openclaw gateway install"],
+      opts: { json: true },
+    });
+
+    expect(loadMock).toHaveBeenCalledTimes(1);
+    const jsonLine = runtimeLogs.find((l) => l.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string };
+    expect(payload.result).toBe("not-loaded");
+  });
+
+  it("uses restart() when service is already loaded", async () => {
+    service.isLoaded.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
+    service.restart.mockResolvedValue(undefined);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service: serviceWithLoad,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(loadMock).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((l) => l.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string };
+    expect(payload.result).toBe("started");
+  });
+});

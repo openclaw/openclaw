@@ -167,6 +167,31 @@ export async function runServiceStart(params: {
     return;
   }
   if (!loaded) {
+    // If the service has a `load` implementation, the service definition file
+    // (plist / unit) may still exist on disk even though the service is not
+    // registered with the OS service manager (e.g. after `gateway stop` which
+    // issues `launchctl bootout`).  Attempt to re-register and start it before
+    // falling back to the "please install" hint.
+    if (params.service.load) {
+      try {
+        await params.service.load({ env: process.env, stdout });
+        let started = true;
+        try {
+          started = await params.service.isLoaded({ env: process.env });
+        } catch {
+          started = true;
+        }
+        emit({
+          ok: true,
+          result: "started",
+          service: buildDaemonServiceSnapshot(params.service, started),
+        });
+        return;
+      } catch {
+        // Load failed (service file not found, bootstrap/kickstart failure, permission
+        // error, etc.) — fall through to the normal "not installed" hint.
+      }
+    }
     await handleServiceNotLoaded({
       serviceNoun: params.serviceNoun,
       service: params.service,

@@ -494,3 +494,59 @@ export async function restartLaunchAgent({
     }
   }
 }
+
+/**
+ * Bootstrap a previously-installed-but-stopped LaunchAgent.
+ *
+ * `openclaw gateway stop` issues `launchctl bootout` which unregisters the
+ * service from launchd while leaving the plist on disk.  `gateway start`
+ * should be able to bring it back via `bootstrap` + `kickstart` without
+ * requiring a full reinstall.
+ */
+export async function loadExistingLaunchAgent({
+  stdout,
+  env: envArg,
+}: GatewayServiceControlArgs): Promise<void> {
+  const env = envArg ?? (process.env as Record<string, string | undefined>);
+  const plistPath = resolveLaunchAgentPlistPath(env);
+  try {
+    await fs.access(plistPath);
+  } catch {
+    throw new Error(
+      `No LaunchAgent plist found at ${plistPath}. Run 'openclaw gateway install' to set up the service.`,
+    );
+  }
+
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env });
+
+  // Clear any persisted "disabled" state so the subsequent bootstrap succeeds.
+  await execLaunchctl(["enable", `${domain}/${label}`]);
+
+  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
+  if (boot.code !== 0) {
+    const detail = (boot.stderr || boot.stdout).trim();
+    if (isUnsupportedGuiDomain(detail)) {
+      throw new Error(
+        [
+          `launchctl bootstrap failed: ${detail}`,
+          `LaunchAgent requires a logged-in macOS GUI session (${domain}).`,
+        ].join("\n"),
+      );
+    }
+    // Code 130 or "already exists" means the service was loaded between our
+    // isLoaded check and here — treat it as success and proceed to kickstart.
+    const alreadyLoaded =
+      boot.code === 130 || detail.toLowerCase().includes("already exists in domain");
+    if (!alreadyLoaded) {
+      throw new Error(`launchctl bootstrap failed: ${detail}`);
+    }
+  }
+
+  const kick = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+  if (kick.code !== 0) {
+    throw new Error(`launchctl kickstart failed: ${kick.stderr || kick.stdout}`.trim());
+  }
+
+  stdout.write(`${formatLine("Started LaunchAgent", `${domain}/${label}`)}\n`);
+}
