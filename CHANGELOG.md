@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Gateway/node pending work: add narrow in-memory pending-work queue primitives (`node.pending.enqueue` / `node.pending.drain`) and wake-helper reuse as a foundation for dormant-node work delivery. (#41409) Thanks @mbelinky.
+- Cron/webhook enrichment: include `jobName` and `callerSessionKey` in the finished-event webhook payload so receivers can correlate the callback to the originating job and caller session without an extra API round-trip.
 
 ### Breaking
 
@@ -213,7 +214,6 @@ Docs: https://docs.openclaw.ai
 - Gateway/service token drift repair: stop persisting shared auth tokens into installed gateway service units, flag stale embedded service tokens for reinstall, and treat tokenless service env as canonical so token rotation/reboot flows stay aligned with config/env resolution. Landed from contributor PR #28428 by @l0cka. Thanks @l0cka.
 - Control UI/agents-page selection: keep the edited agent selected after saving agent config changes and reloading the agents list, so `/agents` no longer snaps back to the default agent. Landed from contributor PR #39301 by @MumuTW. Thanks @MumuTW.
 - Gateway/auth follow-up hardening: preserve systemd `EnvironmentFile=` precedence/source provenance in daemon audits and doctor repairs, block shared-password override flows from piggybacking cached device tokens, and fail closed when config-first gateway SecretRefs cannot resolve. Follow-up to #39241.
-- Cron/webhook enrichment: include `jobName` and `callerSessionKey` in the finished-event webhook payload so receivers can correlate the callback to the originating job and caller session without an extra API round-trip.
 - Agents/context pruning: guard assistant thinking/text char estimation against malformed blocks (missing `thinking`/`text` strings or null entries) so pruning no longer crashes with malformed provider content. (openclaw#35146) thanks @Sid-Qin.
 - Agents/transcript policy: set `preserveSignatures` to Anthropic-only handling in `resolveTranscriptPolicy` so Anthropic thinking signatures are preserved while non-Anthropic providers remain unchanged. (#32813) thanks @Sid-Qin.
 - Agents/schema cleaning: detect Venice + Grok model IDs as xAI-proxied targets so unsupported JSON Schema keywords are stripped before requests, preventing Venice/Grok `Invalid arguments` failures. (openclaw#35355) thanks @Sid-Qin.
