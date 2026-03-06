@@ -208,13 +208,17 @@ def title_case_skill_name(skill_name):
 def parse_resources(raw_resources):
     if not raw_resources:
         return []
-    resources = [item.strip() for item in raw_resources.split(",") if item.strip()]
+
+    # Accept case-insensitive resource names while preserving input order.
+    resources = [item.strip().lower() for item in raw_resources.split(",") if item.strip()]
+
     invalid = sorted({item for item in resources if item not in ALLOWED_RESOURCES})
     if invalid:
         allowed = ", ".join(sorted(ALLOWED_RESOURCES))
         print(f"[ERROR] Unknown resource type(s): {', '.join(invalid)}")
         print(f"   Allowed: {allowed}")
         sys.exit(1)
+
     deduped = []
     seen = set()
     for resource in resources:
