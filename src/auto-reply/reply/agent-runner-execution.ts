@@ -391,6 +391,8 @@ export async function runAgentTurnWithFallback(params: {
                     autoCompactionCompleted = true;
                   }
                 }
+                // Forward full agent event to opts (needed by Feishu thinking panel for tool tracking)
+                await params.opts?.onAgentEvent?.(evt);
               },
               // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
               // even when regular block streaming is disabled. The handler sends directly
