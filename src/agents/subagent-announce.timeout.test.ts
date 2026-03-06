@@ -249,4 +249,59 @@ describe("subagent announce timeout config", () => {
     expect(directAgentCall?.params?.to).toBe("chan-main");
     expect(directAgentCall?.params?.accountId).toBe("acct-main");
   });
+
+  it("falls back to deliver=false injection when channel delivery fails with transient error (#38055)", async () => {
+    const { callGateway: mockedCallGateway } = await import("../gateway/call.js");
+    const callGatewayMock = vi.mocked(mockedCallGateway);
+
+    // Make the first agent call (with deliver=true) throw a transient error,
+    // then succeed on the fallback inject-only call (deliver=false).
+    callGatewayMock.mockImplementation(async (request: GatewayCall) => {
+      gatewayCalls.push(request);
+      if (request.method === "agent" && request.params?.deliver === true) {
+        throw new Error(
+          "HttpError: Network request for 'sendMessage' failed! errorCode=UNAVAILABLE",
+        );
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const didAnnounce = await runAnnounceFlowForTest("run-transient-fallback", {
+      requesterOrigin: {
+        channel: "telegram",
+        to: "chat:123",
+      },
+    });
+
+    expect(didAnnounce).toBe(true);
+
+    // Should have agent calls including the fallback inject-only call
+    const agentCalls = gatewayCalls.filter((c) => c.method === "agent");
+
+    // The transient retry logic will retry the deliver=true call multiple times,
+    // then the outer catch triggers a deliver=false fallback injection
+    const deliverTrueCalls = agentCalls.filter((c) => c.params?.deliver === true);
+    const deliverFalseCalls = agentCalls.filter((c) => c.params?.deliver === false);
+
+    expect(deliverTrueCalls.length).toBeGreaterThanOrEqual(1);
+    expect(deliverFalseCalls.length).toBeGreaterThanOrEqual(1);
+
+    const fallbackCall = deliverFalseCalls.find(
+      (c) =>
+        typeof c.params?.idempotencyKey === "string" && c.params.idempotencyKey.includes(":inject"),
+    );
+    expect(fallbackCall).toBeDefined();
+
+    // Restore default mock
+    callGatewayMock.mockImplementation(async (request: GatewayCall) => {
+      gatewayCalls.push(request);
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+  });
 });

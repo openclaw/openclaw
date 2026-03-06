@@ -750,27 +750,23 @@ async function sendSubagentAnnounceDirectly(params: {
     cfg,
     params.targetRequesterSessionKey,
   );
+  const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
+  const directOrigin = normalizeDeliveryContext(params.directOrigin);
+  const effectiveDirectOrigin =
+    params.expectsCompletionMessage && completionDirectOrigin
+      ? completionDirectOrigin
+      : directOrigin;
+  const directChannelRaw =
+    typeof effectiveDirectOrigin?.channel === "string" ? effectiveDirectOrigin.channel.trim() : "";
+  const directChannel =
+    directChannelRaw && isDeliverableMessageChannel(directChannelRaw) ? directChannelRaw : "";
+  const directTo =
+    typeof effectiveDirectOrigin?.to === "string" ? effectiveDirectOrigin.to.trim() : "";
+  const hasDeliverableDirectTarget =
+    !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
+  const shouldDeliverExternally =
+    !params.requesterIsSubagent && (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
   try {
-    const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
-    const directOrigin = normalizeDeliveryContext(params.directOrigin);
-    const effectiveDirectOrigin =
-      params.expectsCompletionMessage && completionDirectOrigin
-        ? completionDirectOrigin
-        : directOrigin;
-    const directChannelRaw =
-      typeof effectiveDirectOrigin?.channel === "string"
-        ? effectiveDirectOrigin.channel.trim()
-        : "";
-    const directChannel =
-      directChannelRaw && isDeliverableMessageChannel(directChannelRaw) ? directChannelRaw : "";
-    const directTo =
-      typeof effectiveDirectOrigin?.to === "string" ? effectiveDirectOrigin.to.trim() : "";
-    const hasDeliverableDirectTarget =
-      !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
-    const shouldDeliverExternally =
-      !params.requesterIsSubagent &&
-      (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
-
     const threadId =
       effectiveDirectOrigin?.threadId != null && effectiveDirectOrigin.threadId !== ""
         ? String(effectiveDirectOrigin.threadId)
@@ -817,6 +813,45 @@ async function sendSubagentAnnounceDirectly(params: {
       path: "direct",
     };
   } catch (err) {
+    // When external delivery failed due to a transient channel error, fall
+    // back to injecting the event into the parent session *without* delivery
+    // so the completion is not permanently lost.  The LLM response will
+    // appear in the session context and can be delivered later when the
+    // channel recovers.  (#38055)
+    if (shouldDeliverExternally && isTransientAnnounceDeliveryError(err)) {
+      try {
+        defaultRuntime.log(
+          `[warn] Subagent announce delivery failed, falling back to inject-only (deliver=false): ${summarizeDeliveryError(err)}`,
+        );
+        await callGateway({
+          method: "agent",
+          params: {
+            sessionKey: canonicalRequesterSessionKey,
+            message: params.triggerMessage,
+            deliver: false,
+            internalEvents: params.internalEvents,
+            inputProvenance: {
+              kind: "inter_session",
+              sourceSessionKey: params.sourceSessionKey,
+              sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+              sourceTool: params.sourceTool ?? "subagent_announce",
+            },
+            idempotencyKey: `${params.directIdempotencyKey}:inject`,
+          },
+          timeoutMs: announceTimeoutMs,
+        });
+        return {
+          delivered: true,
+          path: "direct",
+        };
+      } catch (fallbackErr) {
+        return {
+          delivered: false,
+          path: "direct",
+          error: summarizeDeliveryError(fallbackErr),
+        };
+      }
+    }
     return {
       delivered: false,
       path: "direct",
