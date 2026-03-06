@@ -1,5 +1,6 @@
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
+import type { AlertingConfig } from "./types.alerting.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
 import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
@@ -117,6 +118,7 @@ export type OpenClawConfig = {
   memory?: MemoryConfig;
   /** MCP server registry: maps server names to the tool names they expose. */
   mcpServers?: McpServersConfig;
+  alerting?: AlertingConfig;
 };
 
 export type ConfigValidationIssue = {

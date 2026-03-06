@@ -96,11 +96,143 @@ const McpServerEntrySchema = z
 
 export const McpServersSchema = z.record(z.string(), McpServerEntrySchema).optional();
 
+const AlertingWebhookSchema = z
+  .object({
+    url: z.string().nullable().optional(),
+    secret: z.string().nullable().optional(),
+    retries: z.number().optional(),
+    retryDelayMs: z.number().optional(),
+    timeoutMs: z.number().optional(),
+  })
+  .strict();
+
+const AlertingRuleSyntacticFailBurstSchema = z
+  .object({
+    count: z.number().optional(),
+    windowMinutes: z.number().optional(),
+  })
+  .strict();
+
+const AlertingRuleTrustedToolSchemaFailSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
+const AlertingRuleFrequencyEscalationTierSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
+const AlertingRuleFrequencyEscalationSchema = z
+  .object({
+    tier2: AlertingRuleFrequencyEscalationTierSchema.optional(),
+    tier3: AlertingRuleFrequencyEscalationTierSchema.optional(),
+  })
+  .strict();
+
+const AlertingRuleSemanticCatchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    escalateAfter: z.number().optional(),
+  })
+  .strict();
+
+const AlertingRuleWriteFailSpikeSchema = z
+  .object({
+    count: z.number().optional(),
+    windowMinutes: z.number().optional(),
+  })
+  .strict();
+
+const AlertingRulesSchema = z
+  .object({
+    syntacticFailBurst: AlertingRuleSyntacticFailBurstSchema.optional(),
+    trustedToolSchemaFail: AlertingRuleTrustedToolSchemaFailSchema.optional(),
+    frequencyEscalation: AlertingRuleFrequencyEscalationSchema.optional(),
+    semanticCatchNoSyntacticFlag: AlertingRuleSemanticCatchSchema.optional(),
+    writeFailSpike: AlertingRuleWriteFailSpikeSchema.optional(),
+  })
+  .strict();
+
+const AlertingSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    channels: z
+      .object({ webhook: AlertingWebhookSchema.optional() })
+      .strict()
+      .optional(),
+    suppression: z.object({ windowMinutes: z.number().optional() }).strict().optional(),
+    rateLimit: z
+      .object({
+        maxPerMinute: z.number().optional(),
+        maxPerHour: z.number().optional(),
+      })
+      .strict()
+      .optional(),
+    retention: z.object({ days: z.number().optional() }).strict().optional(),
+    payload: z.object({ recentContextMax: z.number().optional() }).strict().optional(),
+    index: z.object({ ttlMinutes: z.number().optional() }).strict().optional(),
+    rules: AlertingRulesSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 const MemorySessionSanitizationMcpSchema = z
   .object({
     enabled: z.boolean().optional(),
     trustedServers: z.array(z.string()).optional(),
     blockOnSandboxUnavailable: z.boolean().optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationSyntacticSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxPayloadBytes: z.number().optional(),
+    maxJsonDepth: z.number().optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationSchemaValidationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationTwoPassSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    hardBlockRules: z.array(z.string()).optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationFrequencyThresholdsSchema = z
+  .object({
+    tier1: z.number().optional(),
+    tier2: z.number().optional(),
+    tier3: z.number().optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationFrequencySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    halfLifeMs: z.number().optional(),
+    weights: z.record(z.string(), z.number()).optional(),
+    thresholds: MemorySessionSanitizationFrequencyThresholdsSchema.optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationAuditSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    verbosity: z
+      .enum(["minimal", "standard", "high", "maximum"])
+      .optional(),
+    retentionDays: z.number().optional(),
+    rawRetentionDays: z.number().optional(),
   })
   .strict();
 
@@ -111,6 +243,11 @@ const MemorySessionSanitizationSchema = z
     thinking: z.string().optional(),
     rawMaxAge: z.string().optional(),
     mcp: MemorySessionSanitizationMcpSchema.optional(),
+    syntactic: MemorySessionSanitizationSyntacticSchema.optional(),
+    schema: MemorySessionSanitizationSchemaValidationSchema.optional(),
+    twoPass: MemorySessionSanitizationTwoPassSchema.optional(),
+    frequency: MemorySessionSanitizationFrequencySchema.optional(),
+    audit: MemorySessionSanitizationAuditSchema.optional(),
   })
   .strict();
 
@@ -816,6 +953,7 @@ export const OpenClawSchema = z
       .optional(),
     memory: MemorySchema,
     mcpServers: McpServersSchema,
+    alerting: AlertingSchema,
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),

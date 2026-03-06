@@ -669,6 +669,12 @@ export type McpProcessResult = {
   contextNote: string;
   /** Which tier blocked or passed the result (undefined for trusted results). */
   tier?: 1 | 2;
+  /**
+   * Set to true when frequency tracking reaches Tier 3 and the session is
+   * marked for termination. The caller should propagate an abort signal to
+   * the active run when this is true.
+   */
+  terminated?: boolean;
 };
 
 const SESSION_CONTEXT_MAX_ENTRIES = 10;
