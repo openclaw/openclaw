@@ -23,6 +23,11 @@ function supportsDeveloperRole(model: Model<Api>): boolean | undefined {
   return (model.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole;
 }
 
+function supportsUsageInStreaming(model: Model<Api>): boolean | undefined {
+  return (model.compat as { supportsUsageInStreaming?: boolean } | undefined)
+    ?.supportsUsageInStreaming;
+}
+
 function createTemplateModel(provider: string, id: string): Model<Api> {
   return {
     id,
@@ -80,6 +85,13 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): 
   delete (model as { compat?: unknown }).compat;
   const normalized = normalizeModelCompat(model as Model<Api>);
   expect(supportsDeveloperRole(normalized)).toBe(false);
+}
+
+function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>): void {
+  const model = { ...baseModel(), ...overrides };
+  delete (model as { compat?: unknown }).compat;
+  const normalized = normalizeModelCompat(model as Model<Api>);
+  expect(supportsUsageInStreaming(normalized)).toBe(false);
 }
 
 function expectResolvedForwardCompat(
@@ -207,6 +219,13 @@ describe("normalizeModelCompat", () => {
     });
   });
 
+  it("forces supportsUsageInStreaming off for generic custom openai-completions provider", () => {
+    expectSupportsUsageInStreamingForcedOff({
+      provider: "custom-cpa",
+      baseUrl: "https://cpa.example.com/v1",
+    });
+  });
+
   it("forces supportsDeveloperRole off for Qwen proxy via openai-completions", () => {
     expectSupportsDeveloperRoleForcedOff({
       provider: "qwen-proxy",
@@ -243,6 +262,17 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(normalized)).toBe(false);
   });
 
+  it("overrides explicit supportsUsageInStreaming true on non-native endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsUsageInStreaming: true },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+  });
+
   it("does not mutate caller model when forcing supportsDeveloperRole off", () => {
     const model = {
       ...baseModel(),
@@ -253,14 +283,17 @@ describe("normalizeModelCompat", () => {
     const normalized = normalizeModelCompat(model);
     expect(normalized).not.toBe(model);
     expect(supportsDeveloperRole(model)).toBeUndefined();
+    expect(supportsUsageInStreaming(model)).toBeUndefined();
     expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
   it("does not override explicit compat false", () => {
     const model = baseModel();
-    model.compat = { supportsDeveloperRole: false };
+    model.compat = { supportsDeveloperRole: false, supportsUsageInStreaming: false };
     const normalized = normalizeModelCompat(model);
     expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 });
 
