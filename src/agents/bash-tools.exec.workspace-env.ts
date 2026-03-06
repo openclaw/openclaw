@@ -1,22 +1,32 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import dotenv from "dotenv";
 
-export function loadWorkspaceDotEnvForExec(params: {
+export async function loadWorkspaceDotEnvForExec(params: {
   workspaceDir?: string;
   baseEnv?: Record<string, string>;
-}): Record<string, string> {
+}): Promise<Record<string, string>> {
   const workspaceDir = params.workspaceDir?.trim();
   if (!workspaceDir) {
     return {};
   }
 
   const envPath = path.join(workspaceDir, ".env");
-  if (!fs.existsSync(envPath)) {
-    return {};
+  let envRaw: string;
+  try {
+    envRaw = await fs.readFile(envPath, "utf-8");
+  } catch (error: unknown) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { code?: string }).code)
+        : "";
+    if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
+      return {};
+    }
+    throw error;
   }
 
-  const parsed = dotenv.parse(fs.readFileSync(envPath, "utf-8"));
+  const parsed = dotenv.parse(envRaw);
   const baseEnv = params.baseEnv ?? {};
   const injected: Record<string, string> = {};
   for (const [key, value] of Object.entries(parsed)) {
