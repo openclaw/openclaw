@@ -78,9 +78,23 @@ A Iris roda em cima do OpenClaw upstream com duas camadas de customização:
 
 ## 📅 Histórico de Merges
 
-| Data       | Upstream HEAD | Commits incorporados            | Conflitos manuais | Responsável |
-| ---------- | ------------- | ------------------------------- | ----------------- | ----------- |
+| Data       | Upstream HEAD | Commits incorporados             | Conflitos manuais | Responsável |
+| ---------- | ------------- | -------------------------------- | ----------------- | ----------- |
+| 06/03/2026 | `d6d21b3ab`   | 171 commits (desde `49acb07f9`) | 3 arquivos        | Iris 🌈     |
 | 26/02/2026 | `85b075d0c`   | 192 commits (desde `a898acbd5`) | 0 — auto-merge    | Iris 🌈     |
+
+**Notas do merge 06/03/2026:**
+
+- `README.md`: upstream substituiu por README do OpenClaw — mantido OURS (README em português do fork)
+- `src/commands/models/list.list-command.ts`: conflito menor de cherry-pick — aceito THEIRS
+- `src/commands/models/list.list-command.forward-compat.test.ts`: idem — aceito THEIRS
+- `src/plugins/types.ts`: upstream refatorou `PLUGIN_HOOK_NAMES` de array para `Record<PluginHookName, true>` — adicionado `message_transcribed: true` no novo formato (patch permanente preservado)
+- `hooks.ts` / `types.ts` / `get-reply.ts`: upstream removeu `message_transcribed` — git auto-resolveu mantendo patches permanentes Iris
+- `dispatch-from-config.ts`: upstream removeu `replyMode tool-only` — git auto-resolveu mantendo patch Iris
+- `banner.ts` / `tagline.ts` / UI: upstream reverteu para OpenClaw branding — git auto-resolveu mantendo branding Iris 🌈
+- `run.ts` / `attempt.ts`: patches `senderE164`/`senderName` preservados via auto-merge
+- Build: passou (`pnpm build` + `node scripts/ui.js build`) sem erros
+- Testes: 6769 passaram; 12 falhas são pré-existentes no fork (2 grupos: `manifest-registry` por fix de dedup, `security/audit` por EPERM no Windows)
 
 **Notas do merge 26/02/2026:**
 
