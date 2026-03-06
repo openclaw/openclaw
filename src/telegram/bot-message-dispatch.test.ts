@@ -1630,6 +1630,31 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("does not send NO_REPLY partial fragments to the draft stream (#36811)", async () => {
+    // When the agent responds with only NO_REPLY, streaming may transiently emit
+    // the "NO" prefix fragment via onPartialReply.  That fragment must not reach
+    // the draft stream (it could be flushed as a real Telegram message when
+    // stop() finalises the stream, bypassing the minInitialChars guard).
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // Simulate "NO" streaming fragment then silent final skip.
+        await replyOptions?.onPartialReply?.({ text: "NO" });
+        await replyOptions?.onPartialReply?.({ text: "NO_" });
+        await replyOptions?.onPartialReply?.({ text: "NO_REPLY" });
+        dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { reason: "no_reply", kind: "final" });
+        return { queuedFinal: false };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    // None of the NO_REPLY fragments should reach the draft stream.
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back when all finals are skipped and clears preview", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
