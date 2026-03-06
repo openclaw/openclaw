@@ -52,28 +52,48 @@ function redactMessage(message: unknown): unknown {
 }
 
 /**
+ * Recursively walk any value and redact base64 image content blocks wherever
+ * they appear — inside messages, options.images, or any other nested location.
+ * Returns the same reference when nothing was redacted (zero allocation).
+ */
+function redactDeep(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const next = value.map(redactDeep);
+    return next.every((v, i) => v === (value as unknown[])[i]) ? value : next;
+  }
+  // Try content-block redaction first (fast path for {type:"image", source:...}).
+  const asBlock = redactContentBlock(value);
+  if (asBlock !== value) {
+    return asBlock;
+  }
+  // Recurse into all object values.
+  const obj = value as Record<string, unknown>;
+  let changed = false;
+  const next: Record<string, unknown> = {};
+  for (const key of Object.keys(obj)) {
+    const r = redactDeep(obj[key]);
+    next[key] = r;
+    if (r !== obj[key]) changed = true;
+  }
+  return changed ? next : value;
+}
+
+/**
  * Return a copy of `payload` with base64 image data replaced by byte-count
  * placeholders. Non-image content is preserved verbatim.
  *
  * The original `payload` reference is never mutated; if no images are present
  * the same reference is returned (zero allocation).
+ *
+ * Image blocks are redacted wherever they appear in the payload structure —
+ * inside `messages[*].content`, `options.images`, or any other nested location.
  */
 export function redactImageDataForDiagnostics(payload: unknown): unknown {
   if (!payload || typeof payload !== "object") {
     return payload;
   }
-  // Handle a raw messages array passed directly (e.g. from cache-trace path).
-  if (Array.isArray(payload)) {
-    const messages = payload.map(redactMessage);
-    return messages.every((m, i) => m === (payload as unknown[])[i]) ? payload : messages;
-  }
-  const p = payload as Record<string, unknown>;
-  if (!Array.isArray(p.messages)) {
-    return payload;
-  }
-  const messages = p.messages.map(redactMessage);
-  if (messages.every((m, i) => m === (p.messages as unknown[])[i])) {
-    return payload;
-  }
-  return { ...p, messages };
+  return redactDeep(payload);
 }

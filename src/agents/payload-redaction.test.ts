@@ -53,6 +53,38 @@ describe("redactImageDataForDiagnostics", () => {
     });
   });
 
+  describe("options.images (non-messages payload path)", () => {
+    it("redacts base64 image data in options.images", () => {
+      const payload = {
+        options: {
+          images: [imageBlock],
+        },
+      };
+      const result = redactImageDataForDiagnostics(payload) as typeof payload;
+      expect((result.options.images as unknown[])[0]).toEqual(redactedImageBlock);
+    });
+
+    it("returns same reference when options.images contains no base64 blocks", () => {
+      const payload = { options: { images: [{ type: "text", text: "hi" }] } };
+      expect(redactImageDataForDiagnostics(payload)).toBe(payload);
+    });
+
+    it("redacts images in both messages and options when both are present", () => {
+      const payload = {
+        messages: [{ role: "user", content: [imageBlock] }],
+        options: { images: [imageBlock] },
+      };
+      const result = redactImageDataForDiagnostics(payload) as typeof payload;
+      expect((result.messages[0].content as unknown[])[0]).toEqual(redactedImageBlock);
+      expect((result.options.images as unknown[])[0]).toEqual(redactedImageBlock);
+    });
+
+    it("returns same reference when payload has no messages and no images", () => {
+      const payload = { model: "claude-3" };
+      expect(redactImageDataForDiagnostics(payload)).toBe(payload);
+    });
+  });
+
   describe("non-object inputs", () => {
     it("returns null unchanged", () => {
       expect(redactImageDataForDiagnostics(null)).toBeNull();
