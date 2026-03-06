@@ -203,6 +203,8 @@ openclaw channels add
 
 若使用 `connectionMode: "webhook"`，需设置 `verificationToken`。飞书 Webhook 服务默认绑定 `127.0.0.1`；仅在需要不同监听地址时设置 `webhookHost`。
 
+> 说明：飞书凭证应配置在 `channels.feishu`（或 `channels.feishu.accounts.<id>`）下，不要放在 `plugins.entries.feishu.config`。该插件配置 schema 不接受 `appId`/`appSecret` 字段。
+
 #### 获取 Verification Token（仅 Webhook 模式）
 
 使用 Webhook 模式时，需在配置中设置 `channels.feishu.verificationToken`。获取方式：
