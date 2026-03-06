@@ -201,7 +201,7 @@ async function ensureThreadBindingForSubagentSpawn(params: {
     return {
       status: "error",
       error:
-        "thread=true is unavailable because no channel plugin registered subagent_spawning hooks.",
+        'thread=true is unavailable because the current requester channel does not provide thread-binding hooks. Use mode="run" for one-shot work, or spawn from a thread-capable channel.',
     };
   }
 
@@ -272,7 +272,8 @@ export async function spawnSubagentDirect(
   if (spawnMode === "session" && !requestThreadBinding) {
     return {
       status: "error",
-      error: 'mode="session" requires thread=true so the subagent can stay bound to a thread.',
+      error:
+        'mode="session" requires thread=true so the subagent can stay bound to a thread. For one-shot background work, use mode="run" instead.',
     };
   }
   const cleanup =

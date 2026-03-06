@@ -89,6 +89,7 @@ Tool params:
   - default is `run`
   - if `thread: true` and `mode` omitted, default becomes `session`
   - `mode: "session"` requires `thread: true`
+  - if thread binding is unavailable for the requester channel, fall back to `mode: "run"` instead of claiming a persistent session exists
 - `cleanup?` (`delete|keep`, default `keep`)
 - `sandbox?` (`inherit|require`, default `inherit`; `require` rejects spawn unless target child runtime is sandboxed)
 - `sessions_spawn` does **not** accept channel-delivery params (`target`, `channel`, `to`, `threadId`, `replyTo`, `transport`). For delivery, use `message`/`sessions_send` from the spawned run.
@@ -108,6 +109,8 @@ Quick flow:
 3. Replies and follow-up messages in that thread route to the bound session.
 4. Use `/session idle` to inspect/update inactivity auto-unfocus and `/session max-age` to control the hard cap.
 5. Use `/unfocus` to detach manually.
+
+If the requester channel does not support thread bindings, `thread: true` will fail. In that case use `mode: "run"` for one-shot work instead of retrying impossible thread-bound combinations.
 
 Manual controls:
 

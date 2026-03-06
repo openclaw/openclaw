@@ -488,6 +488,7 @@ Notes:
   - Supports one-shot mode (`mode: "run"`) and persistent thread-bound mode (`mode: "session"` with `thread: true`).
   - If `thread: true` and `mode` is omitted, mode defaults to `session`.
   - `mode: "session"` requires `thread: true`.
+  - Persistent `mode: "session"` only works when the requester channel supports thread bindings. Otherwise use `mode: "run"`.
   - If `runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise timeout defaults to `0` (no timeout).
   - Discord thread-bound flows depend on `session.threadBindings.*` and `channels.discord.threadBindings.*`.
   - Reply format includes `Status`, `Result`, and compact stats.

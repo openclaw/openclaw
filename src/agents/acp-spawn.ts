@@ -279,7 +279,8 @@ export async function spawnAcpDirect(
   if (spawnMode === "session" && !requestThreadBinding) {
     return {
       status: "error",
-      error: 'mode="session" requires thread=true so the ACP session can stay bound to a thread.',
+      error:
+        'mode="session" requires thread=true so the ACP session can stay bound to a thread. For one-shot ACP work, use mode="run" instead.',
     };
   }
 
