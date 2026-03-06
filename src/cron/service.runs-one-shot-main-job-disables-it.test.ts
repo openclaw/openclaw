@@ -532,12 +532,10 @@ describe("CronService", () => {
     };
 
     const heartbeatStarted = createDeferred<void>();
-    let resolveHeartbeat: ((res: HeartbeatRunResult) => void) | null = null;
+    const heartbeatDone = createDeferred<HeartbeatRunResult>();
     const runHeartbeatOnce = vi.fn(async () => {
       heartbeatStarted.resolve();
-      return await new Promise<HeartbeatRunResult>((resolve) => {
-        resolveHeartbeat = resolve;
-      });
+      return await heartbeatDone.promise;
     });
 
     const { store, cron, enqueueSystemEvent, requestHeartbeatNow } =
@@ -557,10 +555,7 @@ describe("CronService", () => {
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
     expectMainSystemEventPosted(enqueueSystemEvent, "hello");
 
-    if (typeof resolveHeartbeat !== "function") {
-      throw new Error("expected heartbeat resolver to be set");
-    }
-    resolveHeartbeat({ status: "ran", durationMs: 123 });
+    heartbeatDone.resolve({ status: "ran", durationMs: 123 });
     await runPromise;
 
     const jobs = await cron.list({ includeDisabled: true });
