@@ -83,20 +83,27 @@ vi.mock("../agents/pi-model-discovery.js", () => {
   };
 });
 
-vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModel: () => {
-    throw new Error("resolveModel should not be called from models.list tests");
-  },
-  resolveModelWithRegistry: ({
-    provider,
-    modelId,
-    modelRegistry,
-  }: {
-    provider: string;
-    modelId: string;
-    modelRegistry: { find: (provider: string, modelId: string) => unknown };
-  }) => modelRegistry.find(provider, modelId),
-}));
+vi.mock("../agents/pi-embedded-runner/model.js", async () => {
+  const { resolveForwardCompatModel } = await import("../agents/model-forward-compat.js");
+  return {
+    resolveModel: () => {
+      throw new Error("resolveModel should not be called from models.list tests");
+    },
+    resolveModelWithRegistry: ({
+      provider,
+      modelId,
+      modelRegistry,
+    }: {
+      provider: string;
+      modelId: string;
+      modelRegistry: {
+        find: (provider: string, modelId: string) => unknown;
+      };
+    }) =>
+      modelRegistry.find(provider, modelId) ??
+      resolveForwardCompatModel(provider, modelId, modelRegistry),
+  };
+});
 
 function makeRuntime() {
   return {
@@ -307,6 +314,44 @@ describe("models list/status", () => {
         }),
       ]),
     );
+  });
+
+  it("configured GPT-5.4 rows keep provider-auth availability fallback", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          models: {
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+    });
+    listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
+      provider === "openai" ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>) : [],
+    );
+    modelRegistryState.models = [
+      {
+        provider: "openai",
+        id: "gpt-5.2",
+        name: "GPT-5.2",
+        api: "openai-responses",
+        input: ["text", "image"],
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+        reasoning: true,
+        cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+      },
+    ];
+    modelRegistryState.available = modelRegistryState.models;
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ json: true }, runtime);
+
+    const payload = parseJsonLog(runtime);
+    expect(payload.models[0]?.key).toBe("openai/gpt-5.4");
+    expect(payload.models[0]?.available).toBe(true);
   });
 
   it("models list does not treat availability-unavailable code as discovery fallback", async () => {
