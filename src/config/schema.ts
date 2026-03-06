@@ -20,6 +20,38 @@ type JsonSchemaObject = JsonSchemaNode & {
   items?: JsonSchemaObject | JsonSchemaObject[];
 };
 
+const FORBIDDEN_LOOKUP_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
+const LOOKUP_SCHEMA_STRING_KEYS = new Set([
+  "$id",
+  "$schema",
+  "title",
+  "description",
+  "format",
+  "pattern",
+  "contentEncoding",
+  "contentMediaType",
+]);
+const LOOKUP_SCHEMA_NUMBER_KEYS = new Set([
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "multipleOf",
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "minProperties",
+  "maxProperties",
+]);
+const LOOKUP_SCHEMA_BOOLEAN_KEYS = new Set([
+  "additionalProperties",
+  "uniqueItems",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+]);
+
 function cloneSchema<T>(value: T): T {
   if (typeof structuredClone === "function") {
     return structuredClone(value);
@@ -530,9 +562,13 @@ function resolveLookupChildSchema(
   schema: JsonSchemaObject,
   segment: string,
 ): JsonSchemaObject | null {
-  const explicit = schema.properties?.[segment];
-  if (explicit) {
-    return explicit;
+  if (FORBIDDEN_LOOKUP_SEGMENTS.has(segment)) {
+    return null;
+  }
+
+  const properties = schema.properties;
+  if (properties && Object.hasOwn(properties, segment)) {
+    return asSchemaObject(properties[segment]);
   }
 
   const itemIndex = /^\d+$/.test(segment) ? Number.parseInt(segment, 10) : undefined;
@@ -548,15 +584,54 @@ function resolveLookupChildSchema(
   return null;
 }
 
-function stripNestedSchema(schema: JsonSchemaObject): JsonSchemaNode {
-  const next = cloneSchema(schema);
-  delete next.properties;
-  if (next.additionalProperties && typeof next.additionalProperties === "object") {
-    delete next.additionalProperties;
+function stripSchemaForLookup(schema: JsonSchemaObject): JsonSchemaNode {
+  const next: JsonSchemaNode = {};
+
+  for (const [key, value] of Object.entries(schema)) {
+    if (LOOKUP_SCHEMA_STRING_KEYS.has(key) && typeof value === "string") {
+      next[key] = value;
+      continue;
+    }
+    if (LOOKUP_SCHEMA_NUMBER_KEYS.has(key) && typeof value === "number") {
+      next[key] = value;
+      continue;
+    }
+    if (LOOKUP_SCHEMA_BOOLEAN_KEYS.has(key) && typeof value === "boolean") {
+      next[key] = value;
+      continue;
+    }
+    if (key === "type") {
+      if (typeof value === "string") {
+        next[key] = value;
+      } else if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+        next[key] = [...value];
+      }
+      continue;
+    }
+    if (key === "enum" && Array.isArray(value)) {
+      const entries = value.filter(
+        (entry) =>
+          entry === null ||
+          typeof entry === "string" ||
+          typeof entry === "number" ||
+          typeof entry === "boolean",
+      );
+      if (entries.length === value.length) {
+        next[key] = [...entries];
+      }
+      continue;
+    }
+    if (
+      key === "const" &&
+      (value === null ||
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean")
+    ) {
+      next[key] = value;
+    }
   }
-  if (next.items !== undefined) {
-    delete next.items;
-  }
+
   return next;
 }
 
@@ -623,7 +698,7 @@ export function lookupConfigSchema(
   const resolvedHint = resolveUiHintMatch(response.uiHints, normalizedPath);
   return {
     path: normalizedPath,
-    schema: stripNestedSchema(current),
+    schema: stripSchemaForLookup(current),
     hint: resolvedHint?.hint,
     hintPath: resolvedHint?.path,
     children: buildLookupChildren(current, normalizedPath, response.uiHints),

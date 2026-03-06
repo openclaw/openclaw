@@ -216,6 +216,13 @@ describe("config schema", () => {
     expect(schema?.properties).toBeUndefined();
   });
 
+  it("returns a shallow lookup schema without nested composition keywords", () => {
+    const lookup = lookupConfigSchema(baseSchema, "agents.list.0.runtime");
+    expect(lookup?.path).toBe("agents.list.0.runtime");
+    expect(lookup?.hintPath).toBe("agents.list[].runtime");
+    expect(lookup?.schema).toEqual({});
+  });
+
   it("matches wildcard ui hints for concrete lookup paths", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.list.0.identity.avatar");
     expect(lookup?.path).toBe("agents.list.0.identity.avatar");
@@ -256,6 +263,12 @@ describe("config schema", () => {
     expect(lookup?.path).toBe("pair.1");
     expect(lookup?.schema).toMatchObject({ type: "number" });
     expect((lookup?.schema as { items?: unknown } | undefined)?.items).toBeUndefined();
+  });
+
+  it("rejects prototype-chain lookup segments", () => {
+    expect(() => lookupConfigSchema(baseSchema, "constructor")).not.toThrow();
+    expect(lookupConfigSchema(baseSchema, "constructor")).toBeNull();
+    expect(lookupConfigSchema(baseSchema, "__proto__.polluted")).toBeNull();
   });
 
   it("returns null for missing config schema paths", () => {

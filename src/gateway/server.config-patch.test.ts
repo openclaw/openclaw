@@ -75,7 +75,7 @@ describe("gateway config methods", () => {
     });
 
     expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("config schema path not found");
+    expect(res.error?.message).toBe("config schema path not found");
   });
 
   it("rejects config.schema.lookup when the path is only whitespace", async () => {
@@ -85,6 +85,15 @@ describe("gateway config methods", () => {
 
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
+  });
+
+  it("rejects prototype-chain config.schema.lookup paths without reflecting them", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+      path: "constructor",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toBe("config schema path not found");
   });
 
   it("rejects config.patch when raw is not an object", async () => {

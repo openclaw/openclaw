@@ -120,6 +120,14 @@ function parseRawConfigOrRespond(
   return rawValue;
 }
 
+function sanitizeLookupPathForLog(path: string): string {
+  const sanitized = Array.from(path, (char) => {
+    const code = char.charCodeAt(0);
+    return code < 0x20 || code === 0x7f ? "?" : char;
+  }).join("");
+  return sanitized.length > 120 ? `${sanitized.slice(0, 117)}...` : sanitized;
+}
+
 function parseValidateConfigFromRawOrRespond(
   params: unknown,
   requestName: string,
@@ -278,14 +286,14 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `config schema path not found: ${path}`),
+        errorShape(ErrorCodes.INVALID_REQUEST, "config schema path not found"),
       );
       return;
     }
     if (!validateConfigSchemaLookupResult(result)) {
       const errors = validateConfigSchemaLookupResult.errors ?? [];
       context.logGateway.warn(
-        `config.schema.lookup produced invalid payload for ${path}: ${formatValidationErrors(errors)}`,
+        `config.schema.lookup produced invalid payload for ${sanitizeLookupPathForLog(path)}: ${formatValidationErrors(errors)}`,
       );
       respond(
         false,
