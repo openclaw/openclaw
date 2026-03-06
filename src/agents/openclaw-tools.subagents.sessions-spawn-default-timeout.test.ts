@@ -74,11 +74,17 @@ describe("sessions_spawn default runTimeoutSeconds", () => {
 
     // Simulate model decreasing timeout across retries (60 → 45 → 20)
     await spawnSubagent("call-4a", { task: "hello", runTimeoutSeconds: 60 });
-    await spawnSubagent("call-4b", { task: "hello", runTimeoutSeconds: 45 });
-    await spawnSubagent("call-4c", { task: "hello", runTimeoutSeconds: 20 });
+    const timeout1 = getSubagentTimeout(gateway.calls);
 
-    const calls = gateway.calls;
+    await spawnSubagent("call-4b", { task: "hello", runTimeoutSeconds: 45 });
+    const timeout2 = getSubagentTimeout(gateway.calls.slice(1));
+
+    await spawnSubagent("call-4c", { task: "hello", runTimeoutSeconds: 20 });
+    const timeout3 = getSubagentTimeout(gateway.calls.slice(2));
+
     // All three spawns should use config default (300) as floor
-    expect(getSubagentTimeout(calls)).toBe(300);
+    expect(timeout1).toBe(300);
+    expect(timeout2).toBe(300);
+    expect(timeout3).toBe(300);
   });
 });
