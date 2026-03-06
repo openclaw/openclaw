@@ -101,6 +101,16 @@ describe("shouldRunDailyMemoryCheckpoint", () => {
     expect(shouldRunDailyMemoryCheckpoint({ entry: entry as never, nowMs, atHour })).toBe(false);
   });
 
+  it("returns false for /new before the daily boundary (e.g. 3am with atHour=4)", () => {
+    // /new at 3am UTC, boundary resolves to *yesterday* 4am UTC.
+    // memoryCheckpointAt = 3am today, which is after yesterday's boundary.
+    const preResetNow = new Date("2025-03-05T03:00:00Z").getTime();
+    const entry = { memoryCheckpointAt: preResetNow };
+    expect(
+      shouldRunDailyMemoryCheckpoint({ entry: entry as never, nowMs: preResetNow, atHour }),
+    ).toBe(false);
+  });
+
   it("returns false when checkpoint is after the daily boundary", () => {
     // checkpoint at 5am UTC (after 4am boundary)
     const entry = { memoryCheckpointAt: boundary + 3_600_000 };
