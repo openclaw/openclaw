@@ -388,6 +388,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Top-level media behavior shared across providers and tools that handle inbound files. Keep defaults unless you need stable filenames for external processing pipelines.",
   "media.preserveFilenames":
     "When enabled, uploaded media keeps its original filename instead of a generated temp-safe name. Turn this on when downstream automations depend on stable names, and leave off to reduce accidental filename leakage.",
+  "media.ttlHours":
+    "Retention window in hours before periodic media cleanup removes old files from ~/.openclaw/media/ subdirectories (default: 24). Increase for longer review windows, or lower to reclaim disk sooner.",
   audio:
     "Global audio ingestion settings used before higher-level tools process speech or media content. Configure this when you need deterministic transcription behavior for voice notes and clips.",
   "audio.transcription":

@@ -417,6 +417,7 @@ export const OpenClawSchema = z
     media: z
       .object({
         preserveFilenames: z.boolean().optional(),
+        ttlHours: z.number().nonnegative().optional(),
       })
       .strict()
       .optional(),

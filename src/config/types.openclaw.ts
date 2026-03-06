@@ -101,6 +101,11 @@ export type OpenClawConfig = {
   bindings?: AgentBinding[];
   broadcast?: BroadcastConfig;
   audio?: AudioConfig;
+  media?: {
+    preserveFilenames?: boolean;
+    /** Retention window in hours for periodic media cleanup. Default: 24. */
+    ttlHours?: number;
+  };
   messages?: MessagesConfig;
   commands?: CommandsConfig;
   approvals?: ApprovalsConfig;

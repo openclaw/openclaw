@@ -1,4 +1,5 @@
 import type { HealthSummary } from "../commands/health.js";
+import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
@@ -37,10 +38,12 @@ export function startGatewayMaintenanceTimers(params: {
   ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  mediaTtlMs: number;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
+  mediaCleanup: ReturnType<typeof setInterval>;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
@@ -129,5 +132,15 @@ export function startGatewayMaintenanceTimers(params: {
     }
   }, 60_000);
 
-  return { tickInterval, healthInterval, dedupeCleanup };
+  const mediaCleanup = setInterval(() => {
+    void cleanOldMedia(params.mediaTtlMs).catch((err) =>
+      params.logHealth.error(`media cleanup failed: ${formatError(err)}`),
+    );
+  }, 60 * 60_000);
+
+  void cleanOldMedia(params.mediaTtlMs).catch((err) =>
+    params.logHealth.error(`initial media cleanup failed: ${formatError(err)}`),
+  );
+
+  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup };
 }

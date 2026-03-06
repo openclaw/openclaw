@@ -17,6 +17,7 @@ const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 // Files are intentionally readable by non-owner UIDs so Docker sandbox containers can access
 // inbound media. The containing state/media directories remain 0o700, which is the trust boundary.
 const MEDIA_FILE_MODE = 0o644;
+
 type RequestImpl = typeof httpRequest;
 type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 
