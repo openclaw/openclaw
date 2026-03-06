@@ -1704,6 +1704,61 @@ describe("runReplyAgent memory flush", () => {
     });
   });
 
+  it("still runs memory flush when sandbox workspaceAccess is none", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      const calls: Array<{ prompt?: string }> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push({ prompt: params.prompt });
+        if (params.prompt?.includes("Pre-compaction memory flush.")) {
+          return { payloads: [], meta: {} };
+        }
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        config: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                scope: "session",
+                workspaceAccess: "none",
+                workspaceRoot: "~/.openclaw/sandboxes",
+              },
+            },
+          },
+        },
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.prompt).toContain("Pre-compaction memory flush.");
+      expect(calls[1]?.prompt).toBe("hello");
+    });
+  });
+
   it("runs memory flush when transcript fallback uses a relative sessionFile path", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "main";
