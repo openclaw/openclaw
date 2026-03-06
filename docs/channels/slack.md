@@ -448,10 +448,18 @@ The view is cached per user and only re-published when the version changes (e.g.
 channels:
   slack:
     homeTab:
-      enabled: true # default: true
+      enabled: true # default: true — auto-publish default view on tab open
       showCommands: true # default: true — show slash command reference
       customBlocks: [] # optional static Block Kit blocks to append
+    actions:
+      homeTab: true # default: true — allow agent updateHomeTab/resetHomeTab calls
 ```
+
+<Note>
+  `homeTab.enabled` controls the **default view** published when users open the tab.
+  `actions.homeTab` controls whether agents can use the `updateHomeTab` and `resetHomeTab` tool actions.
+  Both are enabled by default and can be toggled independently.
+</Note>
 
 ### Custom Home Tab via `updateHomeTab`
 

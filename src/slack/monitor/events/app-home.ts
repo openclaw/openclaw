@@ -30,11 +30,17 @@ export function resolveAgentModelDisplay(
 ): string {
   const agentModel = agent?.model;
   if (agentModel) {
-    return typeof agentModel === "string" ? agentModel : (agentModel.primary ?? "—");
+    const raw = typeof agentModel === "string" ? agentModel : agentModel.primary;
+    if (raw?.trim()) {
+      return raw.trim();
+    }
   }
   const defaultsModel = cfg.agents?.defaults?.model;
   if (defaultsModel) {
-    return typeof defaultsModel === "string" ? defaultsModel : (defaultsModel.primary ?? "—");
+    const raw = typeof defaultsModel === "string" ? defaultsModel : defaultsModel.primary;
+    if (raw?.trim()) {
+      return raw.trim();
+    }
   }
   return "—";
 }

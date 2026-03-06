@@ -158,6 +158,20 @@ describe("resolveAgentModelDisplay", () => {
   it("returns dash when no model configured", () => {
     expect(resolveAgentModelDisplay(undefined, {})).toBe("—");
   });
+
+  it("returns dash when model is empty string", () => {
+    expect(resolveAgentModelDisplay({ id: "a", model: "" }, {})).toBe("—");
+  });
+
+  it("returns dash when model primary is empty string", () => {
+    expect(resolveAgentModelDisplay({ id: "a", model: { primary: "  " } }, {})).toBe("—");
+  });
+
+  it("trims whitespace from model string", () => {
+    expect(resolveAgentModelDisplay({ id: "a", model: "  anthropic/opus-4  " }, {})).toBe(
+      "anthropic/opus-4",
+    );
+  });
 });
 
 describe("Zod schema validation", () => {
