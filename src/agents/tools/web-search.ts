@@ -437,11 +437,11 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
           path: "tools.web.search.apiKey",
         })
       : undefined;
-  // Handle both string and SecretRef - dont normalize non-string values
+  // Only return string values - SecretRef objects should return undefined
   const fromConfig =
     fromConfigRaw !== undefined && typeof fromConfigRaw === "string"
       ? normalizeSecretInput(fromConfigRaw)
-      : fromConfigRaw;
+      : undefined;
   const fromEnvRaw = process.env.BRAVE_API_KEY;
   const fromEnv =
     fromEnvRaw !== undefined ? normalizeSecretInput(fromEnvRaw) : undefined;
@@ -572,11 +572,11 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
   source: PerplexityApiKeySource;
 } {
   const apiKey = perplexity?.apiKey;
-  // Handle both string and SecretRef - dont normalize non-string values
+  // Only return string values - SecretRef objects should return undefined
   const fromConfig =
     apiKey !== undefined && typeof apiKey === "string"
       ? normalizeSecretInput(apiKey)
-      : apiKey;
+      : undefined;
   if (fromConfig) {
     return { apiKey: fromConfig, source: "config" };
   }
@@ -605,11 +605,11 @@ function resolveGrokConfig(search?: WebSearchConfig): GrokConfig {
 
 function resolveGrokApiKey(grok?: GrokConfig): string | undefined {
   const apiKey = grok?.apiKey;
-  // Handle both string and SecretRef - dont normalize non-string values
+  // Only return string values - SecretRef objects should return undefined
   const fromConfig =
     apiKey !== undefined && typeof apiKey === "string"
       ? normalizeSecretInput(apiKey)
-      : apiKey;
+      : undefined;
   if (fromConfig) {
     return fromConfig;
   }
@@ -642,11 +642,11 @@ function resolveKimiConfig(search?: WebSearchConfig): KimiConfig {
 
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
   const apiKey = kimi?.apiKey;
-  // Handle both string and SecretRef - dont normalize non-string values
+  // Only return string values - SecretRef objects should return undefined
   const fromConfig =
     apiKey !== undefined && typeof apiKey === "string"
       ? normalizeSecretInput(apiKey)
-      : apiKey;
+      : undefined;
   if (fromConfig) {
     return fromConfig;
   }
@@ -687,11 +687,11 @@ function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
 
 function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
   const apiKey = gemini?.apiKey;
-  // Handle both string and SecretRef - dont normalize non-string values
+  // Only return string values - SecretRef objects should return undefined
   const fromConfig =
     apiKey !== undefined && typeof apiKey === "string"
       ? normalizeSecretInput(apiKey)
-      : apiKey;
+      : undefined;
   if (fromConfig) {
     return fromConfig;
   }
