@@ -112,7 +112,7 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
     const metaStripped = stripInboundMetadata(stripped.text);
     const res = truncateChatHistoryText(metaStripped);
     entry.text = res.text;
-    changed ||= stripped.changed || res.truncated;
+    changed ||= stripped.changed || metaStripped !== stripped.text || res.truncated;
   }
   if (typeof entry.partialJson === "string") {
     const res = truncateChatHistoryText(entry.partialJson);
@@ -169,7 +169,7 @@ export function sanitizeChatHistoryMessage(message: unknown): { message: unknown
     const metaStripped = stripInboundMetadata(stripped.text);
     const res = truncateChatHistoryText(metaStripped);
     entry.content = res.text;
-    changed ||= stripped.changed || res.truncated;
+    changed ||= stripped.changed || metaStripped !== stripped.text || res.truncated;
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block));
     if (updated.some((item) => item.changed)) {
@@ -183,7 +183,7 @@ export function sanitizeChatHistoryMessage(message: unknown): { message: unknown
     const metaStripped = stripInboundMetadata(stripped.text);
     const res = truncateChatHistoryText(metaStripped);
     entry.text = res.text;
-    changed ||= stripped.changed || res.truncated;
+    changed ||= stripped.changed || metaStripped !== stripped.text || res.truncated;
   }
 
   return { message: changed ? entry : message, changed };
