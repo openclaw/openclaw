@@ -9,7 +9,11 @@ export function isLanxinDebugEnabled(cfg?: ClawdbotConfig): boolean {
   return cfgFlag === true;
 }
 
-export function logLanxinDebug(cfg: ClawdbotConfig | undefined, message: string, meta?: unknown): void {
+export function logLanxinDebug(
+  cfg: ClawdbotConfig | undefined,
+  message: string,
+  meta?: unknown,
+): void {
   if (!isLanxinDebugEnabled(cfg)) {
     return;
   }

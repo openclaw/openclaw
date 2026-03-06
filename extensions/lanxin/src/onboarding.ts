@@ -17,7 +17,9 @@ export const lanxinOnboardingAdapter: ChannelOnboardingAdapter = {
       configured: account.configured,
       statusLines: [
         `Lanxin: ${account.configured ? "configured" : "needs app credentials"}`,
-        account.aesKey ? "Lanxin webhook decrypt key: configured" : "Lanxin webhook decrypt key: missing",
+        account.aesKey
+          ? "Lanxin webhook decrypt key: configured"
+          : "Lanxin webhook decrypt key: missing",
       ],
       selectionHint: account.configured ? "configured" : "needs app creds",
       quickstartScore: account.configured ? 2 : 0,

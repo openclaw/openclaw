@@ -106,22 +106,22 @@ Edit `~/.openclaw/openclaw.json`:
 
 ### Configuration reference
 
-| Setting | Required | Default | Description |
-|---|---|---|---|
-| `enabled` | No | `false` | Enable the Lanxin channel |
-| `appId` | Yes | - | Lanxin App ID |
-| `appSecret` | Yes | - | Lanxin App Secret |
-| `aesKey` | Yes | - | Decryption key for callback `dataEncrypt` |
-| `apiBaseUrl` | No | `https://x.e.lanxin.cn/open/apigw/v1/` | Lanxin Open Platform API base URL |
-| `webhookHost` | No | `0.0.0.0` | Callback bind address |
-| `webhookPort` | No | `8789` | Callback bind port |
-| `webhookPath` | No | `/lanxin/callback` | Callback route path |
-| `dmPolicy` | No | `pairing` | DM policy: `open/pairing/allowlist/disabled` |
-| `groupPolicy` | No | `allowlist` (recommended) | Group policy: `open/allowlist/disabled` |
-| `allowFrom` | No | `[]` | DM allowlist |
-| `groupAllowFrom` | No | `[]` | Group allowlist |
-| `defaultEntryId` | No | - | Fallback when proactive messages lack `entryId` |
-| `debug` | No | `false` | Enable Lanxin debug logging |
+| Setting          | Required | Default                                | Description                                     |
+| ---------------- | -------- | -------------------------------------- | ----------------------------------------------- |
+| `enabled`        | No       | `false`                                | Enable the Lanxin channel                       |
+| `appId`          | Yes      | -                                      | Lanxin App ID                                   |
+| `appSecret`      | Yes      | -                                      | Lanxin App Secret                               |
+| `aesKey`         | Yes      | -                                      | Decryption key for callback `dataEncrypt`       |
+| `apiBaseUrl`     | No       | `https://x.e.lanxin.cn/open/apigw/v1/` | Lanxin Open Platform API base URL               |
+| `webhookHost`    | No       | `0.0.0.0`                              | Callback bind address                           |
+| `webhookPort`    | No       | `8789`                                 | Callback bind port                              |
+| `webhookPath`    | No       | `/lanxin/callback`                     | Callback route path                             |
+| `dmPolicy`       | No       | `pairing`                              | DM policy: `open/pairing/allowlist/disabled`    |
+| `groupPolicy`    | No       | `allowlist` (recommended)              | Group policy: `open/allowlist/disabled`         |
+| `allowFrom`      | No       | `[]`                                   | DM allowlist                                    |
+| `groupAllowFrom` | No       | `[]`                                   | Group allowlist                                 |
+| `defaultEntryId` | No       | -                                      | Fallback when proactive messages lack `entryId` |
+| `debug`          | No       | `false`                                | Enable Lanxin debug logging                     |
 
 ---
 
@@ -410,20 +410,20 @@ openclaw pairing approve lanxin <CODE>  # Approve
 
 ### DM policy (`dmPolicy`)
 
-| Value | Behavior |
-| --- | --- |
-| `"pairing"` | **Default.** Unknown users receive a pairing code; must be approved by admin |
-| `"allowlist"` | Only users in `allowFrom` can chat; others are silently ignored |
-| `"open"` | Allow all users (requires `"*"` in allowFrom) |
-| `"disabled"` | Disable DMs completely |
+| Value         | Behavior                                                                     |
+| ------------- | ---------------------------------------------------------------------------- |
+| `"pairing"`   | **Default.** Unknown users receive a pairing code; must be approved by admin |
+| `"allowlist"` | Only users in `allowFrom` can chat; others are silently ignored              |
+| `"open"`      | Allow all users (requires `"*"` in allowFrom)                                |
+| `"disabled"`  | Disable DMs completely                                                       |
 
 ### Group policy (`groupPolicy`)
 
-| Value | Behavior |
-| --- | --- |
-| `"open"` | Allow all groups |
+| Value         | Behavior                                    |
+| ------------- | ------------------------------------------- |
+| `"open"`      | Allow all groups                            |
 | `"allowlist"` | Only groups in `groupAllowFrom` can trigger |
-| `"disabled"` | Disable group messages |
+| `"disabled"`  | Disable group messages                      |
 
 Recommended for production:
 
@@ -449,21 +449,21 @@ Recommended for production:
 
 ## Common commands
 
-| Command | Description |
-| --- | --- |
-| `/status` | View bot status |
-| `/reset` | Reset conversation session |
-| `/model` | View/switch model |
+| Command   | Description                |
+| --------- | -------------------------- |
+| `/status` | View bot status            |
+| `/reset`  | Reset conversation session |
+| `/model`  | View/switch model          |
 
 ## Gateway management commands
 
-| Command | Description |
-| --- | --- |
-| `openclaw gateway status` | View gateway status |
+| Command                    | Description                   |
+| -------------------------- | ----------------------------- |
+| `openclaw gateway status`  | View gateway status           |
 | `openclaw gateway install` | Install/start gateway service |
-| `openclaw gateway stop` | Stop gateway service |
-| `openclaw gateway restart` | Restart gateway service |
-| `openclaw logs --follow` | View real-time logs |
+| `openclaw gateway stop`    | Stop gateway service          |
+| `openclaw gateway restart` | Restart gateway service       |
+| `openclaw logs --follow`   | View real-time logs           |
 
 ---
 
@@ -483,14 +483,14 @@ Key log messages:
 
 ### Log troubleshooting reference
 
-| Log keyword | Meaning | Check |
-|---|---|---|
-| `HTTP POST ... status: 401/403` | Authentication failed | `appId/appSecret`, token expiration |
-| `errCode != 0` | Platform business error | Check `errMsg` and request fields (especially `entryId`) |
-| `Invalid Lanxin target` | Incorrect send target format | Use `user:<userId>:<entryId>` or `<userId>:<entryId>` |
-| `Missing dataEncrypt` | Unexpected callback body | Platform callback URL/request body format |
-| `failed downloading media` | Inbound media download failed | Check if `mediaId` is valid, token permissions |
-| `skip duplicated event` | Deduplication hit | Normal behavior (platform retry) |
+| Log keyword                     | Meaning                       | Check                                                    |
+| ------------------------------- | ----------------------------- | -------------------------------------------------------- |
+| `HTTP POST ... status: 401/403` | Authentication failed         | `appId/appSecret`, token expiration                      |
+| `errCode != 0`                  | Platform business error       | Check `errMsg` and request fields (especially `entryId`) |
+| `Invalid Lanxin target`         | Incorrect send target format  | Use `user:<userId>:<entryId>` or `<userId>:<entryId>`    |
+| `Missing dataEncrypt`           | Unexpected callback body      | Platform callback URL/request body format                |
+| `failed downloading media`      | Inbound media download failed | Check if `mediaId` is valid, token permissions           |
+| `skip duplicated event`         | Deduplication hit             | Normal behavior (platform retry)                         |
 
 ---
 

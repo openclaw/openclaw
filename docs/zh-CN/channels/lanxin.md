@@ -106,22 +106,22 @@ openclaw channels add
 
 ### 配置项速查表
 
-| 配置项 | 必填 | 默认值 | 说明 |
-|---|---|---|---|
-| `enabled` | 否 | `false` | 是否启用蓝信渠道 |
-| `appId` | 是 | - | 蓝信应用 ID |
-| `appSecret` | 是 | - | 蓝信应用密钥 |
-| `aesKey` | 是 | - | 回调 `dataEncrypt` 解密密钥 |
-| `apiBaseUrl` | 否 | `https://x.e.lanxin.cn/open/apigw/v1/` | 蓝信开放平台 API 基础地址 |
-| `webhookHost` | 否 | `0.0.0.0` | 回调监听地址 |
-| `webhookPort` | 否 | `8789` | 回调监听端口 |
-| `webhookPath` | 否 | `/lanxin/callback` | 回调路径 |
-| `dmPolicy` | 否 | `pairing` | 私聊策略：`open/pairing/allowlist/disabled` |
-| `groupPolicy` | 否 | `allowlist`（建议） | 群策略：`open/allowlist/disabled` |
-| `allowFrom` | 否 | `[]` | 私聊允许列表 |
-| `groupAllowFrom` | 否 | `[]` | 群允许列表 |
-| `defaultEntryId` | 否 | - | 主动发送缺少 `entryId` 时兜底 |
-| `debug` | 否 | `false` | 是否输出蓝信调试日志 |
+| 配置项           | 必填 | 默认值                                 | 说明                                        |
+| ---------------- | ---- | -------------------------------------- | ------------------------------------------- |
+| `enabled`        | 否   | `false`                                | 是否启用蓝信渠道                            |
+| `appId`          | 是   | -                                      | 蓝信应用 ID                                 |
+| `appSecret`      | 是   | -                                      | 蓝信应用密钥                                |
+| `aesKey`         | 是   | -                                      | 回调 `dataEncrypt` 解密密钥                 |
+| `apiBaseUrl`     | 否   | `https://x.e.lanxin.cn/open/apigw/v1/` | 蓝信开放平台 API 基础地址                   |
+| `webhookHost`    | 否   | `0.0.0.0`                              | 回调监听地址                                |
+| `webhookPort`    | 否   | `8789`                                 | 回调监听端口                                |
+| `webhookPath`    | 否   | `/lanxin/callback`                     | 回调路径                                    |
+| `dmPolicy`       | 否   | `pairing`                              | 私聊策略：`open/pairing/allowlist/disabled` |
+| `groupPolicy`    | 否   | `allowlist`（建议）                    | 群策略：`open/allowlist/disabled`           |
+| `allowFrom`      | 否   | `[]`                                   | 私聊允许列表                                |
+| `groupAllowFrom` | 否   | `[]`                                   | 群允许列表                                  |
+| `defaultEntryId` | 否   | -                                      | 主动发送缺少 `entryId` 时兜底               |
+| `debug`          | 否   | `false`                                | 是否输出蓝信调试日志                        |
 
 ---
 
@@ -410,20 +410,20 @@ openclaw pairing approve lanxin <CODE>  # 批准
 
 ### DM 策略（`dmPolicy`）
 
-| 值 | 行为 |
-| --- | --- |
-| `"pairing"` | **默认**。未知用户收到配对码，管理员批准后才能对话 |
-| `"allowlist"` | 仅 `allowFrom` 列表中的用户可对话，其他静默忽略 |
-| `"open"` | 允许所有人对话（需在 allowFrom 中加 `"*"`） |
-| `"disabled"` | 完全禁止私聊 |
+| 值            | 行为                                               |
+| ------------- | -------------------------------------------------- |
+| `"pairing"`   | **默认**。未知用户收到配对码，管理员批准后才能对话 |
+| `"allowlist"` | 仅 `allowFrom` 列表中的用户可对话，其他静默忽略    |
+| `"open"`      | 允许所有人对话（需在 allowFrom 中加 `"*"`）        |
+| `"disabled"`  | 完全禁止私聊                                       |
 
 ### 群策略（`groupPolicy`）
 
-| 值 | 行为 |
-| --- | --- |
-| `"open"` | 允许所有群组 |
+| 值            | 行为                                   |
+| ------------- | -------------------------------------- |
+| `"open"`      | 允许所有群组                           |
 | `"allowlist"` | 仅 `groupAllowFrom` 列表中的群组可触发 |
-| `"disabled"` | 禁用群组消息 |
+| `"disabled"`  | 禁用群组消息                           |
 
 建议生产环境使用：
 
@@ -449,21 +449,21 @@ openclaw pairing approve lanxin <CODE>  # 批准
 
 ## 常用命令
 
-| 命令 | 说明 |
-| --- | --- |
+| 命令      | 说明           |
+| --------- | -------------- |
 | `/status` | 查看机器人状态 |
-| `/reset` | 重置对话会话 |
-| `/model` | 查看/切换模型 |
+| `/reset`  | 重置对话会话   |
+| `/model`  | 查看/切换模型  |
 
 ## 网关管理命令
 
-| 命令 | 说明 |
-| --- | --- |
-| `openclaw gateway status` | 查看网关运行状态 |
+| 命令                       | 说明              |
+| -------------------------- | ----------------- |
+| `openclaw gateway status`  | 查看网关运行状态  |
 | `openclaw gateway install` | 安装/启动网关服务 |
-| `openclaw gateway stop` | 停止网关服务 |
-| `openclaw gateway restart` | 重启网关服务 |
-| `openclaw logs --follow` | 实时查看日志输出 |
+| `openclaw gateway stop`    | 停止网关服务      |
+| `openclaw gateway restart` | 重启网关服务      |
+| `openclaw logs --follow`   | 实时查看日志输出  |
 
 ---
 
@@ -483,14 +483,14 @@ openclaw pairing approve lanxin <CODE>  # 批准
 
 ### 日志排错对照
 
-| 日志关键词 | 含义 | 建议检查 |
-|---|---|---|
-| `HTTP POST ... status: 401/403` | 鉴权失败 | `appId/appSecret`、token 是否过期 |
-| `errCode != 0` | 平台业务错误 | 查看 `errMsg` 与请求字段（尤其 `entryId`） |
-| `Invalid Lanxin target` | 发送目标格式不正确 | 使用 `user:<userId>:<entryId>` 或 `<userId>:<entryId>` |
-| `Missing dataEncrypt` | 回调体不符合预期 | 平台回调地址/请求体格式 |
-| `failed downloading media` | 入站媒体下载失败 | `mediaId` 是否有效、token 权限 |
-| `skip duplicated event` | 命中去重 | 属于正常现象（平台重试回调） |
+| 日志关键词                      | 含义               | 建议检查                                               |
+| ------------------------------- | ------------------ | ------------------------------------------------------ |
+| `HTTP POST ... status: 401/403` | 鉴权失败           | `appId/appSecret`、token 是否过期                      |
+| `errCode != 0`                  | 平台业务错误       | 查看 `errMsg` 与请求字段（尤其 `entryId`）             |
+| `Invalid Lanxin target`         | 发送目标格式不正确 | 使用 `user:<userId>:<entryId>` 或 `<userId>:<entryId>` |
+| `Missing dataEncrypt`           | 回调体不符合预期   | 平台回调地址/请求体格式                                |
+| `failed downloading media`      | 入站媒体下载失败   | `mediaId` 是否有效、token 权限                         |
+| `skip duplicated event`         | 命中去重           | 属于正常现象（平台重试回调）                           |
 
 ---
 

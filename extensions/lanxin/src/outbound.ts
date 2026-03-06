@@ -1,9 +1,9 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/lanxin";
 import { resolveLanxinAccount } from "./accounts.js";
 import { logLanxinDebug } from "./debug.js";
+import { uploadLanxinMediaFromUrl } from "./media.js";
 import { getLanxinRuntime } from "./runtime.js";
 import { sendMessageLanxin } from "./send.js";
-import { uploadLanxinMediaFromUrl } from "./media.js";
 
 export const lanxinOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",

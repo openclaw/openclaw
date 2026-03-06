@@ -34,7 +34,10 @@ export type ParsedLanxinTarget =
 export function parseLanxinTarget(raw: string): ParsedLanxinTarget | null {
   const normalized = stripProviderPrefix(raw);
   if (!normalized) return null;
-  const parts = normalized.split(":").map((s) => s.trim()).filter(Boolean);
+  const parts = normalized
+    .split(":")
+    .map((s) => s.trim())
+    .filter(Boolean);
   // Compatibility shorthand:
   // allow "userId:entryId" (without "user:" prefix) for direct messages.
   if (parts.length === 2) {

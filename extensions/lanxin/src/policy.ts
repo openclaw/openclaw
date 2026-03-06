@@ -21,9 +21,7 @@ function normalizeAllowEntry(raw: string): string {
 }
 
 export function normalizeLanxinAllowlist(entries: Array<string | number> | undefined): string[] {
-  return (entries ?? [])
-    .map((entry) => normalizeAllowEntry(String(entry)))
-    .filter(Boolean);
+  return (entries ?? []).map((entry) => normalizeAllowEntry(String(entry))).filter(Boolean);
 }
 
 export function resolveLanxinAllowlistMatch(params: {

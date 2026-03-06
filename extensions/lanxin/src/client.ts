@@ -1,7 +1,7 @@
-import { resolveLanxinAccount } from "./accounts.js";
-import { getLanxinValidToken } from "./token.js";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/lanxin";
+import { resolveLanxinAccount } from "./accounts.js";
 import { logLanxinDebug } from "./debug.js";
+import { getLanxinValidToken } from "./token.js";
 
 type LanxinApiResponse<T = unknown> = {
   errCode?: number;
@@ -46,7 +46,9 @@ export async function lanxinApiPost<T>(params: {
   });
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(`Lanxin POST ${params.path} failed: HTTP ${response.status} body=${text.slice(0, 500)}`);
+    throw new Error(
+      `Lanxin POST ${params.path} failed: HTTP ${response.status} body=${text.slice(0, 500)}`,
+    );
   }
   let data: LanxinApiResponse<T>;
   try {
@@ -64,7 +66,9 @@ export async function lanxinApiPost<T>(params: {
     hasData: data.data !== undefined,
   });
   if (data.errCode !== undefined && data.errCode !== 0) {
-    throw new Error(`Lanxin POST ${params.path} errCode=${data.errCode} errMsg=${data.errMsg ?? ""}`);
+    throw new Error(
+      `Lanxin POST ${params.path} errCode=${data.errCode} errMsg=${data.errMsg ?? ""}`,
+    );
   }
   return data;
 }

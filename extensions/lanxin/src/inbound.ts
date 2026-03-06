@@ -32,7 +32,10 @@ async function deliverLanxinReply(params: {
   accountId: string;
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
 }): Promise<void> {
-  const combined = formatTextWithAttachmentLinks(params.payload.text, resolveOutboundMediaUrls(params.payload));
+  const combined = formatTextWithAttachmentLinks(
+    params.payload.text,
+    resolveOutboundMediaUrls(params.payload),
+  );
   if (!combined) return;
   const target = parseLanxinTarget(params.target);
   if (!target) throw new Error(`Invalid Lanxin reply target: ${params.target}`);
@@ -99,7 +102,9 @@ export async function handleLanxinInbound(params: {
           `- media_ids: ${message.mediaIds.join(", ")}`,
           `- downloaded_count: ${mediaList.length}`,
           ...(mediaList.length > 0
-            ? [`- downloaded_content_types: ${mediaList.map((m) => m.contentType ?? "unknown").join(", ")}`]
+            ? [
+                `- downloaded_content_types: ${mediaList.map((m) => m.contentType ?? "unknown").join(", ")}`,
+              ]
             : []),
         ].join("\n")
       : "";
@@ -110,11 +115,12 @@ export async function handleLanxinInbound(params: {
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
-  const { groupPolicy, providerMissingFallbackApplied } = resolveAllowlistProviderRuntimeGroupPolicy({
-    providerConfigPresent: config.channels?.lanxin !== undefined,
-    groupPolicy: account.config.groupPolicy,
-    defaultGroupPolicy,
-  });
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: config.channels?.lanxin !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+    });
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: CHANNEL_ID,

@@ -107,7 +107,9 @@ export async function monitorLanxinProvider(opts: MonitorLanxinOpts = {}): Promi
 
   const account = resolveLanxinAccount({ cfg, accountId: opts.accountId });
   if (!account.enabled || !account.configured) {
-    throw new Error(`Lanxin account "${opts.accountId ?? account.accountId}" not configured or disabled`);
+    throw new Error(
+      `Lanxin account "${opts.accountId ?? account.accountId}" not configured or disabled`,
+    );
   }
   if (!account.aesKey) {
     throw new Error(
@@ -143,7 +145,8 @@ export async function monitorLanxinProvider(opts: MonitorLanxinOpts = {}): Promi
         timeoutMs: DEFAULT_WEBHOOK_BODY_TIMEOUT_MS,
       });
       const payload = JSON.parse(body) as { dataEncrypt?: string };
-      const dataEncrypt = typeof payload?.dataEncrypt === "string" ? payload.dataEncrypt.trim() : "";
+      const dataEncrypt =
+        typeof payload?.dataEncrypt === "string" ? payload.dataEncrypt.trim() : "";
       if (!dataEncrypt) {
         writeJson(res, 400, { error: "Missing dataEncrypt" });
         return;
