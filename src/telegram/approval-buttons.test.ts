@@ -24,6 +24,20 @@ describe("telegram approval buttons", () => {
     expect(extractApprovalIdFromText("Run: /approve ab12cd34 allow once")).toBe("ab12cd34");
   });
 
+  it("prefers reply-with instruction over /approve text inside command blocks", () => {
+    expect(
+      extractApprovalIdFromText(
+        [
+          "Command:",
+          "```sh",
+          "echo '/approve wrong123 allow-once'",
+          "```",
+          "Reply with: /approve right456 allow-once|allow-always|deny",
+        ].join("\n"),
+      ),
+    ).toBe("right456");
+  });
+
   it("returns undefined for placeholder docs text", () => {
     expect(
       extractApprovalIdFromText("Reply with: /approve <id> allow-once|allow-always|deny"),
