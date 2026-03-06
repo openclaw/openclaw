@@ -28,6 +28,39 @@ function getSilentTrailingRegex(token: string): RegExp {
   return regex;
 }
 
+/**
+ * Detect JSON-like action objects that represent a silent reply.
+ * Models sometimes emit `{"action":"NO_REPLY"}` (or variations with extra
+ * whitespace / quotes) instead of the bare sentinel string.  We parse
+ * conservatively: the text must be *only* a JSON object whose `action`
+ * value equals the silent token.  (#37727)
+ */
+function isJsonSilentAction(text: string, token: string): boolean {
+  const trimmed = text.trim();
+  // Quick guard: must look like a JSON object.
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return false;
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>;
+      // Accept both exact match and case-insensitive match of the token.
+      if (typeof obj.action === "string") {
+        const val = obj.action.trim();
+        if (val === token || val.toUpperCase() === token.toUpperCase()) {
+          // Only suppress if the object has no other meaningful keys.
+          const keys = Object.keys(obj);
+          return keys.length === 1 || keys.every((k) => k === "action" || obj[k] === undefined);
+        }
+      }
+    }
+  } catch {
+    // Not valid JSON — not a silent action payload.
+  }
+  return false;
+}
+
 export function isSilentReplyText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
@@ -37,7 +70,13 @@ export function isSilentReplyText(
   }
   // Match only the exact silent token with optional surrounding whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  return getSilentExactRegex(token).test(text);
+  if (getSilentExactRegex(token).test(text)) {
+    return true;
+  }
+  // Also detect JSON action-object forms of the silent token that some models
+  // emit (e.g. {"action":"NO_REPLY"}).  These internal control payloads must
+  // never leak to end users as literal text.  (#37727)
+  return isJsonSilentAction(text, token);
 }
 
 /**

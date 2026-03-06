@@ -34,6 +34,38 @@ describe("isSilentReplyText", () => {
     expect(isSilentReplyText("HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(true);
     expect(isSilentReplyText("Checked inbox. HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(false);
   });
+
+  // JSON action-object forms (#37727)
+  it("returns true for JSON action NO_REPLY object", () => {
+    expect(isSilentReplyText('{"action":"NO_REPLY"}')).toBe(true);
+  });
+
+  it("returns true for JSON action NO_REPLY with whitespace", () => {
+    expect(isSilentReplyText('  {"action":"NO_REPLY"}  ')).toBe(true);
+    expect(isSilentReplyText('{ "action": "NO_REPLY" }')).toBe(true);
+    expect(isSilentReplyText('{\n  "action": "NO_REPLY"\n}')).toBe(true);
+  });
+
+  it("returns true for JSON action with case variation", () => {
+    expect(isSilentReplyText('{"action":"no_reply"}')).toBe(true);
+    expect(isSilentReplyText('{"action":"No_Reply"}')).toBe(true);
+  });
+
+  it("returns false for JSON with extra meaningful keys", () => {
+    expect(isSilentReplyText('{"action":"NO_REPLY","text":"hello"}')).toBe(false);
+  });
+
+  it("returns false for JSON with non-silent action", () => {
+    expect(isSilentReplyText('{"action":"SEND"}')).toBe(false);
+  });
+
+  it("returns false for invalid JSON that looks like action object", () => {
+    expect(isSilentReplyText("{action: NO_REPLY}")).toBe(false);
+  });
+
+  it("returns false for text mentioning action NO_REPLY in prose", () => {
+    expect(isSilentReplyText('The action is {"action":"NO_REPLY"} here')).toBe(false);
+  });
 });
 
 describe("stripSilentToken", () => {
