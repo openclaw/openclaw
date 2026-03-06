@@ -65,9 +65,13 @@ export function createDiscordGatewayPlugin(params: {
             } as Record<string, unknown>);
             this.gatewayInfo = (await response.json()) as APIGatewayBotInfo;
           } catch (error) {
-            throw new Error(
-              `Failed to get gateway information from Discord: ${error instanceof Error ? error.message : String(error)}`,
-              { cause: error },
+            // Log gracefully and allow the gateway to start in degraded mode
+            // rather than throwing an unhandled rejection that crashes the
+            // process (and triggers infinite systemd restart loops).
+            params.runtime.error?.(
+              danger(
+                `discord: failed to fetch gateway info via proxy (starting in degraded mode): ${error instanceof Error ? error.message : String(error)}`,
+              ),
             );
           }
         }
