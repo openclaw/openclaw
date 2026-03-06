@@ -165,7 +165,10 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     if (params.buttons && Array.isArray(params.buttons)) {
       const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
       if (account.botToken) setInteractionSecret(account.accountId, account.botToken);
-      const callbackUrl = resolveInteractionCallbackUrl(account.accountId, cfg);
+      const callbackUrl = resolveInteractionCallbackUrl(account.accountId, {
+        gateway: cfg.gateway,
+        interactions: account.config.interactions,
+      });
 
       // Flatten 2D array (rows of buttons) to 1D — core schema sends Array<Array<Button>>
       // but Mattermost doesn't have row layout, so we flatten all rows into a single list.

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { projectSafeChannelAccountSnapshotFields } from "./account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
 
@@ -14,6 +15,7 @@ export function buildChannelAccountSnapshot(params: {
   return {
     enabled: params.enabled,
     configured: params.configured,
+    ...projectSafeChannelAccountSnapshotFields(params.account),
     ...described,
     accountId: params.accountId,
   };
