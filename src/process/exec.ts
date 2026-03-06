@@ -225,16 +225,27 @@ export async function runCommandWithTimeout(
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
   const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
+  
+  // Fix for Issue #37563: When resolveNpmArgvForWindows produces paths with spaces
+  // (e.g., C:\Program Files\nodejs\...), we must use windowsVerbatimArguments: true
+  // and route through cmd.exe wrapper to ensure proper quoting.
+  const needsCmdWrapperForSpaces = 
+    process.platform === "win32" &&
+    !useCmdWrapper &&
+    finalArgv !== argv && // resolveNpmArgvForWindows was applied
+    finalArgv.some(arg => arg.includes(" "));
+  
+  const useCmd = useCmdWrapper || needsCmdWrapperForSpaces;
   const child = spawn(
-    useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
-    useCmdWrapper
+    useCmd ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
+    useCmd
       ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
       : finalArgv.slice(1),
     {
       stdio,
       cwd,
       env: resolvedEnv,
-      windowsVerbatimArguments: useCmdWrapper ? true : windowsVerbatimArguments,
+      windowsVerbatimArguments: useCmd ? true : windowsVerbatimArguments,
       ...(shouldSpawnWithShell({ resolvedCommand, platform: process.platform })
         ? { shell: true }
         : {}),
