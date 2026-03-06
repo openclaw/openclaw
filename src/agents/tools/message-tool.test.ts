@@ -121,7 +121,7 @@ describe("message tool agent routing", () => {
     mockSendResult();
 
     const tool = createMessageTool({
-      requesterAgentIdOverride: "relationships",
+      requesterAgentIdOverride: "media-agent",
       config: {} as never,
     });
 
@@ -132,7 +132,7 @@ describe("message tool agent routing", () => {
     });
 
     const call = mocks.runMessageAction.mock.calls[0]?.[0];
-    expect(call?.agentId).toBe("relationships");
+    expect(call?.agentId).toBe("media-agent");
     expect(call?.sessionKey).toBeUndefined();
   });
 
@@ -141,7 +141,7 @@ describe("message tool agent routing", () => {
 
     const tool = createMessageTool({
       agentSessionKey: "agent:alpha:main",
-      requesterAgentIdOverride: "relationships",
+      requesterAgentIdOverride: "media-agent",
       config: {} as never,
     });
 
