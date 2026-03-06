@@ -1211,6 +1211,7 @@ export const registerTelegramHandlers = ({
             cfg,
             agentDir: resolveAgentDir(cfg, sessionState.agentId),
             sessionEntry: sessionState.sessionEntry,
+            surface: "telegram",
           });
           await editMessageWithButtons(text, buttons);
           return;

@@ -9,6 +9,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { CHANNEL_IDS } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -180,8 +181,9 @@ function parseModelsArgs(raw: string): {
   };
 }
 
-/** Surfaces that deliver output into persistent chat history (Telegram, Discord, Slack, …). */
-const CHANNEL_SURFACES = new Set(["telegram", "discord", "slack", "whatsapp", "signal", "irc"]);
+/** Surfaces that deliver output into persistent chat history — derived from the
+ * authoritative channel registry so new channels are automatically included. */
+const CHANNEL_SURFACES = new Set<string>(CHANNEL_IDS);
 
 function isChannelSurface(surface?: string): boolean {
   return surface ? CHANNEL_SURFACES.has(surface) : false;
