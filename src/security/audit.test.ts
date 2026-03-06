@@ -1326,6 +1326,21 @@ describe("security audit", () => {
     );
   });
 
+  it("suppresses mdns_full_mode finding when gateway.mdns.enabled=false", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        mdns: { enabled: false },
+        auth: { mode: "token", token: "very-long-token-1234567890" },
+      },
+      discovery: {
+        mdns: { mode: "full" },
+      },
+    };
+    const res = await audit(cfg);
+    expect(hasFinding(res, "discovery.mdns_full_mode"), "should not fire when gateway.mdns.enabled=false").toBe(false);
+  });
+
   it("scores mDNS full mode risk by gateway bind mode", async () => {
     const cases: Array<{
       name: string;
