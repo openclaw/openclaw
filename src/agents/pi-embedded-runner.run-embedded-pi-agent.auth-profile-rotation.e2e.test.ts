@@ -707,6 +707,15 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
     expect(computeBackoffMock).toHaveBeenCalledTimes(1);
+    expect(computeBackoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialMs: 250,
+        maxMs: 1500,
+        factor: 2,
+        jitter: 0.2,
+      }),
+      1,
+    );
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
     expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
   });
@@ -720,6 +729,15 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
     expect(computeBackoffMock).toHaveBeenCalledTimes(1);
+    expect(computeBackoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialMs: 250,
+        maxMs: 1500,
+        factor: 2,
+        jitter: 0.2,
+      }),
+      1,
+    );
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
     expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
   });
@@ -744,6 +762,54 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+  });
+
+  it("resets overload failover backoff after a successful turn", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+
+      mockFailedThenSuccessfulAttempt(
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      );
+      await runAutoPinnedOpenAiTurn({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:overloaded-backoff-reset-1",
+        runId: "run:overloaded-backoff-reset-1",
+      });
+
+      mockFailedThenSuccessfulAttempt(
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      );
+      await runAutoPinnedOpenAiTurn({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:overloaded-backoff-reset-2",
+        runId: "run:overloaded-backoff-reset-2",
+      });
+
+      expect(computeBackoffMock).toHaveBeenCalledTimes(2);
+      expect(computeBackoffMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          initialMs: 250,
+          maxMs: 1500,
+          factor: 2,
+          jitter: 0.2,
+        }),
+        1,
+      );
+      expect(computeBackoffMock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          initialMs: 250,
+          maxMs: 1500,
+          factor: 2,
+          jitter: 0.2,
+        }),
+        1,
+      );
+    });
   });
 
   it("does not rotate for compaction timeouts", async () => {
