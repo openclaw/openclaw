@@ -43,6 +43,29 @@ function safeServiceName(name: string) {
   return trimmed.length > 0 ? trimmed : "OpenClaw";
 }
 
+/**
+ * DNS labels must not exceed 63 bytes (RFC 1035 §2.3.4).
+ * Truncate on a code-point boundary so multi-byte hostnames
+ * (e.g. Kubernetes pod names) don't crash ciao's DNSLabelCoder.
+ * See https://github.com/openclaw/openclaw/issues/37705
+ */
+const DNS_LABEL_MAX_BYTES = 63;
+export function truncateToDnsLabel(label: string): string {
+  if (!label) {
+    return "OpenClaw";
+  }
+  const buf = Buffer.from(label, "utf-8");
+  if (buf.length <= DNS_LABEL_MAX_BYTES) {
+    return label;
+  }
+  // Slice and decode back, which safely handles truncated multi-byte chars
+  const truncated = buf
+    .subarray(0, DNS_LABEL_MAX_BYTES)
+    .toString("utf-8")
+    .replace(/\uFFFD$/, "");
+  return truncated || "OpenClaw";
+}
+
 function prettifyInstanceName(name: string) {
   const normalized = name.trim().replace(/\s+/g, " ");
   return normalized.replace(/\s+\(OpenClaw\)\s*$/i, "").trim() || normalized;
@@ -103,10 +126,11 @@ export async function startGatewayBonjourAdvertiser(
       .replace(/\.local$/i, "")
       .split(".")[0]
       .trim() || "openclaw";
-  const instanceName =
+  const instanceName = truncateToDnsLabel(
     typeof opts.instanceName === "string" && opts.instanceName.trim()
       ? opts.instanceName.trim()
-      : `${hostname} (OpenClaw)`;
+      : `${hostname} (OpenClaw)`,
+  );
   const displayName = prettifyInstanceName(instanceName);
 
   const txtBase: Record<string, string> = {

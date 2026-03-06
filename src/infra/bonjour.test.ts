@@ -308,3 +308,41 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 });
+
+describe("truncateToDnsLabel", () => {
+  // Import directly — the function is a pure utility.
+  let truncateToDnsLabel: (label: string) => string;
+
+  beforeEach(async () => {
+    const mod = await import("./bonjour.js");
+    truncateToDnsLabel = mod.truncateToDnsLabel;
+  });
+
+  it("returns short labels unchanged", () => {
+    expect(truncateToDnsLabel("my-host (OpenClaw)")).toBe("my-host (OpenClaw)");
+  });
+
+  it("returns exactly-63-byte labels unchanged", () => {
+    const label = "a".repeat(63);
+    expect(truncateToDnsLabel(label)).toBe(label);
+  });
+
+  it("truncates labels longer than 63 bytes", () => {
+    const longLabel = "a".repeat(100);
+    const result = truncateToDnsLabel(longLabel);
+    expect(Buffer.byteLength(result, "utf-8")).toBeLessThanOrEqual(63);
+  });
+
+  it("truncates Kubernetes-style pod names that exceed 63 bytes", () => {
+    // Real-world case from #37705
+    const podName = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf (OpenClaw)";
+    expect(Buffer.byteLength(podName, "utf-8")).toBeGreaterThan(63);
+    const result = truncateToDnsLabel(podName);
+    expect(Buffer.byteLength(result, "utf-8")).toBeLessThanOrEqual(63);
+    expect(result.length).toBeGreaterThan(0);
+  });
+
+  it("falls back to 'OpenClaw' for empty input", () => {
+    expect(truncateToDnsLabel("")).toBe("OpenClaw");
+  });
+});
