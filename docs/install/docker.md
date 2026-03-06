@@ -476,6 +476,10 @@ curl -fsS http://127.0.0.1:18789/readyz
 
 Aliases: `/health` and `/ready`.
 
+`/healthz` is a shallow liveness probe for "the gateway process is up".
+`/readyz` stays ready during startup grace, then becomes `503` only if required
+managed channels are still disconnected after grace or disconnect later.
+
 The Docker image includes a built-in `HEALTHCHECK` that pings `/healthz` in the
 background. In plain terms: Docker keeps checking if OpenClaw is still
 responsive. If checks keep failing, Docker marks the container as `unhealthy`,
