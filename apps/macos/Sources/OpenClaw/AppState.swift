@@ -29,6 +29,17 @@ final class AppState {
         case direct
     }
 
+    enum RemoteDirectInputMode: String {
+        case autoDiscovery = "autodiscovery"
+        case manual
+    }
+
+    enum RemoteDirectTLSMode: String {
+        case strict
+        case selfSigned = "self-signed"
+        case unencrypted
+    }
+
     var isPaused: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) } }
     }
@@ -175,6 +186,31 @@ final class AppState {
         didSet { self.syncGatewayConfigIfNeeded() }
     }
 
+    var remoteDirectInputMode: RemoteDirectInputMode {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.remoteDirectInputMode.rawValue, forKey: remoteDirectInputModeKey)
+            }
+            self.syncGatewayConfigIfNeeded()
+        }
+    }
+
+    var remoteManualHost: String {
+        didSet {
+            self.ifNotPreview { UserDefaults.standard.set(self.remoteManualHost, forKey: remoteManualHostKey) }
+            self.syncGatewayConfigIfNeeded()
+        }
+    }
+
+    var remoteDirectTLSMode: RemoteDirectTLSMode {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.remoteDirectTLSMode.rawValue, forKey: remoteDirectTLSModeKey)
+            }
+            self.syncGatewayConfigIfNeeded()
+        }
+    }
+
     var canvasEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
     }
@@ -282,8 +318,24 @@ final class AppState {
         let configRoot = OpenClawConfigFile.loadDict()
         let configRemoteUrl = GatewayRemoteConfig.resolveUrlString(root: configRoot)
         let configRemoteTransport = GatewayRemoteConfig.resolveTransport(root: configRoot)
+        let configRemoteDirectInputMode = GatewayRemoteConfig.resolveDirectInputMode(root: configRoot)
+        let configRemoteDirectTLSMode = GatewayRemoteConfig.resolveManualTLSMode(root: configRoot)
+        let configRemoteManualHost = GatewayRemoteConfig.resolveManualHost(root: configRoot) ?? ""
+        let storedRemoteDirectInputMode = UserDefaults.standard.string(forKey: remoteDirectInputModeKey)
+            .flatMap(RemoteDirectInputMode.init(rawValue:))
+        let storedRemoteDirectTLSMode = UserDefaults.standard.string(forKey: remoteDirectTLSModeKey)
+            .flatMap(RemoteDirectTLSMode.init(rawValue:))
+        let storedManualHost = UserDefaults.standard.string(forKey: remoteManualHostKey) ?? ""
+        let initialRemoteDirectInputMode = storedRemoteDirectInputMode ?? configRemoteDirectInputMode
+        let initialRemoteDirectTLSMode = storedRemoteDirectTLSMode ?? configRemoteDirectTLSMode
+        let initialRemoteManualHost = storedManualHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? configRemoteManualHost
+            : storedManualHost
         let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
         self.remoteTransport = configRemoteTransport
+        self.remoteDirectInputMode = initialRemoteDirectInputMode
+        self.remoteDirectTLSMode = initialRemoteDirectTLSMode
+        self.remoteManualHost = initialRemoteManualHost
         self.connectionMode = resolvedConnectionMode
 
         let storedRemoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
@@ -296,7 +348,16 @@ final class AppState {
         } else {
             self.remoteTarget = storedRemoteTarget
         }
-        self.remoteUrl = configRemoteUrl ?? ""
+        if configRemoteTransport == .direct,
+           initialRemoteDirectInputMode == .manual,
+           let manualURL = GatewayRemoteConfig.buildManualGatewayUrlString(
+               host: initialRemoteManualHost,
+               tlsMode: initialRemoteDirectTLSMode)
+        {
+            self.remoteUrl = manualURL
+        } else {
+            self.remoteUrl = configRemoteUrl ?? ""
+        }
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey) ?? ""
@@ -377,6 +438,9 @@ final class AppState {
     private static func updatedRemoteGatewayConfig(
         current: [String: Any],
         transport: RemoteTransport,
+        remoteDirectInputMode: RemoteDirectInputMode,
+        remoteManualHost: String,
+        remoteDirectTLSMode: RemoteDirectTLSMode,
         remoteUrl: String,
         remoteHost: String?,
         remoteTarget: String,
@@ -392,15 +456,42 @@ final class AppState {
                 key: "transport",
                 value: RemoteTransport.direct.rawValue) || changed
 
-            let trimmedUrl = remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmedUrl.isEmpty {
-                changed = Self.updateGatewayString(&remote, key: "url", value: nil) || changed
-            } else if let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) {
-                changed = Self.updateGatewayString(&remote, key: "url", value: normalizedUrl) || changed
+            changed = Self.updateGatewayString(
+                &remote,
+                key: "inputMode",
+                value: remoteDirectInputMode.rawValue) || changed
+
+            switch remoteDirectInputMode {
+            case .autoDiscovery:
+                changed = Self.updateGatewayString(&remote, key: "host", value: nil) || changed
+                changed = Self.updateGatewayString(&remote, key: "tlsMode", value: nil) || changed
+
+                let trimmedUrl = remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmedUrl.isEmpty {
+                    changed = Self.updateGatewayString(&remote, key: "url", value: nil) || changed
+                } else if let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) {
+                    changed = Self.updateGatewayString(&remote, key: "url", value: normalizedUrl) || changed
+                }
+
+            case .manual:
+                let normalizedHost = GatewayRemoteConfig.normalizeManualHost(remoteManualHost)
+                changed = Self.updateGatewayString(&remote, key: "host", value: normalizedHost) || changed
+                changed = Self.updateGatewayString(
+                    &remote,
+                    key: "tlsMode",
+                    value: remoteDirectTLSMode.rawValue) || changed
+
+                let builtURL = GatewayRemoteConfig.buildManualGatewayUrlString(
+                    host: remoteManualHost,
+                    tlsMode: remoteDirectTLSMode)
+                changed = Self.updateGatewayString(&remote, key: "url", value: builtURL) || changed
             }
 
         case .ssh:
             changed = Self.updateGatewayString(&remote, key: "transport", value: nil) || changed
+            changed = Self.updateGatewayString(&remote, key: "inputMode", value: nil) || changed
+            changed = Self.updateGatewayString(&remote, key: "host", value: nil) || changed
+            changed = Self.updateGatewayString(&remote, key: "tlsMode", value: nil) || changed
 
             if let host = remoteHost {
                 let existingUrl = (remote["url"] as? String)?
@@ -443,6 +534,8 @@ final class AppState {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty ?? true)
         let remoteTransport = GatewayRemoteConfig.resolveTransport(root: root)
+        let remoteDirectInputMode = GatewayRemoteConfig.resolveDirectInputMode(root: root)
+        let remoteDirectTLSMode = GatewayRemoteConfig.resolveManualTLSMode(root: root)
 
         let desiredMode: ConnectionMode? = switch modeRaw {
         case "local":
@@ -466,9 +559,31 @@ final class AppState {
         if remoteTransport != self.remoteTransport {
             self.remoteTransport = remoteTransport
         }
+        if remoteDirectInputMode != self.remoteDirectInputMode {
+            self.remoteDirectInputMode = remoteDirectInputMode
+        }
+        if remoteDirectTLSMode != self.remoteDirectTLSMode {
+            self.remoteDirectTLSMode = remoteDirectTLSMode
+        }
+
+        if let configuredManualHost = GatewayRemoteConfig.resolveConfiguredManualHost(root: root),
+           configuredManualHost != self.remoteManualHost
+        {
+            self.remoteManualHost = configuredManualHost
+        }
+
         let remoteUrlText = remoteUrl ?? ""
         if remoteUrlText != self.remoteUrl {
             self.remoteUrl = remoteUrlText
+        }
+
+        if remoteTransport == .direct,
+           remoteDirectInputMode == .manual,
+           self.remoteManualHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let fallbackHost = GatewayRemoteConfig.resolveManualHost(root: root),
+           !fallbackHost.isEmpty
+        {
+            self.remoteManualHost = fallbackHost
         }
 
         let targetMode = desiredMode ?? self.connectionMode
@@ -503,6 +618,9 @@ final class AppState {
         let remoteTarget = self.remoteTarget
         let remoteIdentity = self.remoteIdentity
         let remoteTransport = self.remoteTransport
+        let remoteDirectInputMode = self.remoteDirectInputMode
+        let remoteManualHost = self.remoteManualHost
+        let remoteDirectTLSMode = self.remoteDirectTLSMode
         let remoteUrl = self.remoteUrl
         let desiredMode: String? = switch connectionMode {
         case .local:
@@ -538,6 +656,9 @@ final class AppState {
                 let updated = Self.updatedRemoteGatewayConfig(
                     current: currentRemote,
                     transport: remoteTransport,
+                    remoteDirectInputMode: remoteDirectInputMode,
+                    remoteManualHost: remoteManualHost,
+                    remoteDirectTLSMode: remoteDirectTLSMode,
                     remoteUrl: remoteUrl,
                     remoteHost: remoteHost,
                     remoteTarget: remoteTarget,
@@ -694,6 +815,9 @@ extension AppState {
         state.heartbeatsEnabled = true
         state.connectionMode = .local
         state.remoteTransport = .ssh
+        state.remoteDirectInputMode = .autoDiscovery
+        state.remoteManualHost = "gateway.example.ts.net"
+        state.remoteDirectTLSMode = .strict
         state.canvasEnabled = true
         state.remoteTarget = "user@example.com"
         state.remoteUrl = "wss://gateway.example.ts.net"

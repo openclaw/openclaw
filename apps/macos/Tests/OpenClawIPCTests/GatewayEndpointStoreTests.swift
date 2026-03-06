@@ -231,4 +231,23 @@ import Testing
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.attacker.example")
         #expect(url == nil)
     }
+
+    @Test func normalizeGatewayUrlAllowsRemoteWsWhenExplicitlyAllowed() {
+        let url = GatewayRemoteConfig.normalizeGatewayUrl(
+            "ws://gateway.example:18789",
+            allowInsecureRemoteWS: true)
+        #expect(url?.absoluteString == "ws://gateway.example:18789")
+    }
+
+    @Test func buildManualGatewayUrlUsesTlsMode() {
+        let strict = GatewayRemoteConfig.buildManualGatewayUrlString(
+            host: "gateway.example.ts.net",
+            tlsMode: .strict)
+        #expect(strict == "wss://gateway.example.ts.net")
+
+        let insecure = GatewayRemoteConfig.buildManualGatewayUrlString(
+            host: "10.0.0.24",
+            tlsMode: .unencrypted)
+        #expect(insecure == "ws://10.0.0.24:18789")
+    }
 }

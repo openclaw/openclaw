@@ -103,19 +103,38 @@ import Testing
         #expect(controller._test_didAutoConnect() == false)
     }
 
-    @Test @MainActor func manualConnectionsForceTLSForNonLoopbackHosts() async {
+    @Test @MainActor func manualConnectionsRespectUserSelectedTLSMode() async {
         let controller = makeController()
 
-        #expect(controller._test_resolveManualUseTLS(host: "gateway.example.com", useTLS: false) == true)
-        #expect(controller._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false) == true)
-        #expect(controller._test_resolveManualUseTLS(host: "127.attacker.example", useTLS: false) == true)
-
+        #expect(controller._test_resolveManualUseTLS(host: "gateway.example.com", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "127.attacker.example", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "localhost", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "127.0.0.1", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "::1", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "[::1]", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "::ffff:127.0.0.1", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "0.0.0.0", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "gateway.example.com", useTLS: true) == true)
+    }
+
+    @Test @MainActor func manualTLSParamsSupportStrictRelaxedAndNone() async {
+        let controller = makeController()
+        let stableID = "manual|\(UUID().uuidString)|18789"
+        defer { clearTLSFingerprint(stableID: stableID) }
+        clearTLSFingerprint(stableID: stableID)
+        GatewayTLSStore.saveFingerprint("cafef00d", stableID: stableID)
+
+        let strict = controller._test_resolveManualTLSParams(stableID: stableID, securityMode: .strictTLS)
+        #expect(strict?.required == true)
+        #expect(strict?.expectedFingerprint == "cafef00d")
+
+        let relaxed = controller._test_resolveManualTLSParams(stableID: stableID, securityMode: .relaxedTLS)
+        #expect(relaxed?.required == false)
+        #expect(relaxed?.expectedFingerprint == nil)
+
+        let none = controller._test_resolveManualTLSParams(stableID: stableID, securityMode: .noEncryption)
+        #expect(none == nil)
     }
 
     @Test @MainActor func manualDefaultPortUses443OnlyForTailnetTLSHosts() async {

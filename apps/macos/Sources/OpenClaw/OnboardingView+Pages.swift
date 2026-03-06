@@ -124,49 +124,68 @@ extension OnboardingView {
 
     @ViewBuilder
     private func gatewayDiscoverySection() -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "dot.radiowaves.left.and.right")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(self.gatewayDiscovery.statusText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if self.gatewayDiscovery.gateways.isEmpty {
-                ProgressView().controlSize(.small)
-                Button("Refresh") {
-                    self.gatewayDiscovery.refreshRemoteFallbackNow(timeoutSeconds: 5.0)
-                }
-                .buttonStyle(.link)
-                .help("Retry remote discovery (Tailscale DNS-SD + Serve probe).")
-            }
-            Spacer(minLength: 0)
-        }
-
-        if self.gatewayDiscovery.gateways.isEmpty {
-            Text("Searching for nearby gateways…")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.leading, 4)
-        } else {
+        if self.state.remoteTransport == .direct,
+           self.state.remoteDirectInputMode == .manual
+        {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Nearby gateways")
+                HStack(spacing: 8) {
+                    Image(systemName: "keyboard")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Manual direct mode enabled")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("Enter a domain or IP in Advanced settings to connect without discovery.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.leading, 4)
-                ForEach(self.gatewayDiscovery.gateways.prefix(6)) { gateway in
-                    self.connectionChoiceButton(
-                        title: gateway.displayName,
-                        subtitle: self.gatewaySubtitle(for: gateway),
-                        selected: self.isSelectedGateway(gateway))
-                    {
-                        self.selectRemoteGateway(gateway)
+            }
+        } else {
+            HStack(spacing: 8) {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(self.gatewayDiscovery.statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if self.gatewayDiscovery.gateways.isEmpty {
+                    ProgressView().controlSize(.small)
+                    Button("Refresh") {
+                        self.gatewayDiscovery.refreshRemoteFallbackNow(timeoutSeconds: 5.0)
+                    }
+                    .buttonStyle(.link)
+                    .help("Retry remote discovery (Tailscale DNS-SD + Serve probe).")
+                }
+                Spacer(minLength: 0)
+            }
+
+            if self.gatewayDiscovery.gateways.isEmpty {
+                Text("Searching for nearby gateways…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 4)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Nearby gateways")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 4)
+                    ForEach(self.gatewayDiscovery.gateways.prefix(6)) { gateway in
+                        self.connectionChoiceButton(
+                            title: gateway.displayName,
+                            subtitle: self.gatewaySubtitle(for: gateway),
+                            selected: self.isSelectedGateway(gateway))
+                        {
+                            self.selectRemoteGateway(gateway)
+                        }
                     }
                 }
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color(NSColor.controlBackgroundColor)))
             }
-            .padding(8)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(NSColor.controlBackgroundColor)))
         }
     }
 
@@ -201,12 +220,51 @@ extension OnboardingView {
                     }
                     if self.state.remoteTransport == .direct {
                         GridRow {
+                            Text("Source")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            Picker("Source", selection: self.$state.remoteDirectInputMode) {
+                                Text("Auto-discovery").tag(AppState.RemoteDirectInputMode.autoDiscovery)
+                                Text("Manual").tag(AppState.RemoteDirectInputMode.manual)
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: fieldWidth)
+                        }
+                    }
+                    if self.state.remoteTransport == .direct,
+                       self.state.remoteDirectInputMode == .autoDiscovery
+                    {
+                        GridRow {
                             Text("Gateway URL")
                                 .font(.callout.weight(.semibold))
                                 .frame(width: labelWidth, alignment: .leading)
                             TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: fieldWidth)
+                        }
+                    }
+                    if self.state.remoteTransport == .direct,
+                       self.state.remoteDirectInputMode == .manual
+                    {
+                        GridRow {
+                            Text("Gateway host")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            TextField("gateway.example.ts.net", text: self.$state.remoteManualHost)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: fieldWidth)
+                        }
+                        GridRow {
+                            Text("Security")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            Picker("Security", selection: self.$state.remoteDirectTLSMode) {
+                                Text("Strict TLS").tag(AppState.RemoteDirectTLSMode.strict)
+                                Text("Self-signed TLS").tag(AppState.RemoteDirectTLSMode.selfSigned)
+                                Text("Unencrypted").tag(AppState.RemoteDirectTLSMode.unencrypted)
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: fieldWidth)
                         }
                     }
                     if self.state.remoteTransport == .ssh {
@@ -260,18 +318,22 @@ extension OnboardingView {
                 }
 
                 Text(self.state.remoteTransport == .direct
-                    ? "Tip: use Tailscale Serve so the gateway has a valid HTTPS cert."
+                    ? (self.state.remoteDirectInputMode == .manual
+                        ? "Tip: strict TLS requires a CA-trusted cert; self-signed trusts the first certificate fingerprint."
+                        : "Tip: use Tailscale Serve so the gateway has a valid HTTPS cert.")
                     : "Tip: keep Tailscale enabled so your gateway stays reachable.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
             }
             .transition(.opacity.combined(with: .move(edge: .top)))
         }
     }
 
     func gatewaySubtitle(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
-        if self.state.remoteTransport == .direct {
+        if self.state.remoteTransport == .direct,
+           self.state.remoteDirectInputMode == .autoDiscovery
+        {
             return GatewayDiscoveryHelpers.directUrl(for: gateway) ?? "Gateway pairing only"
         }
         if let target = GatewayDiscoveryHelpers.sshTarget(for: gateway),

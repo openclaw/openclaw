@@ -24,7 +24,10 @@ extension OnboardingView {
 
     func updateDiscoveryMonitoring(for pageIndex: Int) {
         let isConnectionPage = pageIndex == self.connectionPageIndex
-        let shouldMonitor = isConnectionPage
+        let manualDirectMode = self.state.connectionMode == .remote &&
+            self.state.remoteTransport == .direct &&
+            self.state.remoteDirectInputMode == .manual
+        let shouldMonitor = isConnectionPage && !manualDirectMode
         if shouldMonitor, !self.monitoringDiscovery {
             self.monitoringDiscovery = true
             Task { @MainActor in

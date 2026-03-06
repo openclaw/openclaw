@@ -32,6 +32,8 @@ final class GatewayConnectionController {
     }
 
     private(set) var gateways: [GatewayDiscoveryModel.DiscoveredGateway] = []
+    private(set) var gatewayProfiles: [GatewaySettingsStore.GatewayProfile] = []
+    private(set) var activeGatewayProfileID: String?
     private(set) var discoveryStatusText: String = "Idle"
     private(set) var discoveryDebugLog: [GatewayDiscoveryModel.DebugLogEntry] = []
     private(set) var pendingTrustPrompt: TrustPrompt?
@@ -46,6 +48,7 @@ final class GatewayConnectionController {
         self.appModel = appModel
 
         GatewaySettingsStore.bootstrapPersistence()
+        self.reloadGatewayProfiles()
         let defaults = UserDefaults.standard
         self.discovery.setDebugLoggingEnabled(defaults.bool(forKey: "gateway.discovery.debugLogs"))
 
@@ -84,6 +87,11 @@ final class GatewayConnectionController {
         self.didAutoConnect = false
         self.discovery.start()
         self.updateFromDiscovery()
+    }
+
+    func reloadGatewayProfiles() {
+        self.gatewayProfiles = GatewaySettingsStore.loadGatewayProfiles()
+        self.activeGatewayProfileID = GatewaySettingsStore.loadActiveGatewayProfileID()
     }
 
 
@@ -155,16 +163,95 @@ final class GatewayConnectionController {
         _ = await self.connectWithDiagnostics(gateway)
     }
 
+    @discardableResult
+    func saveGatewayProfile(
+        host: String,
+        port: Int,
+        securityMode: GatewayManualSecurityMode,
+        token: String?,
+        password: String?,
+        name: String? = nil,
+        profileID: String? = nil,
+        setActive: Bool = true
+    ) -> GatewaySettingsStore.GatewayProfileSaveResult {
+        let result = GatewaySettingsStore.saveGatewayProfile(
+            GatewaySettingsStore.GatewayProfileDraft(
+                id: profileID,
+                name: name,
+                host: host,
+                port: port,
+                securityMode: securityMode,
+                token: token,
+                password: password))
+        if case let .saved(profile) = result, setActive {
+            GatewaySettingsStore.saveActiveGatewayProfileID(profile.id)
+        }
+        self.reloadGatewayProfiles()
+        return result
+    }
+
+    func deleteGatewayProfile(id: String) {
+        GatewaySettingsStore.deleteGatewayProfile(id: id)
+        self.reloadGatewayProfiles()
+    }
+
+    func connectGatewayProfile(_ profile: GatewaySettingsStore.GatewayProfile) async {
+        GatewaySettingsStore.saveActiveGatewayProfileID(profile.id)
+        self.reloadGatewayProfiles()
+        await self.connectManual(
+            host: profile.host,
+            port: profile.port,
+            securityMode: profile.securityMode,
+            stableIDOverride: profile.stableID,
+            tokenOverride: profile.token,
+            passwordOverride: profile.password,
+            useStoredDefaultCredentials: false)
+    }
+
+    func connectGatewayProfile(id: String) async {
+        guard let profile = self.gatewayProfiles.first(where: { $0.id == id }) else {
+            self.appModel?.gatewayStatusText = "Gateway profile not found."
+            return
+        }
+        await self.connectGatewayProfile(profile)
+    }
+
     func connectManual(host: String, port: Int, useTLS: Bool) async {
+        let securityMode = GatewayManualSecurityMode.fromLegacy(useTLS: useTLS)
+        await self.connectManual(host: host, port: port, securityMode: securityMode)
+    }
+
+    func connectManual(
+        host: String,
+        port: Int,
+        securityMode: GatewayManualSecurityMode,
+        stableIDOverride: String? = nil,
+        tokenOverride: String? = nil,
+        passwordOverride: String? = nil,
+        useStoredDefaultCredentials: Bool = true) async
+    {
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
-        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
+        let token =
+            if useStoredDefaultCredentials {
+                tokenOverride ?? GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+            } else {
+                tokenOverride
+            }
+        let password =
+            if useStoredDefaultCredentials {
+                passwordOverride ?? GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
+            } else {
+                passwordOverride
+            }
         guard let resolvedHost = Self.normalizeManualHostInput(host) else {
             self.appModel?.gatewayStatusText = "Manual gateway host is invalid."
             return
         }
-        let resolvedUseTLS = self.resolveManualUseTLS(host: resolvedHost, useTLS: useTLS)
+        let resolvedSecurityMode = self.resolveManualSecurityMode(
+            host: resolvedHost,
+            securityMode: securityMode)
+        let resolvedUseTLS = resolvedSecurityMode.usesTLS
         guard let resolvedPort = self.resolveManualPort(
             host: resolvedHost,
             port: port,
@@ -173,37 +260,15 @@ final class GatewayConnectionController {
             self.appModel?.gatewayStatusText = "Manual gateway port is invalid."
             return
         }
-        let stableID = self.manualStableID(host: resolvedHost, port: resolvedPort)
-        let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
-        if resolvedUseTLS, stored == nil {
-            guard let url = self.buildGatewayURL(host: resolvedHost, port: resolvedPort, useTLS: true) else {
-                self.appModel?.gatewayStatusText = "Failed to build manual TLS URL."
-                return
-            }
-            guard let fp = await self.probeTLSFingerprint(url: url) else {
-                self.appModel?.gatewayStatusText =
-                    "Failed to read TLS fingerprint from manual gateway. Check host/port and TLS settings."
-                return
-            }
-            self.pendingTrustConnect = (url: url, stableID: stableID, isManual: true)
-            self.pendingTrustPrompt = TrustPrompt(
-                stableID: stableID,
-                gatewayName: "\(resolvedHost):\(resolvedPort)",
-                host: resolvedHost,
-                port: resolvedPort,
-                fingerprintSha256: fp,
-                isManual: true)
-            self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
-            return
-        }
-
-        let tlsParams = stored.map { fp in
-            GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
-        }
+        let stableID = Self.normalizedStableID(stableIDOverride)
+            ?? self.manualStableID(host: resolvedHost, port: resolvedPort)
+        let tlsParams = self.resolveManualTLSParams(
+            stableID: stableID,
+            securityMode: resolvedSecurityMode)
         guard let url = self.buildGatewayURL(
             host: resolvedHost,
             port: resolvedPort,
-            useTLS: tlsParams?.required == true)
+            useTLS: resolvedUseTLS)
         else {
             self.appModel?.gatewayStatusText = "Failed to build manual gateway URL."
             return
@@ -211,8 +276,12 @@ final class GatewayConnectionController {
         GatewaySettingsStore.saveLastGatewayConnectionManual(
             host: resolvedHost,
             port: resolvedPort,
-            useTLS: resolvedUseTLS && tlsParams != nil,
+            securityMode: resolvedSecurityMode,
             stableID: stableID)
+        if let profileID = GatewaySettingsStore.profileID(fromStableID: stableID) {
+            GatewaySettingsStore.saveActiveGatewayProfileID(profileID)
+            self.reloadGatewayProfiles()
+        }
         self.didAutoConnect = true
         self.startAutoConnect(
             url: url,
@@ -225,8 +294,14 @@ final class GatewayConnectionController {
     func connectLastKnown() async {
         guard let last = GatewaySettingsStore.loadLastGatewayConnection() else { return }
         switch last {
-        case let .manual(host, port, useTLS, _):
-            await self.connectManual(host: host, port: port, useTLS: useTLS)
+        case let .manual(host, port, securityMode, stableID):
+            if let profileID = GatewaySettingsStore.profileID(fromStableID: stableID),
+               let profile = self.gatewayProfiles.first(where: { $0.id == profileID })
+            {
+                await self.connectGatewayProfile(profile)
+            } else {
+                await self.connectManual(host: host, port: port, securityMode: securityMode, stableIDOverride: stableID)
+            }
         case let .discovered(stableID, _):
             guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else { return }
             _ = await self.connectDiscoveredGateway(gateway)
@@ -268,7 +343,7 @@ final class GatewayConnectionController {
             GatewaySettingsStore.saveLastGatewayConnectionManual(
                 host: prompt.host,
                 port: prompt.port,
-                useTLS: true,
+                securityMode: .strictTLS,
                 stableID: pending.stableID)
         } else {
             GatewaySettingsStore.saveLastGatewayConnectionDiscovered(stableID: pending.stableID, useTLS: true)
@@ -337,14 +412,50 @@ final class GatewayConnectionController {
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
 
+        if let activeProfile = GatewaySettingsStore.loadActiveGatewayProfile(),
+           let resolvedHost = Self.normalizeManualHostInput(activeProfile.host)
+        {
+            let resolvedSecurityMode = self.resolveManualSecurityMode(
+                host: resolvedHost,
+                securityMode: activeProfile.securityMode)
+            let resolvedUseTLS = resolvedSecurityMode.usesTLS
+            guard let resolvedPort = self.resolveManualPort(
+                host: resolvedHost,
+                port: activeProfile.port,
+                useTLS: resolvedUseTLS)
+            else { return }
+
+            let stableID = activeProfile.stableID
+            let tlsParams = self.resolveManualTLSParams(
+                stableID: stableID,
+                securityMode: resolvedSecurityMode)
+            guard let url = self.buildGatewayURL(
+                host: resolvedHost,
+                port: resolvedPort,
+                useTLS: resolvedUseTLS)
+            else { return }
+
+            self.didAutoConnect = true
+            self.startAutoConnect(
+                url: url,
+                gatewayStableID: stableID,
+                tls: tlsParams,
+                token: activeProfile.token,
+                password: activeProfile.password)
+            return
+        }
+
         if manualEnabled {
-            let manualHost = defaults.string(forKey: "gateway.manual.host")?
+            let manualHostRaw = defaults.string(forKey: "gateway.manual.host")?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !manualHost.isEmpty else { return }
+            guard let manualHost = Self.normalizeManualHostInput(manualHostRaw) else { return }
 
             let manualPort = defaults.integer(forKey: "gateway.manual.port")
-            let manualTLS = defaults.bool(forKey: "gateway.manual.tls")
-            let resolvedUseTLS = self.resolveManualUseTLS(host: manualHost, useTLS: manualTLS)
+            let manualSecurityMode = Self.resolveStoredManualSecurityMode(defaults: defaults)
+            let resolvedSecurityMode = self.resolveManualSecurityMode(
+                host: manualHost,
+                securityMode: manualSecurityMode)
+            let resolvedUseTLS = resolvedSecurityMode.usesTLS
             guard let resolvedPort = self.resolveManualPort(
                 host: manualHost,
                 port: manualPort,
@@ -354,13 +465,12 @@ final class GatewayConnectionController {
             let stableID = self.manualStableID(host: manualHost, port: resolvedPort)
             let tlsParams = self.resolveManualTLSParams(
                 stableID: stableID,
-                tlsEnabled: resolvedUseTLS,
-                allowTOFUReset: self.shouldRequireTLS(host: manualHost))
+                securityMode: resolvedSecurityMode)
 
             guard let url = self.buildGatewayURL(
                 host: manualHost,
                 port: resolvedPort,
-                useTLS: tlsParams?.required == true)
+                useTLS: resolvedUseTLS)
             else { return }
 
             self.didAutoConnect = true
@@ -374,29 +484,60 @@ final class GatewayConnectionController {
         }
 
         if let lastKnown = GatewaySettingsStore.loadLastGatewayConnection() {
-            if case let .manual(host, port, useTLS, stableID) = lastKnown {
-                let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
-                let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
-                let tlsParams = stored.map { fp in
-                    GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
+            if case let .manual(host, port, securityMode, stableID) = lastKnown {
+                if let profileID = GatewaySettingsStore.profileID(fromStableID: stableID),
+                   let profile = GatewaySettingsStore.loadGatewayProfiles().first(where: { $0.id == profileID }),
+                   let resolvedHost = Self.normalizeManualHostInput(profile.host)
+                {
+                    let resolvedSecurityMode = self.resolveManualSecurityMode(
+                        host: resolvedHost,
+                        securityMode: profile.securityMode)
+                    let resolvedUseTLS = resolvedSecurityMode.usesTLS
+                    guard let resolvedPort = self.resolveManualPort(
+                        host: resolvedHost,
+                        port: profile.port,
+                        useTLS: resolvedUseTLS)
+                    else { return }
+                    let tlsParams = self.resolveManualTLSParams(
+                        stableID: profile.stableID,
+                        securityMode: resolvedSecurityMode)
+                    guard let url = self.buildGatewayURL(
+                        host: resolvedHost,
+                        port: resolvedPort,
+                        useTLS: resolvedUseTLS)
+                    else { return }
+
+                    self.didAutoConnect = true
+                    self.startAutoConnect(
+                        url: url,
+                        gatewayStableID: profile.stableID,
+                        tls: tlsParams,
+                        token: profile.token,
+                        password: profile.password)
+                    return
+                } else {
+                    let resolvedSecurityMode = self.resolveManualSecurityMode(
+                        host: host,
+                        securityMode: securityMode)
+                    let resolvedUseTLS = resolvedSecurityMode.usesTLS
+                    let tlsParams = self.resolveManualTLSParams(
+                        stableID: stableID,
+                        securityMode: resolvedSecurityMode)
+                    guard let url = self.buildGatewayURL(
+                        host: host,
+                        port: port,
+                        useTLS: resolvedUseTLS)
+                    else { return }
+
+                    self.didAutoConnect = true
+                    self.startAutoConnect(
+                        url: url,
+                        gatewayStableID: stableID,
+                        tls: tlsParams,
+                        token: token,
+                        password: password)
+                    return
                 }
-                guard let url = self.buildGatewayURL(
-                    host: host,
-                    port: port,
-                    useTLS: resolvedUseTLS && tlsParams != nil)
-                else { return }
-
-                // Security: autoconnect only to previously trusted gateways (stored TLS pin).
-                guard tlsParams != nil else { return }
-
-                self.didAutoConnect = true
-                self.startAutoConnect(
-                    url: url,
-                    gatewayStableID: stableID,
-                    tls: tlsParams,
-                    token: token,
-                    password: password)
-                return
             }
         }
 
@@ -464,10 +605,13 @@ final class GatewayConnectionController {
         gatewayStableID: String,
         tls: GatewayTLSParams?,
         token: String?,
-        password: String?)
+        password: String?,
+        includeDeviceIdentity: Bool = true)
     {
         guard let appModel else { return }
-        let connectOptions = self.makeConnectOptions(stableID: gatewayStableID)
+        let connectOptions = self.makeConnectOptions(
+            stableID: gatewayStableID,
+            includeDeviceIdentity: includeDeviceIdentity)
 
         Task { [weak appModel] in
             guard let appModel else { return }
@@ -514,19 +658,25 @@ final class GatewayConnectionController {
 
     private func resolveManualTLSParams(
         stableID: String,
-        tlsEnabled: Bool,
-        allowTOFUReset: Bool = false) -> GatewayTLSParams?
+        securityMode: GatewayManualSecurityMode) -> GatewayTLSParams?
     {
-        let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
-        if tlsEnabled || stored != nil {
+        switch securityMode {
+        case .noEncryption:
+            return nil
+        case .relaxedTLS:
+            return GatewayTLSParams(
+                required: false,
+                expectedFingerprint: nil,
+                allowTOFU: false,
+                storeKey: nil)
+        case .strictTLS:
+            let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
             return GatewayTLSParams(
                 required: true,
                 expectedFingerprint: stored,
                 allowTOFU: false,
                 storeKey: stableID)
         }
-
-        return nil
     }
 
     private func probeTLSFingerprint(url: URL) async -> String? {
@@ -682,12 +832,29 @@ final class GatewayConnectionController {
         return components.url
     }
 
-    private func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
-        useTLS || self.shouldRequireTLS(host: host)
+    private static func resolveStoredManualSecurityMode(defaults: UserDefaults) -> GatewayManualSecurityMode {
+        if let rawMode = defaults.string(forKey: "gateway.manual.security")?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            let mode = GatewayManualSecurityMode(rawValue: rawMode)
+        {
+            return mode
+        }
+        let legacyTLS = defaults.bool(forKey: "gateway.manual.tls")
+        return GatewayManualSecurityMode.fromLegacy(useTLS: legacyTLS)
     }
 
-    private func shouldRequireTLS(host: String) -> Bool {
-        !Self.isLoopbackHost(host)
+    private func resolveManualSecurityMode(
+        host _: String,
+        securityMode: GatewayManualSecurityMode) -> GatewayManualSecurityMode
+    {
+        securityMode
+    }
+
+    private func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
+        let mode = self.resolveManualSecurityMode(
+            host: host,
+            securityMode: GatewayManualSecurityMode.fromLegacy(useTLS: useTLS))
+        return mode.usesTLS
     }
 
     private func shouldForceTLS(host: String) -> Bool {
@@ -758,7 +925,15 @@ final class GatewayConnectionController {
         "manual|\(host.lowercased())|\(port)"
     }
 
-    private func makeConnectOptions(stableID: String?) -> GatewayConnectOptions {
+    private static func normalizedStableID(_ raw: String?) -> String? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func makeConnectOptions(
+        stableID: String?,
+        includeDeviceIdentity: Bool = true) -> GatewayConnectOptions
+    {
         let defaults = UserDefaults.standard
         let displayName = self.resolvedDisplayName(defaults: defaults)
         let resolvedClientId = self.resolvedClientId(defaults: defaults, stableID: stableID)
@@ -771,7 +946,9 @@ final class GatewayConnectionController {
             permissions: self.currentPermissions(),
             clientId: resolvedClientId,
             clientMode: "node",
-            clientDisplayName: displayName)
+            clientDisplayName: displayName,
+            includeDeviceIdentity: includeDeviceIdentity,
+            gatewayAuthScope: Self.normalizedStableID(stableID))
     }
 
     private func resolvedClientId(defaults: UserDefaults, stableID: String?) -> String {
@@ -1011,6 +1188,13 @@ extension GatewayConnectionController {
 
     func _test_resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
         self.resolveManualUseTLS(host: host, useTLS: useTLS)
+    }
+
+    func _test_resolveManualTLSParams(
+        stableID: String,
+        securityMode: GatewayManualSecurityMode) -> GatewayTLSParams?
+    {
+        self.resolveManualTLSParams(stableID: stableID, securityMode: securityMode)
     }
 
     func _test_resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootTabs: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
@@ -72,6 +73,11 @@ struct RootTabs: View {
         }
         .gatewayActionsDialog(
             isPresented: self.$showGatewayActions,
+            gatewayProfiles: self.gatewayController.gatewayProfiles,
+            activeGatewayProfileID: self.gatewayController.activeGatewayProfileID,
+            onSwitchGateway: { profile in
+                Task { await self.gatewayController.connectGatewayProfile(profile) }
+            },
             onDisconnect: { self.appModel.disconnectGateway() },
             onOpenSettings: { self.selectedTab = 2 })
     }

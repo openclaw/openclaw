@@ -522,8 +522,15 @@ extension MenuSessionsInjector {
         case .remote:
             platform = "remote"
             if AppStateStore.shared.remoteTransport == .direct {
-                let trimmedUrl = AppStateStore.shared.remoteUrl
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmedUrl: String
+                if AppStateStore.shared.remoteDirectInputMode == .manual {
+                    trimmedUrl = GatewayRemoteConfig.buildManualGatewayUrlString(
+                        host: AppStateStore.shared.remoteManualHost,
+                        tlsMode: AppStateStore.shared.remoteDirectTLSMode) ?? ""
+                } else {
+                    trimmedUrl = AppStateStore.shared.remoteUrl
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                }
                 if let url = URL(string: trimmedUrl), let urlHost = url.host, !urlHost.isEmpty {
                     if let port = url.port {
                         host = "\(urlHost):\(port)"

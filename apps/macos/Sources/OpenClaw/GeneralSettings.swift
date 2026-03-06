@@ -131,6 +131,7 @@ struct GeneralSettings: View {
                 TailscaleIntegrationSection(
                     connectionMode: self.state.connectionMode,
                     isPaused: self.state.isPaused)
+                GatewayConnectQRCodeSection()
                 self.healthRow
             }
 
@@ -147,18 +148,21 @@ struct GeneralSettings: View {
             if self.state.remoteTransport == .ssh {
                 self.remoteSshRow
             } else {
+                self.remoteDirectInputModeRow
                 self.remoteDirectRow
             }
 
-            GatewayDiscoveryInlineList(
-                discovery: self.gatewayDiscovery,
-                currentTarget: self.state.remoteTarget,
-                currentUrl: self.state.remoteUrl,
-                transport: self.state.remoteTransport)
-            { gateway in
-                self.applyDiscoveredGateway(gateway)
+            if self.shouldShowGatewayDiscovery {
+                GatewayDiscoveryInlineList(
+                    discovery: self.gatewayDiscovery,
+                    currentTarget: self.state.remoteTarget,
+                    currentUrl: self.state.remoteUrl,
+                    transport: self.state.remoteTransport)
+                { gateway in
+                    self.applyDiscoveredGateway(gateway)
+                }
+                .padding(.leading, self.remoteLabelWidth + 10)
             }
-            .padding(.leading, self.remoteLabelWidth + 10)
 
             self.remoteStatusView
                 .padding(.leading, self.remoteLabelWidth + 10)
@@ -221,6 +225,11 @@ struct GeneralSettings: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+            } else if self.state.remoteDirectInputMode == .manual {
+                Text("Tip: strict TLS requires a valid CA-trusted certificate; self-signed accepts TOFU pinning.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             } else {
                 Text("Tip: use Tailscale Serve so the gateway has a valid HTTPS cert.")
                     .font(.footnote)
@@ -229,7 +238,17 @@ struct GeneralSettings: View {
             }
         }
         .transition(.opacity)
-        .onAppear { self.gatewayDiscovery.start() }
+        .onAppear {
+            if self.shouldShowGatewayDiscovery {
+                self.gatewayDiscovery.start()
+            }
+        }
+        .onChange(of: self.state.remoteTransport) { _, _ in
+            self.updateGatewayDiscoveryLifecycle()
+        }
+        .onChange(of: self.state.remoteDirectInputMode) { _, _ in
+            self.updateGatewayDiscoveryLifecycle()
+        }
         .onDisappear { self.gatewayDiscovery.stop() }
     }
 
@@ -244,6 +263,20 @@ struct GeneralSettings: View {
             }
             .pickerStyle(.segmented)
             .frame(maxWidth: 320)
+        }
+    }
+
+    private var remoteDirectInputModeRow: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text("Gateway source")
+                .font(.callout.weight(.semibold))
+                .frame(width: self.remoteLabelWidth, alignment: .leading)
+            Picker("Gateway source", selection: self.$state.remoteDirectInputMode) {
+                Text("Auto-discovery").tag(AppState.RemoteDirectInputMode.autoDiscovery)
+                Text("Manual").tag(AppState.RemoteDirectInputMode.manual)
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 340)
         }
     }
 
@@ -272,22 +305,66 @@ struct GeneralSettings: View {
     }
 
     private var remoteDirectRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("Gateway")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: self.remoteLabelWidth, alignment: .leading)
-                TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: .infinity)
-                self.remoteTestButton(
-                    disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        VStack(alignment: .leading, spacing: 8) {
+            if self.state.remoteDirectInputMode == .manual {
+                HStack(alignment: .center, spacing: 10) {
+                    Text("Gateway host")
+                        .font(.callout.weight(.semibold))
+                        .frame(width: self.remoteLabelWidth, alignment: .leading)
+                    TextField("gateway.example.ts.net", text: self.$state.remoteManualHost)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: .infinity)
+                    self.remoteTestButton(
+                        disabled: self.state.remoteManualHost
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .isEmpty)
+                }
+
+                HStack(alignment: .center, spacing: 10) {
+                    Text("Security")
+                        .font(.callout.weight(.semibold))
+                        .frame(width: self.remoteLabelWidth, alignment: .leading)
+                    Picker("Security", selection: self.$state.remoteDirectTLSMode) {
+                        Text("Strict TLS").tag(AppState.RemoteDirectTLSMode.strict)
+                        Text("Self-signed TLS").tag(AppState.RemoteDirectTLSMode.selfSigned)
+                        Text("Unencrypted").tag(AppState.RemoteDirectTLSMode.unencrypted)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 380)
+                }
+            } else {
+                HStack(alignment: .center, spacing: 10) {
+                    Text("Gateway")
+                        .font(.callout.weight(.semibold))
+                        .frame(width: self.remoteLabelWidth, alignment: .leading)
+                    TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: .infinity)
+                    self.remoteTestButton(
+                        disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
-            Text(
-                "Direct mode requires wss:// for remote hosts. ws:// is only allowed for localhost/127.0.0.1.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.leading, self.remoteLabelWidth + 10)
+
+            if let previewURL = self.remoteDirectPreviewURL {
+                Text("Resolved URL: \(previewURL)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, self.remoteLabelWidth + 10)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            if self.state.remoteDirectInputMode == .manual {
+                Text("Enter a domain or IP. Manual settings are saved and reused across app sessions.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, self.remoteLabelWidth + 10)
+            } else {
+                Text("Direct mode requires wss:// for remote hosts. ws:// is only allowed for localhost/127.0.0.1.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, self.remoteLabelWidth + 10)
+            }
         }
     }
 
@@ -303,6 +380,32 @@ struct GeneralSettings: View {
         }
         .buttonStyle(.borderedProminent)
         .disabled(self.remoteStatus == .checking || disabled)
+    }
+
+    private var shouldShowGatewayDiscovery: Bool {
+        if self.state.remoteTransport == .ssh { return true }
+        return self.state.remoteDirectInputMode == .autoDiscovery
+    }
+
+    private var remoteDirectPreviewURL: String? {
+        if self.state.remoteTransport != .direct { return nil }
+        switch self.state.remoteDirectInputMode {
+        case .autoDiscovery:
+            let trimmed = self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        case .manual:
+            return GatewayRemoteConfig.buildManualGatewayUrlString(
+                host: self.state.remoteManualHost,
+                tlsMode: self.state.remoteDirectTLSMode)
+        }
+    }
+
+    private func updateGatewayDiscoveryLifecycle() {
+        if self.shouldShowGatewayDiscovery {
+            self.gatewayDiscovery.start()
+        } else {
+            self.gatewayDiscovery.stop()
+        }
     }
 
     private var controlStatusLine: String {
@@ -535,12 +638,34 @@ extension GeneralSettings {
         self.remoteStatus = .checking
         let settings = CommandResolver.connectionSettings()
         if self.state.remoteTransport == .direct {
-            let trimmedUrl = self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedUrl: String
+            if self.state.remoteDirectInputMode == .manual {
+                let host = self.state.remoteManualHost.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !host.isEmpty else {
+                    self.remoteStatus = .failed("Set a gateway domain or IP first")
+                    return
+                }
+                guard let manualURL = GatewayRemoteConfig.buildManualGatewayUrlString(
+                    host: host,
+                    tlsMode: self.state.remoteDirectTLSMode)
+                else {
+                    self.remoteStatus = .failed("Gateway host is invalid")
+                    return
+                }
+                trimmedUrl = manualURL
+            } else {
+                trimmedUrl = self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
             guard !trimmedUrl.isEmpty else {
                 self.remoteStatus = .failed("Set a gateway URL first")
                 return
             }
-            guard Self.isValidWsUrl(trimmedUrl) else {
+            guard Self.isValidWsUrl(
+                trimmedUrl,
+                allowInsecureRemoteWS: self.state.remoteDirectInputMode == .manual &&
+                    self.state.remoteDirectTLSMode == .unencrypted)
+            else {
                 self.remoteStatus = .failed(
                     "Gateway URL must use wss:// for remote hosts (ws:// only for localhost)")
                 return
@@ -598,8 +723,8 @@ extension GeneralSettings {
         }
     }
 
-    private static func isValidWsUrl(_ raw: String) -> Bool {
-        GatewayRemoteConfig.normalizeGatewayUrl(raw) != nil
+    private static func isValidWsUrl(_ raw: String, allowInsecureRemoteWS: Bool = false) -> Bool {
+        GatewayRemoteConfig.normalizeGatewayUrl(raw, allowInsecureRemoteWS: allowInsecureRemoteWS) != nil
     }
 
     private static func sshCheckCommand(target: String, identity: String) -> [String]? {
@@ -690,6 +815,9 @@ extension GeneralSettings {
         let state = AppState(preview: true)
         state.connectionMode = .remote
         state.remoteTransport = .ssh
+        state.remoteDirectInputMode = .manual
+        state.remoteManualHost = "gateway.example.ts.net"
+        state.remoteDirectTLSMode = .strict
         state.remoteTarget = "user@host:2222"
         state.remoteUrl = "wss://gateway.example.ts.net"
         state.remoteIdentity = "/tmp/id_ed25519"
@@ -708,6 +836,12 @@ extension GeneralSettings {
         _ = view.body
 
         state.connectionMode = .unconfigured
+        _ = view.body
+
+        state.connectionMode = .remote
+        state.remoteTransport = .direct
+        state.remoteDirectInputMode = .manual
+        state.remoteDirectTLSMode = .selfSigned
         _ = view.body
 
         state.connectionMode = .local

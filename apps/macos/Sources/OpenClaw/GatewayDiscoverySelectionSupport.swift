@@ -7,6 +7,7 @@ enum GatewayDiscoverySelectionSupport {
         state: AppState)
     {
         if state.remoteTransport == .direct {
+            state.remoteDirectInputMode = .autoDiscovery
             state.remoteUrl = GatewayDiscoveryHelpers.directUrl(for: gateway) ?? ""
         } else {
             state.remoteTarget = GatewayDiscoveryHelpers.sshTarget(for: gateway) ?? ""

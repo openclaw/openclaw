@@ -106,7 +106,7 @@ private struct ManualEntryStep: View {
     @State private var setupStatusText: String?
     @State private var manualHost: String = ""
     @State private var manualPortText: String = ""
-    @State private var manualUseTLS: Bool = true
+    @State private var manualSecurityMode: GatewayManualSecurityMode = .strictTLS
     @State private var manualToken: String = ""
     @State private var manualPassword: String = ""
 
@@ -144,7 +144,12 @@ private struct ManualEntryStep: View {
                 TextField("Port", text: self.$manualPortText)
                     .keyboardType(.numberPad)
 
-                Toggle("Use TLS", isOn: self.$manualUseTLS)
+                Picker("Transport Security", selection: self.$manualSecurityMode) {
+                    Text("Strict TLS").tag(GatewayManualSecurityMode.strictTLS)
+                    Text("Relaxed TLS").tag(GatewayManualSecurityMode.relaxedTLS)
+                    Text("No Encryption").tag(GatewayManualSecurityMode.noEncryption)
+                }
+                .pickerStyle(.menu)
 
                 TextField("Gateway token", text: self.$manualToken)
                     .textInputAutocapitalization(.never)
@@ -200,30 +205,30 @@ private struct ManualEntryStep: View {
             self.connectStatusText = "Failed: invalid port"
             return
         }
+        let port = self.manualPortValue() ?? 18789
 
-        let defaults = UserDefaults.standard
-        defaults.set(true, forKey: "gateway.manual.enabled")
-        defaults.set(host, forKey: "gateway.manual.host")
-        defaults.set(self.manualPortValue() ?? 0, forKey: "gateway.manual.port")
-        defaults.set(self.manualUseTLS, forKey: "gateway.manual.tls")
-
-        if let instanceId = defaults.string(forKey: "node.instanceId")?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !instanceId.isEmpty
-        {
-            let trimmedToken = self.manualToken.trimmingCharacters(in: .whitespacesAndNewlines)
-            let trimmedPassword = self.manualPassword.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedToken.isEmpty {
-                GatewaySettingsStore.saveGatewayToken(trimmedToken, instanceId: instanceId)
-            }
-            GatewaySettingsStore.saveGatewayPassword(trimmedPassword, instanceId: instanceId)
+        let saveResult = self.gatewayController.saveGatewayProfile(
+            host: host,
+            port: port,
+            securityMode: self.manualSecurityMode,
+            token: self.manualToken,
+            password: self.manualPassword,
+            setActive: true)
+        let profile: GatewaySettingsStore.GatewayProfile
+        switch saveResult {
+        case let .saved(savedProfile):
+            profile = savedProfile
+        case let .limitReached(max):
+            self.connectStatusText = "You can save up to \(max) gateways."
+            return
+        case .invalidInput:
+            self.connectStatusText = "Failed: invalid gateway profile"
+            return
         }
 
         self.connectingGatewayID = "manual"
         defer { self.connectingGatewayID = nil }
-        await self.gatewayController.connectManual(
-            host: host,
-            port: self.manualPortValue() ?? 0,
-            useTLS: self.manualUseTLS)
+        await self.gatewayController.connectGatewayProfile(profile)
     }
 
     private func manualPortValue() -> Int? {
@@ -237,7 +242,7 @@ private struct ManualEntryStep: View {
         self.setupStatusText = nil
         self.manualHost = ""
         self.manualPortText = ""
-        self.manualUseTLS = true
+        self.manualSecurityMode = .strictTLS
         self.manualToken = ""
         self.manualPassword = ""
     }
@@ -264,7 +269,7 @@ private struct ManualEntryStep: View {
                 self.manualPortText = ""
             }
             if let tls = payload.tls {
-                self.manualUseTLS = tls
+                self.manualSecurityMode = tls ? .strictTLS : .noEncryption
             }
         } else if let url = URL(string: raw), url.scheme != nil {
             self.applyURL(url)
@@ -293,9 +298,9 @@ private struct ManualEntryStep: View {
         }
         let scheme = (url.scheme ?? "").lowercased()
         if scheme == "wss" || scheme == "https" {
-            self.manualUseTLS = true
+            self.manualSecurityMode = .strictTLS
         } else if scheme == "ws" || scheme == "http" {
-            self.manualUseTLS = false
+            self.manualSecurityMode = .noEncryption
         }
     }
 

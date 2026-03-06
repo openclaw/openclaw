@@ -84,10 +84,10 @@ import UIKit
         GatewaySettingsStore.saveLastGatewayConnectionManual(
             host: "gateway.example.com",
             port: 443,
-            useTLS: true,
+            securityMode: .strictTLS,
             stableID: "manual|gateway.example.com|443")
         let loaded = GatewaySettingsStore.loadLastGatewayConnection()
-        #expect(loaded == .manual(host: "gateway.example.com", port: 443, useTLS: true, stableID: "manual|gateway.example.com|443"))
+        #expect(loaded == .manual(host: "gateway.example.com", port: 443, securityMode: .strictTLS, stableID: "manual|gateway.example.com|443"))
     }
 
     @Test @MainActor func loadLastConnectionReturnsNilForInvalidData() {

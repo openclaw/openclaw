@@ -1791,7 +1791,9 @@ private extension NodeAppModel {
                     GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID) ?? nodeOptions.clientId
                 let operatorOptions = self.makeOperatorConnectOptions(
                     clientId: effectiveClientId,
-                    displayName: nodeOptions.clientDisplayName)
+                    displayName: nodeOptions.clientDisplayName,
+                    includeDeviceIdentity: nodeOptions.includeDeviceIdentity,
+                    gatewayAuthScope: nodeOptions.gatewayAuthScope)
 
                 do {
                     try await self.operatorGateway.connect(
@@ -2070,7 +2072,12 @@ private extension NodeAppModel {
         }
     }
 
-    func makeOperatorConnectOptions(clientId: String, displayName: String?) -> GatewayConnectOptions {
+    func makeOperatorConnectOptions(
+        clientId: String,
+        displayName: String?,
+        includeDeviceIdentity: Bool,
+        gatewayAuthScope: String?) -> GatewayConnectOptions
+    {
         GatewayConnectOptions(
             role: "operator",
             scopes: ["operator.read", "operator.write", "operator.talk.secrets"],
@@ -2080,7 +2087,8 @@ private extension NodeAppModel {
             clientId: clientId,
             clientMode: "ui",
             clientDisplayName: displayName,
-            includeDeviceIdentity: true)
+            includeDeviceIdentity: includeDeviceIdentity,
+            gatewayAuthScope: gatewayAuthScope)
     }
 
     func legacyClientIdFallback(currentClientId: String, error: Error) -> String? {

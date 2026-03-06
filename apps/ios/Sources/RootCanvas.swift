@@ -220,6 +220,7 @@ struct RootCanvas: View {
     }
 
     private func hasExistingGatewayConfig() -> Bool {
+        if !GatewaySettingsStore.loadGatewayProfiles().isEmpty { return true }
         if GatewaySettingsStore.loadLastGatewayConnection() != nil { return true }
         let manualHost = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         return self.manualGatewayEnabled && !manualHost.isEmpty
@@ -251,6 +252,7 @@ struct RootCanvas: View {
 
 private struct CanvasContent: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @State private var showGatewayActions: Bool = false
@@ -270,24 +272,66 @@ private struct CanvasContent: View {
             ScreenTab()
 
             VStack(spacing: 10) {
-                OverlayButton(systemImage: "text.bubble.fill", brighten: self.brightenButtons) {
-                    self.openChat()
-                }
-                .accessibilityLabel("Chat")
-
-                if self.talkButtonEnabled {
-                    // Talk mode lives on a side bubble so it doesn't get buried in settings.
-                    OverlayButton(
-                        systemImage: self.appModel.talkMode.isEnabled ? "waveform.circle.fill" : "waveform.circle",
-                        brighten: self.brightenButtons,
-                        tint: self.appModel.seamColor,
-                        isActive: self.appModel.talkMode.isEnabled)
-                    {
-                        let next = !self.appModel.talkMode.isEnabled
-                        self.talkEnabled = next
-                        self.appModel.setTalkEnabled(next)
+                Button {
+                    if self.gatewayStatus == .connected {
+                        self.showGatewayActions = true
+                    } else {
+                        self.openSettings()
                     }
-                    .accessibilityLabel("Talk Mode")
+                } label: {
+                    GatewayConnectionStatusBlock(
+                        brighten: self.brightenButtons,
+                        gatewayStatus: self.gatewayStatus)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Gateway Connection Status")
+
+                if !self.gatewayController.gatewayProfiles.isEmpty {
+                    Menu {
+                        ForEach(self.gatewayController.gatewayProfiles.prefix(
+                            GatewaySettingsStore.maxSavedGatewayProfiles())) { profile in
+                            Button {
+                                Task { await self.gatewayController.connectGatewayProfile(profile) }
+                            } label: {
+                                if profile.id == self.gatewayController.activeGatewayProfileID {
+                                    Label(profile.displayName, systemImage: "checkmark.circle.fill")
+                                } else {
+                                    Text(profile.displayName)
+                                }
+                            }
+                        }
+                        Divider()
+                        Button("Open Gateway Settings") {
+                            self.openSettings()
+                        }
+                    } label: {
+                        GatewaySelectorOverlayButton(
+                            brighten: self.brightenButtons,
+                            activeProfileName: self.activeGatewayProfileName)
+                    }
+                    .accessibilityLabel("Gateway Selector")
+                }
+
+                HStack(spacing: 8) {
+                    OverlayButton(systemImage: "text.bubble.fill", brighten: self.brightenButtons) {
+                        self.openChat()
+                    }
+                    .accessibilityLabel("Chat")
+
+                    if self.talkButtonEnabled {
+                        // Talk mode lives on a side bubble so it doesn't get buried in settings.
+                        OverlayButton(
+                            systemImage: self.appModel.talkMode.isEnabled ? "waveform.circle.fill" : "waveform.circle",
+                            brighten: self.brightenButtons,
+                            tint: self.appModel.seamColor,
+                            isActive: self.appModel.talkMode.isEnabled)
+                        {
+                            let next = !self.appModel.talkMode.isEnabled
+                            self.talkEnabled = next
+                            self.appModel.setTalkEnabled(next)
+                        }
+                        .accessibilityLabel("Talk Mode")
+                    }
                 }
 
                 OverlayButton(systemImage: "gearshape.fill", brighten: self.brightenButtons) {
@@ -305,22 +349,6 @@ private struct CanvasContent: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            StatusPill(
-                gateway: self.gatewayStatus,
-                voiceWakeEnabled: self.voiceWakeEnabled,
-                activity: self.statusActivity,
-                brighten: self.brightenButtons,
-                onTap: {
-                    if self.gatewayStatus == .connected {
-                        self.showGatewayActions = true
-                    } else {
-                        self.openSettings()
-                    }
-                })
-                .padding(.leading, 10)
-                .safeAreaPadding(.top, 10)
-        }
-        .overlay(alignment: .topLeading) {
             if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
                 VoiceWakeToast(
                     command: voiceWakeToastText,
@@ -332,16 +360,22 @@ private struct CanvasContent: View {
         }
         .gatewayActionsDialog(
             isPresented: self.$showGatewayActions,
+            gatewayProfiles: self.gatewayController.gatewayProfiles,
+            activeGatewayProfileID: self.gatewayController.activeGatewayProfileID,
+            onSwitchGateway: { profile in
+                Task { await self.gatewayController.connectGatewayProfile(profile) }
+            },
             onDisconnect: { self.appModel.disconnectGateway() },
             onOpenSettings: { self.openSettings() })
     }
 
-    private var statusActivity: StatusPill.Activity? {
-        StatusActivityBuilder.build(
-            appModel: self.appModel,
-            voiceWakeEnabled: self.voiceWakeEnabled,
-            cameraHUDText: self.cameraHUDText,
-            cameraHUDKind: self.cameraHUDKind)
+    private var activeGatewayProfileName: String {
+        guard let activeID = self.gatewayController.activeGatewayProfileID,
+              let profile = self.gatewayController.gatewayProfiles.first(where: { $0.id == activeID })
+        else {
+            return "Gateway"
+        }
+        return profile.displayName
     }
 }
 
@@ -399,6 +433,96 @@ private struct OverlayButton: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct GatewaySelectorOverlayButton: View {
+    let brighten: Bool
+    let activeProfileName: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "network")
+                .font(.system(size: 14, weight: .semibold))
+            Text(self.activeProfileName)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(maxWidth: 168)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    .white.opacity(self.brighten ? 0.26 : 0.18),
+                                    .white.opacity(self.brighten ? 0.08 : 0.04),
+                                    .clear,
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing))
+                        .blendMode(.overlay)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(.white.opacity(self.brighten ? 0.24 : 0.18), lineWidth: 0.5)
+                }
+                .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
+        }
+    }
+}
+
+private struct GatewayConnectionStatusBlock: View {
+    let brighten: Bool
+    let gatewayStatus: StatusPill.GatewayState
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(self.gatewayStatus.color)
+                .frame(width: 9, height: 9)
+            Text(self.gatewayStatus.title)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(width: 168)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    .white.opacity(self.brighten ? 0.26 : 0.18),
+                                    .white.opacity(self.brighten ? 0.08 : 0.04),
+                                    .clear,
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing))
+                        .blendMode(.overlay)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(.white.opacity(self.brighten ? 0.24 : 0.18), lineWidth: 0.5)
+                }
+                .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
+        }
     }
 }
 

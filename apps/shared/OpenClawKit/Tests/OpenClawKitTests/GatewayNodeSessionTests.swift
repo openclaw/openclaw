@@ -13,11 +13,17 @@ private extension NSLock {
 
 private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let lock = NSLock()
+    private let emitConnectChallenge: Bool
     private var _state: URLSessionTask.State = .suspended
     private var connectRequestId: String?
+    private var lastConnectRequest: [String: Any]?
     private var receivePhase = 0
     private var pendingReceiveHandler:
         (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
+
+    init(emitConnectChallenge: Bool = true) {
+        self.emitConnectChallenge = emitConnectChallenge
+    }
 
     var state: URLSessionTask.State {
         get { self.lock.withLock { self._state } }
@@ -50,7 +56,10 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
            obj["method"] as? String == "connect",
            let id = obj["id"] as? String
         {
-            self.lock.withLock { self.connectRequestId = id }
+            self.lock.withLock {
+                self.connectRequestId = id
+                self.lastConnectRequest = obj
+            }
         }
     }
 
@@ -64,8 +73,14 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             self.receivePhase += 1
             return current
         }
-        if phase == 0 {
+        if phase == 0, self.emitConnectChallenge {
             return .data(Self.connectChallengeData(nonce: "nonce-1"))
+        }
+        if phase == 0, !self.emitConnectChallenge {
+            while !Task.isCancelled {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            throw CancellationError()
         }
         for _ in 0..<50 {
             let id = self.lock.withLock { self.connectRequestId }
@@ -136,12 +151,25 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         ]
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
+
+    func connectRequestIncludesDeviceField() -> Bool {
+        self.lock.withLock {
+            guard let request = self.lastConnectRequest else { return false }
+            guard let params = request["params"] as? [String: Any] else { return false }
+            return params["device"] != nil
+        }
+    }
 }
 
 private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked Sendable {
     private let lock = NSLock()
+    private let emitConnectChallenge: Bool
     private var tasks: [FakeGatewayWebSocketTask] = []
     private var makeCount = 0
+
+    init(emitConnectChallenge: Bool = true) {
+        self.emitConnectChallenge = emitConnectChallenge
+    }
 
     func snapshotMakeCount() -> Int {
         self.lock.withLock { self.makeCount }
@@ -155,7 +183,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
         _ = url
         return self.lock.withLock {
             self.makeCount += 1
-            let task = FakeGatewayWebSocketTask()
+            let task = FakeGatewayWebSocketTask(emitConnectChallenge: self.emitConnectChallenge)
             self.tasks.append(task)
             return WebSocketTaskBox(task: task)
         }
@@ -169,6 +197,67 @@ private actor SeqGapProbe {
 }
 
 struct GatewayNodeSessionTests {
+    @Test
+    func gatewayChannelFallsBackToSharedAuthWhenChallengeMissing() async throws {
+        let session = FakeGatewayWebSocketSession(emitConnectChallenge: false)
+        let connectOptions = GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.read"],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "ui",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: true)
+        let channel = GatewayChannelActor(
+            url: URL(string: "ws://example.invalid")!,
+            token: "shared-token",
+            password: nil,
+            session: WebSocketSessionBox(session: session),
+            connectOptions: connectOptions,
+            connectChallengeTimeoutSeconds: 0.01)
+
+        try await channel.connect()
+
+        let latestTask = try #require(session.latestTask())
+        #expect(latestTask.connectRequestIncludesDeviceField() == false)
+        #expect(await channel.authSource() == .sharedToken)
+
+        await channel.shutdown()
+    }
+
+    @Test
+    func gatewayChannelRequiresChallengeForNodeRole() async {
+        let session = FakeGatewayWebSocketSession(emitConnectChallenge: false)
+        let connectOptions = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: true)
+        let channel = GatewayChannelActor(
+            url: URL(string: "ws://example.invalid")!,
+            token: "shared-token",
+            password: nil,
+            session: WebSocketSessionBox(session: session),
+            connectOptions: connectOptions,
+            connectChallengeTimeoutSeconds: 0.01)
+
+        do {
+            try await channel.connect()
+            #expect(Bool(false))
+        } catch {
+            #expect(error.localizedDescription.contains("gateway connect challenge timed out"))
+        }
+
+        await channel.shutdown()
+    }
+
     @Test
     func invokeWithTimeoutReturnsUnderlyingResponseBeforeTimeout() async {
         let request = BridgeInvokeRequest(id: "1", command: "x", paramsJSON: nil)

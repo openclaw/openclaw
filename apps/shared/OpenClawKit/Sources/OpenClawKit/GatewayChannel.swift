@@ -85,6 +85,9 @@ public struct GatewayConnectOptions: Sendable {
     // device-scoped auth (role/scope upgrades will require pairing). Keep this true for
     // role/scoped sessions such as operator UI clients.
     public var includeDeviceIdentity: Bool
+    // Optional scope for device-auth token caching. Set this to a stable per-gateway
+    // identifier so token reuse never leaks across gateway profiles/endpoints.
+    public var gatewayAuthScope: String?
 
     public init(
         role: String,
@@ -95,7 +98,8 @@ public struct GatewayConnectOptions: Sendable {
         clientId: String,
         clientMode: String,
         clientDisplayName: String?,
-        includeDeviceIdentity: Bool = true)
+        includeDeviceIdentity: Bool = true,
+        gatewayAuthScope: String? = nil)
     {
         self.role = role
         self.scopes = scopes
@@ -106,6 +110,7 @@ public struct GatewayConnectOptions: Sendable {
         self.clientMode = clientMode
         self.clientDisplayName = clientDisplayName
         self.includeDeviceIdentity = includeDeviceIdentity
+        self.gatewayAuthScope = gatewayAuthScope
     }
 }
 
@@ -119,8 +124,15 @@ public enum GatewayAuthSource: String, Sendable {
 // Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 
-private enum ConnectChallengeError: Error {
+private enum ConnectChallengeError: Error, LocalizedError {
     case timeout
+
+    var errorDescription: String? {
+        switch self {
+        case .timeout:
+            return "gateway connect challenge timed out"
+        }
+    }
 }
 
 private let defaultOperatorConnectScopes: [String] = [
@@ -151,9 +163,9 @@ public actor GatewayChannelActor {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     // Remote gateways (tailscale/wan) can take longer to deliver connect.challenge.
-    // Connect now requires this nonce before we send device-auth.
+    // We prefer nonce-bound device auth when available, but can fall back to shared auth.
     private let connectTimeoutSeconds: Double = 12
-    private let connectChallengeTimeoutSeconds: Double = 6.0
+    private let connectChallengeTimeoutSeconds: Double
     // Some networks will silently drop idle TCP/TLS flows around ~30s. The gateway tick is server->client,
     // but NATs/proxies often require outbound traffic to keep the connection alive.
     private let keepaliveIntervalSeconds: Double = 15.0
@@ -172,6 +184,7 @@ public actor GatewayChannelActor {
         session: WebSocketSessionBox? = nil,
         pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil,
         connectOptions: GatewayConnectOptions? = nil,
+        connectChallengeTimeoutSeconds: Double = 6.0,
         disconnectHandler: (@Sendable (String) async -> Void)? = nil)
     {
         self.url = url
@@ -180,6 +193,7 @@ public actor GatewayChannelActor {
         self.session = session?.session ?? URLSession(configuration: .default)
         self.pushHandler = pushHandler
         self.connectOptions = connectOptions
+        self.connectChallengeTimeoutSeconds = max(0, connectChallengeTimeoutSeconds)
         self.disconnectHandler = disconnectHandler
         Task { [weak self] in
             await self?.startWatchdog()
@@ -366,16 +380,38 @@ public actor GatewayChannelActor {
             params["permissions"] = ProtoAnyCodable(options.permissions)
         }
         let includeDeviceIdentity = options.includeDeviceIdentity
+        let authScope = options.gatewayAuthScope?.trimmingCharacters(in: .whitespacesAndNewlines)
         let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate() : nil
         let storedToken =
             (includeDeviceIdentity && identity != nil)
-                ? DeviceAuthStore.loadToken(deviceId: identity!.deviceId, role: role)?.token
+                ? DeviceAuthStore.loadToken(
+                    deviceId: identity!.deviceId,
+                    role: role,
+                    authScope: authScope)?.token
                 : nil
-        // If we're not sending a device identity, a device token can't be validated server-side.
-        // In that mode we always use the shared gateway token/password.
-        let authToken = includeDeviceIdentity ? (storedToken ?? self.token) : self.token
+        let allowSharedAuthFallback = includeDeviceIdentity && role == "operator"
+        // If the gateway does not emit connect.challenge (legacy/compat mode), operator sessions
+        // can continue with shared auth. Node sessions require device identity and must fail.
+        var connectNonce: String?
+        if includeDeviceIdentity {
+            do {
+                connectNonce = try await self.waitForConnectChallenge()
+            } catch ConnectChallengeError.timeout {
+                if allowSharedAuthFallback {
+                    connectNonce = nil
+                    self.logger.notice("connect.challenge timeout; falling back to shared auth")
+                } else {
+                    throw ConnectChallengeError.timeout
+                }
+            }
+        }
+        let usingDeviceIdentity = includeDeviceIdentity && identity != nil && connectNonce != nil
+
+        // Without a nonce-bound device payload, a device token cannot be validated server-side.
+        // In fallback mode always use shared token/password auth.
+        let authToken = usingDeviceIdentity ? (storedToken ?? self.token) : self.token
         let authSource: GatewayAuthSource
-        if storedToken != nil {
+        if usingDeviceIdentity, storedToken != nil {
             authSource = .deviceToken
         } else if authToken != nil {
             authSource = .sharedToken
@@ -386,15 +422,14 @@ public actor GatewayChannelActor {
         }
         self.lastAuthSource = authSource
         self.logger.info("gateway connect auth=\(authSource.rawValue, privacy: .public)")
-        let canFallbackToShared = includeDeviceIdentity && storedToken != nil && self.token != nil
+        let canFallbackToShared = usingDeviceIdentity && storedToken != nil && self.token != nil
         if let authToken {
             params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(authToken)])
         } else if let password = self.password {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
-        let connectNonce = try await self.waitForConnectChallenge()
-        if includeDeviceIdentity, let identity {
+        if usingDeviceIdentity, let identity, let connectNonce {
             let payload = GatewayDeviceAuthPayload.buildV3(
                 deviceId: identity.deviceId,
                 clientId: clientId,
@@ -425,11 +460,18 @@ public actor GatewayChannelActor {
         try await self.task?.send(.data(data))
         do {
             let response = try await self.waitForConnectResponse(reqId: reqId)
-            try await self.handleConnectResponse(response, identity: identity, role: role)
+            try await self.handleConnectResponse(
+                response,
+                identity: identity,
+                role: role,
+                authScope: authScope)
         } catch {
             if canFallbackToShared {
                 if let identity {
-                    DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: role)
+                    DeviceAuthStore.clearToken(
+                        deviceId: identity.deviceId,
+                        role: role,
+                        authScope: authScope)
                 }
             }
             throw error
@@ -439,7 +481,8 @@ public actor GatewayChannelActor {
     private func handleConnectResponse(
         _ res: ResponseFrame,
         identity: DeviceIdentity?,
-        role: String
+        role: String,
+        authScope: String?
     ) async throws {
         if res.ok == false {
             let msg = (res.error?["message"]?.value as? String) ?? "gateway connect failed"
@@ -468,7 +511,8 @@ public actor GatewayChannelActor {
                     deviceId: identity.deviceId,
                     role: authRole,
                     token: deviceToken,
-                    scopes: scopes)
+                    scopes: scopes,
+                    authScope: authScope)
             }
         }
         self.lastTick = Date()
@@ -545,7 +589,6 @@ public actor GatewayChannelActor {
         return try await AsyncTimeout.withTimeout(
             seconds: self.connectChallengeTimeoutSeconds,
             onTimeout: {
-                task.cancel(with: .goingAway, reason: nil)
                 return ConnectChallengeError.timeout
             },
             operation: { [weak self] in

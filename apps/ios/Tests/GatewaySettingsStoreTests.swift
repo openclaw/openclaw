@@ -14,6 +14,8 @@ private let instanceIdEntry = KeychainEntry(service: nodeService, account: "inst
 private let preferredGatewayEntry = KeychainEntry(service: gatewayService, account: "preferredStableID")
 private let lastGatewayEntry = KeychainEntry(service: gatewayService, account: "lastDiscoveredStableID")
 private let talkAcmeProviderEntry = KeychainEntry(service: talkService, account: "provider.apiKey.acme")
+private let gatewayProfilesEntry = KeychainEntry(service: gatewayService, account: "profiles")
+private let activeGatewayProfileDefaultsKey = "gateway.activeProfileID"
 private let bootstrapDefaultsKeys = [
     "node.instanceId",
     "gateway.preferredStableID",
@@ -26,6 +28,8 @@ private let lastGatewayDefaultsKeys = [
     "gateway.last.port",
     "gateway.last.tls",
     "gateway.last.stableID",
+    "gateway.manual.security",
+    "gateway.manual.tls",
 ]
 private let lastGatewayKeychainEntry = KeychainEntry(service: gatewayService, account: "lastConnection")
 
@@ -95,6 +99,16 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
     body()
 }
 
+private func withGatewayProfilesSnapshot(_ body: () -> Void) {
+    let defaultsSnapshot = snapshotDefaults([activeGatewayProfileDefaultsKey])
+    let keychainSnapshot = snapshotKeychain([gatewayProfilesEntry])
+    defer {
+        restoreDefaults(defaultsSnapshot)
+        restoreKeychain(keychainSnapshot)
+    }
+    body()
+}
+
 @Suite(.serialized) struct GatewaySettingsStoreTests {
     @Test func bootstrapCopiesDefaultsToKeychainWhenMissing() {
         withBootstrapSnapshots {
@@ -144,11 +158,11 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             GatewaySettingsStore.saveLastGatewayConnectionManual(
                 host: "example.com",
                 port: 443,
-                useTLS: true,
+                securityMode: .strictTLS,
                 stableID: "manual|example.com|443")
 
             let loaded = GatewaySettingsStore.loadLastGatewayConnection()
-            #expect(loaded == .manual(host: "example.com", port: 443, useTLS: true, stableID: "manual|example.com|443"))
+            #expect(loaded == .manual(host: "example.com", port: 443, securityMode: .strictTLS, stableID: "manual|example.com|443"))
         }
     }
 
@@ -157,7 +171,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             GatewaySettingsStore.saveLastGatewayConnectionManual(
                 host: "10.0.0.99",
                 port: 18789,
-                useTLS: true,
+                securityMode: .strictTLS,
                 stableID: "manual|10.0.0.99|18789")
 
             GatewaySettingsStore.saveLastGatewayConnectionDiscovered(stableID: "gw|abc", useTLS: true)
@@ -176,10 +190,12 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
                 "gateway.last.port": 18789,
                 "gateway.last.tls": false,
                 "gateway.last.stableID": "manual|example.org|18789",
+                "gateway.manual.security": nil,
+                "gateway.manual.tls": nil,
             ])
 
             let loaded = GatewaySettingsStore.loadLastGatewayConnection()
-            #expect(loaded == .manual(host: "example.org", port: 18789, useTLS: false, stableID: "manual|example.org|18789"))
+            #expect(loaded == .manual(host: "example.org", port: 18789, securityMode: .noEncryption, stableID: "manual|example.org|18789"))
 
             // Legacy keys should be cleaned up after migration.
             let defaults = UserDefaults.standard
@@ -199,5 +215,68 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
 
         GatewaySettingsStore.saveTalkProviderApiKey(nil, provider: "acme")
         #expect(GatewaySettingsStore.loadTalkProviderApiKey(provider: "acme") == nil)
+    }
+
+    @Test func gatewayProfiles_roundTripAndActiveSelection() {
+        withGatewayProfilesSnapshot {
+            GatewaySettingsStore.clearGatewayProfiles()
+
+            let saveResult = GatewaySettingsStore.saveGatewayProfile(
+                .init(
+                    id: nil,
+                    name: "Home",
+                    host: "100.64.0.10",
+                    port: 18789,
+                    securityMode: .noEncryption,
+                    token: "tok-home",
+                    password: "pw-home"))
+            guard case let .saved(profile) = saveResult else {
+                Issue.record("expected profile save")
+                return
+            }
+
+            let profiles = GatewaySettingsStore.loadGatewayProfiles()
+            #expect(profiles.count == 1)
+            #expect(profiles.first?.id == profile.id)
+            #expect(profiles.first?.host == "100.64.0.10")
+            #expect(profiles.first?.port == 18789)
+            #expect(profiles.first?.securityMode == .noEncryption)
+            #expect(profiles.first?.token == "tok-home")
+            #expect(profiles.first?.password == "pw-home")
+            #expect(GatewaySettingsStore.loadActiveGatewayProfileID() == profile.id)
+        }
+    }
+
+    @Test func gatewayProfiles_enforcesMaximumCount() {
+        withGatewayProfilesSnapshot {
+            GatewaySettingsStore.clearGatewayProfiles()
+
+            for idx in 0..<GatewaySettingsStore.maxSavedGatewayProfiles() {
+                let result = GatewaySettingsStore.saveGatewayProfile(
+                    .init(
+                        id: nil,
+                        name: "GW \(idx)",
+                        host: "100.64.0.\(idx + 1)",
+                        port: 18789,
+                        securityMode: .noEncryption,
+                        token: nil,
+                        password: nil))
+                guard case .saved = result else {
+                    Issue.record("expected saved result before reaching max")
+                    return
+                }
+            }
+
+            let overflow = GatewaySettingsStore.saveGatewayProfile(
+                .init(
+                    id: nil,
+                    name: "overflow",
+                    host: "100.64.0.250",
+                    port: 18789,
+                    securityMode: .noEncryption,
+                    token: nil,
+                    password: nil))
+            #expect(overflow == .limitReached(max: GatewaySettingsStore.maxSavedGatewayProfiles()))
+        }
     }
 }

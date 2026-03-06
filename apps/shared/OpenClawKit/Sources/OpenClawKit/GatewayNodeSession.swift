@@ -126,6 +126,7 @@ public actor GatewayNodeSession {
         let clientMode = options.clientMode.trimmingCharacters(in: .whitespacesAndNewlines)
         let clientDisplayName = (options.clientDisplayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let includeDeviceIdentity = options.includeDeviceIdentity ? "1" : "0"
+        let gatewayAuthScope = (options.gatewayAuthScope ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let permissions = options.permissions
             .map { key, value in
                 let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -143,6 +144,7 @@ public actor GatewayNodeSession {
             clientMode,
             clientDisplayName,
             includeDeviceIdentity,
+            gatewayAuthScope,
             permissions,
         ].joined(separator: "|")
     }

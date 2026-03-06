@@ -52,6 +52,10 @@ extension OnboardingView {
         view.selectUnconfiguredGateway()
 
         view.state.connectionMode = .remote
+        view.state.remoteTransport = .direct
+        view.state.remoteDirectInputMode = .manual
+        view.state.remoteManualHost = "gateway.example.ts.net"
+        view.state.remoteDirectTLSMode = .selfSigned
         _ = view.connectionPage()
         _ = view.workspacePage()
 

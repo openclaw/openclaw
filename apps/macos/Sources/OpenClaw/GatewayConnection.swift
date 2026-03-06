@@ -509,6 +509,30 @@ actor GatewayConnection {
 
     private static func buildTLSSessionBox(for url: URL) -> WebSocketSessionBox? {
         guard url.scheme?.lowercased() == "wss" else { return nil }
+
+        let configRoot = OpenClawConfigFile.loadDict()
+        if let manualTLSMode = GatewayRemoteConfig.resolveManualTLSMode(root: configRoot, matching: url) {
+            switch manualTLSMode {
+            case .strict:
+                // Strict TLS relies on system trust validation only (no TOFU/pinning override).
+                return nil
+            case .selfSigned:
+                let host = url.host ?? "gateway"
+                let port = GatewayRemoteConfig.defaultPort(for: url) ?? 443
+                let stableID = "\(host):\(port)"
+                let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
+                let params = GatewayTLSParams(
+                    required: true,
+                    expectedFingerprint: stored,
+                    allowTOFU: true,
+                    allowPinRotation: LoopbackHost.isLoopbackHost(host),
+                    storeKey: stableID)
+                return WebSocketSessionBox(session: GatewayTLSPinningSession(params: params))
+            case .unencrypted:
+                return nil
+            }
+        }
+
         let host = url.host ?? "gateway"
         let port = url.port ?? 443
         let isLoopback = LoopbackHost.isLoopbackHost(host)

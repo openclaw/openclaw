@@ -54,7 +54,7 @@ struct OnboardingWizardView: View {
     @State private var manualHost: String = ""
     @State private var manualPort: Int = 18789
     @State private var manualPortText: String = "18789"
-    @State private var manualTLS: Bool = true
+    @State private var manualSecurityMode: GatewayManualSecurityMode = .strictTLS
     @State private var gatewayToken: String = ""
     @State private var gatewayPassword: String = ""
     @State private var connectMessage: String?
@@ -484,7 +484,12 @@ struct OnboardingWizardView: View {
                 .autocorrectionDisabled()
             TextField("Port", text: self.$manualPortText)
                 .keyboardType(.numberPad)
-            Toggle("Use TLS", isOn: self.$manualTLS)
+            Picker("Transport Security", selection: self.$manualSecurityMode) {
+                Text("Strict TLS").tag(GatewayManualSecurityMode.strictTLS)
+                Text("Relaxed TLS").tag(GatewayManualSecurityMode.relaxedTLS)
+                Text("No Encryption").tag(GatewayManualSecurityMode.noEncryption)
+            }
+            .pickerStyle(.menu)
             self.manualConnectButton
         } header: {
             Text("Developer Local")
@@ -609,10 +614,22 @@ struct OnboardingWizardView: View {
                 .autocorrectionDisabled()
             TextField("Port", text: self.$manualPortText)
                 .keyboardType(.numberPad)
-            Toggle("Use TLS", isOn: self.$manualTLS)
+            Picker("Transport Security", selection: self.$manualSecurityMode) {
+                Text("Strict TLS").tag(GatewayManualSecurityMode.strictTLS)
+                Text("Relaxed TLS").tag(GatewayManualSecurityMode.relaxedTLS)
+                Text("No Encryption").tag(GatewayManualSecurityMode.noEncryption)
+            }
+            .pickerStyle(.menu)
+            Text("Strict TLS validates certificates. Relaxed TLS accepts self-signed certificates.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             TextField("Discovery Domain (optional)", text: self.$discoveryDomain)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+            Button("Test Manual Settings") {
+                Task { await self.testManualSettings() }
+            }
+            .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
             self.manualConnectButton
         }
     }
@@ -637,7 +654,7 @@ struct OnboardingWizardView: View {
     private func handleScannedLink(_ link: GatewayConnectDeepLink) {
         self.manualHost = link.host
         self.manualPort = link.port
-        self.manualTLS = link.tls
+        self.manualSecurityMode = link.tls ? .strictTLS : .noEncryption
         if let token = link.token {
             self.gatewayToken = token
         }
@@ -649,7 +666,7 @@ struct OnboardingWizardView: View {
         self.connectMessage = "Connecting via QR code…"
         self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)…"
         if self.selectedMode == nil {
-            self.selectedMode = link.tls ? .remoteDomain : .homeNetwork
+            self.selectedMode = self.manualSecurityMode.usesTLS ? .remoteDomain : .homeNetwork
         }
         Task { await self.connectManual() }
     }
@@ -730,21 +747,27 @@ struct OnboardingWizardView: View {
 
     private func initializeState() {
         if self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if let last = GatewaySettingsStore.loadLastGatewayConnection() {
+            if let activeProfile = GatewaySettingsStore.loadActiveGatewayProfile() {
+                self.manualHost = activeProfile.host
+                self.manualPort = activeProfile.port
+                self.manualSecurityMode = activeProfile.securityMode
+                self.gatewayToken = activeProfile.token ?? ""
+                self.gatewayPassword = activeProfile.password ?? ""
+            } else if let last = GatewaySettingsStore.loadLastGatewayConnection() {
                 switch last {
-                case let .manual(host, port, useTLS, _):
+                case let .manual(host, port, securityMode, _):
                     self.manualHost = host
                     self.manualPort = port
-                    self.manualTLS = useTLS
+                    self.manualSecurityMode = securityMode
                 case .discovered:
                     self.manualHost = "openclaw.local"
                     self.manualPort = 18789
-                    self.manualTLS = true
+                    self.manualSecurityMode = .strictTLS
                 }
             } else {
                 self.manualHost = "openclaw.local"
                 self.manualPort = 18789
-                self.manualTLS = true
+                self.manualSecurityMode = .strictTLS
             }
         }
         self.manualPortText = self.manualPort > 0 ? String(self.manualPort) : ""
@@ -753,7 +776,7 @@ struct OnboardingWizardView: View {
         }
         if self.selectedMode == .developerLocal && self.manualHost == "openclaw.local" {
             self.manualHost = "localhost"
-            self.manualTLS = false
+            self.manualSecurityMode = .noEncryption
         }
 
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -762,7 +785,9 @@ struct OnboardingWizardView: View {
             self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
         }
 
-        let hasSavedGateway = GatewaySettingsStore.loadLastGatewayConnection() != nil
+        let hasSavedGateway =
+            GatewaySettingsStore.loadLastGatewayConnection() != nil
+            || !GatewaySettingsStore.loadGatewayProfiles().isEmpty
         let hasToken = !self.gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasPassword = !self.gatewayPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if !self.didAutoPresentQR, !hasSavedGateway, !hasToken, !hasPassword {
@@ -814,15 +839,15 @@ struct OnboardingWizardView: View {
         switch mode {
         case .homeNetwork:
             if hostIsDefaultLike { self.manualHost = "openclaw.local" }
-            self.manualTLS = true
+            self.manualSecurityMode = .strictTLS
             if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         case .remoteDomain:
             if host == "openclaw.local" || host == "localhost" { self.manualHost = "" }
-            self.manualTLS = true
+            self.manualSecurityMode = .strictTLS
             if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         case .developerLocal:
             if hostIsDefaultLike { self.manualHost = "localhost" }
-            self.manualTLS = false
+            self.manualSecurityMode = .noEncryption
             if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         }
     }
@@ -830,12 +855,51 @@ struct OnboardingWizardView: View {
     private func connectManual() async {
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty, self.manualPort > 0, self.manualPort <= 65535 else { return }
+        let saveResult = self.gatewayController.saveGatewayProfile(
+            host: host,
+            port: self.manualPort,
+            securityMode: self.manualSecurityMode,
+            token: self.gatewayToken,
+            password: self.gatewayPassword,
+            setActive: true)
+        let profile: GatewaySettingsStore.GatewayProfile
+        switch saveResult {
+        case let .saved(savedProfile):
+            profile = savedProfile
+        case let .limitReached(max):
+            self.connectMessage = "You can save up to \(max) gateways."
+            self.statusLine = self.connectMessage ?? self.statusLine
+            return
+        case .invalidInput:
+            self.connectMessage = "Invalid gateway profile."
+            self.statusLine = self.connectMessage ?? self.statusLine
+            return
+        }
         self.connectingGatewayID = "manual"
         self.issue = .none
         self.connectMessage = "Connecting to \(host)…"
         self.statusLine = "Connecting to \(host):\(self.manualPort)…"
         defer { self.connectingGatewayID = nil }
-        await self.gatewayController.connectManual(host: host, port: self.manualPort, useTLS: self.manualTLS)
+        await self.gatewayController.connectGatewayProfile(profile)
+    }
+
+    private func testManualSettings() async {
+        let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty, self.manualPort > 0, self.manualPort <= 65535 else {
+            self.statusLine = "Manual settings are incomplete."
+            return
+        }
+        self.statusLine = "Testing \(host):\(self.manualPort)…"
+        let reachable = await TCPProbe.probe(
+            host: host,
+            port: self.manualPort,
+            timeoutSeconds: 3,
+            queueLabel: "onboarding.manual.preflight")
+        if reachable {
+            self.statusLine = "Reachable: \(host):\(self.manualPort) (\(self.manualSecurityMode.rawValue))."
+        } else {
+            self.statusLine = "Can't reach \(host):\(self.manualPort). Check host, port, and network."
+        }
     }
 
     private func retryLastAttempt(silent: Bool = false) async {
