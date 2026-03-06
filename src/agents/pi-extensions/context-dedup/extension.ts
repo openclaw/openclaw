@@ -888,7 +888,7 @@ function parseLineageSourceMessageIndex(text: string): number | undefined {
 }
 
 const SYNTHETIC_POINTER_NOTE_HEADER =
-  /^\[(?:\d+ repeats? of content omitted|Read delta from earlier chunk|Same file chunk already shown earlier|Read overlap trimmed)\]/;
+  /^\[(?:\d+ repeats? of content omitted|Near-duplicate content trimmed|Read delta from earlier chunk|Same file chunk already shown earlier|Read overlap trimmed)\]/;
 
 function isSyntheticPointerOrLineageNote(text: string): boolean {
   if (!SYNTHETIC_POINTER_NOTE_HEADER.test(text)) {

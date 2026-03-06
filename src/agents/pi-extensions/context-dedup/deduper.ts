@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createHash } from "node:crypto";
+import { findCommonEdges } from "./lcs-dedup.js";
 
 export type RefTagFormat = "unicode" | "angle";
 
@@ -11,6 +12,9 @@ export interface DedupMessage {
 
 export interface DedupConfig {
   mode: "off" | "on";
+  lcsMode?: "off" | "on";
+  lcsMinSize?: number;
+  sizeSimilarityThreshold?: number;
   debugDump?: boolean;
   minContentSize: number;
   refTagFormat: RefTagFormat;
@@ -18,6 +22,9 @@ export interface DedupConfig {
 
 export interface EffectiveDedupSettings {
   mode: "off" | "on";
+  lcsMode: "off" | "on";
+  lcsMinSize: number;
+  sizeSimilarityThreshold: number;
   debugDump?: boolean;
   minContentSize: number;
   refTagFormat: RefTagFormat;
@@ -184,6 +191,220 @@ function normalizeTextForDedup(text: string, role: string): string {
   return normalized;
 }
 
+type SourceBlock = {
+  messageIndex: number;
+  blockIndex: number;
+  canonicalText: string;
+  toolCallId?: string;
+};
+
+type CommonEdgeMatch = {
+  prefixLen: number;
+  suffixLen: number;
+};
+
+function resolveLcsMinSize(config: DedupConfig): number {
+  const value = config.lcsMinSize;
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  return 50;
+}
+
+function resolveSizeSimilarityThreshold(config: DedupConfig): number {
+  const value = config.sizeSimilarityThreshold;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0.5;
+  }
+  if (value < 0) {
+    return 0;
+  }
+  if (value > 1) {
+    return 1;
+  }
+  return value;
+}
+
+function computeCommonEdgeMatch(
+  sourceCanonicalText: string,
+  targetCanonicalText: string,
+  minSize: number,
+): CommonEdgeMatch | undefined {
+  const edges = findCommonEdges([sourceCanonicalText, targetCanonicalText], minSize);
+
+  let prefixLen = 0;
+  let suffixLen = 0;
+
+  for (const edge of edges) {
+    if (edge.fromMsg !== 0 || edge.toMsg !== 1) {
+      continue;
+    }
+
+    if (typeof edge.prefix === "string") {
+      prefixLen = Math.max(prefixLen, edge.prefix.length);
+    }
+    if (typeof edge.suffix === "string") {
+      suffixLen = Math.max(suffixLen, edge.suffix.length);
+    }
+  }
+
+  if (prefixLen === 0 && suffixLen === 0) {
+    return undefined;
+  }
+
+  if (prefixLen + suffixLen > targetCanonicalText.length) {
+    const overflow = prefixLen + suffixLen - targetCanonicalText.length;
+    const suffixTrim = Math.min(suffixLen, overflow);
+    suffixLen -= suffixTrim;
+    const remainingOverflow = overflow - suffixTrim;
+    if (remainingOverflow > 0) {
+      prefixLen = Math.max(0, prefixLen - remainingOverflow);
+    }
+  }
+
+  if (prefixLen + suffixLen < minSize) {
+    return undefined;
+  }
+
+  return { prefixLen, suffixLen };
+}
+
+function makeNearDuplicatePointer(params: {
+  source: SourceBlock;
+  prefixLen: number;
+  suffixLen: number;
+  differingMiddle: string;
+}): string {
+  const toolHint = params.source.toolCallId ? ` (toolCallId ${params.source.toolCallId})` : "";
+
+  return (
+    `[Near-duplicate content trimmed]\n` +
+    `Same as context message #${params.source.messageIndex}, block #${params.source.blockIndex}${toolHint}. ` +
+    `Shared prefix ${params.prefixLen} chars and suffix ${params.suffixLen} chars.\n` +
+    `Differing middle (${params.differingMiddle.length} chars):\n${params.differingMiddle}`
+  );
+}
+
+function applyLcsNearDuplicateCompaction(
+  messages: any[],
+  config: DedupConfig,
+  protectedMessageIndexes: Set<number>,
+): any[] {
+  if (config.lcsMode !== "on") {
+    return messages;
+  }
+
+  const minSize = resolveLcsMinSize(config);
+  const sizeSimilarityThreshold = resolveSizeSimilarityThreshold(config);
+  const sourceBlocks: SourceBlock[] = [];
+  let changedAnyMessage = false;
+
+  const nextMessages = messages.map((msg, msgIdx) => {
+    if (!isDedupEligibleMessage(msg)) {
+      return msg;
+    }
+
+    const isProtectedMessage = protectedMessageIndexes.has(msgIdx);
+    const role = messageRole(msg);
+    const isArrayContent = Array.isArray(msg.content);
+    const contents = isArrayContent ? msg.content : [msg.content];
+
+    let changedMessage = false;
+    const nextContents = contents.map((block: TextLikeBlock, blockIdx: number) => {
+      const text = getBlockText(block);
+      if (typeof text !== "string" || !text.trim()) {
+        return block;
+      }
+
+      const canonicalText = normalizeTextForDedup(text, role);
+      if (!canonicalText.trim()) {
+        return block;
+      }
+
+      const toolCallId = typeof msg?.toolCallId === "string" ? msg.toolCallId : undefined;
+
+      let replacement: string | undefined;
+      if (!isProtectedMessage && canonicalText.length >= minSize) {
+        let best:
+          | {
+              pointer: string;
+              savedChars: number;
+            }
+          | undefined;
+
+        for (const source of sourceBlocks) {
+          if (source.canonicalText === canonicalText) {
+            continue;
+          }
+
+          const maxLen = Math.max(source.canonicalText.length, canonicalText.length);
+          if (maxLen <= 0) {
+            continue;
+          }
+
+          const sizeSimilarity =
+            Math.min(source.canonicalText.length, canonicalText.length) / maxLen;
+          if (sizeSimilarity < sizeSimilarityThreshold) {
+            continue;
+          }
+
+          const edgeMatch = computeCommonEdgeMatch(source.canonicalText, canonicalText, minSize);
+          if (!edgeMatch) {
+            continue;
+          }
+
+          const middleStart = edgeMatch.prefixLen;
+          const middleEnd = Math.max(middleStart, canonicalText.length - edgeMatch.suffixLen);
+          const differingMiddle = canonicalText.slice(middleStart, middleEnd);
+          const pointer = makeNearDuplicatePointer({
+            source,
+            prefixLen: edgeMatch.prefixLen,
+            suffixLen: edgeMatch.suffixLen,
+            differingMiddle,
+          });
+          const savedChars = text.length - pointer.length;
+          if (savedChars <= 0) {
+            continue;
+          }
+
+          if (!best || savedChars > best.savedChars) {
+            best = { pointer, savedChars };
+          }
+        }
+
+        if (best) {
+          replacement = best.pointer;
+        }
+      }
+
+      if (!replacement) {
+        sourceBlocks.push({
+          messageIndex: msgIdx,
+          blockIndex: blockIdx,
+          canonicalText,
+          toolCallId,
+        });
+        return block;
+      }
+
+      changedMessage = true;
+      return replaceBlockText(block, replacement);
+    });
+
+    if (!changedMessage) {
+      return msg;
+    }
+
+    changedAnyMessage = true;
+    return {
+      ...msg,
+      content: isArrayContent ? nextContents : nextContents[0],
+    };
+  });
+
+  return changedAnyMessage ? nextMessages : messages;
+}
+
 /**
  * Deduplicate content in messages.
  *
@@ -191,6 +412,7 @@ function normalizeTextForDedup(text: string, role: string): string {
  * 1. Scan eligible message text blocks for exact duplicate strings
  * 2. Keep the first occurrence intact
  * 3. Replace later occurrences with a plain-language pointer to the first one
+ * 4. Optionally run an LCS-edge pass (when lcsMode=on) for near-duplicate payloads
  *
  * Notes:
  * - This intentionally avoids symbolic ref-table tags and only emits plain-language pointers.
@@ -280,7 +502,7 @@ export function deduplicateMessages(
   }
 
   const seenOrderByCanonicalText = new Map<string, number>();
-  const newMessages: any[] = messages.map((msg, msgIdx) => {
+  const exactDedupMessages: any[] = messages.map((msg, msgIdx) => {
     if (!isDedupEligibleMessage(msg)) {
       return msg;
     }
@@ -338,7 +560,13 @@ export function deduplicateMessages(
     };
   });
 
+  const messagesWithLcs = applyLcsNearDuplicateCompaction(
+    exactDedupMessages,
+    config,
+    protectedMessageIndexes,
+  );
+
   return {
-    messages: newMessages,
+    messages: messagesWithLcs,
   };
 }

@@ -6,6 +6,7 @@ import {
   applyRepeatFoldCompaction,
   rewriteReadLineageSourcePointers,
 } from "./context-dedup/extension.js";
+import { resolveEffectiveDedupSettings } from "./context-dedup/settings.js";
 
 const DEDUP_ON = {
   mode: "on",
@@ -179,6 +180,59 @@ describe("context-dedup", () => {
 
     expect(String(result.messages[1].content)).toBe(repeated);
     expect(String(result.messages[2].content)).toContain("Same as context message #0");
+  });
+
+  it("applies LCS near-duplicate compaction when lcsMode is enabled", () => {
+    const sharedPrefix = "prefix-section-".repeat(30);
+    const sharedSuffix = "-suffix-section".repeat(30);
+    const first = `${sharedPrefix}\n${"alpha-change-".repeat(18)}\n${sharedSuffix}`;
+    const second = `${sharedPrefix}\n${"beta-".repeat(8)}\n${sharedSuffix}`;
+
+    const result = deduplicateMessages(
+      [
+        { role: "toolResult", toolCallId: "read_a", content: first },
+        { role: "toolResult", toolCallId: "read_b", content: second },
+      ],
+      {
+        ...DEDUP_ON,
+        lcsMode: "on",
+        lcsMinSize: 80,
+        sizeSimilarityThreshold: 0.5,
+      },
+    );
+
+    const secondCompressed = String(result.messages[1].content);
+    expect(secondCompressed).toContain("[Near-duplicate content trimmed]");
+    expect(secondCompressed).toContain("Same as context message #0");
+    expect(secondCompressed).toContain("Differing middle");
+  });
+
+  it("does not apply LCS near-duplicate compaction when lcsMode is disabled", () => {
+    const sharedPrefix = "prefix-section-".repeat(30);
+    const sharedSuffix = "-suffix-section".repeat(30);
+    const first = `${sharedPrefix}\n${"alpha-change-".repeat(18)}\n${sharedSuffix}`;
+    const second = `${sharedPrefix}\n${"beta-".repeat(8)}\n${sharedSuffix}`;
+
+    const result = deduplicateMessages(
+      [
+        { role: "toolResult", toolCallId: "read_a", content: first },
+        { role: "toolResult", toolCallId: "read_b", content: second },
+      ],
+      {
+        ...DEDUP_ON,
+        lcsMode: "off",
+        lcsMinSize: 80,
+      },
+    );
+
+    expect(String(result.messages[1].content)).toBe(second);
+  });
+
+  it("resolves LCS settings defaults in effective dedup settings", () => {
+    const resolved = resolveEffectiveDedupSettings(undefined);
+    expect(resolved.lcsMode).toBe("off");
+    expect(resolved.lcsMinSize).toBe(50);
+    expect(resolved.sizeSimilarityThreshold).toBe(0.5);
   });
 
   it("compresses near-duplicate read chunks into line-based delta notes", () => {
