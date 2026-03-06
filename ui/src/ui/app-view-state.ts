@@ -150,6 +150,7 @@ export type AppViewState = {
   agentDeleteError: string | null;
   agentDeleteConfirmOpen: boolean;
   agentDeleteConfirmInput: string;
+  agentDeleteConfirmAgentId: string | null;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;

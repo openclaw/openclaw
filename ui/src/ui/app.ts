@@ -243,6 +243,7 @@ export class OpenClawApp extends LitElement {
   @state() agentDeleteError: string | null = null;
   @state() agentDeleteConfirmOpen = false;
   @state() agentDeleteConfirmInput = "";
+  @state() agentDeleteConfirmAgentId: string | null = null;
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;

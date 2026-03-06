@@ -46,6 +46,7 @@ export type AgentDeleteState = {
 
 export async function deleteAgent(state: AgentsState & AgentDeleteState, agentId: string) {
   if (!state.client || !state.connected) {
+    state.agentDeleteError = "Not connected to the gateway.";
     return;
   }
   state.agentDeleteBusy = true;
@@ -57,16 +58,20 @@ export async function deleteAgent(state: AgentsState & AgentDeleteState, agentId
     });
     // Refresh agent list, retrying with back-off if the deleted agent still appears
     const maxRetries = 3;
+    let removed = false;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (attempt > 0) {
         await new Promise((r) => setTimeout(r, attempt * 500));
       }
       state.agentsLoading = false; // clear guard so loadAgents can proceed
       await loadAgents(state);
-      const stillPresent = state.agentsList?.agents.some((a) => a.id === agentId);
-      if (!stillPresent) {
+      if (!state.agentsList?.agents.some((a) => a.id === agentId)) {
+        removed = true;
         break;
       }
+    }
+    if (!removed) {
+      state.agentDeleteError = "Agent deleted but may still appear briefly. Try refreshing.";
     }
   } catch (err) {
     state.agentDeleteError = String(err);
