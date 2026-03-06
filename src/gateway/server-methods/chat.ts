@@ -12,7 +12,10 @@ import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  parseAgentSessionKey,
+  resolveSessionThreadInfo,
+} from "../../sessions/session-key-utils.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -104,6 +107,25 @@ function stripDisallowedChatControlChars(message: string): string {
     }
   }
   return output;
+}
+
+function normalizeOptionalNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized || undefined;
+}
+
+function normalizeOptionalThreadId(value: unknown): string | undefined {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      return undefined;
+    }
+    const normalized = String(value).trim();
+    return normalized || undefined;
+  }
+  return normalizeOptionalNonEmptyString(value);
 }
 
 export function sanitizeChatSendMessageInput(
@@ -744,6 +766,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: string;
       thinking?: string;
       deliver?: boolean;
+      threadId?: string | number;
+      threadLabel?: string;
+      parentSessionKey?: string;
       attachments?: Array<{
         type?: string;
         mimeType?: string;
@@ -864,6 +889,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
+      const threadInfo = resolveSessionThreadInfo(rawSessionKey);
+      const explicitThreadId = normalizeOptionalThreadId(p.threadId);
+      const explicitParentSessionKey = normalizeOptionalNonEmptyString(p.parentSessionKey);
+      const explicitThreadLabel = normalizeOptionalNonEmptyString(p.threadLabel);
       const shouldDeliverExternally = p.deliver === true;
       const routeChannelCandidate = normalizeMessageChannel(
         entry?.deliveryContext?.channel ?? entry?.lastChannel,
@@ -871,7 +900,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       const routeToCandidate = entry?.deliveryContext?.to ?? entry?.lastTo;
       const routeAccountIdCandidate =
         entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
-      const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
+      const routeThreadIdCandidate = normalizeOptionalThreadId(
+        entry?.deliveryContext?.threadId ?? entry?.lastThreadId,
+      );
       const parsedSessionKey = parseAgentSessionKey(sessionKey);
       const sessionScopeParts = (parsedSessionKey?.rest ?? sessionKey).split(":").filter(Boolean);
       const sessionScopeHead = sessionScopeParts[0];
@@ -918,7 +949,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         : INTERNAL_MESSAGE_CHANNEL;
       const originatingTo = hasDeliverableRoute ? routeToCandidate : undefined;
       const accountId = hasDeliverableRoute ? routeAccountIdCandidate : undefined;
-      const messageThreadId = hasDeliverableRoute ? routeThreadIdCandidate : undefined;
+      const messageThreadId =
+        explicitThreadId ??
+        threadInfo.threadId ??
+        (hasDeliverableRoute ? routeThreadIdCandidate : undefined);
+      const parentSessionKey = explicitParentSessionKey ?? threadInfo.parentSessionKey ?? undefined;
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
@@ -937,6 +972,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         OriginatingTo: originatingTo,
         AccountId: accountId,
         MessageThreadId: messageThreadId,
+        ParentSessionKey: parentSessionKey,
+        ThreadLabel: explicitThreadLabel,
         ChatType: "direct",
         CommandAuthorized: true,
         MessageSid: clientRunId,

@@ -31,6 +31,9 @@ export type ChatSendOptions = {
   deliver?: boolean;
   timeoutMs?: number;
   runId?: string;
+  threadId?: string;
+  threadLabel?: string;
+  parentSessionKey?: string;
 };
 
 export type GatewayEvent = {
@@ -178,6 +181,9 @@ export class GatewayChatClient {
       thinking: opts.thinking,
       deliver: opts.deliver,
       timeoutMs: opts.timeoutMs,
+      threadId: opts.threadId,
+      threadLabel: opts.threadLabel,
+      parentSessionKey: opts.parentSessionKey,
       idempotencyKey: runId,
     });
     return { runId };

@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleChatEvent, loadChatHistory, type ChatEventPayload, type ChatState } from "./chat.ts";
+import {
+  handleChatEvent,
+  loadChatHistory,
+  sendChatMessage,
+  syncChatHistoryDuringRun,
+  type ChatEventPayload,
+  type ChatState,
+} from "./chat.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -34,6 +41,49 @@ describe("handleChatEvent", () => {
       state: "final",
     };
     expect(handleChatEvent(state, payload)).toBe(null);
+  });
+
+  it("accepts own-run final events even when sessionKey alias differs", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "in progress",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
+  });
+
+  it("accepts same-session final events for main alias without run id match", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done via alias" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
   });
 
   it("returns null for delta from another run", () => {
@@ -465,7 +515,7 @@ describe("handleChatEvent", () => {
       },
     };
 
-    // User messages with NO_REPLY text should NOT be filtered — only assistant messages.
+    // User messages with NO_REPLY text should NOT be filtered - only assistant messages.
     // normalizeFinalAssistantMessage returns null for user role, so this falls through.
     expect(handleChatEvent(state, payload)).toBe("final");
   });
@@ -488,7 +538,7 @@ describe("handleChatEvent", () => {
       },
     };
 
-    // entry.text takes precedence — "real reply" is NOT silent, so the message is kept.
+    // entry.text takes precedence - "real reply" is NOT silent, so the message is kept.
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toHaveLength(1);
   });
@@ -531,8 +581,89 @@ describe("loadChatHistory", () => {
 
     await loadChatHistory(state);
 
-    // text takes precedence — "real reply" is NOT silent, so message is kept.
+    // text takes precedence - "real reply" is NOT silent, so message is kept.
     expect(state.chatMessages).toHaveLength(1);
+  });
+});
+
+describe("sendChatMessage", () => {
+  it("forwards thread metadata for thread session keys", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "agent:main:discord:channel:c1:thread:abc",
+      sessionsResult: {
+        ts: 0,
+        path: "/tmp/sessions.json",
+        count: 1,
+        defaults: { model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:discord:channel:c1:thread:abc",
+            kind: "group",
+            displayName: "Discord thread",
+            updatedAt: null,
+          },
+        ],
+      },
+    });
+
+    await sendChatMessage(state, "hello");
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:channel:c1:thread:abc",
+        message: "hello",
+        deliver: false,
+        threadId: "abc",
+        threadLabel: "Discord thread",
+        parentSessionKey: "agent:main:discord:channel:c1",
+      }),
+    );
+  });
+
+  it("omits threadLabel when the active thread session has no displayName", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "agent:main:discord:channel:c1:thread:abc",
+      sessionsResult: {
+        ts: 0,
+        path: "/tmp/sessions.json",
+        count: 1,
+        defaults: { model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:discord:channel:c1:thread:abc",
+            kind: "group",
+            updatedAt: null,
+          },
+        ],
+      },
+    });
+
+    await sendChatMessage(state, "hello");
+
+    const payload = request.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload.threadLabel).toBeUndefined();
+  });
+
+  it("does not attach thread metadata for non-thread session keys", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "agent:main:main",
+    });
+
+    await sendChatMessage(state, "hello");
+
+    const payload = request.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload.threadId).toBeUndefined();
+    expect(payload.parentSessionKey).toBeUndefined();
   });
 });
 
@@ -564,5 +695,88 @@ describe("loadChatHistory", () => {
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
+  });
+});
+
+describe("syncChatHistoryDuringRun", () => {
+  it("applies history while run/session context is unchanged", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "fresh" }] }],
+      thinkingLevel: "high",
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [],
+      chatThinkingLevel: null,
+    });
+
+    await syncChatHistoryDuringRun(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fresh" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("high");
+  });
+
+  it("filters silent assistant replies while syncing history", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+        { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+        { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
+      ],
+      thinkingLevel: "high",
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [],
+      chatThinkingLevel: null,
+    });
+
+    await syncChatHistoryDuringRun(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+      { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("high");
+  });
+
+  it("drops stale poll responses when active run changes in flight", async () => {
+    let resolveRequest:
+      | ((value: { messages?: Array<unknown>; thinkingLevel?: string }) => void)
+      | undefined;
+    const request = vi.fn(
+      () =>
+        new Promise<{ messages?: Array<unknown>; thinkingLevel?: string }>((resolve) => {
+          resolveRequest = resolve;
+        }),
+    );
+    const originalMessages = [{ role: "assistant", content: [{ type: "text", text: "current" }] }];
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: originalMessages,
+      chatThinkingLevel: "medium",
+    });
+
+    const pending = syncChatHistoryDuringRun(state);
+    state.chatRunId = "run-2";
+    resolveRequest?.({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "stale" }] }],
+      thinkingLevel: "high",
+    });
+    await pending;
+
+    expect(state.chatMessages).toBe(originalMessages);
+    expect(state.chatThinkingLevel).toBe("medium");
   });
 });
