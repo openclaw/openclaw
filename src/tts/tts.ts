@@ -12,7 +12,6 @@ import {
 import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
-import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import type {
@@ -496,7 +495,7 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 }
 
 /** Channels that require opus audio and support voice-bubble playback */
-const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp"]);
+const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
 
 function resolveOutputFormat(channelId?: string | null) {
   if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
@@ -505,8 +504,15 @@ function resolveOutputFormat(channelId?: string | null) {
   return DEFAULT_OUTPUT;
 }
 
-function resolveChannelId(channel: string | undefined): ChannelId | null {
-  return channel ? normalizeChannelId(channel) : null;
+function resolveChannelId(channel: string | undefined): string | null {
+  const normalized = channel?.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (VOICE_BUBBLE_CHANNELS.has(normalized)) {
+    return normalized;
+  }
+  return normalizeChannelId(normalized);
 }
 
 function resolveEdgeOutputFormat(config: ResolvedTtsConfig): string {
