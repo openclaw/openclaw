@@ -10,6 +10,40 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     vi.clearAllMocks();
   });
 
+  it("forwards sender identity fields into embedded attempts", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: ["Response 1"],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-sender-forwarding",
+      senderId: "user-123",
+      senderName: "Josh Lehman",
+      senderUsername: "josh",
+      senderE164: "+15551234567",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderId: "user-123",
+        senderName: "Josh Lehman",
+        senderUsername: "josh",
+        senderE164: "+15551234567",
+      }),
+    );
+  });
+
   it("reports total usage from the last turn instead of accumulated total", async () => {
     // Simulate a multi-turn run result.
     // Turn 1: Input 100, Output 50. Total 150.
