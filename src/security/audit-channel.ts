@@ -147,27 +147,41 @@ export async function collectChannelSecurityFindings(params: {
   ) => {
     const sourceInspectedAccount = inspectChannelAccount(plugin, sourceConfig, accountId);
     const resolvedInspectedAccount = inspectChannelAccount(plugin, params.cfg, accountId);
+    const sourceInspection = sourceInspectedAccount as {
+      enabled?: boolean;
+      configured?: boolean;
+    } | null;
+    const resolvedInspection = resolvedInspectedAccount as {
+      enabled?: boolean;
+      configured?: boolean;
+    } | null;
     const resolvedAccount =
       resolvedInspectedAccount ?? plugin.config.resolveAccount(params.cfg, accountId);
-    const account =
+    const useSourceUnavailableAccount = Boolean(
       sourceInspectedAccount &&
       hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
-      !hasResolvedCredentialValue(resolvedAccount)
-        ? sourceInspectedAccount
-        : resolvedAccount;
+      (!hasResolvedCredentialValue(resolvedAccount) ||
+        (sourceInspection?.configured === true && resolvedInspection?.configured === false)),
+    );
+    const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
+    const selectedInspection = useSourceUnavailableAccount ? sourceInspection : resolvedInspection;
     const accountRecord = asAccountRecord(account);
     const enabled =
-      typeof accountRecord?.enabled === "boolean"
-        ? accountRecord.enabled
-        : plugin.config.isEnabled
-          ? plugin.config.isEnabled(account, params.cfg)
-          : true;
+      typeof selectedInspection?.enabled === "boolean"
+        ? selectedInspection.enabled
+        : typeof accountRecord?.enabled === "boolean"
+          ? accountRecord.enabled
+          : plugin.config.isEnabled
+            ? plugin.config.isEnabled(account, params.cfg)
+            : true;
     const configured =
-      typeof accountRecord?.configured === "boolean"
-        ? accountRecord.configured
-        : plugin.config.isConfigured
-          ? await plugin.config.isConfigured(account, params.cfg)
-          : true;
+      typeof selectedInspection?.configured === "boolean"
+        ? selectedInspection.configured
+        : typeof accountRecord?.configured === "boolean"
+          ? accountRecord.configured
+          : plugin.config.isConfigured
+            ? await plugin.config.isConfigured(account, params.cfg)
+            : true;
     return { account, enabled, configured };
   };
 

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
 import { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
 import type { TelegramAccountConfig } from "../config/types.telegram.js";
+import { resolveAccountWithDefaultFallback } from "../plugin-sdk/account-resolution.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
@@ -99,14 +100,12 @@ function inspectTokenValue(value: unknown): {
   return null;
 }
 
-export function inspectTelegramAccount(params: {
+function inspectTelegramAccountPrimary(params: {
   cfg: OpenClawConfig;
-  accountId?: string | null;
+  accountId: string;
   envToken?: string | null;
 }): InspectedTelegramAccount {
-  const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
-  );
+  const accountId = normalizeAccountId(params.accountId);
   const merged = mergeTelegramAccountConfig(params.cfg, accountId);
   const enabled = params.cfg.channels?.telegram?.enabled !== false && merged.enabled !== false;
 
@@ -192,4 +191,23 @@ export function inspectTelegramAccount(params: {
     configured: false,
     config: merged,
   };
+}
+
+export function inspectTelegramAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  envToken?: string | null;
+}): InspectedTelegramAccount {
+  return resolveAccountWithDefaultFallback({
+    accountId: params.accountId,
+    normalizeAccountId,
+    resolvePrimary: (accountId) =>
+      inspectTelegramAccountPrimary({
+        cfg: params.cfg,
+        accountId,
+        envToken: params.envToken,
+      }),
+    hasCredential: (account) => account.tokenSource !== "none",
+    resolveDefaultAccountId: () => resolveDefaultTelegramAccountId(params.cfg),
+  });
 }

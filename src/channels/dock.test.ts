@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withEnv } from "../test-utils/env.js";
 import { getChannelDock } from "./dock.js";
 
 function emptyConfig(): OpenClawConfig {
@@ -98,6 +99,30 @@ describe("channels dock", () => {
     });
 
     expect(formatted).toEqual(["user", "foo", "plain"]);
+  });
+
+  it("telegram dock config readers preserve omitted-account fallback semantics", () => {
+    withEnv({ TELEGRAM_BOT_TOKEN: "tok-env" }, () => {
+      const telegramDock = getChannelDock("telegram");
+      const cfg = {
+        channels: {
+          telegram: {
+            allowFrom: ["top-owner"],
+            defaultTo: "@top-target",
+            accounts: {
+              work: {
+                botToken: "tok-work",
+                allowFrom: ["work-owner"],
+                defaultTo: "@work-target",
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(telegramDock?.config?.resolveAllowFrom?.({ cfg })).toEqual(["top-owner"]);
+      expect(telegramDock?.config?.resolveDefaultTo?.({ cfg })).toBe("@top-target");
+    });
   });
 
   it("slack dock config readers stay read-only when tokens are unresolved SecretRefs", () => {
