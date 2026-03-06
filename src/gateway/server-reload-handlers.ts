@@ -133,7 +133,11 @@ export function createGatewayReloadHandlers(params: {
     }
 
     // Handle channel groups hot reload (without restarting channel)
-    if (plan.reloadChannelGroups.size > 0) {
+    if (
+      plan.reloadChannelGroups.size > 0 &&
+      !isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) &&
+      !isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
+    ) {
       for (const channelId of plan.reloadChannelGroups) {
         const plugin = getChannelPlugin(channelId);
         if (plugin?.reload?.reloadGroups) {
