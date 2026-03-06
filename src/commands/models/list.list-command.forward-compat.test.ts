@@ -182,6 +182,41 @@ describe("modelsListCommand forward-compat", () => {
     ]);
   });
 
+  it("keeps configured provider-key rows visible with --all --provider for normalized aliases", async () => {
+    mocks.resolveConfiguredEntries.mockReturnValueOnce({
+      entries: [
+        {
+          key: "zai/glm-4.6",
+          ref: { provider: "zai", model: "glm-4.6" },
+          tags: new Set(["configured"]),
+          aliases: [],
+        },
+      ],
+    });
+    mocks.resolveModelWithRegistry.mockReturnValueOnce({
+      provider: "z.ai",
+      id: "glm-4.6",
+      name: "GLM-4.6",
+      api: "openai-responses",
+      baseUrl: "https://api.z.ai/v1",
+      input: ["text"],
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    await modelsListCommand({ all: true, provider: "zai", json: true }, runtime as never);
+
+    expect(mocks.printModelTable).toHaveBeenCalled();
+    const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{ key: string }>;
+    expect(rows).toEqual([
+      expect.objectContaining({
+        key: "zai/glm-4.6",
+      }),
+    ]);
+  });
+
   it("marks synthetic codex gpt-5.4 rows as available when provider auth exists", async () => {
     mocks.loadModelRegistry.mockResolvedValueOnce({
       models: [],

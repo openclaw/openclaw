@@ -92,7 +92,9 @@ export async function modelsListCommand(
       });
 
     for (const { key, model } of sorted) {
-      if (providerFilter && model.provider.toLowerCase() !== providerFilter) {
+      const slash = key.indexOf("/");
+      const keyProvider = slash === -1 ? key : key.slice(0, slash);
+      if (providerFilter && keyProvider.toLowerCase() !== providerFilter) {
         continue;
       }
       if (opts.local && !isLocalBaseUrl(model.baseUrl)) {
