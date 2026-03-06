@@ -429,11 +429,12 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (res.code === 0) {
     return true;
   }
-  const detail = readSystemctlDetail(res);
-  if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
-    return false;
-  }
-  throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
+  // Any non-zero exit from is-enabled means the unit is not enabled (or
+  // not yet installed). This covers disabled, masked, static, indirect,
+  // not-found, systemctl missing, and the pre-install case where the
+  // service file does not exist yet.  The install flow validates systemd
+  // availability separately via assertSystemdAvailable before proceeding.
+  return false;
 }
 
 export async function readSystemdServiceRuntime(

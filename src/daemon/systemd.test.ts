@@ -102,7 +102,7 @@ describe("isSystemdServiceEnabled", () => {
     expect(result).toBe(false);
   });
 
-  it("throws when systemctl is-enabled fails for non-state errors", async () => {
+  it("returns false when systemctl is-enabled fails for non-state errors", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -119,9 +119,21 @@ describe("isSystemdServiceEnabled", () => {
         err.code = 1;
         cb(err, "", "permission denied");
       });
-    await expect(isSystemdServiceEnabled({ env: {} })).rejects.toThrow(
-      "systemctl is-enabled unavailable: permission denied",
-    );
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
+
+  it("returns false when service file does not exist yet (pre-install)", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = new Error(
+        "Command failed: systemctl --user is-enabled openclaw-gateway.service",
+      ) as Error & { code?: number };
+      err.code = 1;
+      cb(err, "", "");
+    });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
   });
 
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
