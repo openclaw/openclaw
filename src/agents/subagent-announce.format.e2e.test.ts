@@ -4,6 +4,7 @@ import {
   __testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
 type RequesterResolution = {
@@ -79,7 +80,9 @@ const chatHistoryMock = vi.fn(async (_sessionKey?: string) => ({
   messages: [] as Array<unknown>,
 }));
 const resolveChannelMessageToolHintsMock = vi.fn((_params?: unknown) => [] as string[]);
-const loadChannelOutboundAdapterMock = vi.fn(async (_channel?: unknown) => undefined);
+const loadChannelOutboundAdapterMock = vi.fn(
+  async (_channel?: unknown): Promise<ChannelOutboundAdapter | undefined> => undefined,
+);
 let sessionStore: Record<string, Record<string, unknown>> = {};
 let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: {

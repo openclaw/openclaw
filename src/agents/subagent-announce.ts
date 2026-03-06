@@ -730,6 +730,11 @@ async function sendSubagentAnnounceDirectly(params: {
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
   expectsCompletionMessage: boolean;
+  completionMessage?: string;
+  spawnMode?: SpawnSubagentMode;
+  completionRouteMode?: string;
+  announceType?: SubagentAnnounceType;
+  currentRunId?: string;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
   completionDirectOrigin?: DeliveryContext;
@@ -948,6 +953,11 @@ async function deliverSubagentAnnouncement(params: {
   requesterOrigin?: DeliveryContext;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
+  completionMessage?: string;
+  spawnMode?: SpawnSubagentMode;
+  completionRouteMode?: string;
+  announceType?: SubagentAnnounceType;
+  currentRunId?: string;
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
@@ -980,6 +990,11 @@ async function deliverSubagentAnnouncement(params: {
         targetRequesterSessionKey: params.targetRequesterSessionKey,
         triggerMessage: params.triggerMessage,
         internalEvents: params.internalEvents,
+        completionMessage: params.completionMessage,
+        spawnMode: params.spawnMode,
+        completionRouteMode: params.completionRouteMode,
+        announceType: params.announceType,
+        currentRunId: params.currentRunId,
         directIdempotencyKey: params.directIdempotencyKey,
         completionDirectOrigin: params.completionDirectOrigin,
         directOrigin: params.directOrigin,
@@ -1263,6 +1278,7 @@ export async function runSubagentAnnounceFlow(params: {
   label?: string;
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
+  completionRouteMode?: string;
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
@@ -1547,6 +1563,11 @@ export async function runSubagentAnnounceFlow(params: {
       requesterIsSubagent,
       expectsCompletionMessage: expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
+      completionMessage: reply,
+      spawnMode: params.spawnMode,
+      completionRouteMode: params.completionRouteMode,
+      announceType,
+      currentRunId: params.childRunId,
       directIdempotencyKey,
       signal: params.signal,
     });
