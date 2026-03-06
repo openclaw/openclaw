@@ -164,6 +164,123 @@ gh pr comment <PR#> --body "<review content>"
 
 ---
 
+## Multi-Agent Orchestration (Experimental)
+
+Codex CLI (v0.111.0+) can spawn parallel sub-agents within a single session. Instead of one agent doing everything serially, you break the work into specialized parallel streams.
+
+> **Status:** This feature is `experimental` and may change. Enable it explicitly before use.
+
+### Enabling Multi-Agent
+
+Via CLI:
+```bash
+codex features enable multi_agent
+```
+
+Or in `~/.codex/config.toml`:
+```toml
+[features]
+multi_agent = true
+```
+
+Restart Codex after enabling.
+
+### Agent Roles
+
+Define specialized roles so agents stay in their lane. An explorer shouldn't rewrite files, and a worker shouldn't waste time mapping the codebase.
+
+In your project's `codex.toml` or `~/.codex/config.toml`:
+
+```toml
+[agents.explorer]
+model = "gpt-5.2-codex"          # fast model for scanning
+sandbox_permissions = ["disk-full-read-access"]  # read-only
+instructions = "Map the codebase. Gather evidence. Do not modify files."
+
+[agents.reviewer]
+model = "o3"                      # high-reasoning for correctness
+sandbox_permissions = ["disk-full-read-access"]
+instructions = "Review for security, correctness, and test coverage. Report risks as JSON."
+
+[agents.worker]
+model = "gpt-5.2-codex"
+sandbox_permissions = ["disk-full-read-access", "disk-write-access"]
+instructions = "Implement fixes. Commit after each change."
+```
+
+### CSV Batch Processing
+
+The `spawn_agents_on_csv` tool lets you run one sub-agent per row in a CSV. Useful for mass audits, migrations, or component reviews.
+
+```bash
+# Create a CSV with targets
+cat > audit-targets.csv << 'EOF'
+path,owner,type
+src/api/auth.ts,backend-team,security
+src/api/payments.ts,backend-team,security
+src/components/UserForm.tsx,frontend-team,validation
+src/lib/db.ts,backend-team,security
+EOF
+
+# Run Codex with a batch audit prompt
+bash pty:true workdir:~/project background:true command:"codex exec --full-auto '
+Read audit-targets.csv and use spawn_agents_on_csv to review each file.
+Prompt per row: Review {path} owned by {owner} for {type} issues.
+Return JSON with keys: path, risk_level, findings, remediation.
+Export results to audit-results.csv.
+'"
+```
+
+Each row spawns a worker sub-agent. Failed rows get marked in the output CSV without crashing the batch. Concurrency is controlled by `agents.max_threads` in config.
+
+### Mapping to OpenClaw Fleet
+
+If you run OpenClaw with a fleet of named agents, Codex multi-agent is a different layer:
+
+| Layer | What it does | Example |
+|-------|-------------|---------|
+| **OpenClaw fleet** | Routes tasks to the right agent (dev, research, deploy) | "İbo handles code, Öz handles research" |
+| **Codex multi-agent** | Parallelizes work within a single Codex session | "3 sub-agents audit 3 files simultaneously" |
+
+They compose well. Your OpenClaw orchestrator spawns a Codex agent for a coding task, and that Codex session internally fans out sub-agents for parallel work:
+
+```bash
+# OpenClaw spawns one Codex session for a big audit
+bash pty:true workdir:~/project background:true command:"codex exec --full-auto '
+Enable multi-agent. Spawn 3 parallel reviewers:
+1. Explorer: map all API routes and list them
+2. Reviewer: check auth middleware on each route
+3. Worker: fix any missing auth guards and commit
+'"
+```
+
+### Monitoring Sub-Agents
+
+Sub-agent activity shows up in the Codex CLI output. Use `process action:log` to watch:
+
+```bash
+# See sub-agent spawn/complete events
+process action:log sessionId:XXX
+
+# Look for lines like:
+# [sub-agent:explorer] Started - scanning src/
+# [sub-agent:reviewer] Completed - found 3 issues
+# [sub-agent:worker] Completed - fixed 2 files, committed
+```
+
+Currently visible only in CLI. IDE/app visibility is planned.
+
+### Tips and Gotchas
+
+- **Sub-agents inherit sandbox policy.** If the parent is `--full-auto`, sub-agents are sandboxed too. If `--yolo`, sub-agents get full access.
+- **Start small.** Try 2-3 sub-agents before scaling to 20. Debug one workflow first.
+- **CSV batches can be large** but respect `agents.max_threads`. Default concurrency is reasonable, don't crank it without testing.
+- **Failed sub-agents don't crash the parent.** The row is marked failed and the batch continues.
+- **Role separation matters.** A read-only explorer can't accidentally delete files. Use `sandbox_permissions` to enforce boundaries.
+- **This is experimental.** The API surface may change between Codex releases. Pin your Codex version for production workflows.
+
+---
+
 ## Claude Code
 
 ```bash
@@ -244,6 +361,8 @@ git worktree remove /tmp/issue-99
 7. **Parallel is OK** - run many Codex processes at once for batch work
 8. **NEVER start Codex in ~/.openclaw/** - it'll read your soul docs and get weird ideas about the org chart!
 9. **NEVER checkout branches in ~/Projects/openclaw/** - that's the LIVE OpenClaw instance!
+10. **Multi-agent: test roles before batch runs** - verify your Explorer/Reviewer/Worker configs work on a single file before unleashing a CSV batch across the whole repo
+11. **Multi-agent: read-only for exploration** - always use `disk-full-read-access` (no write) for explorer/reviewer roles. Only workers should write.
 
 ---
 
