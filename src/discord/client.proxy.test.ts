@@ -6,6 +6,9 @@ const proxyAgentCtorMock = vi.fn();
 vi.mock("undici", () => ({
   ProxyAgent: class ProxyAgent {
     constructor(url: string) {
+      if (url === "bad-proxy") {
+        throw new Error("bad proxy");
+      }
       proxyAgentCtorMock(url);
     }
   },
@@ -28,6 +31,7 @@ vi.mock("../config/config.js", () => ({
         proxy: "http://127.0.0.1:7890",
         accounts: {
           default: {},
+          bad: { proxy: "bad-proxy" },
         },
       },
     },
@@ -77,5 +81,16 @@ describe("discord client proxy wiring", () => {
     const [_token, options] = requestClientCtorMock.mock.calls[0];
     expect(options).toBeTruthy();
     expect((options as { dispatcher?: unknown }).dispatcher).toBeTruthy();
+  });
+
+  it("falls back to a non-proxied RequestClient when the proxy URL is invalid", () => {
+    requestClientCtorMock.mockClear();
+    proxyAgentCtorMock.mockClear();
+
+    createDiscordRestClient({ accountId: "bad" });
+
+    expect(requestClientCtorMock).toHaveBeenCalledTimes(1);
+    const [_token, options] = requestClientCtorMock.mock.calls[0];
+    expect(options).toBeFalsy();
   });
 });

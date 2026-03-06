@@ -36,12 +36,19 @@ function resolveRest(params: { token: string; proxyUrl?: string; rest?: RequestC
   if (!proxy) {
     return new RequestClient(params.token);
   }
+
   // Carbon's RequestClient uses global fetch by default; provide an undici dispatcher
   // so REST calls can traverse an HTTP proxy (e.g. Clash, Squid).
-  return new RequestClient(params.token, { dispatcher: new ProxyAgent(proxy) } as unknown as Record<
-    string,
-    unknown
-  >);
+  //
+  // Be defensive: ProxyAgent construction can throw synchronously for malformed proxy
+  // strings. In that case, fall back to the default (non-proxied) RequestClient instead
+  // of crashing during Discord client initialization.
+  try {
+    const dispatcher = new ProxyAgent(proxy);
+    return new RequestClient(params.token, { dispatcher } as unknown as Record<string, unknown>);
+  } catch {
+    return new RequestClient(params.token);
+  }
 }
 
 export function createDiscordRestClient(opts: DiscordClientOpts, cfg = loadConfig()) {
