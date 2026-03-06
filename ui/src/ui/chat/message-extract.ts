@@ -6,8 +6,9 @@ const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
 function processMessageText(text: string, role: string): string {
-  const shouldStripInboundMetadata = role.toLowerCase() === "user";
-  if (role === "assistant") {
+  const normalizedRole = role.toLowerCase();
+  const shouldStripInboundMetadata = normalizedRole === "user";
+  if (normalizedRole === "assistant") {
     return stripThinkingTags(text);
   }
   return shouldStripInboundMetadata
@@ -92,7 +93,11 @@ export function extractRawText(message: unknown): string | null {
     const parts = content
       .map((p) => {
         const item = p as Record<string, unknown>;
-        if (item.type === "text" && typeof item.text === "string") {
+        const type = typeof item.type === "string" ? item.type : "";
+        if (
+          (type === "text" || type === "output_text" || type === "input_text") &&
+          typeof item.text === "string"
+        ) {
           return item.text;
         }
         return null;
