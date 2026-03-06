@@ -10,6 +10,11 @@ import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyPrefixText,
+  SILENT_REPLY_TOKEN,
+} from "../auto-reply/tokens.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
@@ -304,6 +309,18 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     if (text === lane.lastPartialText) {
+      return;
+    }
+    // Do not stream silent-reply or heartbeat token prefixes to the draft.
+    // When the agent emits "NO_REPLY" the streaming layer may transiently emit
+    // the "NO" fragment.  If that fragment reaches the draft stream it can be
+    // flushed as a real Telegram message (the minInitialChars guard is bypassed
+    // during the final flush).  Catching the prefix here ensures the partial
+    // never enters the draft queue.  (#36811)
+    if (
+      isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
+      isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
+    ) {
       return;
     }
     // Mark that we've received streaming content (for forceNewMessage decision).
