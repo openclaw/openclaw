@@ -117,6 +117,43 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+
+  // --- API error leakage prevention (Issue #22665) ---
+
+  it("returns a friendly message for auth permanent errors instead of raw text", () => {
+    const msg = makeAssistantError("invalid_api_key: The API key you provided is invalid.");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Authentication failed");
+    expect(result).toContain("invalid or revoked");
+    expect(result).not.toContain("invalid_api_key");
+  });
+
+  it("returns a friendly message for auth errors instead of leaking credentials", () => {
+    const msg = makeAssistantError("401 Unauthorized: Invalid token for organization org-abc123");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Authentication error");
+    expect(result).not.toContain("org-abc123");
+  });
+
+  it("never returns raw unclassified error text to the user", () => {
+    const msg = makeAssistantError(
+      "Internal failure at gateway-east-2.internal:8443 — request_id: req_abc123, trace: span_xyz",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).not.toContain("gateway-east-2");
+    expect(result).not.toContain("req_abc123");
+    expect(result).not.toContain("span_xyz");
+    expect(result).toContain("unexpected error");
+  });
+
+  it("does not leak long raw error payloads even when truncated", () => {
+    const longError = "x".repeat(1000) + " secret_key=sk-abc123";
+    const msg = makeAssistantError(longError);
+    const result = formatAssistantErrorText(msg);
+    expect(result).not.toContain("sk-abc123");
+    expect(result).not.toContain("xxxx");
+    expect(result).toContain("unexpected error");
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
@@ -151,5 +188,24 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
     );
+  });
+
+  // --- API error leakage prevention (Issue #22665) ---
+
+  it("returns a safe generic message for unparseable raw errors", () => {
+    const rawError =
+      "Connection refused at provider-internal.east-2:8080 (credentials: sk-ant-xxx, trace_id: t_123)";
+    const result = formatRawAssistantErrorForUi(rawError);
+    expect(result).not.toContain("sk-ant-xxx");
+    expect(result).not.toContain("provider-internal");
+    expect(result).not.toContain("t_123");
+    expect(result).toContain("LLM request failed");
+  });
+
+  it("returns a safe message for very long unparseable errors", () => {
+    const longError = "Some internal error: " + "a]".repeat(500);
+    const result = formatRawAssistantErrorForUi(longError);
+    expect(result).not.toContain("a]a]");
+    expect(result).toContain("LLM request failed");
   });
 });
