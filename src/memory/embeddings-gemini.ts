@@ -8,6 +8,7 @@ import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
+import { resolveMemorySecretInputString } from "./secret-input.js";
 
 export type GeminiEmbeddingClient = {
   baseUrl: string;
@@ -23,8 +24,11 @@ export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-004": 2048,
 };
-function resolveRemoteApiKey(remoteApiKey?: string): string | undefined {
-  const trimmed = remoteApiKey?.trim();
+function resolveRemoteApiKey(remoteApiKey: unknown): string | undefined {
+  const trimmed = resolveMemorySecretInputString({
+    value: remoteApiKey,
+    path: "agents.*.memorySearch.remote.apiKey",
+  });
   if (!trimmed) {
     return undefined;
   }
