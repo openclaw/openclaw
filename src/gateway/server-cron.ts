@@ -360,7 +360,7 @@ export function buildGatewayCronService(params: {
       params.broadcast("cron", evt, { dropIfSlow: true });
       
       // Trigger internal hook for cron events
-      triggerInternalHook({
+      void triggerInternalHook({
         type: "cron",
         action: evt.action,
         sessionKey: evt.sessionKey ?? "",

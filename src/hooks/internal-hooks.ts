@@ -45,8 +45,6 @@ export type GatewayStartupHookEvent = InternalHookEvent & {
 
 export type CronHookContext = {
   jobId: string;
-  jobName?: string;
-  schedule?: string;
   status?: "ok" | "error" | "skipped";
   error?: string;
   summary?: string;
@@ -61,9 +59,11 @@ export type CronHookContext = {
   model?: string;
   provider?: string;
   usage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
   };
 };
 
@@ -481,12 +481,20 @@ export function isMessagePreprocessedEvent(
   return hasStringContextField(context, "channelId");
 }
 
+// Cron events have multiple valid actions, so we validate type + action set
+// rather than using isHookEventTypeAndAction (which accepts a single action).
 export function isCronEvent(event: InternalHookEvent): event is CronHookEvent {
   if (event.type !== "cron") {
     return false;
   }
-  const validActions = ["added", "updated", "removed", "started", "finished"];
-  if (!validActions.includes(event.action)) {
+  const validActions: CronHookEvent["action"][] = [
+    "added",
+    "updated",
+    "removed",
+    "started",
+    "finished",
+  ];
+  if (!validActions.includes(event.action as CronHookEvent["action"])) {
     return false;
   }
   const context = getHookContext<CronHookContext>(event);
