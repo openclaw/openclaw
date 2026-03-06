@@ -336,12 +336,12 @@ describe("delivery-queue", () => {
     });
 
     it("moves entries that exceeded max retries to failed/", async () => {
-      // Create an entry and manually set retryCount to MAX_RETRIES.
+      // Create an entry and manually set retryCount above MAX_RETRIES.
       const id = await enqueueDelivery(
         { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
         tmpDir,
       );
-      setEntryState(id, { retryCount: MAX_RETRIES });
+      setEntryState(id, { retryCount: MAX_RETRIES + 1 });
 
       const deliver = vi.fn();
       const { result } = await runRecovery({ deliver });
@@ -353,6 +353,28 @@ describe("delivery-queue", () => {
       // Entry should be in failed/ directory.
       const failedDir = path.join(tmpDir, "delivery-queue", "failed");
       expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+    });
+
+    it("still attempts delivery when retryCount is exactly MAX_RETRIES", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
+      setEntryState(id, {
+        retryCount: MAX_RETRIES,
+        lastAttemptAt: Date.now() - computeBackoffMs(MAX_RETRIES + 1) - 1,
+      });
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver });
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(result.recovered).toBe(1);
+      expect(result.skippedMaxRetries).toBe(0);
+      expect(result.failed).toBe(0);
+
+      const failedDir = path.join(tmpDir, "delivery-queue", "failed");
+      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(false);
     });
 
     it("increments retryCount on failed recovery attempt", async () => {
