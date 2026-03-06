@@ -1,7 +1,7 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import type { PluginHookAfterToolCallEvent, PluginHookSkillReadEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import type {
@@ -19,6 +19,7 @@ import {
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
 import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js";
+import { classifySkillRead } from "./skill-read-classifier.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -454,5 +455,46 @@ export async function handleToolExecutionEnd(
       .catch((err) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
+  }
+
+  // Run skill_read plugin hook when a read tool targets a skill directory (fire-and-forget)
+  const skills = ctx.params.resolvedSkills;
+  if (toolName === "read" && skills && skills.length > 0) {
+    const hookRunnerSkill = ctx.hookRunner ?? getGlobalHookRunner();
+    if (hookRunnerSkill?.hasHooks("skill_read")) {
+      const readPath =
+        typeof afterToolCallArgs.path === "string"
+          ? afterToolCallArgs.path
+          : typeof afterToolCallArgs.file_path === "string"
+            ? afterToolCallArgs.file_path
+            : "";
+      if (readPath) {
+        const classification = classifySkillRead(readPath, skills);
+        if (classification.isSkillRead) {
+          const durationMs =
+            startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+          const skillEvent: PluginHookSkillReadEvent = {
+            skillName: classification.skillName,
+            skillBaseDir: classification.skillBaseDir,
+            readType: classification.readType,
+            filePath: classification.filePath,
+            durationMs,
+            error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+            runId,
+          };
+          void hookRunnerSkill
+            .runSkillRead(skillEvent, {
+              agentId: ctx.params.agentId,
+              sessionKey: ctx.params.sessionKey,
+              sessionId: ctx.params.sessionId,
+            })
+            .catch((err) => {
+              ctx.log.warn(
+                `skill_read hook failed: skill=${classification.skillName} error=${String(err)}`,
+              );
+            });
+        }
+      }
+    }
   }
 }

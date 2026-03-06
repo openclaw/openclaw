@@ -50,6 +50,8 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookSkillReadEvent,
+  PluginHookSkillReadContext,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -81,6 +83,8 @@ export type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookSkillReadEvent,
+  PluginHookSkillReadContext,
   PluginHookSessionContext,
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
@@ -463,6 +467,18 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run skill_read hook.
+   * Fired when the agent reads a file inside a known skill directory.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runSkillRead(
+    event: PluginHookSkillReadEvent,
+    ctx: PluginHookSkillReadContext,
+  ): Promise<void> {
+    return runVoidHook("skill_read", event, ctx);
+  }
+
+  /**
    * Run tool_result_persist hook.
    *
    * This hook is intentionally synchronous: it runs in hot paths where session
@@ -740,6 +756,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runSkillRead,
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,

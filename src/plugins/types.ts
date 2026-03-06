@@ -331,7 +331,8 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  | "skill_read";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -622,6 +623,39 @@ export type PluginHookAfterToolCallEvent = {
 };
 
 // tool_result_persist hook
+// ── Skill lifecycle hooks ────────────────────────────────────────────
+
+/**
+ * Fired when the agent reads a file inside a known skill directory.
+ * `readType: "entry"` indicates the SKILL.md itself (skill activation);
+ * `readType: "sub"` indicates a supporting file within the skill directory.
+ */
+export type PluginHookSkillReadEvent = {
+  /** Name of the skill as registered in the skill snapshot. */
+  skillName: string;
+  /** Absolute path to the skill's base directory. */
+  skillBaseDir: string;
+  /** Whether this read is the SKILL.md entry point or a sub-file. */
+  readType: "entry" | "sub";
+  /** The file path that was read. */
+  filePath: string;
+  /** Duration of the read operation in milliseconds. */
+  durationMs?: number;
+  /** Whether the read resulted in an error. */
+  error?: string;
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
+};
+
+/**
+ * Context for skill_read hook, extending the standard agent context.
+ */
+export type PluginHookSkillReadContext = {
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+};
+
 export type PluginHookToolResultPersistContext = {
   agentId?: string;
   sessionKey?: string;
@@ -826,6 +860,10 @@ export type PluginHookHandlerMap = {
   after_tool_call: (
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
+  ) => Promise<void> | void;
+  skill_read: (
+    event: PluginHookSkillReadEvent,
+    ctx: PluginHookSkillReadContext,
   ) => Promise<void> | void;
   tool_result_persist: (
     event: PluginHookToolResultPersistEvent,

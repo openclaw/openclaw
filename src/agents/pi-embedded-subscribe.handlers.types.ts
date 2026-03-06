@@ -139,6 +139,7 @@ export type ToolHandlerParams = Pick<
   | "sessionKey"
   | "sessionId"
   | "agentId"
+  | "resolvedSkills"
 >;
 
 export type ToolHandlerState = Pick<
