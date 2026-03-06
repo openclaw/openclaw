@@ -112,6 +112,11 @@ const pluginSdkScopedAliasEntries = [
     srcFile: "diagnostics-otel.ts",
     distFile: "diagnostics-otel.js",
   },
+  {
+    subpath: "diagnostics-prometheus",
+    srcFile: "diagnostics-otel.ts",
+    distFile: "diagnostics-otel.js",
+  },
   { subpath: "diffs", srcFile: "diffs.ts", distFile: "diffs.js" },
   { subpath: "feishu", srcFile: "feishu.ts", distFile: "feishu.js" },
   {

@@ -201,6 +201,62 @@ export type DiagnosticsCacheTraceConfig = {
   includeSystem?: boolean;
 };
 
+export type DiagnosticsPrometheusRemoteWriteConfig = {
+  /** Target URL for Prometheus remote write endpoint (e.g. http://prometheus:9090/api/v1/write). */
+  url: string;
+  /** Remote write timeout in ms. Default: 30000. */
+  remote_timeout_ms?: number;
+  /** HTTP headers to send with each request. */
+  headers?: Record<string, string>;
+  /** Basic authentication credentials. */
+  basic_auth?: { username?: string; password?: string; password_file?: string };
+  /** Bearer token for authorization. */
+  bearer_token?: string;
+  /** Path to a file containing the bearer token. */
+  bearer_token_file?: string;
+  /** TLS client configuration. */
+  tls_config?: {
+    ca_file?: string;
+    cert_file?: string;
+    key_file?: string;
+    server_name?: string;
+    insecure_skip_verify?: boolean;
+  };
+  /** Queue configuration for batching and retries. */
+  queue_config?: {
+    capacity?: number;
+    max_samples_per_send?: number;
+    batch_send_deadline_ms?: number;
+    max_retries?: number;
+    min_backoff_ms?: number;
+    max_backoff_ms?: number;
+  };
+  /** Write relabel configs for filtering metrics before sending. */
+  write_relabel_configs?: Array<{
+    source_labels?: string[];
+    regex?: string;
+    action?: "keep" | "drop";
+  }>;
+  /** Metric name prefix. Default: "openclaw". */
+  metric_prefix?: string;
+};
+
+export type DiagnosticsPrometheusConfig = {
+  enabled?: boolean;
+  /** Metric name prefix. Default: "openclaw". */
+  metric_prefix?: string;
+  /** Enable /metrics pull endpoint. Default: true. */
+  pull?: boolean;
+  /** Enable Node.js default metrics (GC, event loop, etc). Default: true. */
+  default_metrics?: boolean;
+  /** Custom labels added to all metrics. */
+  external_labels?: Record<string, string>;
+  /** Remote write targets (supports multiple endpoints). Compatible with Prometheus remote_write config. */
+  remote_write?: DiagnosticsPrometheusRemoteWriteConfig[];
+  /** Push interval for remote write in ms. Default: 15000. */
+  push_interval_ms?: number;
+};
+
 export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
@@ -208,6 +264,7 @@ export type DiagnosticsConfig = {
   /** Threshold in ms before a processing session logs "stuck session" diagnostics. */
   stuckSessionWarnMs?: number;
   otel?: DiagnosticsOtelConfig;
+  prometheus?: DiagnosticsPrometheusConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };
 

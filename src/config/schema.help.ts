@@ -34,6 +34,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
   "diagnostics.otel":
     "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",
+  "diagnostics.prometheus":
+    "Prometheus monitoring settings for exposing metrics via /metrics endpoint and pushing via Remote Write protocol. Use this when integrating with Prometheus-compatible monitoring systems.",
   "diagnostics.cacheTrace":
     "Cache-trace logging settings for observing cache decisions and payload context in embedded runs. Enable this temporarily for debugging and disable afterward to reduce sensitive log footprint.",
   logging:
@@ -478,6 +480,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
   "diagnostics.otel.flushIntervalMs":
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
+  "diagnostics.prometheus.enabled":
+    "Enables the Prometheus diagnostics plugin for /metrics endpoint and remote write. Keep disabled unless your Prometheus scraping or remote write infrastructure is configured.",
+  "diagnostics.prometheus.metric_prefix":
+    'Prefix for all Prometheus metric names. Default: "openclaw". Adjust if you need to distinguish multiple OpenClaw instances in the same Prometheus namespace.',
+  "diagnostics.prometheus.pull":
+    "Enable the /metrics HTTP pull endpoint for Prometheus scraping. Default: true. Disable if you only use remote write push mode.",
+  "diagnostics.prometheus.default_metrics":
+    "Collect Node.js default metrics (GC, event loop, memory, etc). Default: true. Disable to reduce metric cardinality.",
+  "diagnostics.prometheus.external_labels":
+    "Custom key-value labels added to all metrics. Use this to tag metrics with environment, region, or instance identifiers.",
+  "diagnostics.prometheus.remote_write":
+    "Array of Prometheus remote write target configurations. Compatible with Prometheus remote_write config format. Each entry specifies a target URL and optional auth/TLS/queue settings.",
+  "diagnostics.prometheus.push_interval_ms":
+    "Interval in milliseconds between remote write pushes. Default: 15000. Lower for near-real-time monitoring, higher to reduce network overhead.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "diagnostics.cacheTrace.filePath":

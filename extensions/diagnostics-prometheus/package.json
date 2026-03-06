@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/diagnostics-prometheus",
+  "version": "2026.3.2",
+  "description": "OpenClaw diagnostics Prometheus remote-write exporter and /metrics endpoint",
+  "type": "module",
+  "dependencies": {
+    "prom-client": "^15.1.3",
+    "snappyjs": "^0.7.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
