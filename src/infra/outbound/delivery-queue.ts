@@ -310,7 +310,13 @@ export async function recoverPendingDeliveries(opts: {
 }): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
-    return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0, deferredTransient: 0 };
+    return {
+      recovered: 0,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+      deferredTransient: 0,
+    };
   }
 
   // Process oldest first.
