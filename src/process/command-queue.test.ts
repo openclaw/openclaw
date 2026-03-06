@@ -138,7 +138,9 @@ describe("command queue", () => {
     expect(results).toEqual([1, 2, 3, 4, 5]);
     expect(maxActive).toBeLessThanOrEqual(3);
     expect(getQueueSize(lane)).toBe(0);
-    expect(runOrder[0]).toBe(1);
+    expect(runOrder.slice(0, 3)).toEqual([1, 2, 3]);
+    expect(runOrder[3]).toBe(4);
+    expect(runOrder[4]).toBe(5);
   });
 
   it("logs enqueue depth after push", async () => {
