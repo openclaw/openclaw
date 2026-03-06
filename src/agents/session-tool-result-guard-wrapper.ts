@@ -1,4 +1,5 @@
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import { logError } from "../logger.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   applyInputProvenanceToUserMessage,
@@ -9,6 +10,8 @@ import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 export type GuardedSessionManager = SessionManager & {
   /** Flush any synthetic tool results for pending tool calls. Idempotent. */
   flushPendingToolResults?: () => void;
+  /** Set of tool names that were registered at guard time (read-only snapshot). */
+  readonly knownToolNames?: ReadonlySet<string>;
 };
 
 /**
@@ -27,6 +30,17 @@ export function guardSessionManager(
 ): GuardedSessionManager {
   if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
     return sessionManager as GuardedSessionManager;
+  }
+
+  // Snapshot tool names at guard time so downstream code can detect if a tool
+  // was registered but later lost at runtime (#27205).
+  const knownToolNames: Set<string> = new Set<string>();
+  if (opts?.allowedToolNames) {
+    for (const name of opts.allowedToolNames) {
+      if (typeof name === "string" && name.trim()) {
+        knownToolNames.add(name.trim());
+      }
+    }
   }
 
   const hookRunner = getGlobalHookRunner();
@@ -68,6 +82,23 @@ export function guardSessionManager(
     allowedToolNames: opts?.allowedToolNames,
     beforeMessageWriteHook: beforeMessageWrite,
   });
-  (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
-  return sessionManager as GuardedSessionManager;
+  const guarded = sessionManager as GuardedSessionManager;
+  guarded.flushPendingToolResults = guard.flushPendingToolResults;
+  Object.defineProperty(guarded, "knownToolNames", {
+    value: Object.freeze(knownToolNames),
+    writable: false,
+    configurable: false,
+  });
+  return guarded;
+}
+
+/**
+ * Log a critical warning when a tool that was registered at session start
+ * can no longer be found at runtime — strong indicator of #27205 cascade.
+ */
+export function warnToolRegistryCorruption(toolName: string, sessionKey?: string): void {
+  logError(
+    `[CRITICAL] Tool '${toolName}' was registered but lost at runtime` +
+      `${sessionKey ? ` (session=${sessionKey})` : ""} — possible tool registry corruption (#27205)`,
+  );
 }

@@ -1089,7 +1089,12 @@ export async function runEmbeddedAttempt(
           )
         : [];
 
-      const allCustomTools = [...customTools, ...clientToolDefs];
+      // Freeze the merged tool list to prevent concurrent code paths from
+      // mutating the registry during async tool execution (#27205).
+      const allCustomTools = Object.freeze([
+        ...customTools,
+        ...clientToolDefs,
+      ]) as unknown as typeof customTools;
 
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
@@ -1109,6 +1114,22 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+
+      // Defense-in-depth: wrap Agent.setTools so every tools array written to
+      // internal state is frozen, preventing concurrent mutation (#27205).
+      type AgentLike = { setTools: (t: unknown[]) => void; _state?: { tools?: unknown[] } };
+      const agentRef = activeSession.agent as unknown as AgentLike;
+      const originalSetTools = agentRef.setTools.bind(agentRef);
+      agentRef.setTools = (t: unknown) => {
+        const arr = Array.isArray(t) ? t : [];
+        originalSetTools(Object.freeze([...arr]) as unknown as unknown[]);
+      };
+      // Re-freeze the current tools in case _buildRuntime already set them.
+      const currentTools = agentRef._state?.tools;
+      if (Array.isArray(currentTools) && !Object.isFrozen(currentTools)) {
+        agentRef.setTools(currentTools);
+      }
+
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
         contextWindowTokens: Math.max(

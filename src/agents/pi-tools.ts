@@ -550,5 +550,10 @@ export function createOpenClawCodingTools(options?: {
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
-  return withAbort;
+
+  // Freeze the tools array to prevent concurrent code paths (session repair,
+  // extension reload, context pruning) from mutating the registry at runtime.
+  // See #27205: tools array passed by reference into the agent loop could be
+  // cleared/replaced during async tool execution, causing cascading "Tool not found".
+  return Object.freeze(withAbort) as unknown as AnyAgentTool[];
 }

@@ -9,9 +9,12 @@ export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: 
   builtInTools: AnyAgentTool[];
   customTools: ReturnType<typeof toToolDefinitions>;
 } {
+  // Snapshot and freeze both output arrays to prevent concurrent code paths
+  // from mutating the tool registry during async tool execution (#27205).
   const { tools } = options;
+  const customTools = toToolDefinitions(tools);
   return {
-    builtInTools: [],
-    customTools: toToolDefinitions(tools),
+    builtInTools: Object.freeze([] as AnyAgentTool[]) as unknown as AnyAgentTool[],
+    customTools: Object.freeze(customTools) as unknown as ReturnType<typeof toToolDefinitions>,
   };
 }
