@@ -540,21 +540,25 @@ export class VoiceCallWebhookServer {
         console.log(`[voice-call] AI response: "${result.text}"`);
         await this.manager.speak(callId, result.text);
 
-        if (result.endCall) {
-          // Agent requested hangup — give TTS a moment to finish, then hang up
-          console.log(`[voice-call] Agent requested end_call for ${callId}`);
-          setTimeout(() => {
-            this.manager.endCall(callId).catch((err: unknown) => {
-              console.warn(`[voice-call] Hangup failed:`, err);
-            });
-          }, 1000);
-          return;
-        }
-
         // Restart filler after speaking (in case next turn also needs tools)
-        if (streamSid) {
+        // Only if we aren't ending the call
+        if (!result.endCall && streamSid) {
           this.silenceFiller?.start(streamSid);
         }
+      }
+
+      if (result.endCall) {
+        // Agent requested hangup — give TTS a moment to finish, then hang up.
+        // If fallback <Say> is used, speak() resolves immediately, so we pad the timeout
+        // based on text length to avoid truncating the goodbye message.
+        const delayMs = result.text ? Math.max(1000, result.text.length * 80) : 1000;
+        console.log(`[voice-call] Agent requested end_call for ${callId} (delay: ${delayMs}ms)`);
+        setTimeout(() => {
+          this.manager.endCall(callId).catch((err: unknown) => {
+            console.warn(`[voice-call] Hangup failed:`, err);
+          });
+        }, delayMs);
+        return;
       }
     } catch (err) {
       // Stop filler on error too
