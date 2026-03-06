@@ -274,6 +274,38 @@ describe("resolveModel", () => {
     });
   });
 
+  it("preserves configured openai baseUrl for gpt-5.4 forward-compat fallbacks", () => {
+    mockOpenAITemplateModel();
+
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://proxy.example.com/v1",
+            api: "openai-responses",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect(result.model?.baseUrl).toBe("https://proxy.example.com/v1");
+  });
+
+  it("uses GPT-5.4 Pro pricing even when cloning an older openai template", () => {
+    mockOpenAITemplateModel();
+
+    const result = resolveModel("openai", "gpt-5.4-pro", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model?.cost).toEqual({
+      input: 30,
+      output: 180,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
   it("propagates reasoning from matching configured fallback model", () => {
     const cfg = {
       models: {

@@ -135,7 +135,17 @@ export function resolveModel(
     // Otherwise, configured providers can default to a generic API and break specific transports.
     const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
     if (forwardCompat) {
-      return { model: forwardCompat, authStorage, modelRegistry };
+      return {
+        model: normalizeModelCompat(
+          applyConfiguredProviderOverrides({
+            discoveredModel: forwardCompat,
+            providerConfig,
+            modelId,
+          }),
+        ),
+        authStorage,
+        modelRegistry,
+      };
     }
     // OpenRouter is a pass-through proxy — any model ID available on OpenRouter
     // should work without being pre-registered in the local catalog.

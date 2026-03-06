@@ -15,6 +15,9 @@ const OPENAI_GPT54_CONTEXT_WINDOW = 1_050_000;
 const OPENAI_GPT54_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_SPARK_CONTEXT_WINDOW = 272_000;
 const OPENAI_CODEX_SPARK_MAX_TOKENS = 128_000;
+const OPENAI_GPT54_COST = { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 } as const;
+// OpenAI currently publishes no cached-input price for GPT-5.4 Pro, so keep cacheRead at 0.
+const OPENAI_GPT54_PRO_COST = { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 } as const;
 
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
@@ -69,8 +72,8 @@ function buildOpenAIGpt54FallbackModel(modelId: string, template?: Model<Api> | 
     input: ["text", "image"],
     cost:
       modelId.toLowerCase() === OPENAI_GPT_54_PRO_MODEL_ID
-        ? { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 }
-        : { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+        ? OPENAI_GPT54_PRO_COST
+        : OPENAI_GPT54_COST,
     contextWindow: OPENAI_GPT54_CONTEXT_WINDOW,
     maxTokens: OPENAI_GPT54_MAX_TOKENS,
   } as Model<Api>);
@@ -216,7 +219,7 @@ function resolveOpenAIGpt54ForwardCompatModel(
     },
   });
   if (template) {
-    return template;
+    return buildOpenAIGpt54FallbackModel(trimmedModelId, template);
   }
 
   return buildOpenAIGpt54FallbackModel(trimmedModelId);

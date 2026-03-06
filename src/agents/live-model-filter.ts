@@ -45,6 +45,8 @@ export function isModernModelRef(ref: ModelRef): boolean {
   }
 
   if (provider === "openai") {
+    // Keep the broader prefix match for GPT-5.x families so live tests keep opting into
+    // fresh OpenAI minor variants before the forward-compat catalog learns each exact ID.
     return matchesExactOrPrefix(id, OPENAI_MODELS);
   }
 
