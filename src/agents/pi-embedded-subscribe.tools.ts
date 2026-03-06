@@ -1,6 +1,6 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
-import { splitMediaFromOutput } from "../media/parse.js";
+import { MEDIA_IMAGE_LINE_RE, splitMediaFromOutput } from "../media/parse.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { type MessagingToolSend } from "./pi-embedded-messaging.js";
@@ -104,9 +104,10 @@ export function sanitizeToolResult(result: unknown): unknown {
     }
     const entry = item as Record<string, unknown>;
     if (entry.type === "text" && typeof entry.text === "string") {
-      const matches = entry.text.match(/^MEDIA:/gm);
-      if (matches) {
-        mediaPathCount += matches.length;
+      for (const line of entry.text.split("\n")) {
+        if (MEDIA_IMAGE_LINE_RE.test(line.trim())) {
+          mediaPathCount++;
+        }
       }
     } else if (entry.type === "image" && typeof entry.data === "string") {
       imageBlockCount++;
