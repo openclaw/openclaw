@@ -28,6 +28,11 @@ export function emitAllSmt2(): string {
 ; --- 3. Pipeline Semantics ---
 (include "pipeline.smt2")
 
+; Link visible core predicate to owner gate semantics (runtime parity)
+(assert (forall ((t Tool))
+         (= (core_tool_visible t)
+            (and (is_core_tool t) (passes_owner_gate t)))))
+
 ; --- 4. Profile Presets ---
 (include "profiles.smt2")
 

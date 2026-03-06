@@ -59,7 +59,15 @@ export function emitPipelineSmt2(data: ParsedAll): string {
     w(`(declare-const step${i}_active Bool)`);
     w(`(declare-const step${i}_allow_empty Bool)`);
     w(``);
+    w(`(assert (=> step${i}_allow_empty (forall ((t Tool)) (not (step${i}_allow t)))))`);
+    w(`(assert (=> (not step${i}_allow_empty) (exists ((t Tool)) (step${i}_allow t))))`);
+    w(``);
   }
+
+  // Visible core tools predicate (subset of catalog core tools)
+  w(`(declare-fun core_tool_visible (Tool) Bool)`);
+  w(`(assert (forall ((t Tool)) (=> (core_tool_visible t) (is_core_tool t))))`);
+  w(``);
 
   // 2. Survival semantics
   w(`; --------------------------------------------------------------------------`);
@@ -130,9 +138,7 @@ export function emitPipelineSmt2(data: ParsedAll): string {
     const step = data.pipeline.steps[i - 1];
     if (step.stripPluginOnlyAllowlist) {
       w(`; Step ${i} stripping constraint`);
-      w(
-        `(assert (=> (forall ((t Tool)) (=> (step${i}_allow t) (not (and (is_core_tool t) (passes_owner_gate t)))))`,
-      );
+      w(`(assert (=> (forall ((t Tool)) (=> (step${i}_allow t) (not (core_tool_visible t))))`);
       w(`            step${i}_allow_empty))`);
     }
   }

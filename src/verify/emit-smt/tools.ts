@@ -102,7 +102,8 @@ export function emitToolsSmt2(data: ParsedAll): string {
   w(`; --------------------------------------------------------------------------`);
   w(``);
   w(`(define-fun is_core_tool ((t Tool)) Bool`);
-  const coreIds = [...allToolIds, ...data.policies.extraTools];
+  // Core scope must match runtime isKnownCoreToolId (catalog only)
+  const coreIds = [...allToolIds];
   if (coreIds.length === 0) {
     w(`  false)`);
   } else if (coreIds.length === 1) {
