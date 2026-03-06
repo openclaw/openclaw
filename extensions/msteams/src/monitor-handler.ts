@@ -1,9 +1,10 @@
-import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/msteams";
+import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
+import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
 import type { MSTeamsPollStore } from "./polls.js";
@@ -19,6 +20,12 @@ export type MSTeamsActivityHandler = {
     handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
   ) => MSTeamsActivityHandler;
   onMembersAdded: (
+    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
+  ) => MSTeamsActivityHandler;
+  onReactionsAdded: (
+    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
+  ) => MSTeamsActivityHandler;
+  onReactionsRemoved: (
     handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
   ) => MSTeamsActivityHandler;
   run?: (context: unknown) => Promise<void>;
@@ -182,6 +189,26 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         deps.log.debug?.("member added", { member: member.id });
         // Don't send welcome message - let the user initiate conversation.
       }
+    }
+    await next();
+  });
+
+  const handleReaction = createMSTeamsReactionHandler(deps);
+
+  handler.onReactionsAdded(async (context, next) => {
+    try {
+      await handleReaction(context as MSTeamsTurnContext, "added");
+    } catch (err) {
+      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
+    }
+    await next();
+  });
+
+  handler.onReactionsRemoved(async (context, next) => {
+    try {
+      await handleReaction(context as MSTeamsTurnContext, "removed");
+    } catch (err) {
+      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
     }
     await next();
   });
