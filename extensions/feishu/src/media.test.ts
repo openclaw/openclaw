@@ -538,3 +538,53 @@ describe("downloadMessageResourceFeishu", () => {
     expect(result.buffer).toBeInstanceOf(Buffer);
   });
 });
+
+describe("detectFileType", () => {
+  it("detects opus audio files", () => {
+    const { detectFileType } = require("./media.js");
+    expect(detectFileType("voice.opus")).toBe("opus");
+    expect(detectFileType("voice.ogg")).toBe("opus");
+  });
+
+  it("detects common audio formats as opus (Issue #37868)", () => {
+    const { detectFileType } = require("./media.js");
+    expect(detectFileType("voice.mp3")).toBe("opus");
+    expect(detectFileType("voice.wav")).toBe("opus");
+    expect(detectFileType("voice.m4a")).toBe("opus");
+    expect(detectFileType("voice.aac")).toBe("opus");
+    expect(detectFileType("voice.flac")).toBe("opus");
+    expect(detectFileType("voice.wma")).toBe("opus");
+  });
+
+  it("detects video files as mp4", () => {
+    const { detectFileType } = require("./media.js");
+    expect(detectFileType("video.mp4")).toBe("mp4");
+    expect(detectFileType("video.mov")).toBe("mp4");
+    expect(detectFileType("video.avi")).toBe("mp4");
+  });
+
+  it("detects document files", () => {
+    const { detectFileType } = require("./media.js");
+    expect(detectFileType("document.pdf")).toBe("pdf");
+    expect(detectFileType("document.doc")).toBe("doc");
+    expect(detectFileType("document.docx")).toBe("doc");
+    expect(detectFileType("spreadsheet.xls")).toBe("xls");
+    expect(detectFileType("spreadsheet.xlsx")).toBe("xls");
+    expect(detectFileType("presentation.ppt")).toBe("ppt");
+    expect(detectFileType("presentation.pptx")).toBe("ppt");
+  });
+
+  it("falls back to stream for unknown extensions", () => {
+    const { detectFileType } = require("./media.js");
+    expect(detectFileType("file.zip")).toBe("stream");
+    expect(detectFileType("file.txt")).toBe("stream");
+    expect(detectFileType("file")).toBe("stream");
+  });
+
+  it("handles case-insensitive extensions", () => {
+    const { detectFileType } = require("./media.js");
+    expect(detectFileType("VOICE.MP3")).toBe("opus");
+    expect(detectFileType("Video.MP4")).toBe("mp4");
+    expect(detectFileType("DOC.PDF")).toBe("pdf");
+  });
+});

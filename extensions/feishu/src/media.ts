@@ -392,7 +392,14 @@ export function detectFileType(
   switch (ext) {
     case ".opus":
     case ".ogg":
-      return "opus";
+    // Add support for common audio formats (Issue #37868)
+    case ".mp3":
+    case ".wav":
+    case ".m4a":
+    case ".aac":
+    case ".flac":
+    case ".wma":
+      return "opus"; // Feishu uses "opus" as the audio file type
     case ".mp4":
     case ".mov":
     case ".avi":
