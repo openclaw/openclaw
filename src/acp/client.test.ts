@@ -99,6 +99,38 @@ describe("resolveAcpClientSpawnEnv", () => {
     expect(env.USER).toBe("openclaw");
     expect(env.OPENCLAW_SHELL).toBe("acp-client");
   });
+
+  it.each([
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "MINIMAX_API_KEY",
+    "ELEVENLABS_API_KEY",
+    "TELEGRAM_BOT_TOKEN",
+    "DISCORD_BOT_TOKEN",
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SECRET_KEY",
+    "AWS_SESSION_TOKEN",
+  ])("blocks %s from child env", (key) => {
+    const env = resolveAcpClientSpawnEnv({
+      PATH: "/usr/bin",
+      [key]: "secret-value",
+    });
+    expect(env[key]).toBeUndefined();
+    expect(env.PATH).toBe("/usr/bin");
+  });
+
+  it("preserves OPENCLAW_GATEWAY_TOKEN and OPENCLAW_GATEWAY_PASSWORD", () => {
+    const env = resolveAcpClientSpawnEnv({
+      OPENCLAW_GATEWAY_TOKEN: "gw-token",
+      OPENCLAW_GATEWAY_PASSWORD: "gw-pass",
+    });
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("gw-token");
+    expect(env.OPENCLAW_GATEWAY_PASSWORD).toBe("gw-pass");
+  });
 });
 
 describe("resolveAcpClientSpawnInvocation", () => {
