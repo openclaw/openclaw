@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { PluginHookBeforePromptBuildResult } from "../../../plugins/types.js";
 import {
   applyPromptBuildHookResult,
   composeSystemPromptWithHookContext,
@@ -56,6 +57,7 @@ describe("resolvePromptBuildHookResult", () => {
 
     expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     expect(result).toEqual({
+      actions: [{ kind: "prependContext", text: "from-cache" }],
       prependContext: "from-cache",
       systemPrompt: "legacy-system",
       prependSystemContext: undefined,
@@ -104,6 +106,57 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result.prependContext).toBe("prompt context\n\nlegacy context");
     expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
     expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+  });
+
+  it("preserves legacy prependContext from one hook when another returns explicit actions", async () => {
+    const promptBuildResult = {
+      actions: [{ kind: "prependContext", text: "action ctx" }],
+    } satisfies PluginHookBeforePromptBuildResult;
+    const result = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      hookCtx: {},
+      hookRunner: {
+        hasHooks: vi.fn(() => true),
+        runBeforePromptBuild: vi.fn(async () => promptBuildResult),
+        runBeforeAgentStart: vi.fn(async () => ({
+          prependContext: "legacy ctx",
+        })),
+      },
+    });
+
+    expect(result.actions).toEqual([
+      { kind: "prependContext", text: "action ctx" },
+      { kind: "prependContext", text: "legacy ctx" },
+    ]);
+    expect(
+      applyPromptBuildHookResult({
+        prompt: "user prompt",
+        systemPromptText: "BASE",
+        hookResult: result,
+      }).effectivePrompt,
+    ).toBe("action ctx\n\nlegacy ctx\n\nuser prompt");
+  });
+
+  it("ignores malformed runtime actions payloads before merging", async () => {
+    // Simulate a JS plugin returning runtime-invalid data that bypasses TypeScript.
+    const malformedPromptBuildResult = {
+      actions: { kind: "prependContext", text: "bad shape" },
+      prependContext: "fallback ctx",
+    } as unknown as PluginHookBeforePromptBuildResult;
+    const result = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      hookCtx: {},
+      hookRunner: {
+        hasHooks: vi.fn(() => true),
+        runBeforePromptBuild: vi.fn(async () => malformedPromptBuildResult),
+        runBeforeAgentStart: vi.fn(async () => undefined),
+      },
+    });
+
+    expect(result.actions).toEqual([{ kind: "prependContext", text: "fallback ctx" }]);
+    expect(result.prependContext).toBe("fallback ctx");
   });
 });
 

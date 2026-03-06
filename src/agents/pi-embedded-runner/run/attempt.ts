@@ -562,8 +562,8 @@ export async function resolvePromptBuildHookResult(params: {
           })
       : undefined);
   const actions = [
-    ...(promptBuildResult?.actions ?? []),
-    ...(legacyResult?.actions ?? []),
+    ...normalizePromptBuildHookActions(promptBuildResult),
+    ...normalizePromptBuildHookActions(legacyResult),
   ] satisfies PluginHookPromptAction[];
   return {
     ...(actions.length > 0 ? { actions } : {}),
@@ -627,7 +627,6 @@ function normalizePromptBuildHookActions(
   }
 
   const actions: PluginHookPromptAction[] = [];
-  let hasExplicitActions = false;
 
   if (Array.isArray(result.actions)) {
     for (const raw of result.actions) {
@@ -637,12 +636,10 @@ function normalizePromptBuildHookActions(
       const { kind, text } = raw as { kind?: unknown; text?: unknown };
       if (kind === "prependContext" && typeof text === "string") {
         actions.push({ kind, text });
-        hasExplicitActions = true;
         continue;
       }
       if (kind === "appendSystemPrompt" && typeof text === "string") {
         actions.push({ kind, text });
-        hasExplicitActions = true;
         continue;
       }
     }
@@ -650,10 +647,12 @@ function normalizePromptBuildHookActions(
 
   // Legacy compatibility: treat legacy fields as shorthand actions, but only when
   // the hook did not return explicit actions (prevents accidental double-apply).
-  if (!hasExplicitActions) {
-    if (typeof result.prependContext === "string" && result.prependContext.trim()) {
-      actions.push({ kind: "prependContext", text: result.prependContext });
-    }
+  if (
+    actions.length === 0 &&
+    typeof result.prependContext === "string" &&
+    result.prependContext.trim()
+  ) {
+    actions.push({ kind: "prependContext", text: result.prependContext });
   }
 
   return actions;
