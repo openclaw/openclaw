@@ -155,6 +155,26 @@ class TestPackageSkillSecurity(TestCase):
         self.assertIn("self-output-skill/script.py", names)
         self.assertNotIn("self-output-skill/self-output-skill.skill", names)
 
+    def test_writes_archive_entries_in_stable_sorted_order(self):
+        skill_dir = self.create_skill("sorted-skill")
+        (skill_dir / "z-last.py").write_text("print('z')\n")
+        (skill_dir / "a-first.py").write_text("print('a')\n")
+        nested = skill_dir / "nested"
+        nested.mkdir(parents=True, exist_ok=True)
+        (nested / "middle.py").write_text("print('m')\n")
+
+        out_dir = self.temp_dir / "out"
+        out_dir.mkdir()
+
+        result = package_skill(str(skill_dir), str(out_dir))
+
+        self.assertIsNotNone(result)
+        skill_file = out_dir / "sorted-skill.skill"
+        with zipfile.ZipFile(skill_file, "r") as archive:
+            names = archive.namelist()
+
+        self.assertEqual(names, sorted(names))
+
 
 if __name__ == "__main__":
     main()
