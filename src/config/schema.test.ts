@@ -244,7 +244,7 @@ describe("config schema", () => {
   });
 
   it("uses the indexed tuple item schema for positional array lookups", () => {
-    const tupleSchema: Parameters<typeof lookupConfigSchema>[0] = {
+    const tupleSchema = {
       schema: {
         type: "object",
         properties: {
@@ -257,7 +257,7 @@ describe("config schema", () => {
       uiHints: {},
       version: "test",
       generatedAt: "test",
-    };
+    } as unknown as Parameters<typeof lookupConfigSchema>[0];
 
     const lookup = lookupConfigSchema(tupleSchema, "pair.1");
     expect(lookup?.path).toBe("pair.1");
