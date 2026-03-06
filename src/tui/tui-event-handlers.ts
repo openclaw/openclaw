@@ -150,9 +150,13 @@ export function createEventHandlers(context: EventHandlerContext) {
   const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
     const normalizedLeft = (left ?? "").trim().toLowerCase();
     const normalizedRight = (right ?? "").trim().toLowerCase();
+    
+    // Fix for Issue #37647: When either session key is empty, treat as matching
+    // (empty key from events typically means "current session")
     if (!normalizedLeft || !normalizedRight) {
-      return false;
+      return true;
     }
+    
     if (normalizedLeft === normalizedRight) {
       return true;
     }
