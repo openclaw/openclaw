@@ -1,5 +1,5 @@
 const SLACK_AUTH_ERROR_RE =
-  /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|missing_scope|cannot_find_service|invalid_token/i;
+  /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|not_allowed_token_type|org_login_required|team_access_not_granted|missing_scope|cannot_find_service|invalid_token/i;
 
 export const SLACK_SOCKET_RECONNECT_POLICY = {
   initialMs: 2_000,
