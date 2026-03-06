@@ -50,6 +50,20 @@ export type ChatEventPayload = {
   errorMessage?: string;
 };
 
+export function clearInFlightChatRun(state: {
+  chatRunId: string | null;
+  chatStream: string | null;
+  chatStreamStartedAt: number | null;
+}): boolean {
+  if (!state.chatRunId) {
+    return false;
+  }
+  state.chatRunId = null;
+  state.chatStream = null;
+  state.chatStreamStartedAt = null;
+  return true;
+}
+
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;

@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleChatEvent, loadChatHistory, type ChatEventPayload, type ChatState } from "./chat.ts";
+import {
+  clearInFlightChatRun,
+  handleChatEvent,
+  loadChatHistory,
+  type ChatEventPayload,
+  type ChatState,
+} from "./chat.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -19,6 +25,32 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     ...overrides,
   };
 }
+
+describe("clearInFlightChatRun", () => {
+  it("clears run + stream state when run is active", () => {
+    const state = createState({
+      chatRunId: "run-1",
+      chatStream: "partial output",
+      chatStreamStartedAt: 123,
+    });
+    expect(clearInFlightChatRun(state)).toBe(true);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
+  });
+
+  it("returns false when no run is active", () => {
+    const state = createState({
+      chatRunId: null,
+      chatStream: "ignored",
+      chatStreamStartedAt: 123,
+    });
+    expect(clearInFlightChatRun(state)).toBe(false);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe("ignored");
+    expect(state.chatStreamStartedAt).toBe(123);
+  });
+});
 
 describe("handleChatEvent", () => {
   it("returns null when payload is missing", () => {
