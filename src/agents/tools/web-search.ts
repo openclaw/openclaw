@@ -671,17 +671,18 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
 }
 
 function resolveOpenRouterConfig(search?: WebSearchConfig): OpenRouterConfig {
-  if (search && typeof search === "object") {
-    const openrouter = "openrouter" in search ? search.openrouter : undefined;
-    if (openrouter && typeof openrouter === "object") {
-      return openrouter as OpenRouterConfig;
-    }
-  }
-  // Fall back to the perplexity key if it looks like an OpenRouter key (sk-or-* prefix).
-  // This supports legacy configs that routed Perplexity models via OpenRouter.
-  // Only apply the fallback when OPENROUTER_API_KEY is not already set, so the
+  const openrouter =
+    search && typeof search === "object" && "openrouter" in search
+      ? (search.openrouter as OpenRouterConfig | undefined)
+      : undefined;
+  const hasExplicitBlock = !!openrouter && typeof openrouter === "object";
+  // Explicit openrouter.apiKey in the config block takes top priority.
+  const hasExplicitApiKey = hasExplicitBlock && !!normalizeApiKey(openrouter.apiKey);
+  // Apply the legacy perplexity-key fallback only when no explicit openrouter apiKey
+  // is configured AND the dedicated OPENROUTER_API_KEY env var is not set, so the
   // dedicated env var always takes precedence over the legacy migration path.
-  if (!normalizeApiKey(process.env.OPENROUTER_API_KEY)) {
+  let legacyApiKey: string | undefined;
+  if (!hasExplicitApiKey && !normalizeApiKey(process.env.OPENROUTER_API_KEY)) {
     const perplexityConfig = resolvePerplexityConfig(search);
     const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
     if (perplexityKey?.startsWith("sk-or-")) {
@@ -689,10 +690,14 @@ function resolveOpenRouterConfig(search?: WebSearchConfig): OpenRouterConfig {
         "[openclaw] web_search: Detected OpenRouter-format API key (sk-or-*) in perplexity config. " +
           "Set OPENROUTER_API_KEY or tools.web.search.openrouter.apiKey to suppress this warning.",
       );
-      return { apiKey: perplexityKey };
+      legacyApiKey = perplexityKey;
     }
   }
-  return {};
+  if (hasExplicitBlock) {
+    // Preserve the explicit block's model/baseUrl; inject the legacy key if no apiKey was set.
+    return legacyApiKey ? { ...openrouter, apiKey: legacyApiKey } : openrouter;
+  }
+  return legacyApiKey ? { apiKey: legacyApiKey } : {};
 }
 
 function resolveOpenRouterApiKey(openrouter?: OpenRouterConfig): string | undefined {
@@ -1810,5 +1815,6 @@ export const __testing = {
   resolveOpenRouterApiKey,
   resolveOpenRouterModel,
   resolveOpenRouterBaseUrl,
+  resolveOpenRouterConfig,
   resolveRedirectUrl: resolveCitationRedirectUrl,
 } as const;

@@ -18,6 +18,7 @@ const {
   resolveOpenRouterApiKey,
   resolveOpenRouterModel,
   resolveOpenRouterBaseUrl,
+  resolveOpenRouterConfig,
   resolveSearchProvider,
 } = __testing;
 
@@ -418,6 +419,29 @@ describe("web_search provider auto-detection for openrouter", () => {
       },
       () => {
         expect(resolveSearchProvider(undefined)).toBe("perplexity");
+      },
+    );
+  });
+
+  it("applies perplexity sk-or-* fallback even when openrouter block exists without apiKey", () => {
+    // P2: user sets openrouter.model but no apiKey, and has PERPLEXITY_API_KEY=sk-or-*
+    withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        OPENROUTER_API_KEY: undefined,
+        PERPLEXITY_API_KEY: "sk-or-legacy-key",
+        XAI_API_KEY: undefined,
+      },
+      () => {
+        const config = resolveOpenRouterConfig({
+          openrouter: { model: "perplexity/sonar-large" },
+        } as never);
+        // The legacy perplexity key should be merged in as apiKey; model is preserved.
+        expect(config.apiKey).toBe("sk-or-legacy-key");
+        expect(config.model).toBe("perplexity/sonar-large");
       },
     );
   });
