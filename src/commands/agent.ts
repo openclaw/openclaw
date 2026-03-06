@@ -127,8 +127,19 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   params.sessionStore[params.sessionKey] = persisted;
 }
 
-function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boolean }): string {
+function resolveFallbackRetryPrompt(params: {
+  body: string;
+  isFallbackRetry: boolean;
+  isInitialSubagentSpawn?: boolean;
+}): string {
   if (!params.isFallbackRetry) {
+    return params.body;
+  }
+  // On the initial subagent spawn the task lives only in the body — replacing
+  // it with a generic continuation prompt would drop the task context entirely.
+  // Follow-up messages on an existing session already have the turn recorded,
+  // so they use the standard continuation prompt to avoid duplicate injection.
+  if (params.isInitialSubagentSpawn) {
     return params.body;
   }
   return "Continue where you left off. The previous model attempt failed or timed out.";
@@ -175,10 +186,13 @@ function runAgentAttempt(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowRateLimitCooldownProbe?: boolean;
+  isSubagentLane: boolean;
+  hasExistingTranscript: boolean;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
+    isInitialSubagentSpawn: params.isSubagentLane && !params.hasExistingTranscript,
   });
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
@@ -450,6 +464,9 @@ async function agentCommandInternal(
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
+  // Capture before any mutation: sessions.patch (subagent spawn) never sets
+  // sessionFile, so its absence reliably indicates the first run for this session.
+  const hasExistingTranscript = Boolean(resolvedSessionEntry?.sessionFile);
   let sessionEntry = resolvedSessionEntry;
   const runId = opts.runId?.trim() || sessionId;
   const acpManager = getAcpSessionManager();
@@ -869,6 +886,8 @@ async function agentCommandInternal(
             sessionStore,
             storePath,
             allowRateLimitCooldownProbe: runOptions?.allowRateLimitCooldownProbe,
+            isSubagentLane,
+            hasExistingTranscript,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (

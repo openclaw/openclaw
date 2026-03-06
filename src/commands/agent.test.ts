@@ -513,6 +513,105 @@ describe("agentCommand", () => {
     });
   });
 
+  it("preserves subagent task body on model fallback retry", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        model: {
+          primary: "anthropic/claude-opus-4-5",
+          fallbacks: ["openai/gpt-5.2"],
+        },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-5.2": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-5.2", name: "GPT-5.2", provider: "openai" },
+      ]);
+      vi.mocked(runEmbeddedPiAgent)
+        .mockRejectedValueOnce(Object.assign(new Error("timeout"), { status: 408 }))
+        .mockResolvedValueOnce({
+          payloads: [{ text: "task done" }],
+          meta: {
+            durationMs: 5,
+            agentMeta: { sessionId: "session-subagent-task", provider: "openai", model: "gpt-5.2" },
+          },
+        });
+
+      await agentCommand(
+        {
+          message: "[Subagent Task]: Analyze the data",
+          lane: "subagent",
+          sessionKey: "agent:main:subagent:task-1",
+        },
+        runtime,
+      );
+
+      // Second call (fallback) must still carry the original task, not
+      // the generic "Continue where you left off" continuation prompt.
+      const secondCallPrompt = vi.mocked(runEmbeddedPiAgent).mock.calls[1]?.[0]?.prompt;
+      expect(secondCallPrompt).toBe("[Subagent Task]: Analyze the data");
+    });
+  });
+
+  it("uses continuation prompt for subagent follow-up fallback (not initial spawn)", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:subagent:followup-1";
+      // Seed a session entry WITH sessionFile to simulate a prior run.
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-followup",
+          updatedAt: Date.now(),
+          sessionFile: path.join(home, "agents", "main", "sessions", "session-followup.jsonl"),
+        },
+      });
+      mockConfig(home, store, {
+        model: {
+          primary: "anthropic/claude-opus-4-5",
+          fallbacks: ["openai/gpt-5.2"],
+        },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-5.2": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-5.2", name: "GPT-5.2", provider: "openai" },
+      ]);
+      vi.mocked(runEmbeddedPiAgent)
+        .mockRejectedValueOnce(Object.assign(new Error("timeout"), { status: 408 }))
+        .mockResolvedValueOnce({
+          payloads: [{ text: "follow-up done" }],
+          meta: {
+            durationMs: 5,
+            agentMeta: { sessionId: "session-followup", provider: "openai", model: "gpt-5.2" },
+          },
+        });
+
+      // Session has an existing sessionFile from a prior run, so the body
+      // should NOT be preserved on fallback retry — the turn is already recorded.
+      await agentCommand(
+        {
+          message: "Follow-up instruction",
+          lane: "subagent",
+          sessionKey,
+        },
+        runtime,
+      );
+
+      const secondCallPrompt = vi.mocked(runEmbeddedPiAgent).mock.calls[1]?.[0]?.prompt;
+      expect(secondCallPrompt).toBe(
+        "Continue where you left off. The previous model attempt failed or timed out.",
+      );
+    });
+  });
+
   it("keeps stored session model override when models allowlist is empty", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
