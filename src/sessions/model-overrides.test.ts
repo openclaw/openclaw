@@ -30,6 +30,7 @@ describe("applyModelOverrideToSessionEntry", () => {
       model: "claude-sonnet-4-6",
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
+      contextTokens: 160_000,
       fallbackNoticeSelectedModel: "anthropic/claude-sonnet-4-6",
       fallbackNoticeActiveModel: "anthropic/claude-sonnet-4-6",
       fallbackNoticeReason: "provider temporary failure",
@@ -39,6 +40,7 @@ describe("applyModelOverrideToSessionEntry", () => {
 
     expect(result.updated).toBe(true);
     expectRuntimeModelFieldsCleared(entry, before);
+    expect(entry.contextTokens).toBeUndefined();
     expect(entry.fallbackNoticeSelectedModel).toBeUndefined();
     expect(entry.fallbackNoticeActiveModel).toBeUndefined();
     expect(entry.fallbackNoticeReason).toBeUndefined();
@@ -53,12 +55,14 @@ describe("applyModelOverrideToSessionEntry", () => {
       model: "claude-sonnet-4-6",
       providerOverride: "openai",
       modelOverride: "gpt-5.2",
+      contextTokens: 160_000,
     };
 
     const result = applyOpenAiSelection(entry);
 
     expect(result.updated).toBe(true);
     expectRuntimeModelFieldsCleared(entry, before);
+    expect(entry.contextTokens).toBeUndefined();
   });
 
   it("retains aligned runtime model fields when selection and runtime already match", () => {
@@ -84,5 +88,31 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.modelProvider).toBe("openai");
     expect(entry.model).toBe("gpt-5.2");
     expect(entry.updatedAt).toBe(before);
+  });
+
+  it("clears stale contextTokens when switching back to the default model", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-4",
+      updatedAt: before,
+      providerOverride: "local",
+      modelOverride: "sunapi386/llama-3-lexi-uncensored:8b",
+      contextTokens: 4_096,
+    };
+
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "local",
+        model: "llama3.1:8b",
+        isDefault: true,
+      },
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(entry.contextTokens).toBeUndefined();
+    expect((entry.updatedAt ?? 0) > before).toBe(true);
   });
 });
