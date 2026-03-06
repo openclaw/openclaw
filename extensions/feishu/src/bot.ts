@@ -1070,10 +1070,24 @@ export async function handleFeishuMessage(params: {
     }
   }
 
-  // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
-  // Optimization: skip if disabled to save API quota (Feishu free tier limit).
+  // Resolve sender display name with channel-specific strategy:
+  // - direct chat: only chat.members lookup (single-path, no fallback)
+  // - group chat: contact user lookup (existing behavior)
   let permissionErrorForAgent: PermissionError | undefined;
-  if (feishuCfg?.resolveSenderNames ?? true) {
+
+  if (isDirect && (feishuCfg?.resolveDmDisplayNames ?? true)) {
+    const directName = await resolveFeishuDirectNameFromChatMember({
+      account,
+      chatId: ctx.chatId,
+      senderOpenId: ctx.senderOpenId,
+      log,
+    });
+    if (directName) {
+      ctx = { ...ctx, senderName: directName };
+    }
+  }
+
+  if (isGroup && (feishuCfg?.resolveSenderNames ?? true)) {
     const senderResult = await resolveFeishuSenderName({
       account,
       senderId: ctx.senderOpenId,
@@ -1092,18 +1106,6 @@ export async function handleFeishuMessage(params: {
         permissionErrorNotifiedAt.set(appKey, now);
         permissionErrorForAgent = senderResult.permissionError;
       }
-    }
-  }
-
-  if (isDirect && (feishuCfg?.resolveDmDisplayNames ?? true) && !ctx.senderName) {
-    const directName = await resolveFeishuDirectNameFromChatMember({
-      account,
-      chatId: ctx.chatId,
-      senderOpenId: ctx.senderOpenId,
-      log,
-    });
-    if (directName) {
-      ctx = { ...ctx, senderName: directName };
     }
   }
 
