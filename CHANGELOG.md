@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory/QMD search result decoding: accept `qmd search` hits that only include `file` URIs (for example `qmd://collection/path.md`) without `docid`, resolve them through managed collection roots, and keep multi-collection results keyed by file fallback so valid QMD hits no longer collapse to empty `memory_search` output. (#28181) Thanks @0x76696265.
 - Memory/QMD collection-name conflict recovery: when `qmd collection add` fails because another collection already occupies the same `path + pattern`, detect the conflicting collection from `collection list`, remove it, and retry add so agent-scoped managed collections are created deterministically instead of being silently skipped; also add warning-only fallback when qmd metadata is unavailable to avoid destructive guesses. (#25496) Thanks @Ramsbaby.
 - Slack/app_mention race dedupe: when `app_mention` dispatch wins while same-`ts` `message` prepare is still in-flight, suppress the later message dispatch so near-simultaneous Slack deliveries do not produce duplicate replies; keep single-retry behavior and add regression coverage for both dropped and successful message-prepare outcomes. (#37033) Thanks @Takhoffman.
 - Gateway/chat streaming tool-boundary text retention: merge assistant delta segments into per-run chat buffers so pre-tool text is preserved in live chat deltas/finals when providers emit post-tool assistant segments as non-prefix snapshots. (#36957) Thanks @Datyedyeguy.
@@ -108,6 +109,7 @@ Docs: https://docs.openclaw.ai
 - Security/audit denyCommands guidance: suggest likely exact node command IDs for unknown `gateway.nodes.denyCommands` entries so ineffective denylist entries are easier to correct. (#29713) thanks @liquidhorizon88-bot.
 - Docs/security hardening guidance: document Docker `DOCKER-USER` + UFW policy and add cross-linking from Docker install docs for VPS/public-host setups. (#27613) thanks @dorukardahan.
 - Docs/security threat-model links: replace relative `.md` links with Mintlify-compatible root-relative routes in security docs to prevent broken internal navigation. (#27698) thanks @clawdoo.
+- Plugins/Update integrity drift: avoid false integrity drift prompts when updating npm-installed plugins from unpinned specs, while keeping drift checks for exact pinned versions. (#37179) Thanks @vincentkoc.
 - iOS/Voice timing safety: guard system speech start/finish callbacks to the active utterance to avoid misattributed start events during rapid stop/restart cycles. (#33304) thanks @mbelinky; original implementation direction by @ngutman.
 - iOS/Talk incremental speech pacing: allow long punctuation-free assistant chunks to start speaking at safe whitespace boundaries so voice responses begin sooner instead of waiting for terminal punctuation. (#33305) thanks @mbelinky; original implementation by @ngutman.
 - iOS/Watch reply reliability: make watch session activation waiters robust under concurrent requests so status/send calls no longer hang intermittently, and align delegate callbacks with Swift 6 actor safety. (#33306) thanks @mbelinky; original implementation by @Rocuts.
