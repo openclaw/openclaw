@@ -4,6 +4,7 @@ import { resolveLastChannelRaw, resolveLastToRaw } from "./session-delivery.js";
 describe("session delivery direct-session routing overrides", () => {
   it.each([
     "agent:main:direct:user-1",
+    "agent:main:dm:user-1",
     "agent:main:telegram:direct:123456",
     "agent:main:telegram:account-a:direct:123456",
     "agent:main:telegram:dm:123456",
