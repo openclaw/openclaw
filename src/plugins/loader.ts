@@ -297,16 +297,21 @@ function recordPluginError(params: {
   diagnosticMessagePrefix: string;
 }) {
   const errorText = String(params.error);
-  params.logger.error(`${params.logPrefix}${errorText}`);
+  const deprecatedApiHint =
+    errorText.includes("api.registerHttpHandler") && errorText.includes("is not a function")
+      ? "deprecated api.registerHttpHandler(...) was removed; use api.registerHttpRoute(...) for plugin-owned routes or registerPluginHttpRoute(...) for dynamic lifecycle routes"
+      : null;
+  const displayError = deprecatedApiHint ? `${deprecatedApiHint} (${errorText})` : errorText;
+  params.logger.error(`${params.logPrefix}${displayError}`);
   params.record.status = "error";
-  params.record.error = errorText;
+  params.record.error = displayError;
   params.registry.plugins.push(params.record);
   params.seenIds.set(params.pluginId, params.origin);
   params.registry.diagnostics.push({
     level: "error",
     pluginId: params.record.id,
     source: params.record.source,
-    message: `${params.diagnosticMessagePrefix}${errorText}`,
+    message: `${params.diagnosticMessagePrefix}${displayError}`,
   });
 }
 
