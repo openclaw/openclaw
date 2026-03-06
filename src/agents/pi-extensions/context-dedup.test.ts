@@ -693,6 +693,59 @@ describe("context-dedup", () => {
     expect(postRewrite).not.toContain("Earlier chunk: context message #1");
   });
 
+  it("rewrites only lineage header fields and preserves matching payload text", () => {
+    const rootChunk = "root chunk line ".repeat(20);
+    const compactedLineageNote =
+      "[Same file chunk already shown earlier]\n" +
+      "Path: /tmp/hop-header-only.txt\n" +
+      "Earlier chunk: context message #0 (toolCallId call_root)\n" +
+      "Lines: 1-20";
+    const nestedLineageNote =
+      "[Read delta from earlier chunk]\n" +
+      "Path: /tmp/hop-header-only.txt\n" +
+      "Earlier chunk: context message #1 (toolCallId call_compacted)\n" +
+      "Same as earlier chunk lines 1-20, except:\n" +
+      "- lines 20 now read:\n" +
+      "Earlier chunk: context message #1 (literal file text)";
+
+    const messages = [
+      { role: "toolResult", toolCallId: "call_root", content: rootChunk },
+      { role: "toolResult", toolCallId: "call_compacted", content: compactedLineageNote },
+      { role: "toolResult", toolCallId: "call_nested", content: nestedLineageNote },
+    ];
+
+    const rewritten = rewriteReadLineageSourcePointers(messages as any[]);
+    const postRewrite = String(rewritten[2].content);
+
+    expect(postRewrite).toContain("Earlier chunk: context message #0");
+    expect(postRewrite).toContain("Earlier chunk: context message #1 (literal file text)");
+  });
+
+  it("rewrites dedup pointer header fields without mutating differing-middle payload", () => {
+    const rootChunk = "root chunk line ".repeat(20);
+    const intermediatePointer =
+      "[1 repeat of content omitted]\n" +
+      "Same as context message #0, block #0 (toolCallId call_root).";
+    const nearDuplicateNote =
+      "[Near-duplicate content trimmed]\n" +
+      "Same as context message #1, block #0 (toolCallId call_mid).\n" +
+      "Shared prefix 100 chars and suffix 100 chars.\n" +
+      "Differing middle (49 chars):\n" +
+      "Same as context message #1, block #0 (literal text).";
+
+    const messages = [
+      { role: "toolResult", toolCallId: "call_root", content: rootChunk },
+      { role: "toolResult", toolCallId: "call_mid", content: intermediatePointer },
+      { role: "toolResult", toolCallId: "call_leaf", content: nearDuplicateNote },
+    ];
+
+    const rewritten = rewriteReadLineageSourcePointers(messages as any[]);
+    const postRewrite = String(rewritten[2].content);
+
+    expect(postRewrite).toContain("Same as context message #0, block #0 (toolCallId call_root).");
+    expect(postRewrite).toContain("Same as context message #1, block #0 (literal text).");
+  });
+
   it("clamps block index when lineage hops land on string source messages", () => {
     const rootChunk = "root chunk line ".repeat(20);
     const lineageNote =

@@ -1571,25 +1571,52 @@ function resolveRootDedupPointerTarget(params: {
   };
 }
 
+const SOURCE_HINT_HEADER_SCAN_LIMIT = 4;
+
+function rewriteSyntheticHeaderLines(text: string, lineRewriter: (line: string) => string): string {
+  const lines = text.split("\n");
+  const headerLimit = Math.min(lines.length, SOURCE_HINT_HEADER_SCAN_LIMIT);
+
+  let changed = false;
+  for (let index = 0; index < headerLimit; index++) {
+    const current = lines[index] ?? "";
+    const rewritten = lineRewriter(current);
+    if (rewritten === current) {
+      continue;
+    }
+    lines[index] = rewritten;
+    changed = true;
+  }
+
+  return changed ? lines.join("\n") : text;
+}
+
 function rewriteLineageSourceHint(text: string, messages: any[]): string {
   if (!text.includes("Earlier chunk: context message #")) {
     return text;
   }
 
-  return text.replace(
-    /Earlier chunk: context message #(\d+)(?: \(toolCallId [^)]+\))?/g,
-    (full, sourceIndexRaw: string) => {
-      const sourceIndex = Number.parseInt(sourceIndexRaw, 10);
-      if (!Number.isFinite(sourceIndex) || sourceIndex < 0 || sourceIndex >= messages.length) {
-        return full;
-      }
-      const resolved = resolveRootSourceMessageIndex(messages, sourceIndex);
-      if (resolved === sourceIndex) {
-        return full;
-      }
-      return `Earlier chunk: context message #${resolved}`;
-    },
-  );
+  return rewriteSyntheticHeaderLines(text, (line) => {
+    const match = line.match(
+      /^(Earlier chunk: context message #)(\d+)(?: \(toolCallId [^)]+\))?(.*)$/,
+    );
+    if (!match) {
+      return line;
+    }
+
+    const sourceIndex = Number.parseInt(match[2] ?? "", 10);
+    if (!Number.isFinite(sourceIndex) || sourceIndex < 0 || sourceIndex >= messages.length) {
+      return line;
+    }
+
+    const resolved = resolveRootSourceMessageIndex(messages, sourceIndex);
+    if (resolved === sourceIndex) {
+      return line;
+    }
+
+    const suffix = typeof match[3] === "string" ? match[3] : "";
+    return `Earlier chunk: context message #${resolved}${suffix}`;
+  });
 }
 
 function rewriteDedupPointerSourceHint(text: string, messages: any[]): string {
@@ -1597,36 +1624,41 @@ function rewriteDedupPointerSourceHint(text: string, messages: any[]): string {
     return text;
   }
 
-  return text.replace(
-    /Same as context message #(\d+), block #(\d+)((?: \(toolCallId [^)]+\))?)\./g,
-    (full, sourceIndexRaw: string, blockIndexRaw: string, toolHintRaw: string) => {
-      const sourceIndex = Number.parseInt(sourceIndexRaw, 10);
-      const blockIndex = Number.parseInt(blockIndexRaw, 10);
-      if (!Number.isFinite(sourceIndex) || sourceIndex < 0 || sourceIndex >= messages.length) {
-        return full;
-      }
-      if (!Number.isFinite(blockIndex) || blockIndex < 0) {
-        return full;
-      }
+  return rewriteSyntheticHeaderLines(text, (line) => {
+    const match = line.match(
+      /^(Same as context message #)(\d+), block #(\d+)((?: \(toolCallId [^)]+\))?)\.(.*)$/,
+    );
+    if (!match) {
+      return line;
+    }
 
-      const toolHint = typeof toolHintRaw === "string" ? toolHintRaw : "";
-      const resolved = resolveRootDedupPointerTarget({
-        messages,
-        sourceMessageIndex: sourceIndex,
-        sourceBlockIndex: blockIndex,
-        sourceToolHint: toolHint,
-      });
-      if (
-        resolved.messageIndex === sourceIndex &&
-        resolved.blockIndex === blockIndex &&
-        resolved.toolHint === toolHint
-      ) {
-        return full;
-      }
+    const sourceIndex = Number.parseInt(match[2] ?? "", 10);
+    const blockIndex = Number.parseInt(match[3] ?? "", 10);
+    if (!Number.isFinite(sourceIndex) || sourceIndex < 0 || sourceIndex >= messages.length) {
+      return line;
+    }
+    if (!Number.isFinite(blockIndex) || blockIndex < 0) {
+      return line;
+    }
 
-      return `Same as context message #${resolved.messageIndex}, block #${resolved.blockIndex}${resolved.toolHint}.`;
-    },
-  );
+    const toolHint = typeof match[4] === "string" ? match[4] : "";
+    const resolved = resolveRootDedupPointerTarget({
+      messages,
+      sourceMessageIndex: sourceIndex,
+      sourceBlockIndex: blockIndex,
+      sourceToolHint: toolHint,
+    });
+    if (
+      resolved.messageIndex === sourceIndex &&
+      resolved.blockIndex === blockIndex &&
+      resolved.toolHint === toolHint
+    ) {
+      return line;
+    }
+
+    const suffix = typeof match[5] === "string" ? match[5] : "";
+    return `Same as context message #${resolved.messageIndex}, block #${resolved.blockIndex}${resolved.toolHint}.${suffix}`;
+  });
 }
 
 export function rewriteReadLineageSourcePointers(messages: any[]): any[] {
