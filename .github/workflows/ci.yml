@@ -213,25 +213,13 @@ jobs:
       - name: Enforce safe external URL opening policy
         run: pnpm lint:ui:no-raw-window-open
 
-  # Report-only dead-code scans. Runs after scope detection and stores machine-readable
-  # results as artifacts for later triage before we enable hard gates.
-  # Temporarily disabled in CI while we process initial findings.
+  # Report-only dead-code scan. Runs after scope detection and stores the Knip
+  # report as an artifact so we can triage findings before enabling hard gates.
   deadcode:
     name: dead-code report
     needs: [docs-scope, changed-scope]
-    # if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    if: false
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - tool: knip
-            command: pnpm deadcode:report:ci:knip
-          - tool: ts-prune
-            command: pnpm deadcode:report:ci:ts-prune
-          - tool: ts-unused-exports
-            command: pnpm deadcode:report:ci:ts-unused
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -244,13 +232,13 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "true"
 
-      - name: Run ${{ matrix.tool }} dead-code scan
-        run: ${{ matrix.command }}
+      - name: Run Knip dead-code scan
+        run: pnpm deadcode:report:ci:knip
 
       - name: Upload dead-code results
         uses: actions/upload-artifact@v4
         with:
-          name: dead-code-${{ matrix.tool }}-${{ github.run_id }}
+          name: dead-code-knip-${{ github.run_id }}
           path: .artifacts/deadcode
 
   # Validate docs (format, lint, broken links) only when docs files changed.
