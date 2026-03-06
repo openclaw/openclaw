@@ -424,7 +424,10 @@ function appendAssistantTranscriptMessage(params: {
 
   if (!fs.existsSync(transcriptPath)) {
     if (!params.createIfMissing) {
-      return { ok: false, error: "transcript file not found" };
+      return {
+        ok: false,
+        error: `session does not exist: no transcript found for session "${params.sessionId}"`,
+      };
     }
     const ensured = ensureTranscriptFile({
       transcriptPath,
