@@ -25,12 +25,7 @@ import {
   listAgentEntries,
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
-import {
-  clearConfigCache,
-  loadConfig,
-  readConfigFileSnapshot,
-  writeConfigFile,
-} from "../../config/config.js";
+import { clearConfigCache, loadConfig, writeConfigFile } from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
@@ -627,16 +622,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const refreshRuntimeConfigForCreate =
       typeof context.refreshRuntimeConfigFromDisk === "function"
         ? async () => {
-            const snapshot = await readConfigFileSnapshot();
-            if (!snapshot.exists || !snapshot.valid) {
-              return;
-            }
-            const snapshotHasAgent =
-              findAgentEntryIndex(listAgentEntries(snapshot.config), agentId) >= 0;
-            if (!snapshotHasAgent) {
-              return;
-            }
-            await context.refreshRuntimeConfigFromDisk?.(snapshot.config);
+            // Refresh runtime from the config we just persisted for this mutation.
+            // Avoid re-reading arbitrary on-disk edits during readiness polling.
+            await context.refreshRuntimeConfigFromDisk?.(nextConfig);
           }
         : undefined;
     const ready = await waitForAgentReady({

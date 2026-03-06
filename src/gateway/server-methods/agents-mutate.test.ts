@@ -488,7 +488,7 @@ describe("agents.create", () => {
     }
   });
 
-  it("refreshes readiness from latest disk snapshot to avoid stale runtime re-activation", async () => {
+  it("keeps readiness refresh scoped to the created config payload", async () => {
     mocks.state.runtimeConfig = null;
     let refreshAttempts = 0;
     const refreshPayloads: Array<Record<string, unknown> | undefined> = [];
@@ -522,9 +522,9 @@ describe("agents.create", () => {
     );
     expect(refreshAttempts).toBeGreaterThan(1);
     const lastRefresh = refreshPayloads.at(-1);
-    expect(lastRefresh?.__agentIds).toEqual(
-      expect.arrayContaining(["stale-safe-agent", "newer-agent"]),
-    );
+    expect(lastRefresh?.__agentIds).toEqual(expect.arrayContaining(["stale-safe-agent"]));
+    const refreshedAgentIds = Array.isArray(lastRefresh?.__agentIds) ? lastRefresh.__agentIds : [];
+    expect(refreshedAgentIds).not.toContain("newer-agent");
   });
 
   it("ensures workspace is set up before writing config", async () => {
