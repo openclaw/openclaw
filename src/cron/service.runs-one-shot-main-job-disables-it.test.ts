@@ -357,7 +357,8 @@ async function addWakeModeNowMainSystemEventJob(
     ...(options?.agentId ? { agentId: options.agentId } : {}),
     ...(options?.sessionKey ? { sessionKey: options.sessionKey } : {}),
     enabled: true,
-    schedule: { kind: "at", at: new Date(1).toISOString() },
+    // Keep this job out of normal due scans so force-run tests do not race with timer execution.
+    schedule: { kind: "at", at: new Date("2100-01-01T00:00:00.000Z").toISOString() },
     sessionTarget: "main",
     wakeMode: "now",
     payload: { kind: "systemEvent", text: "hello" },
