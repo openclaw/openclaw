@@ -47,6 +47,9 @@ import { feishuSetupWizard } from "./setup-surface.js";
 import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
 import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
 
+// Track which accounts have already received the dmPolicy migration warning this session.
+const warnedDmPolicyMigration = new Set<string>();
+
 const meta: ChannelMeta = {
   id: "feishu",
   label: "Feishu",
@@ -972,6 +975,31 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       ctx.log?.info(
         `starting feishu[${ctx.accountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
       );
+
+      // Migration warning: dmPolicy default changed from 'open' to 'pairing' in v2026.2.14.
+      // Warn once per account per session when dmPolicy was not explicitly set by the user.
+      if (!warnedDmPolicyMigration.has(ctx.accountId)) {
+        warnedDmPolicyMigration.add(ctx.accountId);
+        const rawFeishu = ctx.cfg.channels?.feishu as FeishuConfig | undefined;
+        const accountsMap = rawFeishu?.accounts;
+        const isMultiAccount =
+          accountsMap != null && Object.keys(accountsMap).length > 0;
+        // In multi-account mode, account-level dmPolicy is undefined when not explicitly set
+        // (FeishuAccountConfigSchema uses .optional() without .default()).
+        // In single-account mode, Zod applies the schema default ("pairing"), so we check
+        // whether the resolved value is "pairing" as the best available signal.
+        const dmPolicyImplicit = isMultiAccount
+          ? accountsMap[ctx.accountId]?.dmPolicy === undefined
+          : rawFeishu?.dmPolicy === "pairing";
+        if (dmPolicyImplicit) {
+          ctx.log?.warn(
+            `[feishu] Feishu dmPolicy default changed from 'open' to 'pairing' in v2026.2.14. ` +
+              `If your bot stopped responding to DMs, add \`dmPolicy: 'open'\` to your Feishu config. ` +
+              `See https://github.com/openclaw/openclaw/issues/17741`,
+          );
+        }
+      }
+
       return monitorFeishuProvider({
         config: ctx.cfg,
         runtime: ctx.runtime,
