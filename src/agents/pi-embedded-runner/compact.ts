@@ -114,6 +114,8 @@ export type CompactEmbeddedPiSessionParams = {
   senderName?: string | null;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** Raw platform origin for trust classification (e.g. "slack", "discord"). */
+  sourceProvider?: string;
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
