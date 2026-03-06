@@ -1,5 +1,7 @@
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig, readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
@@ -8,7 +10,7 @@ import type { GatewayService } from "../daemon/service.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { resolveGatewayProbeAuth } from "../gateway/probe-auth.js";
+import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -36,7 +38,12 @@ export async function statusAllCommand(
 ): Promise<void> {
   await withProgress({ label: "Scanning status --all…", total: 11 }, async (progress) => {
     progress.setLabel("Loading config…");
-    const cfg = loadConfig();
+    const loadedRaw = loadConfig();
+    const { resolvedConfig: cfg } = await resolveCommandSecretRefsViaGateway({
+      config: loadedRaw,
+      commandName: "status --all",
+      targetIds: getStatusCommandSecretTargetIds(),
+    });
     const osSummary = resolveOsSummary();
     const snap = await readConfigFileSnapshot().catch(() => null);
     progress.tick();
@@ -109,9 +116,11 @@ export async function statusAllCommand(
     const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
     const gatewayMode = isRemoteMode ? "remote" : "local";
 
-    const localFallbackAuth = resolveGatewayProbeAuth({ cfg, mode: "local" });
-    const remoteAuth = resolveGatewayProbeAuth({ cfg, mode: "remote" });
-    const probeAuth = isRemoteMode && !remoteUrlMissing ? remoteAuth : localFallbackAuth;
+    const localProbeAuthResolution = resolveGatewayProbeAuthSafe({ cfg, mode: "local" });
+    const remoteProbeAuthResolution = resolveGatewayProbeAuthSafe({ cfg, mode: "remote" });
+    const probeAuthResolution =
+      isRemoteMode && !remoteUrlMissing ? remoteProbeAuthResolution : localProbeAuthResolution;
+    const probeAuth = probeAuthResolution.auth;
 
     const gatewayProbe = await probeGateway({
       url: connection.url,
@@ -172,8 +181,8 @@ export async function statusAllCommand(
     const callOverrides = remoteUrlMissing
       ? {
           url: connection.url,
-          token: localFallbackAuth.token,
-          password: localFallbackAuth.password,
+          token: localProbeAuthResolution.auth.token,
+          password: localProbeAuthResolution.auth.password,
         }
       : {};
 
@@ -285,6 +294,9 @@ export async function statusAllCommand(
         Item: "Gateway",
         Value: `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}${gatewayAuth}`,
       },
+      ...(probeAuthResolution.warning
+        ? [{ Item: "Gateway auth warning", Value: probeAuthResolution.warning }]
+        : []),
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
       gatewaySelfLine
         ? { Item: "Gateway self", Value: gatewaySelfLine }
