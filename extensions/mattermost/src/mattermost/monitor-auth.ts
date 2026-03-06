@@ -47,15 +47,41 @@ export function isMattermostSenderAllowed(params: {
   allowFrom: string[];
   allowNameMatching?: boolean;
 }): boolean {
+  return isMattermostSenderOrChannelAllowed(params);
+}
+
+export function isMattermostSenderOrChannelAllowed(params: {
+  senderId: string;
+  senderName?: string;
+  channelId?: string;
+  allowFrom: string[];
+  allowNameMatching?: boolean;
+}): boolean {
   const allowFrom = normalizeMattermostAllowList(params.allowFrom);
   if (allowFrom.length === 0) {
     return false;
   }
-  const match = resolveAllowlistMatchSimple({
+  const senderMatch = resolveAllowlistMatchSimple({
     allowFrom,
     senderId: normalizeMattermostAllowEntry(params.senderId),
     senderName: params.senderName ? normalizeMattermostAllowEntry(params.senderName) : undefined,
     allowNameMatching: params.allowNameMatching,
   });
-  return match.allowed;
+  if (senderMatch.allowed) {
+    return true;
+  }
+
+  const channelId = normalizeMattermostAllowEntry(params.channelId ?? "");
+  if (!channelId) {
+    return false;
+  }
+
+  // Accept either raw channel ids ("abc123") or explicit channel prefixes
+  // ("channel:abc123", "mattermost:channel:abc123").
+  return (
+    allowFrom.includes("*") ||
+    allowFrom.includes(channelId) ||
+    allowFrom.includes(`channel:${channelId}`) ||
+    allowFrom.includes(`group:${channelId}`)
+  );
 }

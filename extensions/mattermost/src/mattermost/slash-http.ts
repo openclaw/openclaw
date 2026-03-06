@@ -26,6 +26,7 @@ import {
 } from "./client.js";
 import {
   isMattermostSenderAllowed,
+  isMattermostSenderOrChannelAllowed,
   normalizeMattermostAllowList,
   resolveMattermostEffectiveAllowFromLists,
 } from "./monitor-auth.js";
@@ -186,9 +187,10 @@ async function authorizeSlashInvocation(params: {
     allowFrom: commandDmAllowFrom,
     allowNameMatching,
   });
-  const groupAllowedForCommands = isMattermostSenderAllowed({
+  const groupAllowedForCommands = isMattermostSenderOrChannelAllowed({
     senderId,
     senderName,
+    channelId: kind !== "direct" ? channelId : undefined,
     allowFrom: commandGroupAllowFrom,
     allowNameMatching,
   });

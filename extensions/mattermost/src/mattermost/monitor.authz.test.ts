@@ -1,6 +1,9 @@
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it } from "vitest";
-import { resolveMattermostEffectiveAllowFromLists } from "./monitor-auth.js";
+import {
+  isMattermostSenderOrChannelAllowed,
+  resolveMattermostEffectiveAllowFromLists,
+} from "./monitor-auth.js";
 
 describe("mattermost monitor authz", () => {
   it("keeps DM allowlist merged with pairing-store entries", () => {
@@ -55,5 +58,45 @@ describe("mattermost monitor authz", () => {
     });
 
     expect(commandGate.commandAuthorized).toBe(false);
+  });
+
+  it("allows group events when allowlist includes the channel id", () => {
+    const allowed = isMattermostSenderOrChannelAllowed({
+      senderId: "user-123",
+      senderName: "alice",
+      channelId: "channel-abc",
+      allowFrom: ["channel-abc"],
+    });
+
+    expect(allowed).toBe(true);
+  });
+
+  it("allows group events when allowlist uses channel prefixes", () => {
+    const prefixed = isMattermostSenderOrChannelAllowed({
+      senderId: "user-123",
+      senderName: "alice",
+      channelId: "channel-abc",
+      allowFrom: ["mattermost:channel:channel-abc"],
+    });
+    const plainPrefixed = isMattermostSenderOrChannelAllowed({
+      senderId: "user-123",
+      senderName: "alice",
+      channelId: "channel-abc",
+      allowFrom: ["channel:channel-abc"],
+    });
+
+    expect(prefixed).toBe(true);
+    expect(plainPrefixed).toBe(true);
+  });
+
+  it("keeps channel allowlist scoped to matching channels", () => {
+    const allowed = isMattermostSenderOrChannelAllowed({
+      senderId: "user-123",
+      senderName: "alice",
+      channelId: "channel-other",
+      allowFrom: ["channel-abc"],
+    });
+
+    expect(allowed).toBe(false);
   });
 });

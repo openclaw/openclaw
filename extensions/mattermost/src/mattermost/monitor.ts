@@ -50,7 +50,11 @@ import {
   setInteractionCallbackUrl,
   setInteractionSecret,
 } from "./interactions.js";
-import { isMattermostSenderAllowed, normalizeMattermostAllowList } from "./monitor-auth.js";
+import {
+  isMattermostSenderAllowed,
+  isMattermostSenderOrChannelAllowed,
+  normalizeMattermostAllowList,
+} from "./monitor-auth.js";
 import {
   createDedupeCache,
   formatInboundFromLabel,
@@ -837,9 +841,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       groupAllowFrom: normalizedGroupAllowFrom,
       storeAllowFrom,
       isSenderAllowed: (allowFrom) =>
-        isMattermostSenderAllowed({
+        isMattermostSenderOrChannelAllowed({
           senderId,
           senderName,
+          channelId: kind !== "direct" ? channelId : undefined,
           allowFrom,
           allowNameMatching,
         }),
@@ -860,9 +865,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       allowFrom: commandDmAllowFrom,
       allowNameMatching,
     });
-    const groupAllowedForCommands = isMattermostSenderAllowed({
+    const groupAllowedForCommands = isMattermostSenderOrChannelAllowed({
       senderId,
       senderName,
+      channelId: kind !== "direct" ? channelId : undefined,
       allowFrom: effectiveGroupAllowFrom,
       allowNameMatching,
     });
@@ -1350,9 +1356,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       groupAllowFrom: normalizeMattermostAllowList(account.config.groupAllowFrom ?? []),
       storeAllowFrom,
       isSenderAllowed: (allowFrom) =>
-        isMattermostSenderAllowed({
+        isMattermostSenderOrChannelAllowed({
           senderId: userId,
           senderName,
+          channelId: kind !== "direct" ? channelId : undefined,
           allowFrom,
           allowNameMatching,
         }),

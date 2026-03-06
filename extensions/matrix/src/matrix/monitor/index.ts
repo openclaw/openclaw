@@ -8,6 +8,8 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/matrix";
+import { randomUUID } from "node:crypto";
+import type { MatrixClient, OwnUserDevice } from "@vector-im/matrix-bot-sdk";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig, MatrixConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
@@ -37,6 +39,56 @@ export type MonitorMatrixOpts = {
 
 const DEFAULT_MEDIA_MAX_MB = 20;
 export const DEFAULT_STARTUP_GRACE_MS = 5000;
+const MATRIX_DEVICE_VERIFICATION_METHODS = ["m.sas.v1"];
+
+type MatrixOwnVerificationRequester = Pick<MatrixClient, "getOwnDevices" | "sendToDevices"> & {
+  requestOwnUserVerification?: () => Promise<unknown>;
+  crypto?: {
+    requestOwnUserVerification?: () => Promise<unknown>;
+    clientDeviceId?: string;
+  } | null;
+};
+
+export async function requestMatrixOwnDeviceVerification(params: {
+  client: MatrixOwnVerificationRequester;
+  userId: string;
+}): Promise<"requested" | "no-other-devices" | "missing-device-id"> {
+  if (typeof params.client.requestOwnUserVerification === "function") {
+    await params.client.requestOwnUserVerification();
+    return "requested";
+  }
+  if (typeof params.client.crypto?.requestOwnUserVerification === "function") {
+    await params.client.crypto.requestOwnUserVerification();
+    return "requested";
+  }
+
+  const currentDeviceId = params.client.crypto?.clientDeviceId;
+  if (!currentDeviceId) {
+    return "missing-device-id";
+  }
+
+  const ownDevices = await params.client.getOwnDevices();
+  const otherDeviceIds = ownDevices
+    .map((device: OwnUserDevice) => device.device_id)
+    .filter((deviceId) => deviceId !== currentDeviceId);
+  if (otherDeviceIds.length === 0) {
+    return "no-other-devices";
+  }
+
+  const transactionId = randomUUID();
+  const request = {
+    from_device: currentDeviceId,
+    methods: MATRIX_DEVICE_VERIFICATION_METHODS,
+    timestamp: Date.now(),
+    transaction_id: transactionId,
+  };
+  await params.client.sendToDevices("m.key.verification.request", {
+    [params.userId]: Object.fromEntries(
+      otherDeviceIds.map((deviceId) => [deviceId, request] as const),
+    ),
+  });
+  return "requested";
+}
 
 export function isConfiguredMatrixRoomEntry(entry: string): boolean {
   return entry.startsWith("!") || (entry.startsWith("#") && entry.includes(":"));
@@ -382,12 +434,16 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   // If E2EE is enabled, trigger device verification
   if (auth.encryption && client.crypto) {
     try {
-      // Request verification from other sessions
-      const verificationRequest = await (
-        client.crypto as { requestOwnUserVerification?: () => Promise<unknown> }
-      ).requestOwnUserVerification?.();
-      if (verificationRequest) {
+      const verificationResult = await requestMatrixOwnDeviceVerification({
+        client,
+        userId: auth.userId,
+      });
+      if (verificationResult === "requested") {
         logger.info("matrix: device verification requested - please verify in another client");
+      } else {
+        logger.debug?.("matrix: skipped device verification request", {
+          reason: verificationResult,
+        });
       }
     } catch (err) {
       logger.debug?.("Device verification request failed (may already be verified)", {
