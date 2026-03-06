@@ -48,8 +48,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    fail(`Gateway service check failed: ${String(err)}`);
-    return;
+    // Service not found is expected during fresh install; only fail on system errors.
+    const message = String(err).toLowerCase();
+    if (!message.includes("not found") && !message.includes("not-found")) {
+      fail(`Gateway service check failed: ${String(err)}`);
+      return;
+    }
   }
   if (loaded) {
     if (!opts.force) {
