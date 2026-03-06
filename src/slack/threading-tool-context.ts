@@ -19,12 +19,18 @@ export function buildSlackThreadingToolContext(params: {
   const hasExplicitThreadTarget = params.context.MessageThreadId != null;
   const effectiveReplyToMode = hasExplicitThreadTarget ? "all" : configuredReplyToMode;
   const threadId = params.context.MessageThreadId ?? params.context.ReplyToId;
-  // For channel messages, To is "channel:C…" — extract the bare ID.
-  // For DMs, To is "user:U…" which can't be used for reactions; fall back
-  // to NativeChannelId (the raw Slack channel id, e.g. "D…").
-  const currentChannelId = params.context.To?.startsWith("channel:")
-    ? params.context.To.slice("channel:".length)
-    : params.context.NativeChannelId?.trim() || undefined;
+  // For channel targets, strip the "channel:" prefix to get the raw channel ID.
+  // For DM targets (user:xxx), preserve the full "user:xxx" address so that
+  // resolveSlackAutoThreadId can match it when the message tool targets the same DM.
+  // NativeChannelId ("D…") is available for reaction APIs but currentChannelId must
+  // use "user:xxx" form so the thread-injection comparison in resolveSlackAutoThreadId
+  // (which builds targetAddress as `user:${id}` for user-kind targets) finds a match.
+  const to = params.context.To;
+  const currentChannelId = to?.startsWith("channel:")
+    ? to.slice("channel:".length)
+    : to?.startsWith("user:")
+      ? to // e.g. "user:U0AC3LBA08M" — preserved for DM thread matching
+      : params.context.NativeChannelId?.trim() || undefined;
   return {
     currentChannelId,
     currentThreadTs: threadId != null ? String(threadId) : undefined,
