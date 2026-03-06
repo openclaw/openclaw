@@ -2232,6 +2232,41 @@ describe("secrets runtime snapshot", () => {
     ).toBe("db-secret-resolved");
   });
 
+  it("treats sandbox.docker.env refs as inactive on disabled agents", async () => {
+    const config = asConfig({
+      agents: {
+        list: [
+          {
+            id: "disabled-agent",
+            enabled: false,
+            sandbox: {
+              docker: {
+                env: {
+                  SECRET: { source: "env", provider: "default", id: "MISSING_DISABLED_SECRET" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    // Should not throw for the missing env var — agent is disabled
+    expect(
+      (snapshot.config.agents?.list?.[0]?.sandbox?.docker?.env as Record<string, unknown>)?.SECRET,
+    ).toEqual({ source: "env", provider: "default", id: "MISSING_DISABLED_SECRET" });
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.list.0.sandbox.docker.env.SECRET",
+    );
+  });
+
   it("resolves mixed plain string and SecretRef values in sandbox.docker.env", async () => {
     const config = asConfig({
       agents: {

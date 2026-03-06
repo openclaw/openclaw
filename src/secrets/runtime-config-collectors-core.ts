@@ -379,6 +379,8 @@ function collectSandboxDockerEnvAssignments(params: {
   pathPrefix: string;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
+  active: boolean;
+  inactiveReason?: string;
 }): void {
   for (const [key, value] of Object.entries(params.env)) {
     collectSecretInputAssignment({
@@ -387,6 +389,8 @@ function collectSandboxDockerEnvAssignments(params: {
       expected: "string",
       defaults: params.defaults,
       context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
       apply: (resolved) => {
         params.env[key] = resolved as string;
       },
@@ -409,17 +413,35 @@ function collectAgentSandboxDockerEnvAssignments(params: {
   const defaultsSandbox = isRecord(defaultsConfig?.sandbox) ? defaultsConfig.sandbox : undefined;
   const defaultsDocker = isRecord(defaultsSandbox?.docker) ? defaultsSandbox.docker : undefined;
   const defaultsEnv = isRecord(defaultsDocker?.env) ? defaultsDocker.env : undefined;
+
+  // Collect from agents.list[].sandbox.docker.env (skip disabled agents)
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  let hasEnabledAgentWithoutEnvOverride = false;
+  for (const rawAgent of list) {
+    if (!isRecord(rawAgent) || rawAgent.enabled === false) {
+      continue;
+    }
+    const sandbox = isRecord(rawAgent.sandbox) ? rawAgent.sandbox : undefined;
+    const docker = isRecord(sandbox?.docker) ? sandbox.docker : undefined;
+    const env = isRecord(docker?.env) ? docker.env : undefined;
+    if (!env) {
+      hasEnabledAgentWithoutEnvOverride = true;
+    }
+  }
+
   if (defaultsEnv) {
     collectSandboxDockerEnvAssignments({
       env: defaultsEnv,
       pathPrefix: "agents.defaults.sandbox.docker.env",
       defaults: params.defaults,
       context: params.context,
+      active: hasEnabledAgentWithoutEnvOverride || list.length === 0,
+      inactiveReason: hasEnabledAgentWithoutEnvOverride
+        ? undefined
+        : "all enabled agents override sandbox.docker.env.",
     });
   }
 
-  // Collect from agents.list[].sandbox.docker.env
-  const list = Array.isArray(agents.list) ? agents.list : [];
   list.forEach((rawAgent, index) => {
     if (!isRecord(rawAgent)) {
       return;
@@ -428,11 +450,14 @@ function collectAgentSandboxDockerEnvAssignments(params: {
     const docker = isRecord(sandbox?.docker) ? sandbox.docker : undefined;
     const env = isRecord(docker?.env) ? docker.env : undefined;
     if (env) {
+      const enabled = rawAgent.enabled !== false;
       collectSandboxDockerEnvAssignments({
         env,
         pathPrefix: `agents.list.${index}.sandbox.docker.env`,
         defaults: params.defaults,
         context: params.context,
+        active: enabled,
+        inactiveReason: "agent is disabled.",
       });
     }
   });

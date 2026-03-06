@@ -83,11 +83,16 @@ export function resolveSandboxDockerConfig(params: {
   const globalDocker = params.globalDocker;
 
   // SecretRef values in env are resolved to plain strings before this function runs.
-  const env = (
-    agentDocker?.env
-      ? { ...(globalDocker?.env ?? { LANG: "C.UTF-8" }), ...agentDocker.env }
-      : (globalDocker?.env ?? { LANG: "C.UTF-8" })
-  ) as Record<string, string>;
+  // Guard against unresolved SecretRef objects reaching container creation.
+  const rawEnv = agentDocker?.env
+    ? { ...(globalDocker?.env ?? { LANG: "C.UTF-8" }), ...agentDocker.env }
+    : (globalDocker?.env ?? { LANG: "C.UTF-8" });
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rawEnv)) {
+    if (typeof v === "string") {
+      env[k] = v;
+    }
+  }
 
   const ulimits = agentDocker?.ulimits
     ? { ...globalDocker?.ulimits, ...agentDocker.ulimits }
