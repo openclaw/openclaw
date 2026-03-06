@@ -585,6 +585,24 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(seed).toContain("src/core/file.ts:123");
   });
 
+  it("keeps newest identifier hints when seed exceeds cap", () => {
+    const recentMarker = "recent marker: https://recent.test:4317/path src/recent/file.ts:777";
+    const seed = buildIdentifierSeedText({
+      summarizableMessages: [
+        {
+          role: "user",
+          content: `older ${"x".repeat(3800)}`,
+          timestamp: 1,
+        },
+      ],
+      preservedRecentMessages: [],
+      turnPrefixMessages: [{ role: "user", content: recentMarker, timestamp: 2 }],
+    });
+
+    expect(seed).toContain(recentMarker);
+    expect(seed.length).toBeLessThanOrEqual(3000);
+  });
+
   it("formats preserved non-text messages with placeholders", () => {
     const section = formatPreservedTurnsSection([
       {

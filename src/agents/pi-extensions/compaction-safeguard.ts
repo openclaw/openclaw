@@ -256,8 +256,9 @@ function trimHeadTail(text: string, maxChars: number, headChars: number, tailCha
   if (text.length <= maxChars) {
     return text;
   }
-  const safeHead = Math.max(0, Math.floor(headChars));
-  const safeTail = Math.max(0, Math.floor(tailChars));
+  const safeMax = Math.max(0, Math.floor(maxChars));
+  const safeHead = Math.max(0, Math.min(Math.floor(headChars), safeMax));
+  const safeTail = Math.max(0, Math.min(Math.floor(tailChars), Math.max(0, safeMax - safeHead)));
   const trimmedChars = Math.max(0, text.length - (safeHead + safeTail));
   const head = safeHead > 0 ? text.slice(0, safeHead) : "";
   const tail = safeTail > 0 ? text.slice(Math.max(0, text.length - safeTail)) : "";
@@ -281,7 +282,9 @@ function buildIdentifierSeedText(params: {
   if (!seed) {
     return "";
   }
-  return seed.length > MAX_IDENTIFIER_SEED_CHARS ? seed.slice(0, MAX_IDENTIFIER_SEED_CHARS) : seed;
+  return seed.length > MAX_IDENTIFIER_SEED_CHARS
+    ? seed.slice(-MAX_IDENTIFIER_SEED_CHARS)
+    : seed;
 }
 
 function buildIdentifierSeedInstruction(seedText: string): string {
