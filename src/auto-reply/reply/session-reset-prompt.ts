@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { appendCronStyleCurrentTimeLine } from "../../agents/current-time.js";
+import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { extractSections } from "./post-compaction-context.js";
 
@@ -9,11 +10,33 @@ const BARE_SESSION_RESET_PROMPT_BASE =
 
 const MAX_STARTUP_SECTION_CHARS = 2000;
 
+function formatDateStamp(nowMs: number, timezone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(nowMs));
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  const day = parts.find((p) => p.type === "day")?.value;
+  if (year && month && day) {
+    return `${year}-${month}-${day}`;
+  }
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
+
 /**
  * Try to read the ## Session Startup section from AGENTS.md in the given workspace.
+ * Substitutes YYYY-MM-DD placeholders with the real date so agents read the correct
+ * daily memory files instead of guessing based on training cutoff.
  * Returns the section content or null if not found.
  */
-function readStartupSection(workspaceDir: string): string | null {
+function readStartupSection(
+  workspaceDir: string,
+  cfg?: OpenClawConfig,
+  nowMs?: number,
+): string | null {
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
   try {
     const content = fs.readFileSync(agentsPath, "utf-8");
@@ -21,7 +44,10 @@ function readStartupSection(workspaceDir: string): string | null {
     if (sections.length === 0) {
       return null;
     }
-    const combined = sections.join("\n\n");
+    const resolvedNowMs = nowMs ?? Date.now();
+    const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
+    const dateStamp = formatDateStamp(resolvedNowMs, timezone);
+    const combined = sections.join("\n\n").replaceAll("YYYY-MM-DD", dateStamp);
     return combined.length > MAX_STARTUP_SECTION_CHARS
       ? combined.slice(0, MAX_STARTUP_SECTION_CHARS) + "\n...[truncated]..."
       : combined;
@@ -43,18 +69,18 @@ export function buildBareSessionResetPrompt(
   nowMs?: number,
   workspaceDir?: string,
 ): string {
+  const resolvedNowMs = nowMs ?? Date.now();
   let prompt = BARE_SESSION_RESET_PROMPT_BASE;
 
   if (workspaceDir) {
-    const startupSection = readStartupSection(workspaceDir);
+    const startupSection = readStartupSection(workspaceDir, cfg, resolvedNowMs);
     if (startupSection) {
       prompt +=
-        "\n\nYour Session Startup sequence (follow these steps exactly):\n\n" +
-        startupSection;
+        "\n\nYour Session Startup sequence (follow these steps exactly):\n\n" + startupSection;
     }
   }
 
-  return appendCronStyleCurrentTimeLine(prompt, cfg ?? {}, nowMs ?? Date.now());
+  return appendCronStyleCurrentTimeLine(prompt, cfg ?? {}, resolvedNowMs);
 }
 
 /** @deprecated Use buildBareSessionResetPrompt(cfg) instead */
