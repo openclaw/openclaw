@@ -4,14 +4,27 @@ import { sendMessageSlack, type SlackSendIdentity } from "../../../slack/send.js
 import type { ChannelOutboundAdapter } from "../types.js";
 import { sendTextMediaPayload } from "./direct-text-media.js";
 
+function normalizeSlackEmoji(value?: string): string | undefined {
+  const raw = value?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  if (/^:[^:\s]+:$/.test(raw)) {
+    return raw;
+  }
+  if (/^[^:\s]+$/.test(raw)) {
+    return `:${raw}:`;
+  }
+  return undefined;
+}
+
 function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentity | undefined {
   if (!identity) {
     return undefined;
   }
   const username = identity.name?.trim() || undefined;
   const iconUrl = identity.avatarUrl?.trim() || undefined;
-  const rawEmoji = identity.emoji?.trim();
-  const iconEmoji = !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
+  const iconEmoji = !iconUrl ? normalizeSlackEmoji(identity.emoji) : undefined;
   if (!username && !iconUrl && !iconEmoji) {
     return undefined;
   }

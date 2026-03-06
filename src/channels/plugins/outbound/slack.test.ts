@@ -113,6 +113,19 @@ describe("slack outbound hook wiring", () => {
     });
   });
 
+  it("normalizes bare emoji aliases to :alias: for icon_emoji", async () => {
+    vi.mocked(getGlobalHookRunner).mockReturnValue(null);
+
+    await sendSlackTextWithDefaults({
+      text: "hello",
+      identity: { emoji: "stitch-1" },
+    });
+
+    expectSlackSendCalledWith("hello", {
+      identity: { iconEmoji: ":stitch-1:" },
+    });
+  });
+
   it("calls message_sending hook before sending", async () => {
     const mockRunner = {
       hasHooks: vi.fn().mockReturnValue(true),
