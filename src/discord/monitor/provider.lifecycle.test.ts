@@ -352,26 +352,43 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
-  it("force-stops when reconnect stalls after a close event", async () => {
+  it("does not force-stop when reconnect stalls, but updates status", async () => {
     vi.useFakeTimers();
     try {
       const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
       const { emitter, gateway } = createGatewayHarness();
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      const statusSinkMock = vi.fn();
+      const runtimeMock = {
+        log: vi.fn(),
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+      };
       waitForDiscordGatewayStopMock.mockImplementationOnce(
-        (waitParams: WaitForDiscordGatewayStopParams) =>
-          new Promise<void>((_resolve, reject) => {
-            waitParams.registerForceStop?.((err) => reject(err));
-          }),
+        () => new Promise<void>(() => {}),
       );
-      const { lifecycleParams } = createLifecycleHarness({ gateway });
+      const { lifecycleParams } = createLifecycleHarness({ gateway, statusSink: statusSinkMock, runtime: runtimeMock as any });
 
       const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
-      lifecyclePromise.catch(() => {});
       emitter.emit("debug", "WebSocket connection closed with code 1006");
 
       await vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000);
-      await expect(lifecyclePromise).rejects.toThrow("reconnect watchdog timeout");
+      
+      // Verify status was updated with reconnectFailed flag
+      expect(statusSinkMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connected: false,
+          lastError: expect.stringContaining("discord reconnect watchdog timeout"),
+          reconnectFailed: true,
+        }),
+      );
+      
+      // Verify triggerForceStop was NOT called (no error logged)
+      expect(runtimeMock.error).not.toHaveBeenCalled();
+      expect(runtimeMock.log).toHaveBeenCalledWith(
+        expect.stringContaining("discord: reconnect timeout, marking channel as failed"),
+      );
     } finally {
       vi.useRealTimers();
     }
