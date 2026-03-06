@@ -37,7 +37,44 @@ export function isSilentReplyText(
   }
   // Match only the exact silent token with optional surrounding whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  return getSilentExactRegex(token).test(text);
+  if (getSilentExactRegex(token).test(text)) {
+    return true;
+  }
+  // Some models emit JSON-wrapped silent tokens like {"action":"NO_REPLY"}.
+  // Detect and suppress these to prevent raw JSON leaking to end users (#37727).
+  return isJsonWrappedSilentToken(text, token);
+}
+
+/**
+ * Detect JSON payloads whose only meaningful value is a silent reply token.
+ * Matches patterns like `{"action":"NO_REPLY"}`, `{ "text": "NO_REPLY" }`, etc.
+ */
+function isJsonWrappedSilentToken(text: string, token: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const values = Object.values(parsed);
+    // All string values must be the silent token (or empty); at least one must match.
+    let hasToken = false;
+    for (const v of values) {
+      if (typeof v === "string") {
+        const sv = v.trim();
+        if (sv === token) {
+          hasToken = true;
+        } else if (sv !== "") {
+          return false;
+        }
+      } else if (v !== null && v !== undefined) {
+        return false;
+      }
+    }
+    return hasToken;
+  } catch {
+    return false;
+  }
 }
 
 /**

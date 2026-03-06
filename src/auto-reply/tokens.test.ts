@@ -34,6 +34,18 @@ describe("isSilentReplyText", () => {
     expect(isSilentReplyText("HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(true);
     expect(isSilentReplyText("Checked inbox. HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(false);
   });
+
+  it("detects JSON-wrapped NO_REPLY (#37727)", () => {
+    expect(isSilentReplyText('{"action":"NO_REPLY"}')).toBe(true);
+    expect(isSilentReplyText('{ "action": "NO_REPLY" }')).toBe(true);
+    expect(isSilentReplyText('{"text":"NO_REPLY","action":"NO_REPLY"}')).toBe(true);
+    expect(isSilentReplyText('{"action":"NO_REPLY","extra":""}')).toBe(true);
+  });
+
+  it("does not suppress JSON with real content alongside NO_REPLY", () => {
+    expect(isSilentReplyText('{"action":"NO_REPLY","message":"Hello"}')).toBe(false);
+    expect(isSilentReplyText('{"count":42}')).toBe(false);
+  });
 });
 
 describe("stripSilentToken", () => {
