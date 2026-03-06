@@ -44,7 +44,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
     includeReasoning: reasoningMode === "on",
-    shouldEmitPartialReplies: !(reasoningMode === "on" && !params.onBlockReply),
+    shouldEmitPartialReplies: !(
+      reasoningMode === "on" &&
+      !params.onBlockReply &&
+      typeof params.onReasoningStream !== "function"
+    ),
     streamReasoning: reasoningMode === "stream" && typeof params.onReasoningStream === "function",
     deltaBuffer: "",
     blockBuffer: "",

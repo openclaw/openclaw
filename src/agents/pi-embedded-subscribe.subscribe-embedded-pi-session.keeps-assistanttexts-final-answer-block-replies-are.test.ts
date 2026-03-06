@@ -54,4 +54,30 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(subscription.assistantTexts).toEqual(["Final answer"]);
   });
+
+  it("keeps partial replies enabled when reasoning stream callback is provided", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+    const onReasoningStream = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      reasoningMode: "on",
+      onPartialReply,
+      onReasoningStream,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "Draft " });
+    emitAssistantTextDelta({ emit, delta: "reply" });
+
+    expect(onPartialReply).toHaveBeenCalled();
+    expect(onPartialReply).toHaveBeenLastCalledWith({
+      text: "Draft reply",
+      mediaUrls: undefined,
+    });
+    expect(onReasoningStream).not.toHaveBeenCalled();
+  });
 });
