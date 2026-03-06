@@ -219,8 +219,8 @@ def main():
         if image_saved:
             full_path = output_path.resolve()
             print(f"\nImage saved: {full_path}")
-            # OpenClaw parses MEDIA: tokens (line-start, no space after colon)
-            # and will attach the file on supported chat providers.
+            # OpenClaw parses MEDIA: tokens and will attach the file on
+            # supported chat providers. Emit the canonical MEDIA:<path> form.
             print(f"MEDIA:{full_path}")
         else:
             print("Error: No image was generated in the response.", file=sys.stderr)
