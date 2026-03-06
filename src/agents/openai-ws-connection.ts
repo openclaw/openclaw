@@ -298,7 +298,12 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
   constructor(options: OpenAIWebSocketManagerOptions = {}) {
     super();
     this.wsUrl = options.url ?? OPENAI_WS_URL;
-    this.maxRetries = options.maxRetries ?? MAX_RETRIES;
+    // Clamp maxRetries to at least 1 so a misconfigured or accidentally
+    // zeroed value doesn't prevent any reconnect attempts (off-by-one: when
+    // maxRetries is 0, retryCount=0 >= maxRetries=0 fires immediately and
+    // the "max reconnect retries (0)" error is raised before ever retrying).
+    const rawMaxRetries = options.maxRetries ?? MAX_RETRIES;
+    this.maxRetries = Math.max(1, rawMaxRetries);
     this.backoffDelaysMs = options.backoffDelaysMs ?? BACKOFF_DELAYS_MS;
   }
 
