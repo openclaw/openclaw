@@ -32,6 +32,7 @@ type AllowedValuesCollection = {
   incomplete: boolean;
   hasValues: boolean;
 };
+type PluginConfigIssue = Pick<ConfigValidationIssue, "path" | "message">;
 
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   if (!value || typeof value !== "object") {
@@ -220,6 +221,74 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
         '(use gateway.bind="loopback" or gateway.bind="custom" with gateway.customBindHost="127.0.0.1")',
     },
   ];
+}
+
+function hasOwnKey(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function collectMisplacedFeishuPluginConfigIssues(params: {
+  pluginId: string;
+  channels: readonly string[];
+  config: unknown;
+}): PluginConfigIssue[] {
+  const hasFeishuChannel = params.channels.some(
+    (channelId) => channelId.trim().toLowerCase() === "feishu",
+  );
+  if (!hasFeishuChannel || !isRecord(params.config)) {
+    return [];
+  }
+
+  const issues: PluginConfigIssue[] = [];
+  const basePath = `plugins.entries.${params.pluginId}.config`;
+
+  if (hasOwnKey(params.config, "appId")) {
+    issues.push({
+      path: `${basePath}.appId`,
+      message:
+        "Feishu appId belongs under channels.feishu.appId or " +
+        "channels.feishu.accounts.<id>.appId, not plugin config",
+    });
+  }
+
+  if (hasOwnKey(params.config, "appSecret")) {
+    issues.push({
+      path: `${basePath}.appSecret`,
+      message:
+        "Feishu appSecret belongs under channels.feishu.appSecret or " +
+        "channels.feishu.accounts.<id>.appSecret, not plugin config",
+    });
+  }
+
+  const accounts = params.config.accounts;
+  if (!isRecord(accounts)) {
+    return issues;
+  }
+
+  for (const [accountId, account] of Object.entries(accounts)) {
+    if (!isRecord(account)) {
+      continue;
+    }
+    // Mirror the actual Feishu channel shape so the fix points to the right destination key.
+    if (hasOwnKey(account, "appId")) {
+      issues.push({
+        path: `${basePath}.accounts.${accountId}.appId`,
+        message:
+          `Feishu appId for account "${accountId}" belongs under ` +
+          `channels.feishu.accounts.${accountId}.appId, not plugin config`,
+      });
+    }
+    if (hasOwnKey(account, "appSecret")) {
+      issues.push({
+        path: `${basePath}.accounts.${accountId}.appSecret`,
+        message:
+          `Feishu appSecret for account "${accountId}" belongs under ` +
+          `channels.feishu.accounts.${accountId}.appSecret, not plugin config`,
+      });
+    }
+  }
+
+  return issues;
 }
 
 /**
@@ -582,6 +651,13 @@ function validateConfigObjectWithPluginsBase(
 
     const shouldValidate = enabled || entryHasConfig;
     if (shouldValidate) {
+      issues.push(
+        ...collectMisplacedFeishuPluginConfigIssues({
+          pluginId,
+          channels: record.channels,
+          config: entry?.config,
+        }),
+      );
       if (record.configSchema) {
         const res = validateJsonSchemaValue({
           schema: record.configSchema,

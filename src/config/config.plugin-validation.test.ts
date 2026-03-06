@@ -37,6 +37,7 @@ describe("config plugin validation", () => {
   let badPluginDir = "";
   let enumPluginDir = "";
   let bluebubblesPluginDir = "";
+  let feishuAliasPluginDir = "";
   const envSnapshot = {
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
     OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
@@ -51,6 +52,7 @@ describe("config plugin validation", () => {
     badPluginDir = path.join(suiteHome, "bad-plugin");
     enumPluginDir = path.join(suiteHome, "enum-plugin");
     bluebubblesPluginDir = path.join(suiteHome, "bluebubbles-plugin");
+    feishuAliasPluginDir = path.join(suiteHome, "feishu-openclaw-plugin");
     await writePluginFixture({
       dir: badPluginDir,
       id: "bad-plugin",
@@ -83,6 +85,16 @@ describe("config plugin validation", () => {
       channels: ["bluebubbles"],
       schema: { type: "object" },
     });
+    await writePluginFixture({
+      dir: feishuAliasPluginDir,
+      id: "feishu-openclaw-plugin",
+      channels: ["feishu"],
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+    });
     process.env.OPENCLAW_STATE_DIR = path.join(suiteHome, ".openclaw");
     process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = "10000";
     clearPluginManifestRegistryCache();
@@ -91,7 +103,7 @@ describe("config plugin validation", () => {
     validateInSuite({
       plugins: {
         enabled: false,
-        load: { paths: [badPluginDir, bluebubblesPluginDir] },
+        load: { paths: [badPluginDir, bluebubblesPluginDir, feishuAliasPluginDir] },
       },
     });
   });
@@ -226,6 +238,57 @@ describe("config plugin validation", () => {
       expect(issue?.message).toContain('allowed: "markdown", "html"');
       expect(issue?.allowedValues).toEqual(["markdown", "html"]);
       expect(issue?.allowedValuesHiddenCount).toBe(0);
+    }
+  });
+
+  it("points misplaced Feishu credentials at channels.feishu based on plugin channel metadata", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [feishuAliasPluginDir] },
+        entries: {
+          "feishu-openclaw-plugin": {
+            config: {
+              appId: "cli_top",
+              appSecret: "secret_top",
+              accounts: {
+                workspace: {
+                  appId: "cli_workspace",
+                  appSecret: "secret_workspace",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues).toEqual(
+        expect.arrayContaining([
+          {
+            path: "plugins.entries.feishu-openclaw-plugin.config.appId",
+            message:
+              "Feishu appId belongs under channels.feishu.appId or channels.feishu.accounts.<id>.appId, not plugin config",
+          },
+          {
+            path: "plugins.entries.feishu-openclaw-plugin.config.appSecret",
+            message:
+              "Feishu appSecret belongs under channels.feishu.appSecret or channels.feishu.accounts.<id>.appSecret, not plugin config",
+          },
+          {
+            path: "plugins.entries.feishu-openclaw-plugin.config.accounts.workspace.appId",
+            message:
+              'Feishu appId for account "workspace" belongs under channels.feishu.accounts.workspace.appId, not plugin config',
+          },
+          {
+            path: "plugins.entries.feishu-openclaw-plugin.config.accounts.workspace.appSecret",
+            message:
+              'Feishu appSecret for account "workspace" belongs under channels.feishu.accounts.workspace.appSecret, not plugin config',
+          },
+        ]),
+      );
     }
   });
 
