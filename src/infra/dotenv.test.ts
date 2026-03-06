@@ -96,4 +96,45 @@ describe("loadDotEnv", () => {
       });
     });
   });
+
+  it("expands references from the shell and CWD env files", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        process.env.OPENAI_API_KEY = "from-shell";
+        await writeEnvFile(path.join(cwdDir, ".env"), "LOCAL_BASE=from-cwd\n");
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          "OPENAI_TRANSCRIPTION_API_KEY=${OPENAI_API_KEY}\nCHAINED_VALUE=${LOCAL_BASE}\n",
+        );
+
+        process.chdir(cwdDir);
+        delete process.env.OPENAI_TRANSCRIPTION_API_KEY;
+        delete process.env.CHAINED_VALUE;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.OPENAI_TRANSCRIPTION_API_KEY).toBe("from-shell");
+        expect(process.env.CHAINED_VALUE).toBe("from-cwd");
+      });
+    });
+  });
+
+  it("expands references defined earlier in the same env file", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          "BASE=from-global\nCOMBINED=${BASE}-suffix\n",
+        );
+        process.chdir(cwdDir);
+        delete process.env.BASE;
+        delete process.env.COMBINED;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.BASE).toBe("from-global");
+        expect(process.env.COMBINED).toBe("from-global-suffix");
+      });
+    });
+  });
 });
