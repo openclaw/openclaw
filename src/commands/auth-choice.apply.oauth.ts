@@ -1,4 +1,3 @@
-import { createAuthChoiceDefaultModelApplierForMutableState } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { loginChutes } from "./chutes-oauth.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
@@ -7,7 +6,6 @@ import {
   applyAuthProfileConfig,
   applyChutesConfig,
   applyChutesProviderConfig,
-  CHUTES_DEFAULT_MODEL_REF,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
@@ -17,14 +15,6 @@ export async function applyAuthChoiceOAuth(
 ): Promise<ApplyAuthChoiceResult | null> {
   if (params.authChoice === "chutes") {
     let nextConfig = params.config;
-    let agentModelOverride: string | undefined;
-    const applyProviderDefaultModel = createAuthChoiceDefaultModelApplierForMutableState(
-      params,
-      () => nextConfig,
-      (config) => (nextConfig = config),
-      () => agentModelOverride,
-      (model) => (agentModelOverride = model),
-    );
     const isRemote = isRemoteEnvironment();
     const redirectUri =
       process.env.CHUTES_OAUTH_REDIRECT_URI?.trim() || "http://127.0.0.1:1456/oauth-callback";
@@ -90,12 +80,13 @@ export async function applyAuthChoiceOAuth(
         mode: "oauth",
       });
 
-      await applyProviderDefaultModel({
-        defaultModel: CHUTES_DEFAULT_MODEL_REF,
-        applyDefaultConfig: applyChutesConfig,
-        applyProviderConfig: applyChutesProviderConfig,
-        noteDefault: CHUTES_DEFAULT_MODEL_REF,
-      });
+      // Register provider models and set default if this is the primary auth choice.
+      // This ensures the model picker shows a Chutes model pre-selected as current.
+      if (params.setDefaultModel) {
+        nextConfig = applyChutesConfig(nextConfig);
+      } else {
+        nextConfig = applyChutesProviderConfig(nextConfig);
+      }
     } catch (err) {
       spin.stop("Chutes OAuth failed");
       params.runtime.error(String(err));
@@ -109,7 +100,7 @@ export async function applyAuthChoiceOAuth(
         "OAuth help",
       );
     }
-    return { config: nextConfig, agentModelOverride };
+    return { config: nextConfig };
   }
 
   return null;
