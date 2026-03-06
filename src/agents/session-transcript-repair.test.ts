@@ -488,3 +488,61 @@ describe("stripToolResultDetails", () => {
     expect(out).toBe(input);
   });
 });
+
+describe("repairToolUseResultPairing — aborted empty assistant (#37834)", () => {
+  it("drops aborted assistant message with empty content", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "exec_1", name: "exec", input: { command: "ls" } }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "exec_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "file1.txt" }],
+      },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "aborted",
+      },
+      { role: "user", content: "next question" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+    const roles = result.messages.map((m) => (m as { role: string }).role);
+    expect(roles).not.toContain("assistant_aborted");
+    expect(result.messages).toHaveLength(3);
+    expect((result.messages[2] as { role: string }).role).toBe("user");
+  });
+
+  it("keeps aborted assistant message with non-empty content", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "partial response..." }],
+        stopReason: "aborted",
+      },
+      { role: "user", content: "try again" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+    expect(result.messages).toHaveLength(2);
+    expect((result.messages[0] as { role: string }).role).toBe("assistant");
+  });
+
+  it("keeps errored assistant message with content", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "error occurred" }],
+        stopReason: "error",
+      },
+      { role: "user", content: "retry" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+    expect(result.messages).toHaveLength(2);
+  });
+});

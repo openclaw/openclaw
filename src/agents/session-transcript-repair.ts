@@ -398,6 +398,14 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     // See: https://github.com/openclaw/openclaw/issues/4597
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
+      // Drop aborted/errored messages with no content — they add nothing to the
+      // context and can leave orphaned tool_use blocks from the preceding
+      // assistant turn unresolved, causing permanent 400 loops (#37834).
+      const content = Array.isArray(assistant.content) ? assistant.content : [];
+      if (content.length === 0) {
+        changed = true;
+        continue;
+      }
       out.push(msg);
       continue;
     }
