@@ -359,6 +359,45 @@ async function agentCommandInternal(
   for (const entry of diagnostics) {
     runtime.log(`[secrets] ${entry}`);
   }
+
+  // Load and merge per-stack openclaw.json overlay from --config-dir early,
+  // before model/agent/timeout resolution so the overlay can influence all of them.
+  // The workspaceBaseDir security boundary comes from the base config (not the overlay).
+  if (opts.configDirOverride) {
+    const configDir = path.resolve(opts.configDirOverride.trim());
+    const workspaceBaseDirForValidation = cfg.agents?.defaults?.workspaceBaseDir?.trim();
+    if (workspaceBaseDirForValidation) {
+      const base = path.resolve(workspaceBaseDirForValidation);
+      if (!configDir.startsWith(base + path.sep) && configDir !== base) {
+        throw new Error(
+          `--config-dir must be under workspaceBaseDir (${base}), got: ${configDir}`,
+        );
+      }
+    }
+    const overlayPath = path.join(configDir, "openclaw.json");
+    try {
+      const overlayRaw = await fs.readFile(overlayPath, "utf-8");
+      const parseResult = parseConfigJson5(overlayRaw);
+      if (
+        parseResult.ok &&
+        parseResult.parsed &&
+        typeof parseResult.parsed === "object" &&
+        !Array.isArray(parseResult.parsed)
+      ) {
+        const resolved = resolveConfigEnvVars(parseResult.parsed);
+        const merged = applyMergePatch(cfg, resolved, { mergeObjectArraysById: true });
+        Object.assign(cfg, merged);
+      } else if (!parseResult.ok) {
+        log.error(`Failed to parse ${overlayPath}: ${parseResult.error}`);
+      }
+    } catch (err: any) {
+      if (err instanceof MissingEnvVarError) {
+        throw new Error(`Config overlay ${overlayPath}: ${err.message}`);
+      }
+      if (err.code !== "ENOENT") throw err;
+    }
+  }
+
   const agentIdOverrideRaw = opts.agentId?.trim();
   const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
   if (agentIdOverride) {
@@ -474,18 +513,10 @@ async function agentCommandInternal(
   });
   const workspaceDir = workspace.dir;
 
-  // Copy bootstrap .md files from --config-dir into workspace (overwriting defaults)
+  // Copy bootstrap .md files from --config-dir into workspace (overwriting defaults).
+  // Note: workspaceBaseDir boundary was already validated in the early overlay block above.
   if (opts.configDirOverride) {
     const configDir = path.resolve(opts.configDirOverride.trim());
-
-    if (workspaceBaseDir) {
-      const base = path.resolve(workspaceBaseDir);
-      if (!configDir.startsWith(base + path.sep) && configDir !== base) {
-        throw new Error(
-          `--config-dir must be under workspaceBaseDir (${base}), got: ${configDir}`,
-        );
-      }
-    }
 
     try {
       await fs.access(configDir);
@@ -511,29 +542,6 @@ async function agentCommandInternal(
       log.warn(`--config-dir ${configDir} contains no bootstrap .md files`);
     }
 
-    // Load and merge per-stack openclaw.json overlay from config directory.
-    const overlayPath = path.join(configDir, "openclaw.json");
-    try {
-      const overlayRaw = await fs.readFile(overlayPath, "utf-8");
-      const parseResult = parseConfigJson5(overlayRaw);
-      if (
-        parseResult.ok &&
-        parseResult.parsed &&
-        typeof parseResult.parsed === "object" &&
-        !Array.isArray(parseResult.parsed)
-      ) {
-        const resolved = resolveConfigEnvVars(parseResult.parsed);
-        const merged = applyMergePatch(cfg, resolved, { mergeObjectArraysById: true });
-        Object.assign(cfg, merged);
-      } else if (!parseResult.ok) {
-        log.error(`Failed to parse ${overlayPath}: ${parseResult.error}`);
-      }
-    } catch (err: any) {
-      if (err instanceof MissingEnvVarError) {
-        throw new Error(`Config overlay ${overlayPath}: ${err.message}`);
-      }
-      if (err.code !== "ENOENT") throw err;
-    }
   }
 
   // Apply --tools-* overrides to config
