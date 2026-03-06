@@ -333,6 +333,35 @@ CI/automation: use `BW_CLIENTID` and `BW_CLIENTSECRET` instead of `BW_SESSION` f
 }
 ```
 
+For multi-secret batch resolution, use the bundled wrapper script (`scripts/bw-exec-resolver.mjs`). It accepts OpenClaw protocol-v1 JSON on stdin and resolves multiple `item-name/field-name` refs in a single exec provider:
+
+```json5
+{
+  secrets: {
+    providers: {
+      bw: {
+        source: "exec",
+        command: "/absolute/path/to/openclaw/scripts/bw-exec-resolver.mjs",
+        passEnv: ["BW_SESSION", "PATH", "HOME"],
+        jsonOnly: true,
+      },
+    },
+  },
+  models: {
+    providers: {
+      anthropic: {
+        apiKey: { source: "exec", provider: "bw", id: "anthropic-key/password" },
+      },
+      openai: {
+        apiKey: { source: "exec", provider: "bw", id: "openai-key/password" },
+      },
+    },
+  },
+}
+```
+
+Ref ID format: `item-name/field-name` or `item-name` (defaults to `password`). Supported fields: `password`, `username`, `notes`, `uri`, or any custom field name.
+
 ## Supported credential surface
 
 Canonical supported and unsupported credentials are listed in:
