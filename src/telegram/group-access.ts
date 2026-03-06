@@ -126,6 +126,8 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
   effectiveGroupAllow: NormalizedAllowFrom;
   senderId?: string;
   senderUsername?: string;
+  /** Chat/group ID as a string, used to match group IDs in groupAllowFrom. */
+  chatIdStr?: string;
   resolveGroupPolicy: (chatId: string | number) => ChannelGroupPolicy;
   enforcePolicy: boolean;
   useTopicAndGroupOverrides: boolean;
@@ -192,6 +194,18 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
       return { allowed: true, groupPolicy };
     }
     const senderUsername = params.senderUsername ?? "";
+    // For group messages, check the chat/group ID against the allowlist so that
+    // entries like "-100xxxxxxxxxx" in groupAllowFrom correctly allow a group.
+    // If the chat ID matches, the group itself is authorized; otherwise fall
+    // through to the per-sender check.
+    const chatIdStr = params.chatIdStr ?? String(params.chatId);
+    if (
+      params.isGroup &&
+      chatIdStr &&
+      isSenderAllowed({ allow: params.effectiveGroupAllow, senderId: chatIdStr, senderUsername: "" })
+    ) {
+      return { allowed: true, groupPolicy };
+    }
     if (
       !isSenderAllowed({
         allow: params.effectiveGroupAllow,
