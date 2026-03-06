@@ -11,6 +11,7 @@ import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -685,6 +686,7 @@ export async function runEmbeddedAttempt(
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
   const runAbortController = new AbortController();
+  ensureGlobalUndiciStreamTimeouts();
 
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
@@ -1338,6 +1340,7 @@ export async function runEmbeddedAttempt(
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,
           sessionManager,
+          clearPendingOnTimeout: true,
         });
         activeSession.dispose();
         throw err;
@@ -1688,6 +1691,14 @@ export async function runEmbeddedAttempt(
         const preCompactionSessionId = activeSession.sessionId;
 
         try {
+          // Flush buffered block replies before waiting for compaction so the
+          // user receives the assistant response immediately.  Without this,
+          // coalesced/buffered blocks stay in the pipeline until compaction
+          // finishes — which can take minutes on large contexts (#35074).
+          if (params.onBlockReplyFlush) {
+            await params.onBlockReplyFlush();
+          }
+
           await abortable(waitForCompactionRetry());
         } catch (err) {
           if (isRunnerAbortError(err)) {
@@ -1896,6 +1907,7 @@ export async function runEmbeddedAttempt(
       await flushPendingToolResultsAfterIdle({
         agent: session?.agent,
         sessionManager,
+        clearPendingOnTimeout: true,
       });
       session?.dispose();
       releaseWsSession(params.sessionId);

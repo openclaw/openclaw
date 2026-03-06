@@ -8,6 +8,7 @@ import {
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
+  isPeriodicUsageLimitErrorMessage,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
@@ -249,6 +250,66 @@ export function isTransientHttpError(raw: string): boolean {
     return false;
   }
   return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
+}
+
+export function classifyFailoverReasonFromHttpStatus(
+  status: number | undefined,
+  message?: string,
+): FailoverReason | null {
+  if (typeof status !== "number" || !Number.isFinite(status)) {
+    return null;
+  }
+
+  if (status === 402) {
+    // Some providers (e.g. Anthropic Claude Max plan) surface temporary
+    // usage/rate-limit failures as HTTP 402. Use a narrow matcher for
+    // temporary limits to avoid misclassifying billing failures (#30484).
+    if (message) {
+      const lower = message.toLowerCase();
+      // Temporary usage limit signals: retry language + usage/limit terminology
+      const hasTemporarySignal =
+        (lower.includes("try again") ||
+          lower.includes("retry") ||
+          lower.includes("temporary") ||
+          lower.includes("cooldown")) &&
+        (lower.includes("usage limit") ||
+          lower.includes("rate limit") ||
+          lower.includes("organization usage"));
+      if (hasTemporarySignal) {
+        return "rate_limit";
+      }
+    }
+    return "billing";
+  }
+  if (status === 429) {
+    return "rate_limit";
+  }
+  if (status === 401 || status === 403) {
+    if (message && isAuthPermanentErrorMessage(message)) {
+      return "auth_permanent";
+    }
+    return "auth";
+  }
+  if (status === 408) {
+    return "timeout";
+  }
+  // Keep the status-only path conservative and behavior-preserving.
+  // Message-path HTTP heuristics are broader and should not leak in here.
+  if (status === 502 || status === 503 || status === 504) {
+    return "timeout";
+  }
+  if (status === 529) {
+    return "rate_limit";
+  }
+  if (status === 400) {
+    // Some providers return quota/balance errors under HTTP 400, so do not
+    // let the generic format fallback mask an explicit billing signal.
+    if (message && isBillingErrorMessage(message)) {
+      return "billing";
+    }
+    return "format";
+  }
+  return null;
 }
 
 function stripFinalTagsFromText(text: string): string {
@@ -799,6 +860,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isJsonApiInternalServerError(raw)) {
     return "timeout";
+  }
+  if (isPeriodicUsageLimitErrorMessage(raw)) {
+    return isBillingErrorMessage(raw) ? "billing" : "rate_limit";
   }
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";
