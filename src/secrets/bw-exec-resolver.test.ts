@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-// @ts-expect-error — .mjs has no type declarations; tested via runtime assertions below.
 import {
   extractField,
   groupByItem,
