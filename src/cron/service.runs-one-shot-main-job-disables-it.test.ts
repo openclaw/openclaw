@@ -193,6 +193,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 beforeEach(() => {
   fsState.entries.clear();
   fsState.nowMs = 0;
+  // Keep incrementing fixture ids across tests so cron store cache keys do not collide.
   ensureDir(fixturesRoot);
 });
 
@@ -542,7 +543,16 @@ describe("CronService", () => {
     const job = await addWakeModeNowMainSystemEventJob(cron, { name: "wakeMode now waits" });
 
     const runPromise = cron.run(job.id, "force");
-    await heartbeatStarted.promise;
+    // `cron.run()` now persists the running marker before executing the job.
+    // Allow more microtask turns so the post-lock execution can start.
+    for (let i = 0; i < 500; i++) {
+      if (runHeartbeatOnce.mock.calls.length > 0) {
+        break;
+      }
+      // Let the locked() chain progress.
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(1);
+    }
 
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
