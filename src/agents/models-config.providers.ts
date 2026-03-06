@@ -35,6 +35,11 @@ import {
   DOUBAO_CODING_MODEL_CATALOG,
 } from "./doubao-models.js";
 import {
+  FEATHERLESS_BASE_URL,
+  FEATHERLESS_MODEL_CATALOG,
+  buildFeatherlessModelDefinition,
+} from "./featherless-models.js";
+import {
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,
@@ -957,6 +962,14 @@ async function buildHuggingfaceProvider(discoveryApiKey?: string): Promise<Provi
   };
 }
 
+function buildFeatherlessProvider(): ProviderConfig {
+  return {
+    baseUrl: FEATHERLESS_BASE_URL,
+    api: "openai-completions",
+    models: FEATHERLESS_MODEL_CATALOG.map(buildFeatherlessModelDefinition),
+  };
+}
+
 function buildTogetherProvider(): ProviderConfig {
   return {
     baseUrl: TOGETHER_BASE_URL,
@@ -1259,6 +1272,14 @@ export async function resolveImplicitProviders(params: {
         apiKey: vllmKey,
       };
     }
+  }
+
+  const featherlessKey = resolveProviderApiKey("featherless").apiKey;
+  if (featherlessKey) {
+    providers.featherless = {
+      ...buildFeatherlessProvider(),
+      apiKey: featherlessKey,
+    };
   }
 
   const togetherKey = resolveProviderApiKey("together").apiKey;
