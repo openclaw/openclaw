@@ -144,4 +144,64 @@ describe("createCacheTrace", () => {
     expect(source.bytes).toBe(6);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("U0VDUkVU").digest("hex"));
   });
+
+  it("suppresses message content when includeMessages is false", () => {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+            includeMessages: false,
+          },
+        },
+      },
+      env: {},
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+      },
+    });
+
+    trace?.recordStage("session:loaded", {
+      messages: [{ role: "user" } as never],
+    });
+
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event.messageCount).toBe(1);
+    expect(event).not.toHaveProperty("messages");
+  });
+
+  it("wrapStreamFn records a stream:context stage event with model and message info", () => {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+          },
+        },
+      },
+      env: {},
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+      },
+    });
+
+    const innerStreamFn: import("@mariozechner/pi-agent-core").StreamFn = (() =>
+      ({}) as never) as import("@mariozechner/pi-agent-core").StreamFn;
+    const wrapped = trace?.wrapStreamFn(innerStreamFn);
+    wrapped?.(
+      { id: "claude-opus", provider: "anthropic", api: "anthropic-messages" } as never,
+      { messages: [{ role: "user" } as never], system: "you are helpful" } as never,
+      {},
+    );
+
+    expect(lines).toHaveLength(1);
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event.stage).toBe("stream:context");
+    expect((event.model as { id?: string } | undefined)?.id).toBe("claude-opus");
+    expect(event.messageCount).toBe(1);
+  });
 });

@@ -141,34 +141,25 @@ export function projectCredentialSnapshotFields(
     return {};
   }
 
+  const tokenSource = readTrimmedString(record, "tokenSource");
+  const botTokenSource = readTrimmedString(record, "botTokenSource");
+  const appTokenSource = readTrimmedString(record, "appTokenSource");
+  const signingSecretSource = readTrimmedString(record, "signingSecretSource");
+  const tokenStatus = readCredentialStatus(record, "tokenStatus");
+  const botTokenStatus = readCredentialStatus(record, "botTokenStatus");
+  const appTokenStatus = readCredentialStatus(record, "appTokenStatus");
+  const signingSecretStatus = readCredentialStatus(record, "signingSecretStatus");
+  const userTokenStatus = readCredentialStatus(record, "userTokenStatus");
   return {
-    ...(readTrimmedString(record, "tokenSource")
-      ? { tokenSource: readTrimmedString(record, "tokenSource") }
-      : {}),
-    ...(readTrimmedString(record, "botTokenSource")
-      ? { botTokenSource: readTrimmedString(record, "botTokenSource") }
-      : {}),
-    ...(readTrimmedString(record, "appTokenSource")
-      ? { appTokenSource: readTrimmedString(record, "appTokenSource") }
-      : {}),
-    ...(readTrimmedString(record, "signingSecretSource")
-      ? { signingSecretSource: readTrimmedString(record, "signingSecretSource") }
-      : {}),
-    ...(readCredentialStatus(record, "tokenStatus")
-      ? { tokenStatus: readCredentialStatus(record, "tokenStatus") }
-      : {}),
-    ...(readCredentialStatus(record, "botTokenStatus")
-      ? { botTokenStatus: readCredentialStatus(record, "botTokenStatus") }
-      : {}),
-    ...(readCredentialStatus(record, "appTokenStatus")
-      ? { appTokenStatus: readCredentialStatus(record, "appTokenStatus") }
-      : {}),
-    ...(readCredentialStatus(record, "signingSecretStatus")
-      ? { signingSecretStatus: readCredentialStatus(record, "signingSecretStatus") }
-      : {}),
-    ...(readCredentialStatus(record, "userTokenStatus")
-      ? { userTokenStatus: readCredentialStatus(record, "userTokenStatus") }
-      : {}),
+    ...(tokenSource ? { tokenSource } : {}),
+    ...(botTokenSource ? { botTokenSource } : {}),
+    ...(appTokenSource ? { appTokenSource } : {}),
+    ...(signingSecretSource ? { signingSecretSource } : {}),
+    ...(tokenStatus ? { tokenStatus } : {}),
+    ...(botTokenStatus ? { botTokenStatus } : {}),
+    ...(appTokenStatus ? { appTokenStatus } : {}),
+    ...(signingSecretStatus ? { signingSecretStatus } : {}),
+    ...(userTokenStatus ? { userTokenStatus } : {}),
   };
 }
 
@@ -180,38 +171,33 @@ export function projectSafeChannelAccountSnapshotFields(
     return {};
   }
 
+  const name = readTrimmedString(record, "name");
+  const linked = readBoolean(record, "linked");
+  const running = readBoolean(record, "running");
+  const connected = readBoolean(record, "connected");
+  const reconnectAttempts = readNumber(record, "reconnectAttempts");
+  const mode = readTrimmedString(record, "mode");
+  const dmPolicy = readTrimmedString(record, "dmPolicy");
+  const allowFrom = readStringArray(record, "allowFrom");
+  const baseUrl = readTrimmedString(record, "baseUrl");
+  const allowUnmentionedGroups = readBoolean(record, "allowUnmentionedGroups");
+  const cliPath = readTrimmedString(record, "cliPath");
+  const dbPath = readTrimmedString(record, "dbPath");
+  const port = readNumber(record, "port");
   return {
-    ...(readTrimmedString(record, "name") ? { name: readTrimmedString(record, "name") } : {}),
-    ...(readBoolean(record, "linked") !== undefined
-      ? { linked: readBoolean(record, "linked") }
-      : {}),
-    ...(readBoolean(record, "running") !== undefined
-      ? { running: readBoolean(record, "running") }
-      : {}),
-    ...(readBoolean(record, "connected") !== undefined
-      ? { connected: readBoolean(record, "connected") }
-      : {}),
-    ...(readNumber(record, "reconnectAttempts") !== undefined
-      ? { reconnectAttempts: readNumber(record, "reconnectAttempts") }
-      : {}),
-    ...(readTrimmedString(record, "mode") ? { mode: readTrimmedString(record, "mode") } : {}),
-    ...(readTrimmedString(record, "dmPolicy")
-      ? { dmPolicy: readTrimmedString(record, "dmPolicy") }
-      : {}),
-    ...(readStringArray(record, "allowFrom")
-      ? { allowFrom: readStringArray(record, "allowFrom") }
-      : {}),
+    ...(name ? { name } : {}),
+    ...(linked !== undefined ? { linked } : {}),
+    ...(running !== undefined ? { running } : {}),
+    ...(connected !== undefined ? { connected } : {}),
+    ...(reconnectAttempts !== undefined ? { reconnectAttempts } : {}),
+    ...(mode ? { mode } : {}),
+    ...(dmPolicy ? { dmPolicy } : {}),
+    ...(allowFrom ? { allowFrom } : {}),
     ...projectCredentialSnapshotFields(account),
-    ...(readTrimmedString(record, "baseUrl")
-      ? { baseUrl: readTrimmedString(record, "baseUrl") }
-      : {}),
-    ...(readBoolean(record, "allowUnmentionedGroups") !== undefined
-      ? { allowUnmentionedGroups: readBoolean(record, "allowUnmentionedGroups") }
-      : {}),
-    ...(readTrimmedString(record, "cliPath")
-      ? { cliPath: readTrimmedString(record, "cliPath") }
-      : {}),
-    ...(readTrimmedString(record, "dbPath") ? { dbPath: readTrimmedString(record, "dbPath") } : {}),
-    ...(readNumber(record, "port") !== undefined ? { port: readNumber(record, "port") } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(allowUnmentionedGroups !== undefined ? { allowUnmentionedGroups } : {}),
+    ...(cliPath ? { cliPath } : {}),
+    ...(dbPath ? { dbPath } : {}),
+    ...(port !== undefined ? { port } : {}),
   };
 }
