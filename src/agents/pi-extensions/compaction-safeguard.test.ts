@@ -28,6 +28,7 @@ const {
   formatToolFailuresSection,
   splitPreservedRecentTurns,
   formatPreservedTurnsSection,
+  buildIdentifierSeedText,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
   appendSummarySection,
@@ -524,6 +525,64 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const section = formatPreservedTurnsSection(split.preservedMessages);
     expect(section).toContain("- Tool result (read): recent raw output");
     expect(section).toContain("- User: recent ask");
+  });
+
+  it("preserves critical tail lines for long error tool results", () => {
+    const tailMarker = "EADDRINUSE:3000 at src/agents/pi-extensions/compaction-safeguard.ts:123";
+    const longText = `${"x".repeat(2200)}\n${tailMarker}`;
+    const section = formatPreservedTurnsSection([
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        isError: true,
+        content: [{ type: "text", text: longText }],
+        timestamp: 1,
+      } as unknown as AgentMessage,
+    ]);
+
+    expect(section).toContain(tailMarker);
+    expect(section).toContain("...[trimmed");
+  });
+
+  it("keeps preserved tool-result section length bounded", () => {
+    const section = formatPreservedTurnsSection([
+      {
+        role: "toolResult",
+        toolCallId: "call-2",
+        toolName: "exec",
+        isError: true,
+        content: [{ type: "text", text: "y".repeat(25_000) }],
+        timestamp: 1,
+      } as unknown as AgentMessage,
+    ]);
+
+    expect(section.length).toBeLessThan(3_500);
+    expect(section).toContain("...[trimmed");
+  });
+
+  it("includes preserved recent messages in identifier seed text", () => {
+    const seed = buildIdentifierSeedText({
+      summarizableMessages: [{ role: "user", content: "older text", timestamp: 1 }],
+      preservedRecentMessages: [
+        {
+          role: "toolResult",
+          toolCallId: "call-3",
+          toolName: "exec",
+          content: [
+            {
+              type: "text",
+              text: "tail marker: https://example.test:3000/path src/core/file.ts:123",
+            },
+          ],
+          timestamp: 2,
+        } as unknown as AgentMessage,
+      ],
+      turnPrefixMessages: [],
+    });
+
+    expect(seed).toContain("https://example.test:3000/path");
+    expect(seed).toContain("src/core/file.ts:123");
   });
 
   it("formats preserved non-text messages with placeholders", () => {

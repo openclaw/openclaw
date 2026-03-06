@@ -36,6 +36,16 @@ const MAX_TOOL_FAILURE_CHARS = 240;
 const DEFAULT_RECENT_TURNS_PRESERVE = 3;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
+const MAX_PRESERVED_TOOL_RESULT_ERROR_CHARS = 1800;
+const MAX_PRESERVED_TOOL_RESULT_CHARS = 1000;
+const PRESERVED_TOOL_RESULT_ERROR_HEAD_CHARS = 900;
+const PRESERVED_TOOL_RESULT_ERROR_TAIL_CHARS = 900;
+const PRESERVED_TOOL_RESULT_HEAD_CHARS = 500;
+const PRESERVED_TOOL_RESULT_TAIL_CHARS = 500;
+const IDENTIFIER_SEED_SUMMARIZABLE_TAIL = 6;
+const IDENTIFIER_SEED_PRESERVED_TAIL = 6;
+const IDENTIFIER_SEED_TURN_PREFIX_TAIL = 3;
+const MAX_IDENTIFIER_SEED_CHARS = 3000;
 const MAX_UNTRUSTED_INSTRUCTION_CHARS = 4000;
 const REQUIRED_SUMMARY_SECTIONS = [
   "## Decisions",
@@ -242,6 +252,48 @@ function formatNonTextPlaceholder(content: unknown): string | null {
   return `[non-text content: ${parts.join(", ")}]`;
 }
 
+function trimHeadTail(text: string, maxChars: number, headChars: number, tailChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const safeHead = Math.max(0, Math.floor(headChars));
+  const safeTail = Math.max(0, Math.floor(tailChars));
+  const trimmedChars = Math.max(0, text.length - (safeHead + safeTail));
+  const head = safeHead > 0 ? text.slice(0, safeHead) : "";
+  const tail = safeTail > 0 ? text.slice(Math.max(0, text.length - safeTail)) : "";
+  return `${head}\n...[trimmed ${trimmedChars} chars]...\n${tail}`;
+}
+
+function buildIdentifierSeedText(params: {
+  summarizableMessages: AgentMessage[];
+  preservedRecentMessages: AgentMessage[];
+  turnPrefixMessages: AgentMessage[];
+}): string {
+  const sampled = [
+    ...params.summarizableMessages.slice(-IDENTIFIER_SEED_SUMMARIZABLE_TAIL),
+    ...params.preservedRecentMessages.slice(-IDENTIFIER_SEED_PRESERVED_TAIL),
+    ...params.turnPrefixMessages.slice(-IDENTIFIER_SEED_TURN_PREFIX_TAIL),
+  ];
+  const seed = sampled
+    .map(extractMessageText)
+    .filter((text) => text.length > 0)
+    .join("\n");
+  if (!seed) {
+    return "";
+  }
+  return seed.length > MAX_IDENTIFIER_SEED_CHARS ? seed.slice(0, MAX_IDENTIFIER_SEED_CHARS) : seed;
+}
+
+function buildIdentifierSeedInstruction(seedText: string): string {
+  if (!seedText.trim()) {
+    return "";
+  }
+  return wrapUntrustedInstructionBlock(
+    "Identifier hints from recent/preserved messages (include in ## Exact identifiers if relevant)",
+    seedText,
+  );
+}
+
 function splitPreservedRecentTurns(params: {
   messages: AgentMessage[];
   recentTurnsPreserve: number;
@@ -377,8 +429,26 @@ function formatPreservedTurnsSection(messages: AgentMessage[]): string {
       if (!rendered) {
         return null;
       }
-      const trimmed =
-        rendered.length > MAX_RECENT_TURN_TEXT_CHARS
+      const isToolResult = message.role === "toolResult";
+      const isToolResultError =
+        isToolResult &&
+        ((message as { isError?: unknown }).isError === true ||
+          ((message as { toolName?: unknown }).toolName === "error"));
+      const trimmed = isToolResult
+        ? isToolResultError
+          ? trimHeadTail(
+              rendered,
+              MAX_PRESERVED_TOOL_RESULT_ERROR_CHARS,
+              PRESERVED_TOOL_RESULT_ERROR_HEAD_CHARS,
+              PRESERVED_TOOL_RESULT_ERROR_TAIL_CHARS,
+            )
+          : trimHeadTail(
+              rendered,
+              MAX_PRESERVED_TOOL_RESULT_CHARS,
+              PRESERVED_TOOL_RESULT_HEAD_CHARS,
+              PRESERVED_TOOL_RESULT_TAIL_CHARS,
+            )
+        : rendered.length > MAX_RECENT_TURN_TEXT_CHARS
           ? `${rendered.slice(0, MAX_RECENT_TURN_TEXT_CHARS)}...`
           : rendered;
       return `- ${roleLabel}: ${trimmed}`;
@@ -623,7 +693,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
       let messagesToSummarize = preparation.messagesToSummarize;
       const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
-      const structuredInstructions = buildCompactionStructureInstructions(
+      const baseStructuredInstructions = buildCompactionStructureInstructions(
         customInstructions,
         summarizationInstructions,
       );
@@ -681,7 +751,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
                   maxChunkTokens: droppedMaxChunkTokens,
                   contextWindow: contextWindowTokens,
-                  customInstructions: structuredInstructions,
+                  customInstructions: baseStructuredInstructions,
                   summarizationInstructions,
                   previousSummary: preparation.previousSummary,
                 });
@@ -706,6 +776,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       });
       messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
+      const identifierSeedText = buildIdentifierSeedText({
+        summarizableMessages: messagesToSummarize,
+        preservedRecentMessages,
+        turnPrefixMessages,
+      });
+      const identifierSeedInstruction = buildIdentifierSeedInstruction(identifierSeedText);
+      const structuredInstructions = identifierSeedInstruction
+        ? `${baseStructuredInstructions}\n\n${identifierSeedInstruction}`
+        : baseStructuredInstructions;
 
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
       // the summarization prompt, system prompt, previous summary, and reasoning budget
@@ -792,6 +871,7 @@ export const __testing = {
   formatToolFailuresSection,
   splitPreservedRecentTurns,
   formatPreservedTurnsSection,
+  buildIdentifierSeedText,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
   appendSummarySection,
