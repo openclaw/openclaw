@@ -27,6 +27,12 @@ describe("web_search brave language param normalization", () => {
       search_lang: "en",
       ui_lang: "en-US",
     });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-Hans" })).toEqual({
+      search_lang: "zh-hans",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "PT-BR" })).toEqual({
+      search_lang: "pt-br",
+    });
   });
 
   it("flags invalid Brave language formats", () => {

@@ -185,6 +185,28 @@ describe("web_search country and language parameters", () => {
     expect(url.searchParams.get("search_lang")).toBe("de");
   });
 
+  it("accepts Brave localized search_lang values like zh-hans", async () => {
+    const mockFetch = installMockFetch({ web: { results: [] } });
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    await tool?.execute?.("call-1", { query: "test", search_lang: "zh-hans" });
+
+    const url = new URL(mockFetch.mock.calls[0][0] as string);
+    expect(url.searchParams.get("search_lang")).toBe("zh-hans");
+  });
+
+  it("documents Brave localized search_lang values in the tool schema", () => {
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    expect(tool).not.toBeNull();
+
+    const description = (
+      tool!.parameters as { properties?: { search_lang?: { description?: string } } }
+    ).properties?.search_lang?.description;
+
+    expect(description).toContain("zh-hans");
+    expect(description).toContain("zh-hant");
+    expect(description).not.toContain("Must be a 2-letter code");
+  });
+
   it("rejects invalid freshness values", async () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });

@@ -40,8 +40,64 @@ const KIMI_WEB_SEARCH_TOOL = {
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
-const BRAVE_SEARCH_LANG_CODE = /^[a-z]{2}$/i;
 const BRAVE_UI_LANG_LOCALE = /^([a-z]{2})-([a-z]{2})$/i;
+const BRAVE_SEARCH_LANG_CODES = new Set([
+  "ar",
+  "eu",
+  "bn",
+  "bg",
+  "ca",
+  "zh-hans",
+  "zh-hant",
+  "hr",
+  "cs",
+  "da",
+  "nl",
+  "en",
+  "en-gb",
+  "et",
+  "fi",
+  "fr",
+  "gl",
+  "de",
+  "el",
+  "gu",
+  "he",
+  "hi",
+  "hu",
+  "is",
+  "it",
+  "jp",
+  "kn",
+  "ko",
+  "lv",
+  "lt",
+  "ms",
+  "ml",
+  "mr",
+  "nb",
+  "pl",
+  "pt-br",
+  "pt-pt",
+  "pa",
+  "ro",
+  "ru",
+  "sr",
+  "sk",
+  "sl",
+  "es",
+  "sv",
+  "ta",
+  "te",
+  "th",
+  "tr",
+  "uk",
+  "vi",
+]);
+const BRAVE_SEARCH_LANG_DESCRIPTION =
+  "Brave search language code for results (e.g., 'de', 'en', 'en-gb', 'pt-br', 'zh-hans', 'zh-hant'). Use Brave search_lang values, not ui locales like 'en-US'.";
+const BRAVE_SEARCH_LANG_ERROR =
+  "search_lang must be a Brave search language code like 'en', 'en-gb', 'pt-br', 'zh-hans', or 'zh-hant' (not a ui locale like 'en-US').";
 const PERPLEXITY_RECENCY_VALUES = new Set(["day", "week", "month", "year"]);
 
 const FRESHNESS_TO_RECENCY: Record<string, string> = {
@@ -126,8 +182,7 @@ function createWebSearchSchema(provider: (typeof SEARCH_PROVIDERS)[number]) {
       ...baseSchema,
       search_lang: Type.Optional(
         Type.String({
-          description:
-            "Short ISO language code for search results (e.g., 'de', 'en', 'fr', 'tr'). Must be a 2-letter code, NOT a locale.",
+          description: BRAVE_SEARCH_LANG_DESCRIPTION,
         }),
       ),
       ui_lang: Type.Optional(
@@ -731,10 +786,14 @@ function normalizeBraveSearchLang(value: string | undefined): string | undefined
     return undefined;
   }
   const trimmed = value.trim();
-  if (!trimmed || !BRAVE_SEARCH_LANG_CODE.test(trimmed)) {
+  if (!trimmed) {
     return undefined;
   }
-  return trimmed.toLowerCase();
+  const normalized = trimmed.toLowerCase();
+  if (!BRAVE_SEARCH_LANG_CODES.has(normalized)) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function normalizeBraveUiLang(value: string | undefined): string | undefined {
@@ -1472,8 +1531,7 @@ export function createWebSearchTool(options?: {
       if (normalizedBraveLanguageParams.invalidField === "search_lang") {
         return jsonResult({
           error: "invalid_search_lang",
-          message:
-            "search_lang must be a 2-letter ISO language code like 'en' (not a locale like 'en-US').",
+          message: BRAVE_SEARCH_LANG_ERROR,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
