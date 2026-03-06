@@ -19,14 +19,6 @@ export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
-  const hasApprovalClients = (context: { hasExecApprovalClients?: () => boolean }) => {
-    if (typeof context.hasExecApprovalClients === "function") {
-      return context.hasExecApprovalClients();
-    }
-    // Fail closed when no operator-scope probe is available.
-    return false;
-  };
-
   return {
     "exec.approval.request": async ({ params, respond, context, client }) => {
       if (!validateExecApprovalRequestParams(params)) {
@@ -178,10 +170,9 @@ export function createExecApprovalHandlers(
         },
         { dropIfSlow: true },
       );
-      let forwardedToTargets = false;
       if (opts?.forwarder) {
         try {
-          forwardedToTargets = await opts.forwarder.handleRequested({
+          await opts.forwarder.handleRequested({
             id: record.id,
             request: record.request,
             createdAtMs: record.createdAtMs,
@@ -192,9 +183,9 @@ export function createExecApprovalHandlers(
         }
       }
 
-      if (!hasApprovalClients(context) && !forwardedToTargets) {
-        manager.expire(record.id, "auto-expire:no-approver-clients");
-      }
+      // Keep approvals pending until timeout even when no operator WS approver
+      // clients are connected; in-band text commands (e.g. /approve in chat)
+      // can still resolve them.
 
       // Only send immediate "accepted" response when twoPhase is requested.
       // This preserves single-response semantics for existing callers.
