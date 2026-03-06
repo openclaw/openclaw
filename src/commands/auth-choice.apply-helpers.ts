@@ -9,7 +9,6 @@ import {
 } from "../secrets/ref-contract.js";
 import { resolveSecretRefString } from "../secrets/resolve.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { formatApiKeyPreview } from "./auth-choice.api-key.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import type { SecretInputMode } from "./onboard-types.js";
@@ -510,7 +509,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
 
   if (envKey && selectedMode === "plaintext") {
     const useExisting = await params.prompter.confirm({
-      message: `Use existing ${params.envLabel} (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+      message: `Use existing ${params.envLabel} (${envKey.source})?`,
       initialValue: true,
     });
     if (useExisting) {

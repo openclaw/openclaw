@@ -229,6 +229,36 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     expect(text).not.toHaveBeenCalled();
   });
 
+  it("never includes API key preview in env confirmation prompt", async () => {
+    process.env.MINIMAX_API_KEY = "sk-minimax-secret-value";
+    delete process.env.MINIMAX_OAUTH_TOKEN;
+
+    const { confirm, text } = createPromptSpies({
+      confirmResult: true,
+      textResult: "prompt-key",
+    });
+    const setCredential = vi.fn(async () => undefined);
+
+    await ensureMinimaxApiKey({
+      confirm,
+      text,
+      setCredential,
+    });
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Use existing MINIMAX_API_KEY (env: MINIMAX_API_KEY)?",
+      }),
+    );
+    const confirmCall = (
+      confirm.mock.calls as unknown as Array<[{ message?: string }] | undefined>
+    )[0];
+    const confirmMessage = String(confirmCall?.[0]?.message ?? "");
+    expect(confirmMessage).not.toContain("sk-minimax-secret-value");
+    expect(confirmMessage).not.toContain("sk-m");
+    expect(confirmMessage).not.toContain("alue");
+  });
+
   it("falls back to prompt when env is declined", async () => {
     const { result, setCredential, text } = await runEnsureMinimaxApiKeyFlow({
       confirmResult: false,
