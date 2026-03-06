@@ -56,7 +56,16 @@ export function isSilentReplyPrefixText(
   if (!text) {
     return false;
   }
-  const normalized = text.trimStart().toUpperCase();
+  const trimmed = text.trimStart();
+  if (!trimmed) {
+    return false;
+  }
+  // Guard against suppressing natural-language "No..." text while still
+  // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
+  if (trimmed !== trimmed.toUpperCase()) {
+    return false;
+  }
+  const normalized = trimmed.toUpperCase();
   if (!normalized) {
     return false;
   }
@@ -66,6 +75,8 @@ export function isSilentReplyPrefixText(
   // This prevents "No" or "N" from matching NO_REPLY
   if (normalized === upperToken || upperToken.startsWith(normalized + "_")) {
     return true;
+  if (normalized.length < 2) {
+    return false;
   }
   // Legacy check: catch all-uppercase prefixes for backwards compatibility
   // but only if the token is exactly the prefix (no partial matches)
@@ -74,4 +85,15 @@ export function isSilentReplyPrefixText(
     return false;
   }
   return upperToken === normalized;
+  const tokenUpper = token.toUpperCase();
+  if (!tokenUpper.startsWith(normalized)) {
+    return false;
+  }
+  if (normalized.includes("_")) {
+    return true;
+  }
+  // Keep underscore guard for generic tokens to avoid suppressing unrelated
+  // uppercase words (e.g. HEART/HE with HEARTBEAT_OK). Only allow bare "NO"
+  // because NO_REPLY streaming can transiently emit that fragment.
+  return tokenUpper === SILENT_REPLY_TOKEN && normalized === "NO";
 }
