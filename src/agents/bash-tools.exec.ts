@@ -364,7 +364,7 @@ export function createExecTool(
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const workspaceEnv = await loadWorkspaceDotEnvForExec({
-        workspaceDir: defaults?.cwd,
+        workspaceDir: workdir,
         baseEnv: inheritedBaseEnv,
       });
       const inheritedWithWorkspaceEnv = { ...inheritedBaseEnv, ...workspaceEnv };

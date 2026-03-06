@@ -20,7 +20,13 @@ export async function loadWorkspaceDotEnvForExec(params: {
       typeof error === "object" && error !== null && "code" in error
         ? String((error as { code?: string }).code)
         : "";
-    if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
+    if (
+      code === "ENOENT" ||
+      code === "EACCES" ||
+      code === "EPERM" ||
+      code === "ENOTDIR" ||
+      code === "EISDIR"
+    ) {
       return {};
     }
     throw error;
