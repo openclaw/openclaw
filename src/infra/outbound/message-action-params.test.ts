@@ -185,3 +185,136 @@ describe("message action sandbox media hydration", () => {
     }
   });
 });
+
+const baseContext = {
+  replyToMode: "all" as const,
+  currentThreadTs: "1700000000.111111",
+} as const;
+
+describe("resolveSlackAutoThreadId", () => {
+  describe("channel targets", () => {
+    it("returns threadTs when channel target matches", () => {
+      const result = resolveSlackAutoThreadId({
+        to: "channel:C0AC3LUJQQM",
+        toolContext: { ...baseContext, currentChannelId: "C0AC3LUJQQM" },
+      });
+      expect(result).toBe("1700000000.111111");
+    });
+
+    it("returns undefined when channel target does not match", () => {
+      const result = resolveSlackAutoThreadId({
+        to: "channel:CDIFFERENT",
+        toolContext: { ...baseContext, currentChannelId: "C0AC3LUJQQM" },
+      });
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe("DM targets (user: prefix)", () => {
+    it("returns threadTs when DM target matches currentDmUserId", () => {
+      // Regression case: agent in a Slack DM thread sends media via the message tool.
+      // buildSlackThreadingToolContext stores currentChannelId as the native "D…" channel ID
+      // (so Slack channel actions like react/read/edit/pins can infer the correct target)
+      // and currentDmUserId as "user:U…" (so resolveSlackAutoThreadId can match DM sends).
+      const result = resolveSlackAutoThreadId({
+        to: "user:U0AC3LBA08M",
+        toolContext: {
+          ...baseContext,
+          currentChannelId: "D8SRXRDNF",
+          currentDmUserId: "user:U0AC3LBA08M",
+        },
+      });
+      expect(result).toBe("1700000000.111111");
+    });
+
+    it("returns undefined when DM target does not match currentDmUserId", () => {
+      const result = resolveSlackAutoThreadId({
+        to: "user:UDIFFERENT",
+        toolContext: {
+          ...baseContext,
+          currentChannelId: "D8SRXRDNF",
+          currentDmUserId: "user:U0AC3LBA08M",
+        },
+      });
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined when agent is in a DM thread but targets a different channel", () => {
+      const result = resolveSlackAutoThreadId({
+        to: "channel:CSOMECHANNEL",
+        toolContext: {
+          ...baseContext,
+          currentChannelId: "D8SRXRDNF",
+          currentDmUserId: "user:U0AC3LBA08M",
+        },
+      });
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe("replyToMode gating", () => {
+    it("returns undefined when replyToMode is off", () => {
+      const result = resolveSlackAutoThreadId({
+        to: "user:U0AC3LBA08M",
+        toolContext: {
+          replyToMode: "off",
+          currentThreadTs: "1700000000.111111",
+          currentChannelId: "D8SRXRDNF",
+          currentDmUserId: "user:U0AC3LBA08M",
+        },
+      });
+      expect(result).toBeUndefined();
+    });
+
+    it("returns threadTs on first call with replyToMode first", () => {
+      const hasRepliedRef = { value: false };
+      const result = resolveSlackAutoThreadId({
+        to: "user:U0AC3LBA08M",
+        toolContext: {
+          replyToMode: "first",
+          currentThreadTs: "1700000000.111111",
+          currentChannelId: "D8SRXRDNF",
+          currentDmUserId: "user:U0AC3LBA08M",
+          hasRepliedRef,
+        },
+      });
+      expect(result).toBe("1700000000.111111");
+    });
+
+    it("returns undefined on subsequent calls with replyToMode first after hasReplied", () => {
+      const result = resolveSlackAutoThreadId({
+        to: "user:U0AC3LBA08M",
+        toolContext: {
+          replyToMode: "first",
+          currentThreadTs: "1700000000.111111",
+          currentChannelId: "D8SRXRDNF",
+          currentDmUserId: "user:U0AC3LBA08M",
+          hasRepliedRef: { value: true },
+        },
+      });
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe("missing context", () => {
+    it("returns undefined when toolContext is absent", () => {
+      expect(resolveSlackAutoThreadId({ to: "user:U0AC3LBA08M" })).toBeUndefined();
+    });
+
+    it("returns undefined when currentThreadTs is absent", () => {
+      const result = resolveSlackAutoThreadId({
+        to: "user:U0AC3LBA08M",
+        toolContext: { replyToMode: "all", currentDmUserId: "user:U0AC3LBA08M" },
+      });
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined when both currentChannelId and currentDmUserId are absent", () => {
+      const result = resolveSlackAutoThreadId({
+        to: "user:U0AC3LBA08M",
+        toolContext: { replyToMode: "all", currentThreadTs: "1700000000.111111" },
+      });
+      expect(result).toBeUndefined();
+    });
+  });
+});

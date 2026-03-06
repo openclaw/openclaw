@@ -22,7 +22,7 @@ export function resolveSlackAutoThreadId(params: {
   toolContext?: ChannelThreadingToolContext;
 }): string | undefined {
   const context = params.toolContext;
-  if (!context?.currentThreadTs || !context.currentChannelId) {
+  if (!context?.currentThreadTs || (!context.currentChannelId && !context.currentDmUserId)) {
     return undefined;
   }
   // Only mirror auto-threading when Slack would reply in the active thread for this channel.
@@ -30,10 +30,20 @@ export function resolveSlackAutoThreadId(params: {
     return undefined;
   }
   const parsedTarget = parseSlackTarget(params.to, { defaultKind: "channel" });
-  if (!parsedTarget || parsedTarget.kind !== "channel") {
+  if (!parsedTarget) {
     return undefined;
   }
-  if (parsedTarget.id.toLowerCase() !== context.currentChannelId.toLowerCase()) {
+  // Match the target against the active session's channel.
+  // Channel targets: compare the raw channel ID against currentChannelId (e.g. "C…" or "D…").
+  // DM/user targets: compare as "user:<id>" against currentDmUserId, which is stored separately
+  //   from currentChannelId so that Slack channel actions (react, read, edit, pins…) keep using
+  //   the native "D…" channel ID for target inference rather than a user: address that
+  //   resolveSlackChannelId would reject.
+  const isMatch =
+    parsedTarget.kind === "channel"
+      ? parsedTarget.id.toLowerCase() === context.currentChannelId?.toLowerCase()
+      : `user:${parsedTarget.id}`.toLowerCase() === context.currentDmUserId?.toLowerCase();
+  if (!isMatch) {
     return undefined;
   }
   if (context.replyToMode === "first" && context.hasRepliedRef?.value) {

@@ -276,6 +276,13 @@ export type ChannelThreadingToolContext = {
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
   /**
+   * For Slack DM sessions: the `user:<id>` address of the active DM conversation.
+   * Kept separate from `currentChannelId` (which holds the native `D…` channel ID)
+   * so that thread-injection in `resolveSlackAutoThreadId` can match `user:` targets
+   * without replacing the native channel ID that other Slack actions require.
+   */
+  currentDmUserId?: string;
+  /**
    * When true, skip cross-context decoration (e.g., "[from X]" prefix).
    * Use this for direct tool invocations where the agent is composing a new message,
    * not forwarding/relaying a message from another conversation.
