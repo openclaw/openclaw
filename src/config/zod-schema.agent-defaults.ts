@@ -159,6 +159,14 @@ export const AgentDefaultsSchema = z
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
+        minRunTimeoutSeconds: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe(
+            "Minimum run timeout in seconds. Agent-supplied values below this floor are raised to it.",
+          ),
         announceTimeoutMs: z.number().int().positive().optional(),
       })
       .strict()

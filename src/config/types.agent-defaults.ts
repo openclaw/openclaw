@@ -261,6 +261,12 @@ export type AgentDefaultsConfig = {
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
+    /**
+     * Minimum run timeout in seconds for spawned sub-agents.
+     * When the agent passes a lower value via runTimeoutSeconds, this floor is enforced.
+     * 0 or unset = no minimum (model value accepted as-is).
+     */
+    minRunTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
     announceTimeoutMs?: number;
   };

@@ -207,10 +207,19 @@ export async function spawnSubagentDirect(
     Number.isFinite(cfg.agents.defaults.subagents.runTimeoutSeconds)
       ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.runTimeoutSeconds))
       : 0;
-  const runTimeoutSeconds =
+  const cfgMinTimeout =
+    typeof cfg?.agents?.defaults?.subagents?.minRunTimeoutSeconds === "number" &&
+    Number.isFinite(cfg.agents.defaults.subagents.minRunTimeoutSeconds)
+      ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.minRunTimeoutSeconds))
+      : 0;
+  const rawRunTimeout =
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
       : cfgSubagentTimeout;
+  // Enforce configured minimum: if the agent (or default) supplies a value
+  // below the floor, raise it.  A floor of 0 means no enforcement.
+  const runTimeoutSeconds =
+    cfgMinTimeout > 0 && rawRunTimeout > 0 ? Math.max(rawRunTimeout, cfgMinTimeout) : rawRunTimeout;
   let modelApplied = false;
   let threadBindingReady = false;
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
