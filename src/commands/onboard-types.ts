@@ -144,6 +144,7 @@ export type OnboardOptions = {
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;
   gatewayToken?: string;
+  gatewayTokenRefEnv?: string;
   gatewayPassword?: string;
   tailscale?: TailscaleMode;
   tailscaleResetOnExit?: boolean;
@@ -153,6 +154,7 @@ export type OnboardOptions = {
   /** @deprecated Legacy alias for `skipChannels`. */
   skipProviders?: boolean;
   skipSkills?: boolean;
+  skipSearch?: boolean;
   skipHealth?: boolean;
   skipUi?: boolean;
   nodeManager?: NodeManagerChoice;
