@@ -197,9 +197,9 @@ describe("DiscordMessageListener", () => {
 
       // Release the background handler and allow slow-log finalizer to run.
       deferred.resolve();
-      await Promise.resolve();
-
-      expect(logger.warn).toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(logger.warn).toHaveBeenCalled();
+      });
       const warnMock = logger.warn as unknown as { mock: { calls: unknown[][] } };
       const [, meta] = warnMock.mock.calls[0] ?? [];
       const durationMs = (meta as { durationMs?: number } | undefined)?.durationMs;
