@@ -314,7 +314,9 @@ export function createExecTool(
             `configure tools.exec.host=${renderExecHostLabel(configuredHost)} to allow).`,
         );
       }
-      if (elevatedRequested) {
+      if (elevatedRequested && host !== "node") {
+        // Elevated mode should escape sandbox by default, but must not override
+        // explicit node-host routing.
         host = "gateway";
       }
 
