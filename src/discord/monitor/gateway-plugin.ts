@@ -46,8 +46,9 @@ export function createDiscordGatewayPlugin(params: {
   try {
     const wsAgent = new HttpsProxyAgent<string>(proxy);
     const fetchAgent = new ProxyAgent(proxy);
+    const runtime = params.runtime;
 
-    params.runtime.log?.("discord: gateway proxy enabled");
+    runtime.log?.("discord: gateway proxy enabled");
 
     class ProxyGatewayPlugin extends GatewayPlugin {
       constructor() {
@@ -65,10 +66,13 @@ export function createDiscordGatewayPlugin(params: {
             } as Record<string, unknown>);
             this.gatewayInfo = (await response.json()) as APIGatewayBotInfo;
           } catch (error) {
-            throw new Error(
-              `Failed to get gateway information from Discord: ${error instanceof Error ? error.message : String(error)}`,
-              { cause: error },
+            // Log error but don't throw - let the gateway handle reconnection naturally
+            runtime.error?.(
+              danger(
+                `discord: failed to get gateway information from Discord API: ${error instanceof Error ? error.message : String(error)}`,
+              ),
             );
+            // Continue to super.registerClient() which will handle connection/reconnection
           }
         }
         return super.registerClient(client);
