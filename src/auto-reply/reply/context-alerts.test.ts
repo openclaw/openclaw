@@ -25,6 +25,18 @@ describe("evaluateContextAlert", () => {
 
   it("suppresses repeated same-level alerts during cooldown", () => {
     const out = evaluateContextAlert({
+      usedTokens: 86,
+      contextTokens: 100,
+      previousLevel: 85,
+      previousAt: 10_000,
+      now: 20_000,
+      cooldownMs: 30_000,
+    });
+    expect(out).toEqual({ nextLevel: 85, shouldAlert: false, alertLevel: null });
+  });
+
+  it("alerts on 85% to 95% escalation even during cooldown", () => {
+    const out = evaluateContextAlert({
       usedTokens: 96,
       contextTokens: 100,
       previousLevel: 85,
@@ -32,7 +44,19 @@ describe("evaluateContextAlert", () => {
       now: 20_000,
       cooldownMs: 30_000,
     });
-    expect(out).toEqual({ nextLevel: 95, shouldAlert: false, alertLevel: null });
+    expect(out).toEqual({ nextLevel: 95, shouldAlert: true, alertLevel: 95 });
+  });
+
+  it("re-alerts at the same level after cooldown elapses", () => {
+    const out = evaluateContextAlert({
+      usedTokens: 86,
+      contextTokens: 100,
+      previousLevel: 85,
+      previousAt: 0,
+      now: 31_000,
+      cooldownMs: 30_000,
+    });
+    expect(out).toEqual({ nextLevel: 85, shouldAlert: true, alertLevel: 85 });
   });
 
   it("re-arms 85% alert after dropping below hysteresis and crossing again", () => {

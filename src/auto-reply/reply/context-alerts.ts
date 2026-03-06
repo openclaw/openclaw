@@ -49,12 +49,15 @@ export function evaluateContextAlert(params: {
   }
 
   const crossedUp = nextLevel > previousLevel;
+  const repeatedSameLevel = nextLevel > 0 && nextLevel === previousLevel;
   const cooledDown =
     typeof previousAt !== "number" ||
     !Number.isFinite(previousAt) ||
     now - previousAt >= cooldownMs;
 
-  if (crossedUp && cooledDown && nextLevel > 0) {
+  const shouldAlert = nextLevel > 0 && (crossedUp || (repeatedSameLevel && cooledDown));
+
+  if (shouldAlert) {
     const alertLevel: Exclude<ContextAlertLevel, 0> = nextLevel === 95 ? 95 : 85;
     return {
       nextLevel,
