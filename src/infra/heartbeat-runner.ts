@@ -478,7 +478,18 @@ type HeartbeatReasonFlags = {
 
 function shouldCarryEventSessionThreadId(heartbeat?: HeartbeatConfig): boolean {
   const target = typeof heartbeat?.target === "string" ? heartbeat.target.trim().toLowerCase() : "";
-  return target.length === 0 || target === "last";
+  // Keep topic/thread routing for event-driven Telegram delivery when target
+  // remains session-derived (`last`) or explicitly Telegram without an explicit
+  // destination override. Explicit cross-channel or explicit destination routes
+  // should not inherit source thread IDs.
+  if (target.length === 0 || target === "last") {
+    return true;
+  }
+  if (target === "telegram") {
+    const explicitTo = typeof heartbeat?.to === "string" ? heartbeat.to.trim() : "";
+    return explicitTo.length === 0;
+  }
+  return false;
 }
 
 type HeartbeatSkipReason = "empty-heartbeat-file";
