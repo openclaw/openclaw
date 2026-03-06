@@ -161,6 +161,8 @@ describe("delivery-queue", () => {
     it.each([
       "No conversation reference found for user:abc",
       "Telegram send failed: chat not found (chat_id=user:123)",
+      "Telegram send failed: 400: Bad Request: message to be replied not found",
+      "Telegram send failed: 400: Bad Request: message is too long",
       "user not found",
       "Bot was blocked by the user",
       "Forbidden: bot was kicked from the group chat",
