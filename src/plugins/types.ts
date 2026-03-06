@@ -488,6 +488,13 @@ export type PluginHookLlmInputEvent = {
   imagesCount: number;
 };
 
+export type PluginHookLlmInputResult = {
+  /** Override the final prompt text sent to the model. */
+  prompt?: string;
+  /** Override the history messages used for this model call. */
+  historyMessages?: unknown[];
+};
+
 // llm_output hook
 export type PluginHookLlmOutputEvent = {
   runId: string;
@@ -503,6 +510,11 @@ export type PluginHookLlmOutputEvent = {
     cacheWrite?: number;
     total?: number;
   };
+};
+
+export type PluginHookLlmOutputResult = {
+  /** Override assistant text payloads before outbound delivery formatting. */
+  assistantTexts?: string[];
 };
 
 // agent_end hook
@@ -789,11 +801,14 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
-  llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
+  llm_input: (
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookLlmInputResult | void> | PluginHookLlmInputResult | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,
     ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
+  ) => Promise<PluginHookLlmOutputResult | void> | PluginHookLlmOutputResult | void;
   agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   before_compaction: (
     event: PluginHookBeforeCompactionEvent,

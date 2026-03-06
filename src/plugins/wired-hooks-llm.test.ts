@@ -69,4 +69,125 @@ describe("llm hook runner methods", () => {
     expect(runner.hasHooks("llm_input")).toBe(true);
     expect(runner.hasHooks("llm_output")).toBe(false);
   });
+
+  it("runLlmInput returns prompt and history overrides", async () => {
+    const handler = vi.fn().mockResolvedValue({
+      prompt: "redacted prompt",
+      historyMessages: [{ role: "user", content: "trimmed history" }],
+    });
+    const registry = createMockPluginRegistry([{ hookName: "llm_input", handler }]);
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runLlmInput(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5",
+        systemPrompt: "be helpful",
+        prompt: "original prompt",
+        historyMessages: [{ role: "user", content: "original history" }],
+        imagesCount: 0,
+      },
+      { agentId: "main", sessionId: "session-1" },
+    );
+
+    expect(result).toEqual({
+      prompt: "redacted prompt",
+      historyMessages: [{ role: "user", content: "trimmed history" }],
+    });
+  });
+
+  it("runLlmInput preserves backward compatibility when handler returns void", async () => {
+    const handler = vi.fn(); // undefined return
+    const registry = createMockPluginRegistry([{ hookName: "llm_input", handler }]);
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runLlmInput(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5",
+        prompt: "hello",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { agentId: "main", sessionId: "session-1" },
+    );
+
+    expect(result).toBeUndefined();
+  });
+
+  it("runLlmInput merges prompt/history across multiple handlers", async () => {
+    const registry = createMockPluginRegistry([
+      { hookName: "llm_input", handler: vi.fn().mockResolvedValue({ prompt: "first prompt" }) },
+      {
+        hookName: "llm_input",
+        handler: vi.fn().mockResolvedValue({
+          historyMessages: [{ role: "assistant", content: "history override" }],
+        }),
+      },
+    ]);
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runLlmInput(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5",
+        prompt: "hello",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { agentId: "main", sessionId: "session-1" },
+    );
+
+    expect(result).toEqual({
+      prompt: "first prompt",
+      historyMessages: [{ role: "assistant", content: "history override" }],
+    });
+  });
+
+  it("runLlmOutput returns modified assistant texts", async () => {
+    const handler = vi.fn().mockResolvedValue({ assistantTexts: ["rehydrated response"] });
+    const registry = createMockPluginRegistry([{ hookName: "llm_output", handler }]);
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runLlmOutput(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5",
+        assistantTexts: ["raw masked response"],
+        lastAssistant: { role: "assistant", content: "raw masked response" },
+        usage: { input: 10, output: 20, total: 30 },
+      },
+      { agentId: "main", sessionId: "session-1" },
+    );
+
+    expect(result).toEqual({ assistantTexts: ["rehydrated response"] });
+  });
+
+  it("runLlmOutput preserves backward compatibility when handler returns void", async () => {
+    const handler = vi.fn(); // undefined return
+    const registry = createMockPluginRegistry([{ hookName: "llm_output", handler }]);
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runLlmOutput(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5",
+        assistantTexts: ["hi"],
+        usage: { input: 10, output: 20, total: 30 },
+      },
+      { agentId: "main", sessionId: "session-1" },
+    );
+
+    expect(result).toBeUndefined();
+  });
 });

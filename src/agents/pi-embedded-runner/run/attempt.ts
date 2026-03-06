@@ -1425,7 +1425,7 @@ export async function runEmbeddedAttempt(
       });
 
       const {
-        assistantTexts,
+        assistantTexts: rawAssistantTexts,
         toolMetas,
         unsubscribe,
         waitForCompactionRetry,
@@ -1438,6 +1438,7 @@ export async function runEmbeddedAttempt(
         getUsageTotals,
         getCompactionCount,
       } = subscription;
+      let assistantTexts = rawAssistantTexts;
 
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
@@ -1597,22 +1598,70 @@ export async function runEmbeddedAttempt(
             activeSession.agent.replaceMessages(activeSession.messages);
           }
 
+          const resolvePromptImages = async (promptText: string) =>
+            detectAndLoadPromptImages({
+              prompt: promptText,
+              workspaceDir: effectiveWorkspace,
+              model: params.model,
+              existingImages: params.images,
+              maxBytes: MAX_IMAGE_BYTES,
+              maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
+              workspaceOnly: effectiveFsWorkspaceOnly,
+              // Enforce sandbox path restrictions when sandbox is enabled
+              sandbox:
+                sandbox?.enabled && sandbox?.fsBridge
+                  ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
+                  : undefined,
+            });
+
           // Detect and load images referenced in the prompt for vision-capable models.
           // Images are prompt-local only (pi-like behavior).
-          const imageResult = await detectAndLoadPromptImages({
-            prompt: effectivePrompt,
-            workspaceDir: effectiveWorkspace,
-            model: params.model,
-            existingImages: params.images,
-            maxBytes: MAX_IMAGE_BYTES,
-            maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
-            workspaceOnly: effectiveFsWorkspaceOnly,
-            // Enforce sandbox path restrictions when sandbox is enabled
-            sandbox:
-              sandbox?.enabled && sandbox?.fsBridge
-                ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
-                : undefined,
-          });
+          let imageResult = await resolvePromptImages(effectivePrompt);
+
+          if (hookRunner?.hasHooks("llm_input")) {
+            try {
+              const llmInputResult = await hookRunner.runLlmInput(
+                {
+                  runId: params.runId,
+                  sessionId: params.sessionId,
+                  provider: params.provider,
+                  model: params.modelId,
+                  systemPrompt: systemPromptText,
+                  prompt: effectivePrompt,
+                  historyMessages: activeSession.messages,
+                  imagesCount: imageResult.images.length,
+                },
+                {
+                  agentId: hookAgentId,
+                  sessionKey: params.sessionKey,
+                  sessionId: params.sessionId,
+                  workspaceDir: params.workspaceDir,
+                  messageProvider: params.messageProvider ?? undefined,
+                },
+              );
+
+              if (Array.isArray(llmInputResult?.historyMessages)) {
+                activeSession.messages.splice(
+                  0,
+                  activeSession.messages.length,
+                  ...(llmInputResult.historyMessages as AgentMessage[]),
+                );
+                activeSession.agent.replaceMessages(activeSession.messages);
+              }
+
+              if (
+                typeof llmInputResult?.prompt === "string" &&
+                llmInputResult.prompt !== effectivePrompt
+              ) {
+                const promptOverride = llmInputResult.prompt;
+                const promptOverrideImages = await resolvePromptImages(promptOverride);
+                effectivePrompt = promptOverride;
+                imageResult = promptOverrideImages;
+              }
+            } catch (err) {
+              log.warn(`llm_input hook failed: ${String(err)}`);
+            }
+          }
 
           cacheTrace?.recordStage("prompt:images", {
             prompt: effectivePrompt,
@@ -1636,32 +1685,6 @@ export async function runEmbeddedAttempt(
                 `promptImages=${imageResult.images.length} ` +
                 `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
             );
-          }
-
-          if (hookRunner?.hasHooks("llm_input")) {
-            hookRunner
-              .runLlmInput(
-                {
-                  runId: params.runId,
-                  sessionId: params.sessionId,
-                  provider: params.provider,
-                  model: params.modelId,
-                  systemPrompt: systemPromptText,
-                  prompt: effectivePrompt,
-                  historyMessages: activeSession.messages,
-                  imagesCount: imageResult.images.length,
-                },
-                {
-                  agentId: hookAgentId,
-                  sessionKey: params.sessionKey,
-                  sessionId: params.sessionId,
-                  workspaceDir: params.workspaceDir,
-                  messageProvider: params.messageProvider ?? undefined,
-                },
-              )
-              .catch((err) => {
-                log.warn(`llm_input hook failed: ${String(err)}`);
-              });
           }
 
           // Only pass images option if there are actually images to pass
@@ -1843,8 +1866,8 @@ export async function runEmbeddedAttempt(
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
 
       if (hookRunner?.hasHooks("llm_output")) {
-        hookRunner
-          .runLlmOutput(
+        try {
+          const llmOutputResult = await hookRunner.runLlmOutput(
             {
               runId: params.runId,
               sessionId: params.sessionId,
@@ -1861,10 +1884,13 @@ export async function runEmbeddedAttempt(
               workspaceDir: params.workspaceDir,
               messageProvider: params.messageProvider ?? undefined,
             },
-          )
-          .catch((err) => {
-            log.warn(`llm_output hook failed: ${String(err)}`);
-          });
+          );
+          if (llmOutputResult?.assistantTexts) {
+            assistantTexts = llmOutputResult.assistantTexts;
+          }
+        } catch (err) {
+          log.warn(`llm_output hook failed: ${String(err)}`);
+        }
       }
 
       return {
