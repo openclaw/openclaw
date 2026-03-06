@@ -144,11 +144,6 @@ export function createSlackMessageHandler(params: {
       });
       const seenMessageKey = buildSeenMessageKey(last.message.channel, last.message.ts);
       if (!prepared) {
-        const hasMessageSource = entries.some((entry) => entry.opts.source === "message");
-        const hasAppMentionSource = entries.some((entry) => entry.opts.source === "app_mention");
-        if (seenMessageKey && hasMessageSource && !hasAppMentionSource) {
-          rememberAppMentionRetryKey(seenMessageKey);
-        }
         return;
       }
       if (seenMessageKey) {
@@ -209,7 +204,13 @@ export function createSlackMessageHandler(params: {
       return;
     }
     const seenMessageKey = buildSeenMessageKey(message.channel, message.ts);
-    if (seenMessageKey && ctx.markMessageSeen(message.channel, message.ts)) {
+    const wasSeen = seenMessageKey ? ctx.markMessageSeen(message.channel, message.ts) : false;
+    if (seenMessageKey && opts.source === "message" && !wasSeen) {
+      // Prime exactly one fallback app_mention allowance immediately so a near-simultaneous
+      // app_mention is not dropped while message handling is still in-flight.
+      rememberAppMentionRetryKey(seenMessageKey);
+    }
+    if (seenMessageKey && wasSeen) {
       // Allow exactly one app_mention retry if the same ts was previously dropped
       // from the message stream before it reached dispatch.
       if (opts.source !== "app_mention" || !consumeAppMentionRetryKey(seenMessageKey)) {
