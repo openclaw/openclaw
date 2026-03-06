@@ -1,7 +1,7 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 import { AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI } from "./auth-choice-legacy.js";
 import { ONBOARD_PROVIDER_AUTH_FLAGS } from "./onboard-provider-auth-flags.js";
-import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
 export type { AuthChoiceGroupId };
 
@@ -10,6 +10,7 @@ export type AuthChoiceOption = {
   label: string;
   hint?: string;
 };
+
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
   label: string;
@@ -172,6 +173,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "LiteLLM",
     hint: "Unified LLM gateway (100+ providers)",
     choices: ["litellm-api-key"],
+  },
+  {
+    value: "apertis",
+    label: "Apertis AI",
+    hint: "API key (multi-model proxy)",
+    choices: ["apertis-api-key"],
   },
   {
     value: "cloudflare-ai-gateway",
