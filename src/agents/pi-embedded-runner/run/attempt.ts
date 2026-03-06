@@ -862,7 +862,8 @@ export async function runEmbeddedAttempt(
       config: params.config,
       agentId: params.agentId,
     });
-    const modelAuthMode = resolveModelAuthMode(params.model.provider, params.config);
+    const modelProviderId = params.model.provider ?? params.provider;
+    const modelAuthMode = resolveModelAuthMode(modelProviderId, params.config);
     const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
       config: params.config,
       sessionAgentId,
@@ -1402,7 +1403,7 @@ export async function runEmbeddedAttempt(
         );
       }
 
-      if (shouldCapGoogleOAuthRetryDelay({ provider: params.provider, modelAuthMode })) {
+      if (shouldCapGoogleOAuthRetryDelay({ provider: modelProviderId, modelAuthMode })) {
         // Cloud Code Assist OAuth can emit long Retry-After values that look like hard hangs.
         activeSession.agent.streamFn = wrapStreamFnCapMaxRetryDelay(
           activeSession.agent.streamFn,
