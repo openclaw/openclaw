@@ -14,7 +14,6 @@
 import type { WebClient } from "@slack/web-api";
 import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { logVerbose } from "../globals.js";
-import { normalizeSlackOutboundText } from "./format.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -100,7 +99,7 @@ export async function startSlackStream(
   // If initial text is provided, send it as the first append which will
   // trigger the ChatStreamer to call chat.startStream under the hood.
   if (text) {
-    await streamer.append({ markdown_text: normalizeSlackOutboundText(text) });
+    await streamer.append({ markdown_text: text });
     logVerbose(`slack-stream: appended initial text (${text.length} chars)`);
   }
 
@@ -122,7 +121,7 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
     return;
   }
 
-  await session.streamer.append({ markdown_text: normalizeSlackOutboundText(text) });
+  await session.streamer.append({ markdown_text: text });
   logVerbose(`slack-stream: appended ${text.length} chars`);
 }
 
@@ -148,9 +147,7 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
     }`,
   );
 
-  await session.streamer.stop(
-    text ? { markdown_text: normalizeSlackOutboundText(text) } : undefined,
-  );
+  await session.streamer.stop(text ? { markdown_text: text } : undefined);
 
   logVerbose("slack-stream: stream stopped");
 }
