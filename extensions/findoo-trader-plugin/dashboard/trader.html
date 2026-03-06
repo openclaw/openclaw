@@ -146,6 +146,15 @@ body::after{
 .domain-btn:hover{color:var(--text);background:rgba(255,255,255,.04)}
 .domain-btn.active{color:var(--text-hi);background:rgba(255,255,255,.06)}
 
+.account-select{
+  font-family:var(--mono);font-size:10px;font-weight:600;
+  padding:2px 8px;border-radius:4px;
+  background:var(--surface);color:var(--text);
+  border:1px solid var(--border);outline:none;
+  transition:border-color .15s;cursor:pointer;
+}
+.account-select:focus{border-color:var(--accent)}
+
 .topbar__risk{
   padding:2px 8px;border-radius:3px;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.6px;
   background:var(--gain-dim);color:var(--gain);border:1px solid rgba(34,197,94,.2);flex-shrink:0;
@@ -564,6 +573,9 @@ body.embedded .topbar__logo{display:none}
         <button class="domain-btn domain-btn--paper active" data-domain="paper" id="domPaper">Paper</button>
         <button class="domain-btn domain-btn--backtest" data-domain="backtest" id="domBacktest">Backtest</button>
       </div>
+      <select class="account-select" id="accountSelect" style="display:none">
+        <option value="">Select Paper Account...</option>
+      </select>
       <div class="topbar__sep"></div>
       <span class="topbar__risk" id="riskBadge">--</span>
       <div class="topbar__sse" id="sseDots" title="SSE connections">
@@ -1061,6 +1073,7 @@ body.embedded .topbar__logo{display:none}
           var activeBtn = $("dom" + domain.charAt(0).toUpperCase() + domain.slice(1));
           if (activeBtn) activeBtn.classList.add("active");
           $("backtestSection").style.display = domain === "backtest" ? "" : "none";
+          $("accountSelect").style.display = domain === "paper" ? "inline-block" : "none";
         }
 
         function renderTopEquity(trading) {
@@ -1426,8 +1439,27 @@ body.embedded .topbar__logo{display:none}
           connect();
         }
 
+        function populatePaperAccounts(data) {
+          var accounts = data.paperAccounts || data.accounts || [];
+          var sel = $("accountSelect");
+          var prev = sel.value;
+          // Keep first placeholder option, clear the rest
+          while (sel.options.length > 1) sel.remove(1);
+          accounts.forEach(function (acc) {
+            var opt = document.createElement("option");
+            opt.value = acc.id || acc.name || acc;
+            opt.textContent = (acc.name || acc.id || acc) + (acc.balance != null ? " ($" + fmt(acc.balance, 2) + ")" : "");
+            sel.appendChild(opt);
+          });
+          // Restore previous selection if still present
+          if (prev) sel.value = prev;
+          // Auto-select first account if none selected and accounts exist
+          if (!sel.value && accounts.length > 0) sel.value = sel.options[1].value;
+        }
+
         function onTradingData(data) {
           state.trading = data;
+          populatePaperAccounts(data);
           // Update risk from trading SSE (data.risk or data.summary.riskLevel)
           if (data.risk) {
             state.risk = data.risk;
@@ -1802,6 +1834,23 @@ body.embedded .topbar__logo{display:none}
         // ── Event bindings ──
         document.querySelectorAll(".domain-btn").forEach(function (btn) {
           btn.addEventListener("click", function () { switchDomain(btn.dataset.domain); });
+        });
+
+        $("accountSelect").addEventListener("change", function () {
+          var accountId = this.value;
+          if (!accountId) return;
+          $("botMsg").innerHTML = "<em>Switching paper account...</em>";
+          fetch("/api/v1/finance/dashboard/trader?domain=paper&accountId=" + encodeURIComponent(accountId))
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+              state.trading = data.trading || {};
+              state.events = data.events || {};
+              state.risk = data.risk || {};
+              state.alerts = data.alerts || [];
+              renderAll();
+              $("botMsg").innerHTML = "<em>Paper account: " + accountId + "</em> " + new Date().toLocaleTimeString();
+            })
+            .catch(function (e) { toast("Account switch failed: " + e.message, "error"); });
         });
 
         $("qoType").addEventListener("change", function () {

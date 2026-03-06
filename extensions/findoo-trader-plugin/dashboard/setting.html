@@ -142,6 +142,62 @@
               <label class="setting-field__label">Max Concurrent Strategies</label>
               <input type="number" id="agentMaxStrats" class="setting-input" step="1" min="1" />
             </div>
+
+            <!-- Active Hours sub-card -->
+            <div class="agent-subcard" style="background:rgba(0,0,0,0.15);border-radius:6px;padding:12px;margin-bottom:12px;">
+              <div style="font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Active Hours</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                <div class="setting-field">
+                  <label class="setting-field__label">Start</label>
+                  <input type="time" id="agentActiveStart" class="setting-input" value="08:00" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">End</label>
+                  <input type="time" id="agentActiveEnd" class="setting-input" value="22:00" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Timezone</label>
+                  <select id="agentTimezone" class="setting-input">
+                    <option value="Asia/Shanghai">Asia/Shanghai</option>
+                    <option value="America/New_York">America/New_York</option>
+                    <option value="Europe/London">Europe/London</option>
+                    <option value="Asia/Tokyo">Asia/Tokyo</option>
+                    <option value="UTC">UTC</option>
+                  </select>
+                </div>
+                <div class="setting-toggle-row">
+                  <label class="setting-field__label">Weekend Active</label>
+                  <label class="toggle">
+                    <input type="checkbox" id="agentWeekend" />
+                    <span class="toggle__slider"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <!-- Auto-Discovery sub-card -->
+            <div class="agent-subcard" style="background:rgba(0,0,0,0.15);border-radius:6px;padding:12px;margin-bottom:12px;">
+              <div style="font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Auto-Discovery</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                <div class="setting-field">
+                  <label class="setting-field__label">Scan Interval</label>
+                  <select id="agentScanInterval" class="setting-input">
+                    <option value="6h">6h</option>
+                    <option value="12h">12h</option>
+                    <option value="24h" selected>24h</option>
+                    <option value="7d">7d</option>
+                  </select>
+                </div>
+                <div class="setting-toggle-row">
+                  <label class="setting-field__label">Auto-add to L0</label>
+                  <label class="toggle">
+                    <input type="checkbox" id="agentAutoAddL0" />
+                    <span class="toggle__slider"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
             <button class="save-btn" onclick="SE.saveAgent()">Save Agent Config</button>
           </div>
         </section>
@@ -272,6 +328,14 @@
                 </label>
               </div>
               <div class="notif-card__desc">Receive alerts via Discord webhook</div>
+              <div class="notif-card__fields" id="discordFields">
+                <div class="setting-field">
+                  <label class="setting-field__label">Webhook URL</label>
+                  <input type="url" id="dcWebhook" class="setting-input" placeholder="https://discord.com/api/webhooks/..." autocomplete="off" />
+                  <span class="setting-field__hint">From Server Settings &rarr; Integrations &rarr; Webhooks</span>
+                </div>
+                <button class="save-btn" onclick="SE.saveDiscord()">Save Discord Config</button>
+              </div>
             </div>
             <div class="notif-card">
               <div class="notif-card__head">
@@ -282,6 +346,25 @@
                 </label>
               </div>
               <div class="notif-card__desc">Receive alerts via email</div>
+              <div class="notif-card__fields" id="emailFields">
+                <div class="setting-field">
+                  <label class="setting-field__label">SMTP Host</label>
+                  <input type="text" id="emailHost" class="setting-input" placeholder="smtp.gmail.com" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">SMTP Port</label>
+                  <input type="number" id="emailPort" class="setting-input" value="587" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">From Address</label>
+                  <input type="email" id="emailFrom" class="setting-input" placeholder="alerts@example.com" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">To Address</label>
+                  <input type="email" id="emailTo" class="setting-input" placeholder="you@example.com" />
+                </div>
+                <button class="save-btn" onclick="SE.saveEmail()">Save Email Config</button>
+              </div>
             </div>
           </div>
         </section>
@@ -370,6 +453,56 @@
           <div class="modal-box__actions">
             <button type="button" class="modal-btn modal-btn--cancel" onclick="SE.closeAddExchange()">Cancel</button>
             <button type="submit" class="modal-btn modal-btn--primary">Add Exchange</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL: EDIT EXCHANGE -->
+    <div class="modal-bg" id="editExchangeModal">
+      <div class="modal-box" style="max-width: 400px">
+        <div class="modal-box__title">Edit Exchange</div>
+        <form id="editExchangeForm" onsubmit="event.preventDefault(); SE.submitEditExchange();">
+          <input type="hidden" name="id" />
+          <div class="fg" style="margin-bottom: 10px">
+            <label class="fg__label">Exchange</label>
+            <select id="editExchType" style="width: 100%" disabled>
+              <option value="binance">Binance</option>
+              <option value="bybit">Bybit</option>
+              <option value="okx">OKX</option>
+              <option value="bitget">Bitget</option>
+              <option value="gate">Gate.io</option>
+              <option value="htx">HTX</option>
+            </select>
+          </div>
+          <div class="fg" style="margin-bottom: 10px">
+            <label class="fg__label">API Key</label>
+            <input name="apiKey" type="password" autocomplete="off" style="width: 100%" placeholder="Leave blank to keep current" />
+            <span class="setting-field__hint">Only fill to change. Current key is masked for security.</span>
+          </div>
+          <div class="fg" style="margin-bottom: 10px">
+            <label class="fg__label">Secret</label>
+            <input name="secret" type="password" autocomplete="off" style="width: 100%" placeholder="Leave blank to keep current" />
+            <span class="setting-field__hint">Only fill to change. Current secret is masked.</span>
+          </div>
+          <div class="fg" style="margin-bottom: 10px">
+            <label class="fg__label">Passphrase (optional)</label>
+            <input name="passphrase" type="password" autocomplete="off" style="width: 100%" placeholder="Leave blank to keep current" />
+          </div>
+          <div class="fg" style="margin-bottom: 10px">
+            <label class="fg__label">Label (optional)</label>
+            <input name="label" style="width: 100%" placeholder="my-binance" />
+          </div>
+          <div class="setting-toggle-row" style="margin-bottom: 12px">
+            <label class="setting-field__label">Testnet Mode</label>
+            <label class="toggle">
+              <input type="checkbox" name="testnet" />
+              <span class="toggle__slider"></span>
+            </label>
+          </div>
+          <div class="modal-box__actions">
+            <button type="button" class="modal-btn modal-btn--cancel" onclick="SE.closeEditExchange()">Cancel</button>
+            <button type="submit" class="modal-btn modal-btn--primary">Save Changes</button>
           </div>
         </form>
       </div>
@@ -506,6 +639,30 @@
         };
 
         // ── Render: Exchanges ──
+        function maskKey(key) {
+          if (!key || key.length < 8) return "****";
+          return key.slice(0, 4) + "****" + key.slice(-4);
+        }
+
+        function latencyClass(ms) {
+          if (ms < 100) return "gain";
+          if (ms <= 500) return "warn";
+          return "loss";
+        }
+
+        function formatBalance(balances) {
+          if (!balances || typeof balances !== "object") return "";
+          var keys = Object.keys(balances);
+          if (!keys.length) return "";
+          // Show top 3 balances sorted by value desc
+          var sorted = keys.map(function (k) { return { asset: k, val: Number(balances[k]) || 0 }; })
+            .filter(function (b) { return b.val > 0; })
+            .sort(function (a, b) { return b.val - a.val; })
+            .slice(0, 3);
+          if (!sorted.length) return "";
+          return sorted.map(function (b) { return b.asset + ": " + fmt(b.val, 2); }).join(" | ");
+        }
+
         function renderExchanges(exchanges, health) {
           var grid = $("exchangeGrid");
           if (!exchanges || !exchanges.length) {
@@ -525,21 +682,30 @@
             var latency = h.lastPingMs || 0;
             var statusCls = connected ? "exchange-card--ok" : "exchange-card--err";
             var statusDot = connected ? "gain" : "loss";
+            var modeBadge = ex.testnet ? "TESTNET" : "LIVE";
+            var modeCls = ex.testnet ? "exchange-card__mode--testnet" : "exchange-card__mode--live";
+            var latencyCls = latencyClass(latency);
+            var balanceSummary = formatBalance(h.balances);
+            var apiCalls = h.apiCallsToday != null ? h.apiCallsToday : "--";
+            var apiLimit = h.apiLimit != null ? h.apiLimit : "--";
 
             html +=
               '<div class="exchange-card ' + statusCls + '" data-id="' + esc(ex.id) + '">' +
               '<div class="exchange-card__head">' +
               '<span class="exchange-card__name">' + esc(ex.exchange || ex.id) + "</span>" +
-              (ex.testnet ? '<span class="exchange-card__testnet">TESTNET</span>' : "") +
+              '<span class="exchange-card__mode ' + modeCls + '">' + modeBadge + "</span>" +
               "</div>" +
-              '<div class="exchange-card__status">' +
+              '<div class="exchange-card__meta">' +
               '<span class="exchange-card__dot ' + statusDot + '"></span>' +
               '<span>' + (connected ? "Connected" : "Disconnected") + "</span>" +
-              (latency > 0 ? '<span class="num" style="margin-left:auto">' + latency + "ms</span>" : "") +
+              (latency > 0 ? '<span class="exchange-card__latency num ' + latencyCls + '">' + latency + "ms</span>" : "") +
               "</div>" +
               '<div class="exchange-card__id num">' + esc(ex.id) + "</div>" +
+              (balanceSummary ? '<div class="exchange-card__balance num">' + esc(balanceSummary) + "</div>" : "") +
+              '<div class="exchange-card__api num">' + apiCalls + "/" + apiLimit + " calls</div>" +
               '<div class="exchange-card__actions">' +
               '<button class="btn-sm" onclick="SE.testExchange(\'' + esc(ex.id) + '\')">Test</button>' +
+              '<button class="btn-sm" onclick="SE.editExchange(\'' + esc(ex.id) + '\')">Edit</button>' +
               '<button class="btn-sm btn-sm--danger" onclick="SE.removeExchange(\'' + esc(ex.id) + '\')">Remove</button>' +
               "</div>" +
               "</div>";
@@ -565,6 +731,14 @@
           $("agentEvolution").checked = a.evolutionEnabled === true;
           $("agentMutRate").value = a.mutationRate || 0.1;
           $("agentMaxStrats").value = a.maxConcurrentStrategies || 5;
+          // Active Hours
+          $("agentActiveStart").value = a.activeStart || "08:00";
+          $("agentActiveEnd").value = a.activeEnd || "22:00";
+          if (a.timezone) $("agentTimezone").value = a.timezone;
+          $("agentWeekend").checked = a.weekendActive === true;
+          // Auto-Discovery
+          if (a.scanInterval) $("agentScanInterval").value = a.scanInterval;
+          $("agentAutoAddL0").checked = a.autoAddL0 === true;
         }
 
         // ── Render: Gates form ──
@@ -603,6 +777,13 @@
           // Populate Telegram fields
           if (n.telegramBotToken) $("tgBotToken").value = n.telegramBotToken;
           if (n.telegramChatId) $("tgChatId").value = n.telegramChatId;
+          // Populate Discord fields
+          if (n.discordWebhookUrl) $("dcWebhook").value = n.discordWebhookUrl;
+          // Populate Email fields
+          if (n.emailHost) $("emailHost").value = n.emailHost;
+          if (n.emailPort) $("emailPort").value = n.emailPort;
+          if (n.emailFrom) $("emailFrom").value = n.emailFrom;
+          if (n.emailTo) $("emailTo").value = n.emailTo;
         }
 
         // ── Render: Plugins ──
@@ -803,6 +984,58 @@
               });
           },
 
+          editExchange: function (id) {
+            var ex = state.exchanges.find(function (e) { return e.id === id; });
+            if (!ex) { toast("Exchange not found: " + id, "error"); return; }
+            var form = $("editExchangeForm");
+            form.querySelector("[name=id]").value = ex.id;
+            $("editExchType").value = ex.exchange || "";
+            // API key / secret: show masked placeholder, leave blank to keep current
+            form.querySelector("[name=apiKey]").value = "";
+            form.querySelector("[name=apiKey]").placeholder = ex.apiKey ? maskKey(ex.apiKey) : "Leave blank to keep current";
+            form.querySelector("[name=secret]").value = "";
+            form.querySelector("[name=secret]").placeholder = ex.secret ? maskKey(ex.secret) : "Leave blank to keep current";
+            form.querySelector("[name=passphrase]").value = "";
+            form.querySelector("[name=label]").value = ex.label || "";
+            form.querySelector("[name=testnet]").checked = !!ex.testnet;
+            $("editExchangeModal").classList.add("open");
+          },
+          closeEditExchange: function () {
+            $("editExchangeModal").classList.remove("open");
+          },
+          submitEditExchange: function () {
+            var form = $("editExchangeForm");
+            var id = form.querySelector("[name=id]").value;
+            var body = {
+              id: id,
+              label: form.querySelector("[name=label]").value.trim() || undefined,
+              testnet: form.querySelector("[name=testnet]").checked,
+            };
+            // Only send credentials if user filled them in (non-empty)
+            var apiKey = form.querySelector("[name=apiKey]").value.trim();
+            var secret = form.querySelector("[name=secret]").value.trim();
+            var passphrase = form.querySelector("[name=passphrase]").value.trim();
+            if (apiKey) body.apiKey = apiKey;
+            if (secret) body.secret = secret;
+            if (passphrase) body.passphrase = passphrase;
+
+            putApi("/api/v1/finance/exchanges/" + encodeURIComponent(id), body)
+              .then(function () {
+                SE.closeEditExchange();
+                toast("Exchange updated: " + id, "success");
+                // Update local state
+                var ex = state.exchanges.find(function (e) { return e.id === id; });
+                if (ex) {
+                  if (body.label) ex.label = body.label;
+                  ex.testnet = body.testnet;
+                }
+                renderExchanges(state.exchanges, state.exchangeHealth);
+              })
+              .catch(function (e) {
+                toast("Update failed: " + e.message, "error");
+              });
+          },
+
           applyRiskPreset: function (preset) {
             var p = RISK_PRESETS[preset];
             if (!p) return;
@@ -844,6 +1077,12 @@
               evolutionEnabled: $("agentEvolution").checked,
               mutationRate: parseFloat($("agentMutRate").value) || 0.1,
               maxConcurrentStrategies: parseInt($("agentMaxStrats").value) || 5,
+              activeStart: $("agentActiveStart").value || "08:00",
+              activeEnd: $("agentActiveEnd").value || "22:00",
+              timezone: $("agentTimezone").value || "Asia/Shanghai",
+              weekendActive: $("agentWeekend").checked,
+              scanInterval: $("agentScanInterval").value || "24h",
+              autoAddL0: $("agentAutoAddL0").checked,
             };
             putApi("/api/v1/finance/config/agent", body)
               .then(function () {
@@ -897,6 +1136,35 @@
             putApi("/api/v1/finance/config/notifications", body)
               .then(function () {
                 toast("Telegram config saved", "success");
+              })
+              .catch(function (e) {
+                toast("Save failed: " + e.message, "error");
+              });
+          },
+
+          saveDiscord: function () {
+            var body = {
+              discordWebhookUrl: $("dcWebhook").value.trim() || undefined,
+            };
+            putApi("/api/v1/finance/config/notifications", body)
+              .then(function () {
+                toast("Discord config saved", "success");
+              })
+              .catch(function (e) {
+                toast("Save failed: " + e.message, "error");
+              });
+          },
+
+          saveEmail: function () {
+            var body = {
+              emailHost: $("emailHost").value.trim() || undefined,
+              emailPort: parseInt($("emailPort").value) || 587,
+              emailFrom: $("emailFrom").value.trim() || undefined,
+              emailTo: $("emailTo").value.trim() || undefined,
+            };
+            putApi("/api/v1/finance/config/notifications", body)
+              .then(function () {
+                toast("Email config saved", "success");
               })
               .catch(function (e) {
                 toast("Save failed: " + e.message, "error");
