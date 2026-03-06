@@ -32,6 +32,7 @@ import type {
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 import type {
   ResolvedMemoryBackendConfig,
+  ResolvedQmdCollection,
   ResolvedQmdConfig,
   ResolvedQmdMcporterConfig,
 } from "./backend-config.js";
@@ -189,6 +190,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly env: NodeJS.ProcessEnv;
   private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
+  private readonly collectionAliases = new Map<string, string>();
   private readonly sources = new Set<MemorySource>();
   private readonly docPathCache = new Map<
     string,
@@ -311,10 +313,12 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private bootstrapCollections(): void {
     this.collectionRoots.clear();
+    this.collectionAliases.clear();
     this.sources.clear();
     for (const collection of this.qmd.collections) {
       const kind: MemorySource = collection.kind === "sessions" ? "sessions" : "memory";
       this.collectionRoots.set(collection.name, { path: collection.path, kind });
+      this.collectionAliases.set(collection.name, collection.name);
       this.sources.add(kind);
     }
   }
@@ -359,11 +363,38 @@ export class QmdMemoryManager implements MemorySearchManager {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (this.isCollectionAlreadyExistsError(message)) {
+          const existingName = this.findCollectionByPath(collection, existing);
+          if (existingName) {
+            this.collectionAliases.set(collection.name, existingName);
+            if (!this.collectionRoots.has(existingName)) {
+              const rootKind: MemorySource = collection.kind === "sessions" ? "sessions" : "memory";
+              this.collectionRoots.set(existingName, { path: collection.path, kind: rootKind });
+            }
+            log.info(
+              `qmd collection ${collection.name} remapped to existing collection ${existingName} (same path)`,
+            );
+          }
           continue;
         }
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
     }
+  }
+
+  private findCollectionByPath(
+    target: ResolvedQmdCollection,
+    existing: Map<string, ListedCollection>,
+  ): string | undefined {
+    const normalizedPath = path.resolve(target.path);
+    for (const [name, details] of existing) {
+      if (name === target.name) {
+        continue;
+      }
+      if (details.path && path.resolve(details.path) === normalizedPath) {
+        return name;
+      }
+    }
+    return undefined;
   }
 
   private async migrateLegacyUnscopedCollections(
@@ -1922,12 +1953,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     const seen = new Set<string>();
     const names: string[] = [];
     for (const collection of this.qmd.collections) {
-      const name = collection.name?.trim();
-      if (!name || seen.has(name)) {
+      const configName = collection.name?.trim();
+      if (!configName) {
         continue;
       }
-      seen.add(name);
-      names.push(name);
+      const resolved = this.collectionAliases.get(configName) ?? configName;
+      if (seen.has(resolved)) {
+        continue;
+      }
+      seen.add(resolved);
+      names.push(resolved);
     }
     return names;
   }

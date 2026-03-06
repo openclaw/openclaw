@@ -504,6 +504,71 @@ describe("QmdMemoryManager", () => {
     expect(legacyCollections.has("memory-dir")).toBe(false);
   });
 
+  it("remaps extra collections to existing qmd collection names when add conflicts on path", async () => {
+    const familySessionsPath = path.join(tmpRoot, "family-sessions");
+    await fs.mkdir(familySessionsPath, { recursive: true });
+    cfg = {
+      agents: {
+        list: [
+          {
+            id: agentId,
+            default: true,
+            workspace: workspaceDir,
+            memorySearch: {
+              qmd: {
+                extraCollections: [{ path: familySessionsPath, pattern: "**/*.md" }],
+              },
+            },
+          },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        const jsonData = JSON.stringify([
+          { name: "workspace-main", path: workspaceDir, pattern: "**/*.md" },
+          { name: "sessions-family", path: familySessionsPath, pattern: "**/*.md" },
+        ]);
+        emitAndClose(child, "stdout", jsonData, 0);
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const pathArg = args[2] ?? "";
+        if (path.resolve(pathArg) === path.resolve(familySessionsPath)) {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stderr", "A collection already exists for this path and pattern", 1);
+          return child;
+        }
+        return createMockChild();
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+
+    // Verify the remap was logged
+    expect(logInfoMock).toHaveBeenCalledWith(
+      expect.stringContaining("remapped to existing collection sessions-family"),
+    );
+
+    // Verify the aliased QMD-side name is in collectionRoots so search results
+    // from that collection won't be silently dropped by toDocLocation().
+    const roots = (manager as unknown as { collectionRoots: Map<string, unknown> }).collectionRoots;
+    expect(roots.has("sessions-family")).toBe(true);
+
+    await manager.close();
+  });
+
   it("migrates unscoped legacy collections from plain-text collection list output", async () => {
     cfg = {
       ...cfg,

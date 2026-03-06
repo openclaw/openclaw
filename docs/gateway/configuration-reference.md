@@ -1259,6 +1259,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
+- `memorySearch.qmd.extraCollections`: additional QMD collections for this agent's memory search. Useful for cross-agent session search (e.g., letting one agent search another's session transcripts). Each entry: `{ path, pattern?, name? }`.
 
 ---
 
