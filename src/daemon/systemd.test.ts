@@ -138,6 +138,26 @@ describe("isSystemdServiceEnabled", () => {
     const result = await isSystemdServiceEnabled({ env: {} });
     expect(result).toBe(false);
   });
+
+  it("returns false when D-Bus is unavailable (e.g. container, no medium found)", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    const busError = "Failed to connect to bus: No medium found";
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+        const err = new Error(busError) as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", busError);
+      })
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        // Fallback --machine user@ also fails with no D-Bus (e.g. container).
+        const err = new Error(busError) as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", busError);
+      });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
 });
 
 describe("systemd runtime parsing", () => {

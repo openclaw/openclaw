@@ -179,6 +179,19 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
   );
 }
 
+/** True when systemctl/user D-Bus is unavailable (e.g. container, chroot, no session). */
+function isSystemctlBusUnavailable(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("failed to connect to bus") ||
+    normalized.includes("no medium found") ||
+    normalized.includes("connection refused")
+  );
+}
+
 function resolveSystemctlDirectUserScopeArgs(): string[] {
   return ["--user"];
 }
@@ -430,7 +443,11 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
     return true;
   }
   const detail = readSystemctlDetail(res);
-  if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
+  if (
+    isSystemctlMissing(detail) ||
+    isSystemdUnitNotEnabled(detail) ||
+    isSystemctlBusUnavailable(detail)
+  ) {
     return false;
   }
   throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
