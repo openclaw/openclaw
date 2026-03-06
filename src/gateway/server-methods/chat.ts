@@ -1135,13 +1135,21 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    // Reload entry before append to avoid writing into a stale transcript path
+    // when concurrent session mutations (for example sessions.reset) rotate ids/files.
+    const latest = loadSessionEntry(rawSessionKey);
+    const latestSessionId = latest.entry?.sessionId ?? sessionId;
+    const latestStorePath = latest.storePath ?? storePath;
+    const latestSessionFile = latest.entry?.sessionFile ?? entry?.sessionFile;
+    const latestCfg = latest.cfg ?? cfg;
+
     const appended = appendAssistantTranscriptMessage({
       message: p.message,
       label: p.label,
-      sessionId,
-      storePath,
-      sessionFile: entry?.sessionFile,
-      agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
+      sessionId: latestSessionId,
+      storePath: latestStorePath,
+      sessionFile: latestSessionFile,
+      agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: latestCfg }),
       createIfMissing: true,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {
