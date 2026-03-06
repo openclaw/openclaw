@@ -101,6 +101,7 @@ Please include in your PR:
 - [ ] Note the degree of testing (untested / lightly tested / fully tested)
 - [ ] Include prompts or session logs if possible (super helpful!)
 - [ ] Confirm you understand what the code does
+- [ ] Note any Risks and Mitigations (if applicable)
 
 AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
 
