@@ -65,6 +65,22 @@ describe("resolveOpenClawAgentDir", () => {
     });
   });
 
+  it("ignores legacy OPENCLAW_AGENT_DIR when OPENCLAW_STATE_DIR is set", async () => {
+    await withTempStateDir((stateDir) => {
+      withEnv(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_AGENT_DIR: "~/.openclaw/agents/main/agent",
+          PI_CODING_AGENT_DIR: undefined,
+        },
+        () => {
+          const resolved = resolveOpenClawAgentDir();
+          expect(resolved).toBe(path.join(stateDir, "agents", "main", "agent"));
+        },
+      );
+    });
+  });
+
   it("prefers OPENCLAW_AGENT_DIR over PI_CODING_AGENT_DIR when both are set", async () => {
     await withTempStateDir((stateDir) => {
       const primaryOverride = path.join(stateDir, "primary-agent");
