@@ -209,7 +209,15 @@ if ! run_as_openclaw test -f "$OPENCLAW_JSON"; then
 fi
 
 echo "Building image from $REPO_PATH..."
-podman build -t openclaw:local -f "$REPO_PATH/Dockerfile" "$REPO_PATH"
+# Optional apt packages for the container build (matches docker-setup.sh behavior).
+# Example:
+#   export OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg imagemagick"
+OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
+podman build \
+  --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
+  -t openclaw:local \
+  -f "$REPO_PATH/Dockerfile" \
+  "$REPO_PATH"
 
 echo "Loading image into $OPENCLAW_USER's Podman store..."
 TMP_IMAGE="$(mktemp -p /tmp openclaw-image.XXXXXX.tar)"
