@@ -1,3 +1,4 @@
+import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -122,6 +123,29 @@ describe("saveCronStore", () => {
     await saveCronStore(storePath, dummyStore);
     const loaded = await loadCronStore(storePath);
     expect(loaded).toEqual(dummyStore);
+  });
+
+  it("attempts to fsync tmp/final files and parent directory", async () => {
+    const { storePath } = await makeStorePath();
+    const openedPaths: string[] = [];
+    const origOpen = fsNode.promises.open.bind(fsNode.promises);
+    const openSpy = vi
+      .spyOn(fsNode.promises, "open")
+      .mockImplementation(async (...args: Parameters<typeof fsNode.promises.open>) => {
+        openedPaths.push(String(args[0]));
+        return await origOpen(...args);
+      });
+
+    try {
+      await saveCronStore(storePath, dummyStore);
+      expect(openedPaths.some((p) => p.startsWith(`${storePath}.`) && p.endsWith(".tmp"))).toBe(
+        true,
+      );
+      expect(openedPaths).toContain(storePath);
+      expect(openedPaths).toContain(path.dirname(storePath));
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   it("retries rename on EBUSY then succeeds", async () => {
