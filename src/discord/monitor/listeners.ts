@@ -201,6 +201,9 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
 export class DiscordMessageListener extends MessageCreateListener {
   private readonly channelQueue = new KeyedAsyncQueue();
   private readonly listenerTimeoutMs: number;
+  // Deduplicate messages within a short time window to handle Discord duplicate events
+  private readonly processedMessages = new Map<string, number>();
+  private readonly dedupeWindowMs = 5_000; // 5 seconds window for deduplication
 
   constructor(
     private handler: DiscordMessageHandler,
@@ -212,12 +215,41 @@ export class DiscordMessageListener extends MessageCreateListener {
     this.listenerTimeoutMs = normalizeDiscordListenerTimeoutMs(options?.timeoutMs);
   }
 
+  private isMessageDuplicate(messageId: string): boolean {
+    const now = Date.now();
+    // Clean up old entries periodically
+    if (this.processedMessages.size > 100) {
+      for (const [id, timestamp] of this.processedMessages) {
+        if (now - timestamp > this.dedupeWindowMs) {
+          this.processedMessages.delete(id);
+        }
+      }
+    }
+
+    const lastProcessed = this.processedMessages.get(messageId);
+    if (lastProcessed && now - lastProcessed < this.dedupeWindowMs) {
+      return true;
+    }
+
+    this.processedMessages.set(messageId, now);
+    return false;
+  }
+
   async handle(data: DiscordMessageEvent, client: Client) {
+    const messageId = (data as { message?: { id?: string } }).message?.id;
+
+    // Deduplicate: skip if we've recently processed this exact message
+    if (messageId && this.isMessageDuplicate(messageId)) {
+      return;
+    }
+
+    this.onEvent?.();
+
     this.onEvent?.();
     const channelId = data.channel_id;
     const context = {
       channelId,
-      messageId: (data as { message?: { id?: string } }).message?.id,
+      messageId,
       guildId: (data as { guild_id?: string }).guild_id,
     } satisfies Record<string, unknown>;
     // Serialize messages within the same channel to preserve ordering,
