@@ -4,8 +4,13 @@ import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { normalizeModelCompat } from "./model-compat.js";
 import { normalizeProviderId } from "./model-selection.js";
 
+const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
+const OPENAI_CODEX_FORWARD_COMPAT_MODEL_IDS = new Set([
+  OPENAI_CODEX_GPT_54_MODEL_ID,
+  OPENAI_CODEX_GPT_53_MODEL_ID,
+]);
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
@@ -139,9 +144,22 @@ export function augmentKnownForwardCompatModels(models: Model<Api>[]): Model<Api
     ) ??
     null;
   if (codexBaseTemplate) {
+    const codex54Key = getKey("openai-codex", OPENAI_CODEX_GPT_54_MODEL_ID);
+    if (!existing.has(codex54Key)) {
+      next.push(
+        normalizeModelCompat({
+          ...codexBaseTemplate,
+          id: OPENAI_CODEX_GPT_54_MODEL_ID,
+          name: OPENAI_CODEX_GPT_54_MODEL_ID,
+        } as Model<Api>),
+      );
+      existing.add(codex54Key);
+    }
+
     const sparkKey = getKey("openai-codex", OPENAI_CODEX_GPT_53_SPARK_MODEL_ID);
     if (!existing.has(sparkKey)) {
       next.push(buildOpenAICodexSparkFallbackModel(codexBaseTemplate));
+      existing.add(sparkKey);
     }
   }
 
@@ -160,7 +178,7 @@ function resolveOpenAICodexGpt53FallbackModel(
   if (!CODEX_GPT53_ELIGIBLE_PROVIDERS.has(normalizedProvider)) {
     return undefined;
   }
-  if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_53_MODEL_ID) {
+  if (!OPENAI_CODEX_FORWARD_COMPAT_MODEL_IDS.has(trimmedModelId.toLowerCase())) {
     return undefined;
   }
 

@@ -35,6 +35,7 @@ let importPiSdk = defaultImportPiSdk;
 const CODEX_PROVIDER = "openai-codex";
 const OPENAI_PROVIDER = "openai";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
+const OPENAI_CODEX_GPT54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_GPT54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT54_PRO_MODEL_ID = "gpt-5.4-pro";
@@ -62,6 +63,42 @@ function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
     ...baseModel,
     id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
     name: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
+  });
+}
+
+function applyOpenAICodexGpt54Fallback(models: ModelCatalogEntry[]): void {
+  const hasCodex = models.some((entry) => entry.provider === CODEX_PROVIDER);
+  if (!hasCodex) {
+    return;
+  }
+
+  const hasGpt54 = models.some(
+    (entry) =>
+      entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === OPENAI_CODEX_GPT54_MODEL_ID,
+  );
+  if (hasGpt54) {
+    return;
+  }
+
+  const template =
+    models.find(
+      (entry) =>
+        entry.provider === CODEX_PROVIDER &&
+        entry.id.toLowerCase() === OPENAI_CODEX_GPT53_MODEL_ID,
+    ) ??
+    models.find(
+      (entry) =>
+        entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === "gpt-5.2-codex",
+    );
+
+  if (!template) {
+    return;
+  }
+
+  models.push({
+    ...template,
+    id: OPENAI_CODEX_GPT54_MODEL_ID,
+    name: OPENAI_CODEX_GPT54_MODEL_ID,
   });
 }
 
@@ -262,6 +299,7 @@ export async function loadModelCatalog(params?: {
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
       applyOpenAIGpt54Fallbacks(models);
+      applyOpenAICodexGpt54Fallback(models);
       applyOpenAICodexSparkFallback(models);
 
       if (models.length === 0) {

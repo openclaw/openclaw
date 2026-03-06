@@ -264,6 +264,16 @@ describe("resolveModel", () => {
     });
   });
 
+  it("builds an openai-codex forward-compat fallback for gpt-5.4", () => {
+    mockOpenAICodexTemplateModel();
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      expectedModel: buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+    });
+  });
+
   it("builds an openai forward-compat fallback for gpt-5.4-pro", () => {
     mockOpenAITemplateModel();
 

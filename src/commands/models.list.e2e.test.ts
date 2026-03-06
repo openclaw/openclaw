@@ -300,6 +300,36 @@ describe("models list/status", () => {
     );
   });
 
+  it("loadModelRegistry augments raw openai-codex models with gpt-5.4 fallback", async () => {
+    modelRegistryState.models = [
+      {
+        provider: "openai-codex",
+        id: "gpt-5.3-codex",
+        name: "GPT-5.3 Codex",
+        api: "openai-codex-responses",
+        input: ["text", "image"],
+        baseUrl: "https://chatgpt.com/backend-api",
+        contextWindow: 272_000,
+        maxTokens: 128_000,
+        reasoning: true,
+        cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+      },
+    ];
+    modelRegistryState.available = modelRegistryState.models;
+
+    const { models } = await loadModelRegistry({});
+    expect(models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: "openai-codex",
+          id: "gpt-5.4",
+          api: "openai-codex-responses",
+          contextWindow: 272_000,
+        }),
+      ]),
+    );
+  });
+
   it("models list does not treat availability-unavailable code as discovery fallback", async () => {
     configureGoogleAntigravityModel("claude-opus-4-6-thinking");
     modelRegistryState.getAllError = Object.assign(new Error("model discovery failed"), {
