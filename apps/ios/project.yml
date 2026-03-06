@@ -25,6 +25,11 @@ schemes:
     test:
       targets:
         - OpenClawTests
+  OpenClawiPad:
+    shared: true
+    build:
+      targets:
+        OpenClawiPad: all
 
 targets:
   OpenClaw:
@@ -35,6 +40,9 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Sources
+        excludes:
+          - Status/LiveActivityManager.swift
+          - Info-iPad.plist
     dependencies:
       - target: OpenClawShareExtension
         embed: true
@@ -110,7 +118,112 @@ targets:
           - ai.openclaw.ios.bgrefresh
         NSLocalNetworkUsageDescription: OpenClaw discovers and connects to your OpenClaw gateway on the local network.
         NSAppTransportSecurity:
-          NSAllowsArbitraryLoadsInWebContent: true
+          NSAllowsArbitraryLoads: true
+        NSBonjourServices:
+          - _openclaw-gw._tcp
+        NSCameraUsageDescription: OpenClaw can capture photos or short video clips when requested via the gateway.
+        NSLocationWhenInUseUsageDescription: OpenClaw uses your location when you allow location sharing.
+        NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
+        NSMicrophoneUsageDescription: OpenClaw needs microphone access for voice wake.
+        NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for voice wake.
+        NSSupportsLiveActivities: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+
+  OpenClawiPad:
+    type: application
+    platform: iOS
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
+    sources:
+      - path: Sources
+        excludes:
+          - Status/LiveActivityManager.swift
+          - Info.plist
+    dependencies:
+      - target: OpenClawShareExtension
+        embed: true
+      - target: OpenClawActivityWidget
+        embed: true
+      - package: OpenClawKit
+      - package: OpenClawKit
+        product: OpenClawChatUI
+      - package: OpenClawKit
+        product: OpenClawProtocol
+      - package: Swabble
+        product: SwabbleKit
+      - sdk: AppIntents.framework
+    preBuildScripts:
+      - name: SwiftFormat (lint)
+        basedOnDependencyAnalysis: false
+        inputFileLists:
+          - $(SRCROOT)/SwiftSources.input.xcfilelist
+        script: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          if ! command -v swiftformat >/dev/null 2>&1; then
+            echo "error: swiftformat not found (brew install swiftformat)" >&2
+            exit 1
+          fi
+          swiftformat --lint --config "$SRCROOT/../../.swiftformat" \
+            --filelist "$SRCROOT/SwiftSources.input.xcfilelist"
+      - name: SwiftLint
+        basedOnDependencyAnalysis: false
+        inputFileLists:
+          - $(SRCROOT)/SwiftSources.input.xcfilelist
+        script: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          if ! command -v swiftlint >/dev/null 2>&1; then
+            echo "error: swiftlint not found (brew install swiftlint)" >&2
+            exit 1
+          fi
+          swiftlint lint --config "$SRCROOT/.swiftlint.yml" --use-script-input-file-lists
+    settings:
+      base:
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_ENTITLEMENTS: Sources/OpenClaw.entitlements
+        CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
+        DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_APP_BUNDLE_ID)"
+        PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_APP_PROFILE)"
+        TARGETED_DEVICE_FAMILY: "2"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        SUPPORTS_LIVE_ACTIVITIES: YES
+        ENABLE_APPINTENTS_METADATA: NO
+        ENABLE_APP_INTENTS_METADATA_GENERATION: NO
+    info:
+      path: Sources/Info-iPad.plist
+      properties:
+        CFBundleDisplayName: OpenClaw iPad
+        CFBundleIconName: AppIcon
+        CFBundleURLTypes:
+          - CFBundleURLName: ai.openclaw.ios
+            CFBundleURLSchemes:
+              - openclaw
+        CFBundleShortVersionString: "2026.3.2"
+        CFBundleVersion: "20260301"
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UIBackgroundModes:
+          - audio
+          - remote-notification
+        BGTaskSchedulerPermittedIdentifiers:
+          - ai.openclaw.ios.bgrefresh
+        NSLocalNetworkUsageDescription: OpenClaw discovers and connects to your OpenClaw gateway on the local network.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
         NSBonjourServices:
           - _openclaw-gw._tcp
         NSCameraUsageDescription: OpenClaw can capture photos or short video clips when requested via the gateway.
@@ -158,6 +271,8 @@ targets:
         CFBundleDisplayName: OpenClaw Share
         CFBundleShortVersionString: "2026.3.2"
         CFBundleVersion: "20260301"
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).ShareViewController"

@@ -7,6 +7,7 @@ OPENCLAW_DEVELOPMENT_TEAM = Y5PE65HELJ
 
 OPENCLAW_APP_BUNDLE_ID = ai.openclaw.ios
 OPENCLAW_SHARE_BUNDLE_ID = ai.openclaw.ios.share
+OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = $(OPENCLAW_APP_BUNDLE_ID).activitywidget
 
 OPENCLAW_APP_PROFILE = ai.openclaw.ios Development
 OPENCLAW_SHARE_PROFILE = ai.openclaw.ios.share Development

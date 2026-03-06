@@ -20,6 +20,11 @@
 	<string>2026.3.2</string>
 	<key>CFBundleVersion</key>
 	<string>20260301</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionAttributes</key>
