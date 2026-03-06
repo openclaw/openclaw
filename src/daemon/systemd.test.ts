@@ -124,6 +124,27 @@ describe("isSystemdServiceEnabled", () => {
     );
   });
 
+  it("returns false when both user-scope and machine-scope fail with bus connection error (refs #38379)", async () => {
+    // During initial provisioning (e.g. `sudo -u openclaw openclaw onboard --install-daemon`
+    // before the first login), the systemd user bus is not yet running.  Both the
+    // direct `--user` scope and the machine-user fallback return "Failed to connect to bus".
+    // The onboard flow should treat this as "service not yet installed" and continue.
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        const err = new Error("Failed to connect to bus") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "Failed to connect to bus: No such file or directory");
+      })
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        const err = new Error("Failed to connect to bus") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "Failed to connect to bus: No such file or directory");
+      });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
+
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
     execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {

@@ -433,6 +433,18 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
     return false;
   }
+  // During initial provisioning (e.g. `sudo -u openclaw openclaw onboard --install-daemon`
+  // before the user's first login), the systemd user bus is not yet started and
+  // both the direct `--user` scope and the machine-user fallback fail with
+  // "Failed to connect to bus".  Treat this as "service not yet installed" so the
+  // onboard flow can proceed and install the unit.  Fixes #38379.
+  const normalizedDetail = detail.toLowerCase();
+  if (
+    normalizedDetail.includes("failed to connect to bus") ||
+    normalizedDetail.includes("failed to connect to user scope bus")
+  ) {
+    return false;
+  }
   throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
 }
 
