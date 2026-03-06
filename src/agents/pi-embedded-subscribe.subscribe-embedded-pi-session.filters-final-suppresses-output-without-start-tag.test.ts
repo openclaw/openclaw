@@ -94,6 +94,23 @@ describe("subscribeEmbeddedPiSession", () => {
     const payload = onPartialReply.mock.calls[0][0];
     expect(payload.text).toBe("Hello world");
   });
+  it("recovers message_end text without <final> when enforcement is off", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emitMessageStartAndEndForAssistantText({ emit, text: "MiniMax fallback reply" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("MiniMax fallback reply");
+  });
   it("emits block replies on message_end", () => {
     const { session, emit } = createStubSessionHarness();
 
