@@ -12,8 +12,19 @@ def test_normalize_background_allows_empty_for_non_gpt_models():
     assert normalize_background("dall-e-3", "transparent") == ""
 
 
+def test_normalize_background_allows_empty_for_gpt_models():
+    assert normalize_background("gpt-image-1", "") == ""
+    assert normalize_background("gpt-image-1", "   ") == ""
+
+
 def test_normalize_background_normalizes_case_for_gpt_models():
     assert normalize_background("gpt-image-1", "TRANSPARENT") == "transparent"
+
+
+def test_normalize_background_warns_when_model_does_not_support_flag(capsys):
+    assert normalize_background("dall-e-3", "transparent") == ""
+    captured = capsys.readouterr()
+    assert "--background is only supported for gpt-image models" in captured.err
 
 
 def test_normalize_background_rejects_invalid_values():
@@ -25,8 +36,19 @@ def test_normalize_style_allows_empty_for_non_dalle3_models():
     assert normalize_style("gpt-image-1", "vivid") == ""
 
 
+def test_normalize_style_allows_empty_for_dalle3():
+    assert normalize_style("dall-e-3", "") == ""
+    assert normalize_style("dall-e-3", "   ") == ""
+
+
 def test_normalize_style_normalizes_case_for_dalle3():
     assert normalize_style("dall-e-3", "NATURAL") == "natural"
+
+
+def test_normalize_style_warns_when_model_does_not_support_flag(capsys):
+    assert normalize_style("gpt-image-1", "vivid") == ""
+    captured = capsys.readouterr()
+    assert "--style is only supported for dall-e-3" in captured.err
 
 
 def test_normalize_style_rejects_invalid_values():
@@ -75,4 +97,3 @@ def test_write_gallery_normal_output():
         assert "a lobster astronaut, golden hour" in html
         assert 'src="001-lobster.png"' in html
         assert "002-nook.png" in html
-
