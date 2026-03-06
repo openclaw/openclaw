@@ -124,7 +124,8 @@ jobs:
         id: infra
         run: |
           set -euo pipefail
-          envs="dev"
+          # Main pushes should keep both environments on the latest released image.
+          envs="dev,prd"
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             case "${{ inputs.environment }}" in
               dev) envs="dev" ;;
