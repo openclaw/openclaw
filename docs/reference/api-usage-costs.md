@@ -81,6 +81,7 @@ See [Memory](/concepts/memory).
 
 - **Brave Search API**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
 - **Perplexity** (via OpenRouter): `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
+- **Querit Search API**: `QUERIT_API_KEY`
 
 See [Web tools](/tools/web).
 

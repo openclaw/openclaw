@@ -15,6 +15,8 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveQueritApiKey,
+  resolveQueritConfig,
 } = __testing;
 
 describe("web_search brave language param normalization", () => {
@@ -269,5 +271,41 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("web_search querit config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveQueritApiKey({ apiKey: "querit-test-key" })).toBe("querit-test-key");
+  });
+
+  it("falls back to QUERIT_API_KEY env var", () => {
+    withEnv({ QUERIT_API_KEY: "querit-env-key" }, () => {
+      expect(resolveQueritApiKey({})).toBe("querit-env-key");
+    });
+  });
+
+  it("config key takes precedence over env var", () => {
+    withEnv({ QUERIT_API_KEY: "querit-env-key" }, () => {
+      expect(resolveQueritApiKey({ apiKey: "querit-config-key" })).toBe("querit-config-key");
+    });
+  });
+
+  it("returns undefined when no key is configured", () => {
+    withEnv({ QUERIT_API_KEY: undefined }, () => {
+      expect(resolveQueritApiKey({})).toBeUndefined();
+      expect(resolveQueritApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("extracts querit config from search config object", () => {
+    const config = resolveQueritConfig({ provider: "querit", querit: { apiKey: "querit-key" } });
+    expect(config).toEqual({ apiKey: "querit-key" });
+  });
+
+  it("returns empty object when querit key is absent from search config", () => {
+    expect(resolveQueritConfig({ provider: "brave" })).toEqual({});
+    expect(resolveQueritConfig({})).toEqual({});
+    expect(resolveQueritConfig(undefined)).toEqual({});
   });
 });
