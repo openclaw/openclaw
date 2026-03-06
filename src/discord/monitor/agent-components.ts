@@ -388,7 +388,7 @@ export type AgentComponentContext = {
   /** DM allowlist (from allowFrom config; legacy: dm.allowFrom) */
   allowFrom?: string[];
   /** DM policy (default: "pairing") */
-  dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
+  dmPolicy?: "open" | "pairing" | "allowlist" | "disabled" | "confirming";
 };
 
 /**
