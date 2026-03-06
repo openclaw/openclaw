@@ -2,13 +2,8 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import {
-  deduplicateMessages,
-  serializeRefTable,
-  cleanOrphanedRefs,
-  buildRefTableExplanation,
-} from "./deduper.js";
-import { getContextDedupRuntime, setContextDedupRuntime } from "./runtime.js";
+import { deduplicateMessages } from "./deduper.js";
+import { getContextDedupRuntime } from "./runtime.js";
 
 function extractText(value: unknown): string {
   if (typeof value === "string") {
@@ -905,6 +900,520 @@ function isSyntheticPointerOrLineageNote(text: string): boolean {
   );
 }
 
+type RepeatFoldStats = {
+  collapsedRuns: number;
+  omittedCopies: number;
+  omittedChars: number;
+};
+
+type RepeatFoldResult = {
+  messages: any[];
+  stats: RepeatFoldStats;
+};
+
+const REPEAT_FOLD_MARKER_REGEX = /\[repeats \d+ more times\]/i;
+const REPEAT_FOLD_MIN_UNIT_CHARS = 24;
+const REPEAT_FOLD_MAX_PATTERN_UNITS = 32;
+const REPEAT_FOLD_RAW_MAX_TEXT_CHARS = 16_000;
+const REPEAT_FOLD_RAW_MIN_PATTERN_CHARS = 24;
+const REPEAT_FOLD_RAW_MAX_PATTERN_CHARS = 320;
+const REPEAT_FOLD_RAW_MIN_SAVED_CHARS = 24;
+const ANSI_ESCAPE_SEQUENCE_REGEX = new RegExp(String.raw`\u001b\[[0-9;?]*[A-Za-z]`, "g");
+
+function createEmptyRepeatFoldStats(): RepeatFoldStats {
+  return {
+    collapsedRuns: 0,
+    omittedCopies: 0,
+    omittedChars: 0,
+  };
+}
+
+type RepeatFoldCanonicalizer = (unit: string) => string;
+
+function normalizeWhitespaceForRepeatMatch(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function normalizeTerminalFrameForRepeatMatch(text: string): string {
+  return normalizeWhitespaceForRepeatMatch(
+    text
+      .replace(ANSI_ESCAPE_SEQUENCE_REGEX, " ")
+      .replace(/\[(?:\d+;)*\d+m/g, " ")
+      .replace(/\[\d+G\[J/g, " ")
+      .replace(/[◐◑◒◓]/g, "<spin>")
+      .replace(/\.{2,}/g, "."),
+  );
+}
+
+function foldContiguousRepeatedUnitPatterns(
+  units: string[],
+  joiner: string,
+  canonicalizer: RepeatFoldCanonicalizer = normalizeWhitespaceForRepeatMatch,
+): {
+  text: string;
+  changed: boolean;
+  stats: RepeatFoldStats;
+} {
+  const originalText = units.join(joiner);
+  if (units.length < 2) {
+    return {
+      text: originalText,
+      changed: false,
+      stats: createEmptyRepeatFoldStats(),
+    };
+  }
+
+  const canonicalUnits = units.map((unit) => canonicalizer(unit));
+  const output: string[] = [];
+  const stats = createEmptyRepeatFoldStats();
+
+  let idx = 0;
+  while (idx < units.length) {
+    let best:
+      | {
+          patternUnits: number;
+          repeats: number;
+          collapsedText: string;
+          savedChars: number;
+        }
+      | undefined;
+
+    const remaining = units.length - idx;
+    const maxPatternUnits = Math.min(REPEAT_FOLD_MAX_PATTERN_UNITS, Math.floor(remaining / 2));
+
+    for (let patternUnits = 1; patternUnits <= maxPatternUnits; patternUnits++) {
+      const patternEnd = idx + patternUnits;
+
+      const patternCanonical = canonicalUnits.slice(idx, patternEnd);
+      if (patternCanonical.some((value) => !value || value.length === 0)) {
+        continue;
+      }
+      if (units.slice(idx, patternEnd).some((unit) => REPEAT_FOLD_MARKER_REGEX.test(unit))) {
+        continue;
+      }
+
+      const patternCanonicalChars = patternCanonical.reduce((sum, value) => sum + value.length, 0);
+      if (patternCanonicalChars < REPEAT_FOLD_MIN_UNIT_CHARS) {
+        continue;
+      }
+
+      let immediateMatch = true;
+      for (let unitOffset = 0; unitOffset < patternUnits; unitOffset++) {
+        if (canonicalUnits[idx + unitOffset] !== canonicalUnits[idx + patternUnits + unitOffset]) {
+          immediateMatch = false;
+          break;
+        }
+      }
+      if (!immediateMatch) {
+        continue;
+      }
+
+      let repeats = 2;
+      while (idx + (repeats + 1) * patternUnits <= units.length) {
+        let matches = true;
+        const compareBase = idx + repeats * patternUnits;
+        for (let unitOffset = 0; unitOffset < patternUnits; unitOffset++) {
+          if (canonicalUnits[idx + unitOffset] !== canonicalUnits[compareBase + unitOffset]) {
+            matches = false;
+            break;
+          }
+        }
+        if (!matches) {
+          break;
+        }
+        repeats++;
+      }
+
+      const patternText = units.slice(idx, patternEnd).join(joiner).trimEnd();
+      const originalRunText = units.slice(idx, idx + repeats * patternUnits).join(joiner);
+      const collapsedText = `${patternText} [repeats ${repeats - 1} more times]`;
+      const savedChars = originalRunText.length - collapsedText.length;
+      if (savedChars <= 0) {
+        continue;
+      }
+
+      if (!best || savedChars > best.savedChars) {
+        best = {
+          patternUnits,
+          repeats,
+          collapsedText,
+          savedChars,
+        };
+      }
+    }
+
+    if (!best) {
+      output.push(units[idx]);
+      idx++;
+      continue;
+    }
+
+    output.push(best.collapsedText);
+    stats.collapsedRuns += 1;
+    stats.omittedCopies += best.repeats - 1;
+    stats.omittedChars += best.savedChars;
+    idx += best.patternUnits * best.repeats;
+  }
+
+  const nextText = output.join(joiner);
+  return {
+    text: nextText,
+    changed: nextText !== originalText,
+    stats,
+  };
+}
+
+function splitTerminalProgressFrames(text: string): string[] {
+  if (!/\[\d+G\[J/.test(text)) {
+    return [];
+  }
+
+  const frames = text
+    .split(/(?=\[\d+G\[J)/g)
+    .map((frame) => frame.trim())
+    .filter((frame) => frame.length > 0);
+
+  if (frames.length < 2) {
+    return [];
+  }
+
+  return frames;
+}
+
+function splitSentenceLikeUnits(text: string): string[] {
+  const parts = text
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+
+  if (parts.length <= 1) {
+    return [];
+  }
+
+  return parts;
+}
+
+function foldRawRepeatedCharacterPatterns(text: string): {
+  text: string;
+  changed: boolean;
+  stats: RepeatFoldStats;
+} {
+  if (
+    text.length < REPEAT_FOLD_RAW_MIN_PATTERN_CHARS * 2 ||
+    text.length > REPEAT_FOLD_RAW_MAX_TEXT_CHARS
+  ) {
+    return {
+      text,
+      changed: false,
+      stats: createEmptyRepeatFoldStats(),
+    };
+  }
+
+  const outputSegments: string[] = [];
+  const stats = createEmptyRepeatFoldStats();
+
+  let cursor = 0;
+  let idx = 0;
+
+  while (idx < text.length - REPEAT_FOLD_RAW_MIN_PATTERN_CHARS * 2) {
+    let best:
+      | {
+          patternLength: number;
+          repeats: number;
+          collapsedText: string;
+          savedChars: number;
+        }
+      | undefined;
+
+    const remaining = text.length - idx;
+    const maxPatternLength = Math.min(REPEAT_FOLD_RAW_MAX_PATTERN_CHARS, Math.floor(remaining / 2));
+
+    for (
+      let patternLength = REPEAT_FOLD_RAW_MIN_PATTERN_CHARS;
+      patternLength <= maxPatternLength;
+      patternLength++
+    ) {
+      const pattern = text.slice(idx, idx + patternLength);
+      if (REPEAT_FOLD_MARKER_REGEX.test(pattern)) {
+        continue;
+      }
+
+      if (text.slice(idx + patternLength, idx + patternLength * 2) !== pattern) {
+        continue;
+      }
+
+      let repeats = 2;
+      while (idx + (repeats + 1) * patternLength <= text.length) {
+        const nextChunkStart = idx + repeats * patternLength;
+        const nextChunkEnd = nextChunkStart + patternLength;
+        if (text.slice(nextChunkStart, nextChunkEnd) !== pattern) {
+          break;
+        }
+        repeats++;
+      }
+
+      const collapsedText = `${pattern.trimEnd()} [repeats ${repeats - 1} more times]`;
+      const savedChars = patternLength * repeats - collapsedText.length;
+      if (savedChars < REPEAT_FOLD_RAW_MIN_SAVED_CHARS) {
+        continue;
+      }
+
+      if (!best || savedChars > best.savedChars) {
+        best = {
+          patternLength,
+          repeats,
+          collapsedText,
+          savedChars,
+        };
+      }
+    }
+
+    if (!best) {
+      idx++;
+      continue;
+    }
+
+    if (cursor < idx) {
+      outputSegments.push(text.slice(cursor, idx));
+    }
+
+    outputSegments.push(best.collapsedText);
+    stats.collapsedRuns += 1;
+    stats.omittedCopies += best.repeats - 1;
+    stats.omittedChars += best.savedChars;
+
+    idx += best.patternLength * best.repeats;
+    cursor = idx;
+  }
+
+  if (stats.collapsedRuns === 0) {
+    return {
+      text,
+      changed: false,
+      stats,
+    };
+  }
+
+  if (cursor < text.length) {
+    outputSegments.push(text.slice(cursor));
+  }
+
+  const nextText = outputSegments.join("");
+  return {
+    text: nextText,
+    changed: nextText !== text,
+    stats,
+  };
+}
+
+function foldSingleLineRepeatedTextRuns(text: string): {
+  text: string;
+  changed: boolean;
+  stats: RepeatFoldStats;
+} {
+  let bestFold: {
+    text: string;
+    changed: boolean;
+    stats: RepeatFoldStats;
+  } = {
+    text,
+    changed: false,
+    stats: createEmptyRepeatFoldStats(),
+  };
+
+  const terminalFrames = splitTerminalProgressFrames(text);
+  if (terminalFrames.length >= 2) {
+    const terminalFold = foldContiguousRepeatedUnitPatterns(
+      terminalFrames,
+      "",
+      normalizeTerminalFrameForRepeatMatch,
+    );
+    if (terminalFold.changed && terminalFold.stats.omittedChars > bestFold.stats.omittedChars) {
+      bestFold = {
+        text: terminalFold.text,
+        changed: true,
+        stats: terminalFold.stats,
+      };
+    }
+  }
+
+  const sentenceUnits = splitSentenceLikeUnits(text);
+  if (sentenceUnits.length >= 2) {
+    const sentencePatternFold = foldContiguousRepeatedUnitPatterns(sentenceUnits, " ");
+    if (
+      sentencePatternFold.changed &&
+      sentencePatternFold.stats.omittedChars > bestFold.stats.omittedChars
+    ) {
+      bestFold = {
+        text: sentencePatternFold.text,
+        changed: true,
+        stats: sentencePatternFold.stats,
+      };
+    }
+  }
+
+  const rawFold = foldRawRepeatedCharacterPatterns(text);
+  if (rawFold.changed && rawFold.stats.omittedChars > bestFold.stats.omittedChars) {
+    bestFold = rawFold;
+  }
+
+  return bestFold;
+}
+
+function foldRepeatedTextRuns(text: string): {
+  text: string;
+  changed: boolean;
+  stats: RepeatFoldStats;
+} {
+  if (!text.trim() || isSyntheticPointerOrLineageNote(text)) {
+    return {
+      text,
+      changed: false,
+      stats: createEmptyRepeatFoldStats(),
+    };
+  }
+
+  let workingText = text;
+  const combinedStats = createEmptyRepeatFoldStats();
+  let changed = false;
+
+  const linePatternFold = foldContiguousRepeatedUnitPatterns(workingText.split("\n"), "\n");
+  if (linePatternFold.changed) {
+    workingText = linePatternFold.text;
+    changed = true;
+    combinedStats.collapsedRuns += linePatternFold.stats.collapsedRuns;
+    combinedStats.omittedCopies += linePatternFold.stats.omittedCopies;
+    combinedStats.omittedChars += linePatternFold.stats.omittedChars;
+  }
+
+  if (!workingText.includes("\n")) {
+    const singleLineFold = foldSingleLineRepeatedTextRuns(workingText);
+    if (singleLineFold.changed) {
+      workingText = singleLineFold.text;
+      changed = true;
+      combinedStats.collapsedRuns += singleLineFold.stats.collapsedRuns;
+      combinedStats.omittedCopies += singleLineFold.stats.omittedCopies;
+      combinedStats.omittedChars += singleLineFold.stats.omittedChars;
+    }
+
+    return {
+      text: workingText,
+      changed,
+      stats: changed ? combinedStats : createEmptyRepeatFoldStats(),
+    };
+  }
+
+  // For multiline tool output, still fold repeated terminal/raw runs within each line.
+  // This catches spinner/progress blobs embedded in otherwise newline-rich payloads.
+  const lineParts = workingText.split(/(\r?\n)/);
+
+  for (let i = 0; i < lineParts.length; i += 2) {
+    const line = lineParts[i] ?? "";
+    if (line.length < REPEAT_FOLD_MIN_UNIT_CHARS * 2) {
+      continue;
+    }
+
+    const foldedLine = foldSingleLineRepeatedTextRuns(line);
+    if (!foldedLine.changed) {
+      continue;
+    }
+
+    lineParts[i] = foldedLine.text;
+    changed = true;
+    combinedStats.collapsedRuns += foldedLine.stats.collapsedRuns;
+    combinedStats.omittedCopies += foldedLine.stats.omittedCopies;
+    combinedStats.omittedChars += foldedLine.stats.omittedChars;
+  }
+
+  return {
+    text: changed ? lineParts.join("") : text,
+    changed,
+    stats: changed ? combinedStats : createEmptyRepeatFoldStats(),
+  };
+}
+
+function isRepeatFoldEligibleMessage(msg: any): boolean {
+  const role = String(msg?.role ?? "").toLowerCase();
+  return role === "tool" || role === "toolresult";
+}
+
+export function applyRepeatFoldCompaction(messages: any[]): RepeatFoldResult {
+  let nextMessages: any[] | null = null;
+  const stats: RepeatFoldStats = {
+    collapsedRuns: 0,
+    omittedCopies: 0,
+    omittedChars: 0,
+  };
+
+  for (let msgIndex = 0; msgIndex < messages.length; msgIndex++) {
+    const msg = messages[msgIndex];
+    if (!isRepeatFoldEligibleMessage(msg)) {
+      continue;
+    }
+
+    const content = msg?.content;
+
+    if (typeof content === "string") {
+      const folded = foldRepeatedTextRuns(content);
+      if (!folded.changed) {
+        continue;
+      }
+
+      if (!nextMessages) {
+        nextMessages = messages.slice();
+      }
+      nextMessages[msgIndex] = {
+        ...msg,
+        content: folded.text,
+      };
+      stats.collapsedRuns += folded.stats.collapsedRuns;
+      stats.omittedCopies += folded.stats.omittedCopies;
+      stats.omittedChars += folded.stats.omittedChars;
+      continue;
+    }
+
+    if (!Array.isArray(content)) {
+      continue;
+    }
+
+    let messageChanged = false;
+    const nextContent = content.map((block) => {
+      const blockText = extractBlockText(block);
+      if (typeof blockText !== "string") {
+        return block;
+      }
+
+      const folded = foldRepeatedTextRuns(blockText);
+      if (!folded.changed) {
+        return block;
+      }
+
+      messageChanged = true;
+      stats.collapsedRuns += folded.stats.collapsedRuns;
+      stats.omittedCopies += folded.stats.omittedCopies;
+      stats.omittedChars += folded.stats.omittedChars;
+      return setBlockText(block, folded.text);
+    });
+
+    if (!messageChanged) {
+      continue;
+    }
+
+    if (!nextMessages) {
+      nextMessages = messages.slice();
+    }
+    nextMessages[msgIndex] = {
+      ...msg,
+      content: nextContent,
+    };
+  }
+
+  return {
+    messages: nextMessages ?? messages,
+    stats,
+  };
+}
+
 function extractMessageBlockText(message: any, blockIndex: number): string | undefined {
   const content = message?.content;
 
@@ -1201,40 +1710,19 @@ export default function contextDedupExtension(api: ExtensionAPI): void {
     const lineage = applyReadLineageCompaction(baseMessages);
     const lineageMessages = lineage.messages;
 
-    // Clean orphaned refs from the persistent table
-    const cleanedTable = cleanOrphanedRefs(lineageMessages, runtime.refTable, runtime.settings);
-
     // Run deduplication on normalized messages
     const result = deduplicateMessages(lineageMessages, runtime.settings, {
       protectedMessageIndexes: lineage.protectedSourceMessageIndexes,
     });
     const resolvedMessages = rewriteReadLineageSourcePointers(result.messages);
+    const repeatFold = applyRepeatFoldCompaction(resolvedMessages);
 
-    // Merge ref tables (new refs from this turn + cleaned old refs)
-    const mergedTable = { ...cleanedTable, ...result.refTable };
-
-    // Build candidate context: deduped messages + ref table message (if any refs)
-    let candidateMessages = resolvedMessages;
-    if (Object.keys(mergedTable).length > 0) {
-      const refTableText = serializeRefTable(mergedTable, runtime.settings);
-      const explanation = buildRefTableExplanation(runtime.settings);
-      const refMessage = {
-        role: "system" as const,
-        content: `${explanation}${refTableText}`,
-      };
-      candidateMessages = [refMessage, ...resolvedMessages];
-    }
-
+    const candidateMessages = repeatFold.messages;
     const candidateChars = contextChars(candidateMessages);
 
     // Safety guard: only apply dedup when it reduces context size.
     const useCandidate = candidateChars < baseChars;
     const finalMessages = useCandidate ? candidateMessages : baseMessages;
-
-    setContextDedupRuntime(ctx.sessionManager, {
-      ...runtime,
-      refTable: useCandidate ? mergedTable : cleanedTable,
-    });
 
     if (runtime.settings.debugDump) {
       console.log(
@@ -1246,12 +1734,14 @@ export default function contextDedupExtension(api: ExtensionAPI): void {
         candidateChars,
         "chars,",
         useCandidate ? "dedup applied" : "dedup skipped (no net savings)",
-        "refTable:",
-        Object.keys(useCandidate ? mergedTable : cleanedTable).length,
         "readLineage:",
         `full=${lineage.stats.fullyOmittedChunks}`,
         `trimmed=${lineage.stats.partiallyTrimmedChunks}`,
         `savedChars=${lineage.stats.omittedChars}`,
+        "repeatFold:",
+        `runs=${repeatFold.stats.collapsedRuns}`,
+        `copies=${repeatFold.stats.omittedCopies}`,
+        `savedChars=${repeatFold.stats.omittedChars}`,
       );
     }
 

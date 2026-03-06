@@ -5,13 +5,11 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-extensions/compaction-safeguard.js";
-import { getRefTagSize } from "../pi-extensions/context-dedup/deduper.js";
 import contextDedupExtension from "../pi-extensions/context-dedup/extension.js";
 import { setContextDedupRuntime } from "../pi-extensions/context-dedup/runtime.js";
 import {
   resolveDedupConfig,
   resolveEffectiveDedupSettings,
-  resolveLCSSettings,
 } from "../pi-extensions/context-dedup/settings.js";
 import contextPruningExtension from "../pi-extensions/context-pruning.js";
 import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
@@ -76,12 +74,8 @@ function buildContextDedupFactory(params: {
   }
 
   const settings = resolveEffectiveDedupSettings(raw);
-  const refTagSize = getRefTagSize(settings);
   setContextDedupRuntime(params.sessionManager, {
     settings,
-    lcsSettings: resolveLCSSettings(raw, refTagSize),
-    refTable: {},
-    refTagSize,
   });
 
   return contextDedupExtension;

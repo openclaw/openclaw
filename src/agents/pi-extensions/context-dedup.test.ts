@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { deduplicateMessages } from "./context-dedup/deduper.js";
 import {
   applyReadLineageCompaction,
+  applyRepeatFoldCompaction,
   rewriteReadLineageSourcePointers,
 } from "./context-dedup/extension.js";
 
@@ -31,7 +32,6 @@ describe("context-dedup", () => {
 
     const result = deduplicateMessages(messages as any[], DEDUP_ON);
 
-    expect(Object.keys(result.refTable)).toHaveLength(0);
     expect((result.messages[0].content[0] as { type: string; text: string }).text).toBe(repeated);
 
     const second = (result.messages[1].content[0] as { type: string; text: string }).text;
@@ -135,7 +135,10 @@ describe("context-dedup", () => {
       DEDUP_ON,
     );
 
-    expect(Object.keys(result.refTable)).toHaveLength(0);
+    expect(result.messages).toEqual([
+      { role: "toolResult", content: [{ type: "image", content: repeated }] },
+      { role: "toolResult", content: [{ type: "image", content: repeated }] },
+    ]);
   });
 
   it("deduplicates equivalent nested text-parts blocks", () => {
@@ -761,5 +764,167 @@ describe("context-dedup", () => {
     const postRewriteDeltaText = String(rewritten[7].content);
     expect(postRewriteDeltaText).toContain("context message #1");
     expect(postRewriteDeltaText).not.toContain("context message #5");
+  });
+
+  it("folds repeated multiline tool output runs", () => {
+    const repeatedLine =
+      "ERROR: ld.so: object '/usr/lib/libtcmalloc.so.4' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.";
+
+    const messages = [
+      {
+        role: "toolResult",
+        content: [repeatedLine, repeatedLine, repeatedLine, repeatedLine, repeatedLine].join("\n"),
+      },
+    ];
+
+    const folded = applyRepeatFoldCompaction(messages as any[]);
+    const text = String(folded.messages[0].content);
+
+    expect(text).toContain("[repeats 4 more times]");
+    expect(text).toContain(repeatedLine);
+    expect(folded.stats.collapsedRuns).toBe(1);
+    expect(folded.stats.omittedCopies).toBe(4);
+  });
+
+  it("folds repeated sentence runs in single-line tool output", () => {
+    const repeatedSentence =
+      "ERROR: ld.so: object '/usr/lib/libtcmalloc.so.4' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.";
+    const singleLine = `${repeatedSentence} ${repeatedSentence} ${repeatedSentence}`;
+
+    const messages = [
+      {
+        role: "toolResult",
+        content: singleLine,
+      },
+    ];
+
+    const folded = applyRepeatFoldCompaction(messages as any[]);
+    const text = String(folded.messages[0].content);
+
+    expect(text).toContain("[repeats 2 more times]");
+    expect(text).toContain(repeatedSentence);
+    expect(folded.stats.collapsedRuns).toBe(1);
+    expect(folded.stats.omittedCopies).toBe(2);
+  });
+
+  it("folds delimiter-free repeating block patterns", () => {
+    const a = "ALPHA_BLOCK_xxxxxxxxxxxxxxxxxxxxxx";
+    const b = "BRAVO_BLOCK_yyyyyyyyyyyyyyyyyyyyyy";
+    const c = "CHARLIE_BLOCK_zzzzzzzzzzzzzzzzzzzz";
+    const d = "DELTA_BLOCK_qqqqqqqqqqqqqqqqqqqqqq";
+
+    const pattern = `${a}${b}${c}${d}`;
+    const input = `${pattern}${pattern}${pattern}`;
+
+    const messages = [
+      {
+        role: "toolResult",
+        content: input,
+      },
+    ];
+
+    const folded = applyRepeatFoldCompaction(messages as any[]);
+    const text = String(folded.messages[0].content);
+
+    expect(text).toContain("[repeats 2 more times]");
+    expect(text).toContain(pattern.slice(0, 80));
+    expect(folded.stats.collapsedRuns).toBeGreaterThanOrEqual(1);
+    expect(folded.stats.omittedCopies).toBeGreaterThanOrEqual(2);
+  });
+
+  it("folds periodic terminal-style frame cycles in one-line text", () => {
+    const frameA = "[1G[J[35m◒[39m  [38;5;209mComplete sign-in in browser…[39m";
+    const frameB = "[1G[J[35m◐[39m  [38;5;209mComplete sign-in in browser…[39m.";
+    const frameC = "[1G[J[35m◓[39m  [38;5;209mComplete sign-in in browser…[39m..";
+    const frameD = "[1G[J[35m◑[39m  [38;5;209mComplete sign-in in browser…[39m...";
+
+    const input = `${frameA}${frameB}${frameC}${frameD}${frameA}${frameB}${frameC}${frameD}`;
+
+    const messages = [
+      {
+        role: "toolResult",
+        content: input,
+      },
+    ];
+
+    const folded = applyRepeatFoldCompaction(messages as any[]);
+    const text = String(folded.messages[0].content);
+
+    expect(text).toContain("[repeats 1 more times]");
+    expect(text).toContain("Complete sign-in in browser");
+    expect(folded.stats.collapsedRuns).toBeGreaterThanOrEqual(1);
+    expect(folded.stats.omittedCopies).toBeGreaterThanOrEqual(1);
+  });
+
+  it("folds terminal-style frame cycles embedded in multiline tool output", () => {
+    const frameA = "[1G[J[35m◒[39m  [38;5;209mComplete sign-in in browser…[39m";
+    const frameB = "[1G[J[35m◐[39m  [38;5;209mComplete sign-in in browser…[39m.";
+    const frameC = "[1G[J[35m◓[39m  [38;5;209mComplete sign-in in browser…[39m..";
+    const frameD = "[1G[J[35m◑[39m  [38;5;209mComplete sign-in in browser…[39m...";
+
+    const spinnerBlob = `${frameA}${frameB}${frameC}${frameD}`.repeat(3);
+    const input = `OpenClaw onboarding\n${spinnerBlob}\n\nProcess still running.`;
+
+    const messages = [
+      {
+        role: "toolResult",
+        content: input,
+      },
+    ];
+
+    const folded = applyRepeatFoldCompaction(messages as any[]);
+    const text = String(folded.messages[0].content);
+
+    expect(text).toContain("[repeats 2 more times]");
+    expect(text).toContain("OpenClaw onboarding");
+    expect(text).toContain("Process still running.");
+    expect(folded.stats.collapsedRuns).toBeGreaterThanOrEqual(1);
+    expect(folded.stats.omittedCopies).toBeGreaterThanOrEqual(2);
+  });
+
+  it("still folds repeated lines when message also contains existing repeat markers", () => {
+    const repeatedLine =
+      "ERROR: ld.so: object '/usr/lib/libtcmalloc.so.4' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.";
+
+    const prefix = `${repeatedLine}\n`.repeat(9).trimEnd();
+    const suffix =
+      "\n\nPREVIEW:\n[1G[J[35m◐[39m  [38;5;209mComplete sign-in in browser…[39m [repeats 7 more times]";
+
+    const messages = [
+      {
+        role: "toolResult",
+        content: `${prefix}${suffix}`,
+      },
+    ];
+
+    const folded = applyRepeatFoldCompaction(messages as any[]);
+    const text = String(folded.messages[0].content);
+
+    expect(text).toContain("[repeats 8 more times]");
+    expect(text).toContain("PREVIEW:");
+    expect(text).toContain("[repeats 7 more times]");
+    expect(folded.stats.collapsedRuns).toBeGreaterThanOrEqual(1);
+    expect(folded.stats.omittedCopies).toBeGreaterThanOrEqual(8);
+  });
+
+  it("does not fold synthetic pointer notes", () => {
+    const note =
+      "[1 repeat of content omitted]\n" +
+      "Same as context message #12, block #0 (toolCallId call_1).\n" +
+      "[1 repeat of content omitted]\n" +
+      "Same as context message #12, block #0 (toolCallId call_1).";
+
+    const messages = [
+      {
+        role: "toolResult",
+        content: note,
+      },
+    ];
+
+    const folded = applyRepeatFoldCompaction(messages as any[]);
+
+    expect(String(folded.messages[0].content)).toBe(note);
+    expect(folded.stats.collapsedRuns).toBe(0);
+    expect(folded.stats.omittedCopies).toBe(0);
   });
 });

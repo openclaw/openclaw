@@ -23,14 +23,8 @@ export interface EffectiveDedupSettings {
   refTagFormat: RefTagFormat;
 }
 
-export interface RefTable {
-  [refId: string]: string; // refId -> content
-}
-
 export interface DedupResult {
   messages: any[];
-  refTable: RefTable;
-  refTagSize: number;
 }
 
 export interface DedupOptions {
@@ -39,37 +33,6 @@ export interface DedupOptions {
    * Used to avoid nested compaction when read-lineage notes point at these messages.
    */
   protectedMessageIndexes?: Set<number>;
-}
-
-function refSuffix(refId: string): string {
-  return refId.startsWith("REF_") ? refId.slice(4) : refId;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Get reference tag delimiters.
- *
- * NOTE:
- * We intentionally emit the same canonical format for both config variants:
- *   tag:   <¯REF_XXXX¯>
- *   table: <¯REF_XXXX= [content] END_REF¯>
- * This keeps behavior stable even when existing configs still say "angle".
- */
-export function getRefDelimiters(_format: RefTagFormat): {
-  start: string;
-  end: string;
-  full: (id: string) => string;
-} {
-  const start = "<¯REF_";
-  const end = "¯>";
-  return {
-    start,
-    end,
-    full: (id: string) => `<¯REF_${id}¯>`,
-  };
 }
 
 /**
@@ -222,37 +185,6 @@ function normalizeTextForDedup(text: string, role: string): string {
 }
 
 /**
- * Get the full reference tag string.
- */
-export function makeRefTag(refId: string, config: DedupConfig): string {
-  const { full } = getRefDelimiters(config.refTagFormat);
-  return full(refSuffix(refId));
-}
-
-/**
- * Get the reference tag size in characters.
- */
-export function getRefTagSize(config: DedupConfig): number {
-  const { start, end } = getRefDelimiters(config.refTagFormat);
-  // Format: <¯REF_XXXXXXXX¯>
-  return start.length + 8 + end.length;
-}
-
-/**
- * Build reference table explanation text for the LLM.
- */
-export function buildRefTableExplanation(config: DedupConfig): string {
-  const { full } = getRefDelimiters(config.refTagFormat);
-  const exampleRef = full("EXAMPLE");
-
-  return `[REFERENCES]
-Use reference tags in this format: ${exampleRef}
-Resolve each tag with the table entries below.
-Each entry uses: <¯REF_XXXX= [content] END_REF¯>
-`;
-}
-
-/**
  * Deduplicate content in messages.
  *
  * Algorithm:
@@ -261,8 +193,7 @@ Each entry uses: <¯REF_XXXX= [content] END_REF¯>
  * 3. Replace later occurrences with a plain-language pointer to the first one
  *
  * Notes:
- * - This intentionally avoids symbolic ref-table tags to keep smaller models stable.
- * - We still return a DedupResult shape with an empty refTable for compatibility.
+ * - This intentionally avoids symbolic ref-table tags and only emits plain-language pointers.
  */
 export function deduplicateMessages(
   messages: any[],
@@ -272,8 +203,6 @@ export function deduplicateMessages(
   if (config.mode === "off") {
     return {
       messages,
-      refTable: {},
-      refTagSize: getRefTagSize(config),
     };
   }
 
@@ -411,62 +340,5 @@ export function deduplicateMessages(
 
   return {
     messages: newMessages,
-    refTable: {},
-    refTagSize: getRefTagSize(config),
   };
-}
-
-/**
- * Clean orphaned refs from table - remove entries no longer referenced in messages.
- * Used during context compaction when old content is pruned.
- */
-export function cleanOrphanedRefs(
-  messages: any[],
-  refTable: RefTable,
-  config: DedupConfig,
-): RefTable {
-  // Find all ref IDs used in messages
-  const usedRefs = new Set<string>();
-  const { start, end } = getRefDelimiters(config.refTagFormat);
-  const regex = new RegExp(`${escapeRegExp(start)}(\\w+)(?:${escapeRegExp(end)}|=)`, "g");
-
-  for (const msg of messages) {
-    const contents = Array.isArray(msg.content) ? msg.content : [msg.content];
-
-    for (const block of contents) {
-      const text = getBlockText(block as TextLikeBlock);
-      if (typeof text !== "string") {
-        continue;
-      }
-
-      // Find refs in this block (both inline tags and table rows)
-      let match;
-      while ((match = regex.exec(text)) !== null) {
-        usedRefs.add(`REF_${match[1]}`);
-      }
-    }
-  }
-
-  // Filter ref table to only include used refs
-  const cleanedRefTable: RefTable = {};
-  for (const refId of Object.keys(refTable)) {
-    if (usedRefs.has(refId)) {
-      cleanedRefTable[refId] = refTable[refId];
-    }
-  }
-
-  return cleanedRefTable;
-}
-
-/**
- * Serialize ref table to string for injection into context.
- */
-export function serializeRefTable(refTable: RefTable, _config: DedupConfig): string {
-  const lines: string[] = [];
-
-  for (const [refId, content] of Object.entries(refTable)) {
-    lines.push(`<¯REF_${refSuffix(refId)}= [${content}] END_REF¯>`);
-  }
-
-  return lines.join("\n");
 }

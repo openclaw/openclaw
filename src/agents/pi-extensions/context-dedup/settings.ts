@@ -1,6 +1,5 @@
 import type { AgentContextDedupConfig } from "../../../config/types.agent-defaults.js";
 import type { DedupConfig, EffectiveDedupSettings } from "./deduper.js";
-import type { LCSConfig } from "./lcs-dedup.js";
 
 export function resolveDedupConfig(
   config: AgentContextDedupConfig | undefined,
@@ -32,24 +31,4 @@ export function resolveEffectiveDedupSettings(
       refTagFormat: "unicode",
     }
   );
-}
-
-/**
- * Sub-line/LCS dedup is intentionally disabled.
- * Keep the shape for compatibility with existing runtime wiring.
- */
-export function resolveLCSSettings(
-  config: AgentContextDedupConfig | undefined,
-  refTagSize: number,
-): LCSConfig {
-  const minSubstringSize = Math.max(8, config?.lcsMinSize ?? 50);
-  const maxSubstringSize = Math.max(minSubstringSize, 4096);
-
-  return {
-    mode: "off",
-    minSubstringSize,
-    maxSubstringSize,
-    refTagSize,
-    maxIterations: 1,
-  };
 }
