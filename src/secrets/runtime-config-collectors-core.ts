@@ -416,29 +416,17 @@ function collectAgentSandboxDockerEnvAssignments(params: {
 
   // Collect from agents.list[].sandbox.docker.env (skip disabled agents)
   const list = Array.isArray(agents.list) ? agents.list : [];
-  let hasEnabledAgentWithoutEnvOverride = false;
-  for (const rawAgent of list) {
-    if (!isRecord(rawAgent) || rawAgent.enabled === false) {
-      continue;
-    }
-    const sandbox = isRecord(rawAgent.sandbox) ? rawAgent.sandbox : undefined;
-    const docker = isRecord(sandbox?.docker) ? sandbox.docker : undefined;
-    const env = isRecord(docker?.env) ? docker.env : undefined;
-    if (!env) {
-      hasEnabledAgentWithoutEnvOverride = true;
-    }
-  }
 
+  // Defaults env refs are always active because sandbox env is merged key-by-key
+  // (global + agent), not replaced wholesale. An agent having its own env map does
+  // not mean it overrides every key from defaults.
   if (defaultsEnv) {
     collectSandboxDockerEnvAssignments({
       env: defaultsEnv,
       pathPrefix: "agents.defaults.sandbox.docker.env",
       defaults: params.defaults,
       context: params.context,
-      active: hasEnabledAgentWithoutEnvOverride || list.length === 0,
-      inactiveReason: hasEnabledAgentWithoutEnvOverride
-        ? undefined
-        : "all enabled agents override sandbox.docker.env.",
+      active: true,
     });
   }
 

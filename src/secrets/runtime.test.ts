@@ -2267,6 +2267,47 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("resolves defaults sandbox.docker.env refs even when agents define their own env", async () => {
+    // Sandbox env is merged key-by-key (global + agent), not replaced wholesale.
+    // Defaults refs must stay active even when agents have their own env maps,
+    // because agents may not override every key from defaults.
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              env: {
+                SHARED_KEY: { source: "env", provider: "default", id: "SHARED_SECRET" },
+              },
+            },
+          },
+        },
+        list: [
+          {
+            id: "agent-with-own-env",
+            sandbox: {
+              docker: {
+                env: {
+                  AGENT_ONLY: "agent-value",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { SHARED_SECRET: "shared-resolved" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const env = snapshot.config.agents?.defaults?.sandbox?.docker?.env as Record<string, unknown>;
+    expect(env?.SHARED_KEY).toBe("shared-resolved");
+  });
+
   it("resolves mixed plain string and SecretRef values in sandbox.docker.env", async () => {
     const config = asConfig({
       agents: {
