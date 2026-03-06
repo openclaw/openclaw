@@ -332,6 +332,80 @@ describe("tool-cards", () => {
     expect(enriched[1]?.text).toBe("longer and richer read output body");
   });
 
+  it("does not reuse another run's output when toolCallId is reused", () => {
+    const cards = extractToolCards({
+      role: "assistant",
+      runId: "run-2",
+      toolCallId: "shared-read-1",
+      content: [
+        {
+          type: "toolcall",
+          name: "read",
+          arguments: { path: "logs/current.log" },
+        },
+      ],
+    });
+
+    const lookup = buildToolCardOutputLookup([
+      {
+        role: "assistant",
+        runId: "run-1",
+        toolCallId: "shared-read-1",
+        content: [
+          { type: "toolcall", name: "read", arguments: { path: "logs/previous.log" } },
+          { type: "toolresult", name: "read", text: "previous run output" },
+        ],
+      },
+      {
+        role: "assistant",
+        runId: "run-2",
+        toolCallId: "shared-read-1",
+        content: [{ type: "toolcall", name: "read", arguments: { path: "logs/current.log" } }],
+      },
+    ]);
+
+    const enriched = enrichToolCardsWithLookup(cards, lookup);
+    expect(enriched[0]?.args).toEqual({ path: "logs/current.log" });
+    expect(enriched[0]?.text).toBeUndefined();
+  });
+
+  it("does not reuse another run's output when toolCallId and args are both reused", () => {
+    const cards = extractToolCards({
+      role: "assistant",
+      runId: "run-2",
+      toolCallId: "shared-read-2",
+      content: [
+        {
+          type: "toolcall",
+          name: "read",
+          arguments: { path: "logs/shared.log" },
+        },
+      ],
+    });
+
+    const lookup = buildToolCardOutputLookup([
+      {
+        role: "assistant",
+        runId: "run-1",
+        toolCallId: "shared-read-2",
+        content: [
+          { type: "toolcall", name: "read", arguments: { path: "logs/shared.log" } },
+          { type: "toolresult", name: "read", text: "stale previous run output" },
+        ],
+      },
+      {
+        role: "assistant",
+        runId: "run-2",
+        toolCallId: "shared-read-2",
+        content: [{ type: "toolcall", name: "read", arguments: { path: "logs/shared.log" } }],
+      },
+    ]);
+
+    const enriched = enrichToolCardsWithLookup(cards, lookup);
+    expect(enriched[0]?.args).toEqual({ path: "logs/shared.log" });
+    expect(enriched[0]?.text).toBeUndefined();
+  });
+
   it("hydrates missing command args from lookup when tool result card only has output", () => {
     const resultOnlyCards = extractToolCards({
       role: "toolresult",
@@ -463,7 +537,7 @@ describe("tool-cards", () => {
     expect(enriched[1]?.text).toBe("latest concise summary");
   });
 
-  it("replaces metadata-only exec summary with richer lookup output on non-id match", () => {
+  it("does not replace metadata-only exec summary from tool-name-only lookup", () => {
     const cards = extractToolCards({
       role: "assistant",
       content: [
@@ -490,6 +564,56 @@ describe("tool-cards", () => {
         content: [
           {
             type: "text",
+            text: "git status output from a different exec call",
+          },
+        ],
+      },
+    ]);
+
+    const enriched = enrichToolCardsWithLookup(cards, lookup);
+    expect(enriched[0]?.text).toBe(
+      "Command: openclaw system --help\nWorking Dir: C:\\Users\\test\\.openclaw\\workspace",
+    );
+    expect(enriched[1]?.text).toBe(
+      "Command: openclaw system --help\nWorking Dir: C:\\Users\\test\\.openclaw\\workspace",
+    );
+  });
+
+  it("replaces metadata-only exec summary with richer lookup output on signature match", () => {
+    const cards = extractToolCards({
+      role: "assistant",
+      content: [
+        {
+          type: "toolcall",
+          name: "exec",
+          arguments: {
+            command: "openclaw system --help",
+            cwd: "C:\\Users\\test\\.openclaw\\workspace",
+          },
+        },
+        {
+          type: "toolresult",
+          name: "exec",
+          text: "Command: openclaw system --help\nWorking Dir: C:\\Users\\test\\.openclaw\\workspace",
+        },
+      ],
+    });
+
+    const lookup = buildToolCardOutputLookup([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolcall",
+            name: "exec",
+            arguments: {
+              command: "openclaw system --help",
+              cwd: "C:\\Users\\test\\.openclaw\\workspace",
+            },
+          },
+          {
+            type: "toolresult",
+            name: "exec",
             text: "🦞 OpenClaw 2026.2.26\n\nUsage: openclaw system [options] [command]\n\nSystem tools...",
           },
         ],
@@ -499,9 +623,5 @@ describe("tool-cards", () => {
     const enriched = enrichToolCardsWithLookup(cards, lookup);
     expect(enriched[0]?.text).toContain("Usage: openclaw system");
     expect(enriched[1]?.text).toContain("Usage: openclaw system");
-    expect(enriched[0]?.args).toEqual({
-      command: "openclaw system --help",
-      cwd: "C:\\Users\\test\\.openclaw\\workspace",
-    });
   });
 });

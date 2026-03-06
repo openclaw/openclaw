@@ -149,11 +149,19 @@ describe("chat view", () => {
           ],
           toolMessages: [
             {
-              role: "toolresult",
-              toolName: "exec",
+              role: "assistant",
               content: [
                 {
-                  type: "text",
+                  type: "toolcall",
+                  name: "exec",
+                  arguments: {
+                    command: "openclaw system --help",
+                    cwd: "C:\\Users\\test\\.openclaw\\workspace",
+                  },
+                },
+                {
+                  type: "toolresult",
+                  name: "exec",
                   text: "Usage: openclaw system [options] [command]\nSystem tools...",
                 },
               ],
@@ -373,6 +381,10 @@ describe("chat view", () => {
     const threadText = container.querySelector(".chat-thread")?.textContent ?? "";
     expect(threadText).toContain("history output");
     expect(threadText).toContain("live output");
+    const cardTexts = Array.from(container.querySelectorAll(".chat-tool-card__inline")).map(
+      (node) => node.textContent ?? "",
+    );
+    expect(cardTexts).toEqual(["history output", "live output"]);
   });
 
   it("hydrates command detail on live tool cards from history when output and args split across cards", () => {

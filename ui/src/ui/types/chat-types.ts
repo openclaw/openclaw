@@ -42,4 +42,5 @@ export type ToolCard = {
   args?: unknown;
   text?: string;
   toolCallId?: string;
+  runId?: string;
 };

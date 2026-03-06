@@ -51,6 +51,7 @@ export function extractToolCards(
   const m = message as Record<string, unknown>;
   const content = normalizeContent(m.content);
   const fallbackToolCallId = resolveToolCallId(m);
+  const runId = normalizeRunId(m.runId ?? m.run_id);
   const cards: ToolCard[] = [];
 
   for (const item of content) {
@@ -64,6 +65,7 @@ export function extractToolCards(
         name: (item.name as string) ?? "tool",
         args: coerceArgs(item.arguments ?? item.args),
         toolCallId: resolveToolCallId(item, fallbackToolCallId),
+        runId,
       });
     }
   }
@@ -80,6 +82,7 @@ export function extractToolCards(
       name,
       text,
       toolCallId: resolveToolCallId(item, fallbackToolCallId),
+      runId,
     });
   }
 
@@ -89,7 +92,7 @@ export function extractToolCards(
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
     const text = extractTextCached(message) ?? undefined;
-    cards.push({ kind: "result", name, text, toolCallId: fallbackToolCallId });
+    cards.push({ kind: "result", name, text, toolCallId: fallbackToolCallId, runId });
   }
 
   const merged = mergeToolCards(cards);
@@ -114,7 +117,17 @@ export function buildToolCardOutputLookup(messages: unknown[]): ToolCardOutputLo
       }
       const toolCallId = normalizeToolCallId(card.toolCallId);
       if (toolCallId) {
-        upsertLookupEntry(lookup.byToolCallId, toolCallId, { text: text ?? undefined, args });
+        // Keep tool output scoped to the originating run so reused ids like
+        // `call_1` do not leak stale content across runs.
+        upsertLookupEntry(lookup.byToolCallId, buildToolCallLookupKey(toolCallId, card.runId), {
+          text: text ?? undefined,
+          args,
+        });
+        // Preserve a loose args-only fallback so split call/result cards can
+        // still recover command details when only one side carried arguments.
+        if (card.runId && hasMeaningfulArgs(args)) {
+          upsertLookupEntry(lookup.byToolCallId, toolCallId, { args });
+        }
       }
       const signature = buildToolSignature(card.name, card.args);
       if (signature) {
@@ -388,6 +401,12 @@ function mergeToolCards(cards: ToolCard[]): ToolCard[] {
       if (!resultCard.toolCallId && callCard.toolCallId) {
         resultCard.toolCallId = callCard.toolCallId;
       }
+      if (!callCard.runId && resultCard.runId) {
+        callCard.runId = resultCard.runId;
+      }
+      if (!resultCard.runId && callCard.runId) {
+        resultCard.runId = callCard.runId;
+      }
       break;
     }
   }
@@ -405,6 +424,23 @@ function resolveToolCallId(value: Record<string, unknown>, fallback?: string): s
 
 function normalizeToolCallId(value: string | undefined): string {
   return value?.trim() ?? "";
+}
+
+function normalizeRunId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized || undefined;
+}
+
+function buildToolCallLookupKey(toolCallId: string, runId?: string): string {
+  const normalizedToolCallId = normalizeToolCallId(toolCallId);
+  if (!normalizedToolCallId) {
+    return "";
+  }
+  const normalizedRunId = normalizeRunId(runId);
+  return normalizedRunId ? `${normalizedRunId}::${normalizedToolCallId}` : normalizedToolCallId;
 }
 
 function normalizeToolText(value: string | undefined): string | null {
@@ -455,10 +491,19 @@ function resolveLookupMatch(
   const toolCallId = normalizeToolCallId(card.toolCallId);
   const byId: ToolLookupCandidate | undefined = toolCallId
     ? (() => {
-        const entry = lookup.byToolCallId.get(toolCallId);
+        const entry = lookup.byToolCallId.get(buildToolCallLookupKey(toolCallId, card.runId));
         return entry ? { source: "toolCallId", entry } : undefined;
       })()
     : undefined;
+  const byIdLoose: ToolLookupCandidate | undefined =
+    toolCallId && card.runId
+      ? (() => {
+          // Cross-run fallback is args-only; text stays run-scoped to avoid
+          // showing another run's tool output on the current card.
+          const entry = lookup.byToolCallId.get(toolCallId);
+          return entry ? { source: "toolCallId", entry } : undefined;
+        })()
+      : undefined;
   const signature = buildToolSignature(card.name, card.args);
   const resourceHint = buildResourceHint(card);
   const bySignature: ToolLookupCandidate | undefined = signature
@@ -474,15 +519,29 @@ function resolveLookupMatch(
       })()
     : undefined;
   const toolName = normalizeToolName(card.name);
-  const byToolName: ToolLookupCandidate | undefined = toolName
-    ? (() => {
-        const entry = lookup.byToolName.get(toolName);
-        return entry ? { source: "toolName", entry } : undefined;
-      })()
-    : undefined;
+  const byToolName: ToolLookupCandidate | undefined =
+    !toolCallId && !signature && !resourceHint && toolName
+      ? (() => {
+          const entry = lookup.byToolName.get(toolName);
+          return entry ? { source: "toolName", entry } : undefined;
+        })()
+      : undefined;
+  const hasRunScopedToolIdentity = Boolean(toolCallId && card.runId);
 
-  const textCandidate = pickPreferredTextCandidate(byId, bySignature, byResourceHint, byToolName);
-  const argsCandidate = pickPreferredArgsCandidate(byId, bySignature, byResourceHint, byToolName);
+  // Once a card is tied to a concrete run + toolCallId, keep text hydration
+  // on that exact boundary. We still allow loose args recovery below, but we
+  // do not let same-signature/resource lookups pull stale output across runs.
+  const textCandidate = hasRunScopedToolIdentity
+    ? typeof byId?.entry.text === "string" && byId.entry.text.trim().length > 0
+      ? byId
+      : undefined
+    : pickPreferredTextCandidate(byId, bySignature, byResourceHint, byToolName);
+  const argsCandidate = pickPreferredArgsCandidate(
+    hasMeaningfulArgs(byId?.entry.args) ? byId : byIdLoose,
+    bySignature,
+    byResourceHint,
+    byToolName,
+  );
   if (!textCandidate && !argsCandidate) {
     return undefined;
   }
@@ -682,6 +741,24 @@ function upsertLookupEntry(
     map.set(key, incoming);
     return;
   }
+
+  const existingArgsKey = hasMeaningfulArgs(existing.args)
+    ? stableSerialize(stableNormalize(existing.args))
+    : "";
+  const incomingArgsKey = hasMeaningfulArgs(incoming.args)
+    ? stableSerialize(stableNormalize(incoming.args))
+    : "";
+  const hasConflictingArgs =
+    existingArgsKey.length > 0 && incomingArgsKey.length > 0 && existingArgsKey !== incomingArgsKey;
+
+  if (hasConflictingArgs) {
+    map.set(key, {
+      text: incoming.text,
+      args: incoming.args,
+    });
+    return;
+  }
+
   map.set(key, {
     text: incoming.text ?? existing.text,
     args: incoming.args ?? existing.args,
