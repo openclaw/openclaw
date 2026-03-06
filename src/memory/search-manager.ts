@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import type {
@@ -72,6 +73,19 @@ export async function getMemorySearchManager(params: {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+    }
+  }
+
+  // Postgres driver (our RAG augmentation): route to postgres manager when configured.
+  const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
+  if (settings?.store.driver === "postgres") {
+    try {
+      const { PostgresMemoryIndexManager } = await import("./manager-postgres.js");
+      const manager = await PostgresMemoryIndexManager.get(params);
+      return { manager };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`postgres memory unavailable; falling back to builtin: ${message}`);
     }
   }
 

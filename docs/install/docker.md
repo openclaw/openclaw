@@ -143,7 +143,48 @@ It writes config/workspace on the host:
 - `~/.openclaw/`
 - `~/.openclaw/workspace`
 
+<<<<<<< HEAD
+**Workspace volume mapping:** The agent’s default workspace path inside the container is
+`/home/node/.openclaw/workspace`. Compose mounts `${OPENCLAW_WORKSPACE_DIR}` from the host to that path, so
+**whatever you set `OPENCLAW_WORKSPACE_DIR` to is where SOUL.md, IDENTITY.md, USER.md, *_PLUS, memory files, and AGENTS.md will live.** Set it to a host path (or a path inside your state volume) so that:
+
+- The container path `/home/node/.openclaw/workspace` = your chosen host/state path
+- Template files (SOUL, IDENTITY, USER, TOOLS, BOOTSTRAP, etc.) are created there when the workspace is first ensured (e.g. during onboarding or when the gateway ensures the workspace). If you don’t see those files in the volume, run onboarding or ensure the workspace is created once.
+- **Immutable templates in the image:** When running in Docker, SOUL.md, IDENTITY.md, USER.md, TOOLS.md, and WORKSPACE_RULES.md are **not** written to the workspace. They live in the image at `/openclaw-immutable` (chmod 444 at build time). The app reads them from there (`OPENCLAW_IMMUTABLE_DIR`), so the agent cannot chmod or edit them. The agent is told what it can and cannot edit (and how to propose code changes via PR) in WORKSPACE_RULES.md. Supplement identity/soul/user via *_PLUS; TOOLS and code changes via PR only.
+- **Read-only root:** The gateway container runs with `read_only: true`. Only the mounted workspace and config dirs (and tmpfs for `/tmp`) are writable. The app code and allowlist logic are in the image and cannot be changed by the agent; only a GitHub PR can change them.
+
+**GitHub PR workflow (optional):** The image includes the GitHub CLI (`gh`) so the agent can create pull requests when you set repo and token env vars. Set `OPENCLAW_GITHUB_REPO` (e.g. `owner/repo`) and `GH_TOKEN` (or `GITHUB_TOKEN`) in your `.env` or environment so the agent can use the GitHub skill to open PRs for codebase or TOOLS changes. See [GitHub env vars](#github-env-vars-for-pr-workflow) below.
+
+Example with a state directory on the host:
+
+```bash
+export OPENCLAW_WORKSPACE_DIR="$HOME/openclaw-state/.openclaw/workspace"
+mkdir -p "$OPENCLAW_WORKSPACE_DIR"
+./docker-setup.sh
+```
+
+**Workspace volume mapping:** The agent’s default workspace path inside the container is
+`/home/node/.openclaw/workspace`. Compose mounts `${OPENCLAW_WORKSPACE_DIR}` from the host to that path, so
+**whatever you set `OPENCLAW_WORKSPACE_DIR` to is where SOUL.md, IDENTITY.md, USER.md, *_PLUS, memory files, and AGENTS.md will live.** Set it to a host path (or a path inside your state volume) so that:
+
+- The container path `/home/node/.openclaw/workspace` = your chosen host/state path
+- Template files (SOUL, IDENTITY, USER, TOOLS, BOOTSTRAP, etc.) are created there when the workspace is first ensured (e.g. during onboarding or when the gateway ensures the workspace). If you don’t see those files in the volume, run onboarding or ensure the workspace is created once.
+- **Immutable templates in the image:** When running in Docker, SOUL.md, IDENTITY.md, USER.md, TOOLS.md, and WORKSPACE_RULES.md are **not** written to the workspace. They live in the image at `/openclaw-immutable` (chmod 444 at build time). The app reads them from there (`OPENCLAW_IMMUTABLE_DIR`), so the agent cannot chmod or edit them. The agent is told what it can and cannot edit (and how to propose code changes via PR) in WORKSPACE_RULES.md. Supplement identity/soul/user via *_PLUS; TOOLS and code changes via PR only.
+- **Read-only root:** The gateway container runs with `read_only: true`. Only the mounted workspace and config dirs (and tmpfs for `/tmp`) are writable. The app code and allowlist logic are in the image and cannot be changed by the agent; only a GitHub PR can change them.
+
+**GitHub PR workflow (optional):** The image includes the GitHub CLI (`gh`) so the agent can create pull requests when you set repo and token env vars. Set `OPENCLAW_GITHUB_REPO` (e.g. `owner/repo`) and `GH_TOKEN` (or `GITHUB_TOKEN`) in your `.env` or environment so the agent can use the GitHub skill to open PRs for codebase or TOOLS changes. See [GitHub env vars](#github-env-vars-for-pr-workflow) below.
+
+Example with a state directory on the host:
+
+```bash
+export OPENCLAW_WORKSPACE_DIR="$HOME/openclaw-state/.openclaw/workspace"
+mkdir -p "$OPENCLAW_WORKSPACE_DIR"
+./docker-setup.sh
+```
 Running on a VPS? See [Hetzner (Docker VPS)](/install/hetzner).
+=======
+Running on a VPS? See [Hetzner (Docker VPS)](/platforms/hetzner).
+>>>>>>> adf79197e (README update)
 
 ### Use a remote image (skip local build)
 
@@ -320,6 +361,7 @@ Notes:
 - If you change `OPENCLAW_DOCKER_APT_PACKAGES`, rerun `docker-setup.sh` to rebuild
   the image.
 
+<<<<<<< HEAD
 ### Power-user / full-featured container (opt-in)
 
 The default Docker image is **security-first** and runs as the non-root `node`
@@ -356,11 +398,28 @@ If you need Playwright to install system deps, rebuild the image with
 `OPENCLAW_DOCKER_APT_PACKAGES` instead of using `--with-deps` at runtime.
 
 4. **Persist Playwright browser downloads**:
+   - Set `PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright` in
+     `docker-compose.yml`.
+   - Ensure `/home/node` persists via `OPENCLAW_HOME_VOLUME`, or mount
+     `/home/node/.cache/ms-playwright` via `OPENCLAW_EXTRA_MOUNTS`.
 
-- Set `PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright` in
-  `docker-compose.yml`.
-- Ensure `/home/node` persists via `OPENCLAW_HOME_VOLUME`, or mount
-  `/home/node/.cache/ms-playwright` via `OPENCLAW_EXTRA_MOUNTS`.
+### GitHub env vars for PR workflow
+
+The Docker image includes the **GitHub CLI** (`gh`) so the agent can use the GitHub skill to create branches and open pull requests. To enable this:
+
+1. Set **OPENCLAW_GITHUB_REPO** to the target repo in **owner/repo** form only (e.g. `myorg/my-repo`). This is what `gh` uses to know which repo to interact with. Do not use a URL (no `https://` or `git@...`).
+2. Set **GH_TOKEN** or **GITHUB_TOKEN** (either works; `gh` accepts both) to a GitHub token with permissions to push branches and create PRs in that repo.
+
+Add them to your `.env` (used by Docker Compose) or pass them when starting the gateway. The agent reads WORKSPACE_RULES.md, which explains that it cannot edit SOUL/IDENTITY/USER/TOOLS directly and that codebase changes are done via PR using `gh` and these env vars.
+
+Example `.env`:
+
+```
+OPENCLAW_GITHUB_REPO=myorg/openclaw
+GH_TOKEN=ghp_xxxxxxxxxxxx
+```
+
+The agent will use `gh pr create`, `gh pr view`, etc. with `--repo $OPENCLAW_GITHUB_REPO` when creating or inspecting PRs. If these variables are not set, the agent cannot create PRs from the container and will suggest the operator configure them.
 
 ### Permissions + EACCES
 
@@ -375,6 +434,8 @@ sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
 
 If you choose to run as root for convenience, you accept the security tradeoff.
 
+=======
+>>>>>>> adf79197e (README update)
 ### Faster rebuilds (recommended)
 
 To speed up rebuilds, order your Dockerfile so dependency layers are cached.

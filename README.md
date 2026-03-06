@@ -60,6 +60,63 @@ openclaw onboard --install-daemon
 
 The wizard installs the Gateway daemon (launchd/systemd user service) so it stays running.
 
+### Docker Setup (this fork)
+
+This fork includes customizations for a hardened Docker + Postgres/pgvector setup. It is **intended to be used with a parent repo** that owns deployment, secrets, and config—not run standalone in production.
+
+#### Intended use: this fork + a parent repo
+
+**How this fork is meant to be used**
+
+- This repo is typically included in a **parent repo** as a **Git submodule** (or equivalent). The parent repo is your deployment repo: it holds Docker Compose, env files, OpenClaw config, and optional workspace templates. It does not duplicate OpenClaw source code; it references this fork and builds a Docker container image from it.
+- The **parent** provides the runtime environment. The **fork** (this repo) provides the OpenClaw binary, Dockerfile, startup script, and base workspace templates. Sensitive or environment-specific data stays in the parent and is never committed to this fork.
+
+**What the parent repo provides**
+
+- **Docker Compose** (or similar) that builds the image from this fork’s `Dockerfile` and runs the gateway (often with a Postgres service for memory).
+- **`.env`** (gitignored): tokens, API keys, DB password, and any env vars that OpenClaw substitutes into config (e.g. `ASSISTANT_NAME`, `AGENT_COMPACTION_HISTORY_LIMIT`). The Compose file passes these into the container.
+- **`config/openclaw.json`** (gitignored): created from a committed `config/openclaw.json.example`. Contains channel/ID keys (e.g. Discord guild and channel IDs) that cannot be env vars. Values like `${ASSISTANT_NAME}` are filled from `.env` at runtime.
+- **Optional: `workspace-templates/`** (often gitignored): your custom SOUL, USER, IDENTITY, etc. Mounted into the container so the startup script seeds the workspace from these instead of (or in addition to) the base templates in this fork.
+- **Volumes** for persistent state (e.g. OpenClaw workspace and Postgres data), so restarts don’t lose memory or config.
+
+**How the parent and this fork interact**
+
+1. **Build:** Parent runs `docker compose build` (or equivalent) with build context pointing at this fork (e.g. `./openclaw` when the fork is a submodule at `openclaw/`). The image is built from this fork’s Dockerfile.
+2. **Run:** Compose starts the container with env from the parent’s `.env`, a mount of the parent’s `config/openclaw.json`, optional mount of `workspace-templates/`, and named volumes for state. The container runs this fork’s startup script then the gateway.
+3. **Secrets and config:** All secrets and per-environment config live in the parent (`.env`, `openclaw.json`, `workspace-templates/`). This fork stays generic and safe to share or make public; the parent can stay private.
+
+If you are building a parent repo like this, see the sections below for config and template details, and use a parent README (e.g. the one in the repo that contains this fork as a submodule) for your deployment steps.
+
+#### Key Customizations
+
+- **Postgres-backed memory indexing** (`src/memory/manager-postgres.ts`): RAG memory store using pgvector for embeddings with hybrid search (vector + keyword)
+- **Docker hardening**: Read-only root filesystem, non-root user, dropped capabilities, tmpfs for writable directories
+- **Docker startup script** (`scripts/docker-startup.sh`): Automated workspace seeding and memory index initialization
+- **Memory workflow**: 
+  - Immutable context files: `SOUL.md`, `IDENTITY.md`, `USER.md` (read-only in image)
+  - Mutable extensions: `*_PLUS.md` (AI-managed in workspace volume)
+  - Postgres memory store for all prompts/thinking/responses with hybrid search tools:
+    - `memory_search` (vector/keyword/hybrid)
+    - `memory_recall` (time window + actor filters)
+
+#### Personal Template Files
+
+**Template Management**: Base templates (generic upstream versions) are committed in `docs/reference/templates/`. Personal customizations are stored in a parent repo's `workspace-templates/` directory and mounted into the container. The startup script (`scripts/docker-startup.sh`) prefers personal templates over base templates, ensuring your customizations take precedence while keeping the base templates available for the Docker build process.
+
+#### Config when used from a parent repo
+
+When this fork is run via a parent repo's Docker setup, the gateway is configured by a **mounted config file** (e.g. `config/openclaw.json`) and **env vars** provided by the parent. OpenClaw substitutes env vars only in config **values** (e.g. `${ASSISTANT_NAME}`), not in **keys**. So channel and ID keys must be set in the config file; they cannot be passed as env vars.
+
+If you use a parent repo (e.g. your own deployment repo that mounts config and env), use this process:
+
+1. **Create the config from an example:** `cp config/openclaw.json.example config/openclaw.json`. The example lives in the parent repo; keep it generic and add `config/openclaw.json` to the parent's `.gitignore`.
+2. **Replace placeholder keys** in `openclaw.json` with your real IDs:
+   - **Discord:** Replace `YOUR_DISCORD_GUILD_ID` with your server (guild) ID; replace each `YOUR_DISCORD_CHANNEL_ID` with your channel IDs (add or remove channel entries as needed); replace `YOUR_DISCORD_USER_ID` with your user ID in the guild's `users` array.
+   - **Other channels** that use ID keys (e.g. guild/group/channel as object keys) follow the same pattern—replace placeholders with your real IDs.
+3. **Leave value placeholders as-is** so they are filled from the parent's `.env` at runtime (e.g. `"name": "${ASSISTANT_NAME}"`, `"idleMinutes": "${SESSION_IDLE_MINUTES}"`).
+
+A parent repo README can reference this section and add parent-specific details (paths, env var names, and optional settings like LM Studio URL or embedding model).
+
 ## Quick start (TL;DR)
 
 Runtime: **Node ≥22**.

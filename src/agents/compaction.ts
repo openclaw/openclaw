@@ -398,7 +398,7 @@ export async function summarizeInStages(params: {
 export function pruneHistoryForContextShare(params: {
   messages: AgentMessage[];
   maxContextTokens: number;
-  maxHistoryShare?: number;
+  historyLimit?: number;
   parts?: number;
 }): {
   messages: AgentMessage[];
@@ -409,8 +409,8 @@ export function pruneHistoryForContextShare(params: {
   keptTokens: number;
   budgetTokens: number;
 } {
-  const maxHistoryShare = params.maxHistoryShare ?? 0.5;
-  const budgetTokens = Math.max(1, Math.floor(params.maxContextTokens * maxHistoryShare));
+  const historyLimit = params.historyLimit ?? 0.7;
+  const budgetTokens = Math.max(1, Math.floor(params.maxContextTokens * historyLimit));
   let keptMessages = params.messages;
   const allDroppedMessages: AgentMessage[] = [];
   let droppedChunks = 0;

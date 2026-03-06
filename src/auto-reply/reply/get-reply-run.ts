@@ -452,6 +452,10 @@ export async function runPreparedReply(
   const queueKey = sessionKey ?? sessionIdFinal;
   const isActive = isEmbeddedPiRunActive(sessionIdFinal);
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
+  // Treat lane as "run in progress" so we enqueue followups even before the run registers
+  // (avoids race where a second message starts a new run instead of queuing).
+  const runInProgress =
+    isActive || (laneSize > 0 && resolvedQueue.mode !== "interrupt");
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
   const shouldFollowup =
     resolvedQueue.mode === "followup" ||
@@ -535,6 +539,7 @@ export async function runPreparedReply(
     shouldFollowup,
     isActive,
     isStreaming,
+    runInProgress,
     opts,
     typing,
     sessionEntry,

@@ -82,6 +82,15 @@ if (isMain) {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
+    const msg = String(error?.message ?? error);
+    // Discord/carbon reconnect edge case: avoid crashing the gateway (log and continue).
+    if (msg.includes("zombie") && msg.includes("reconnect")) {
+      console.error(
+        "[openclaw] Uncaught exception (non-fatal, continuing):",
+        formatUncaughtError(error),
+      );
+      return;
+    }
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
     process.exit(1);
   });

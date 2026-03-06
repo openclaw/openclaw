@@ -41,10 +41,15 @@ backend return `{ text: "", path }` instead of throwing `ENOENT`, so agents can
 handle "nothing recorded yet" and continue their workflow without wrapping the
 tool call in try/catch logic.
 
+## Memory files vs Postgres (what goes where)
+
+- **Memory files** (`MEMORY.md`, `memory/YYYY-MM-DD.md`): store **outcomes, metadata, and shorthand** — decisions, lessons learned, preferences, key facts. Do **not** store raw conversation (prompts, thinking, full responses) in these files.
+- **Postgres (pgvector)**: stores **full conversations** — all prompts, thinking, and responses per session/actor. Synced from session transcripts and queried via `memory_search` / `memory_recall` with actor/session and time filters. Combined with memory files, this gives accurate context each time.
+
 ## When to write memory
 
 - Decisions, preferences, and durable facts go to `MEMORY.md`.
-- Day-to-day notes and running context go to `memory/YYYY-MM-DD.md`.
+- Day-to-day notes and running context go to `memory/YYYY-MM-DD.md` — as **shorthand and outcomes**, not full conversation logs.
 - If someone says "remember this," write it down (do not keep it in RAM).
 - This area is still evolving. It helps to remind the model to store memories; it will know what to do.
 - If you want something to stick, **ask the bot to write it** into memory.
@@ -376,6 +381,7 @@ Tools:
 
 - `memory_search` — returns snippets with file + line ranges.
 - `memory_get` — read memory file content by path.
+- `memory_recall` — hybrid recall from the Postgres memory store (optional time window + actor filters).
 
 Local mode:
 
@@ -385,15 +391,17 @@ Local mode:
 
 ### How the memory tools work
 
-- `memory_search` semantically searches Markdown chunks (~400 token target, 80-token overlap) from `MEMORY.md` + `memory/**/*.md`. It returns snippet text (capped ~700 chars), file path, line range, score, provider/model, and whether we fell back from local → remote embeddings. No full file payload is returned.
-- `memory_get` reads a specific memory Markdown file (workspace-relative), optionally from a starting line and for N lines. Paths outside `MEMORY.md` / `memory/` are rejected.
+- `memory_search` searches Markdown chunks (~400 token target, 80-token overlap) from `MEMORY.md` + `memory/**/*.md` and session transcripts. It supports `mode: "vector" | "keyword" | "hybrid"` and actor/session filters (`sessionScope`, `actorId`, `actorType`, `role`). It returns snippet text (capped ~700 chars), file path, line range, score, provider/model, and whether we fell back from local → remote embeddings. No full file payload is returned.
+- `memory_get` reads a specific memory Markdown file (workspace-relative), optionally from a starting line and for N lines. Paths outside `MEMORY.md` / `memory/` are allowed only when explicitly listed in `memorySearch.extraPaths`.
+- `memory_recall` queries the Postgres memory store (prompts, thinking, responses) with optional `timeWindowHours`, actor filters, and search modes. Time windows use message timestamps when available (fallback to index time).
 - Both tools are enabled only when `memorySearch.enabled` resolves true for the agent.
 
 ### What gets indexed (and when)
 
-- File type: Markdown only (`MEMORY.md`, `memory/**/*.md`).
-- Index storage: per-agent SQLite at `~/.openclaw/memory/<agentId>.sqlite` (configurable via `agents.defaults.memorySearch.store.path`, supports `{agentId}` token).
-- Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync is scheduled on session start, on search, or on an interval and runs asynchronously. Session transcripts use delta thresholds to trigger background sync.
+- File type: Markdown only (`MEMORY.md`, `memory/**/*.md`, plus any `.md` files under `memorySearch.extraPaths`).
+- Index storage: per-agent SQLite at `~/.openclaw/memory/<agentId>.sqlite` by default, or **Postgres** when `memorySearch.store.driver` is `"postgres"` (configurable via `agents.defaults.memorySearch.store.path` / `store.postgres`, supports `{agentId}` token).
+- **Postgres connection:** Set `OPENCLAW_MEMORY_PG_URL` (e.g. `postgresql://user:pass@host:5432/dbname`), or the manager builds a URL from `OPENCLAW_PG_USER`, `OPENCLAW_PG_PASSWORD`, `OPENCLAW_PG_DB`, and optionally `OPENCLAW_PG_HOST` (default `localhost`), `OPENCLAW_PG_PORT` (default `5432`). Schema is `memorySearch.store.postgres.schema` (default `memory`).
+- Freshness: watcher on `MEMORY.md`, `memory/`, and `memorySearch.extraPaths` marks the index dirty (debounce 1.5s). Sync runs **on each agent run start** (so session transcripts and memory files are synced to Postgres even if the model never calls `memory_search`), and also on search or on an interval. Session transcripts use delta thresholds for incremental sync.
 - Reindex triggers: the index stores the embedding **provider/model + endpoint fingerprint + chunking params**. If any of those change, OpenClaw automatically resets and reindexes the entire store.
 
 ### Hybrid search (BM25 + vector)
@@ -656,6 +664,8 @@ Notes:
 - Results still include snippets only; `memory_get` remains limited to memory files.
 - Session indexing is isolated per agent (only that agent’s session logs are indexed).
 - Session logs live on disk (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`). Any process/user with filesystem access can read them, so treat disk access as the trust boundary. For stricter isolation, run agents under separate OS users or hosts.
+
+**Session transcript storage (disk + Postgres):** Session messages are kept in both the transcript JSONL file and (after sync) in the Postgres index. We do **not** remove messages from the transcript file after indexing, because that file is the source of truth for loading conversation history for the current run and for compaction. Deleting content after sync would break those flows. A future option may allow trimming the session file to the last N messages after sync to reduce disk use while keeping full history in Postgres.
 
 Delta thresholds (defaults shown):
 

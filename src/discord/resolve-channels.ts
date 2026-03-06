@@ -60,6 +60,9 @@ function parseDiscordChannelInput(raw: string): {
     if (!channel) {
       return guild ? { guild: guild.trim(), guildOnly: true } : {};
     }
+    if (guild && /^\d+$/.test(guild) && /^\d+$/.test(channel)) {
+      return { guildId: guild, channelId: channel };
+    }
     if (guild && /^\d+$/.test(guild)) {
       if (/^\d+$/.test(channel)) {
         return { guildId: guild, channelId: channel };

@@ -145,7 +145,7 @@ Available groups:
 - `group:runtime`: `exec`, `bash`, `process`
 - `group:fs`: `read`, `write`, `edit`, `apply_patch`
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
-- `group:memory`: `memory_search`, `memory_get`
+- `group:memory`: `memory_search`, `memory_get`, `memory_recall`
 - `group:web`: `web_search`, `web_fetch`
 - `group:ui`: `browser`, `canvas`
 - `group:automation`: `cron`, `gateway`
@@ -177,6 +177,19 @@ Optional plugin tools:
 - [Diffs](/tools/diffs): read-only diff viewer and PNG or PDF file renderer for before/after text or unified patches.
 
 ## Tool inventory
+
+### `memory_search`
+
+Search the memory store using `mode: "vector" | "keyword" | "hybrid"` with optional actor/session filters.
+Returns snippets with file paths and line ranges.
+
+### `memory_get`
+
+Read a memory file by path (workspace‑relative) with optional line ranges.
+
+### `memory_recall`
+
+Recall from the Postgres memory store with optional actor/session filters and a `timeWindowHours` range.
 
 ### `apply_patch`
 

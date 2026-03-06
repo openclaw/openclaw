@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 
+/** Total run timeout (all turns including compaction retries). Default 10 min. */
 const DEFAULT_AGENT_TIMEOUT_SECONDS = 600;
 const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 

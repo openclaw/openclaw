@@ -21,6 +21,32 @@ export function isBinaryThinkingProvider(provider?: string | null): boolean {
   return normalizeProviderId(provider) === "zai";
 }
 
+/**
+ * True when the model is a GLM (Z.AI or LM Studio with a GLM model).
+ * Used to map reasoning/thinking to on/off only, since GLM only supports binary.
+ */
+export function isGlmModel(provider?: string | null, modelId?: string | null): boolean {
+  const p = normalizeProviderId(provider);
+  if (p === "zai") {
+    return true;
+  }
+  const id = modelId?.trim().toLowerCase() ?? "";
+  return id.length > 0 && (id.includes("glm") || id.startsWith("glm-"));
+}
+
+/**
+ * For GLM model calls: map any non-off reasoning level to "on".
+ * GLM (e.g. LM Studio GLM-4.7 Flash) only supports "on" | "off".
+ */
+export function normalizeReasoningLevelForGlm(
+  level?: ReasoningLevel | string | null,
+): "on" | "off" {
+  if (!level || level === "off") {
+    return "off";
+  }
+  return "on";
+}
+
 export const XHIGH_MODEL_REFS = [
   "openai/gpt-5.2",
   "openai-codex/gpt-5.3-codex",

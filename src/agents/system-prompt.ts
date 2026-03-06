@@ -42,23 +42,29 @@ function buildMemorySection(params: {
   if (params.isMinimal) {
     return [];
   }
-  if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
+  const hasMemorySearch = params.availableTools.has("memory_search");
+  const hasMemoryRecall = params.availableTools.has("memory_recall");
+  const hasMemoryGet = params.availableTools.has("memory_get");
+  if (!hasMemorySearch && !hasMemoryRecall && !hasMemoryGet) {
     return [];
   }
   const lines = [
-    "## Memory Recall",
-    "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+    "## Memory (built-in)",
+    "Use memory tools freely to build context and to answer questions about prior work, decisions, dates, people, or preferences.",
   ];
-  if (params.citationsMode === "off") {
+  if (hasMemorySearch || hasMemoryRecall) {
     lines.push(
-      "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
-    );
-  } else {
-    lines.push(
-      "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
+      "- memory_search: hybrid/vector/keyword search over MEMORY.md, memory/*.md, and (when enabled) session transcripts in Postgres. Use sessionScope (session | actor | global) and actorId for user-specific recall.",
+      "- memory_recall: same store with optional timeWindowHours for recent-conversation recall.",
     );
   }
-  lines.push("");
+  if (hasMemoryGet) {
+    lines.push("- memory_get: read specific memory file lines after search (path, from, lines).");
+  }
+  lines.push(
+    "Before answering anything that may have historical record: run memory_search or memory_recall; then memory_get if you need full lines. If low confidence after search, say you checked.",
+    "",
+  );
   return lines;
 }
 
@@ -238,6 +244,11 @@ export function buildAgentSystemPrompt(params: {
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
+    memory_search:
+      "Search memory (MEMORY.md, memory/*.md, session transcripts) by vector/keyword/hybrid; use sessionScope and actorId for context by actor or session",
+    memory_recall:
+      "Recall from Postgres memory store with optional timeWindowHours and actor/session filters",
+    memory_get: "Read specific lines from a memory file (use after memory_search to keep context small)",
     write: "Create or overwrite files",
     edit: "Make precise edits to files",
     apply_patch: "Apply multi-file patches",
@@ -272,6 +283,9 @@ export function buildAgentSystemPrompt(params: {
 
   const toolOrder = [
     "read",
+    "memory_search",
+    "memory_recall",
+    "memory_get",
     "write",
     "edit",
     "apply_patch",

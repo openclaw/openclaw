@@ -142,6 +142,21 @@ const QWEN_PORTAL_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+// Qwen 3.5 MLX models served locally via LM Studio (no API key required)
+// Models: https://huggingface.co/mlx-community
+const QWEN_LM_STUDIO_BASE_URL = "http://127.0.0.1:1234/v1";
+const QWEN_35_27B_MODEL_ID = "mlx-community/Qwen3.5-27B-4bit";
+const QWEN_35_35B_MODEL_ID = "mlx-community/Qwen3.5-35B-A3B-4bit";
+const QWEN_35_122B_MODEL_ID = "mlx-community/Qwen3.5-122B-A10B-4bit";
+const QWEN_DEFAULT_CONTEXT_WINDOW = 128000;
+const QWEN_DEFAULT_MAX_TOKENS = 16384;
+const QWEN_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const OLLAMA_BASE_URL = OLLAMA_NATIVE_BASE_URL;
 const OLLAMA_API_BASE_URL = OLLAMA_BASE_URL;
 const OLLAMA_SHOW_CONCURRENCY = 8;
@@ -698,6 +713,42 @@ function buildQwenPortalProvider(): ProviderConfig {
   };
 }
 
+function buildQwenProvider(): ProviderConfig {
+  return {
+    baseUrl: QWEN_LM_STUDIO_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: QWEN_35_27B_MODEL_ID,
+        name: "Qwen3.5 27B (4-bit MLX)",
+        reasoning: false,
+        input: ["text"],
+        cost: QWEN_DEFAULT_COST,
+        contextWindow: QWEN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: QWEN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: QWEN_35_35B_MODEL_ID,
+        name: "Qwen3.5 35B-A3B (4-bit MLX)",
+        reasoning: false,
+        input: ["text"],
+        cost: QWEN_DEFAULT_COST,
+        contextWindow: QWEN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: QWEN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: QWEN_35_122B_MODEL_ID,
+        name: "Qwen3.5 122B-A10B (4-bit MLX)",
+        reasoning: false,
+        input: ["text"],
+        cost: QWEN_DEFAULT_COST,
+        contextWindow: QWEN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: QWEN_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 function buildSyntheticProvider(): ProviderConfig {
   return {
     baseUrl: SYNTHETIC_BASE_URL,
@@ -1001,6 +1052,9 @@ export async function resolveImplicitProviders(params: {
       apiKey: byteplusKey,
     };
   }
+
+  // qwen: Qwen3.5 MLX models via LM Studio (local, no API key required).
+  providers.qwen = buildQwenProvider();
 
   const xiaomiKey =
     resolveEnvApiKeyVarName("xiaomi") ??

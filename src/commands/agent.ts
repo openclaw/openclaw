@@ -37,6 +37,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import {
   formatThinkingLevels,
@@ -911,7 +912,7 @@ async function agentCommandInternal(
             phase: "error",
             startedAt,
             endedAt: Date.now(),
-            error: String(err),
+            error: formatErrorMessage(err),
           },
         });
       }

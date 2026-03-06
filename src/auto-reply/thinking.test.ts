@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  isGlmModel,
   listThinkingLevelLabels,
   listThinkingLevels,
   normalizeReasoningLevel,
+  normalizeReasoningLevelForGlm,
   normalizeThinkLevel,
 } from "./thinking.js";
 
@@ -92,5 +94,39 @@ describe("normalizeReasoningLevel", () => {
   it("accepts stream", () => {
     expect(normalizeReasoningLevel("stream")).toBe("stream");
     expect(normalizeReasoningLevel("streaming")).toBe("stream");
+  });
+});
+
+describe("isGlmModel", () => {
+  it("returns true for zai provider", () => {
+    expect(isGlmModel("zai", "glm-4.7")).toBe(true);
+    expect(isGlmModel("z.ai", "anything")).toBe(true);
+  });
+
+  it("returns true when model id contains glm", () => {
+    expect(isGlmModel("lmstudio", "glm-4.7-flash")).toBe(true);
+    expect(isGlmModel("openai", "glm-4.7")).toBe(true);
+  });
+
+  it("returns false for non-GLM provider and model", () => {
+    expect(isGlmModel("openai", "gpt-4.1-mini")).toBe(false);
+    expect(isGlmModel("lmstudio", "llama-3")).toBe(false);
+  });
+
+  it("returns false when model id is empty", () => {
+    expect(isGlmModel("lmstudio", "")).toBe(false);
+    expect(isGlmModel(undefined, undefined)).toBe(false);
+  });
+});
+
+describe("normalizeReasoningLevelForGlm", () => {
+  it("maps off to off", () => {
+    expect(normalizeReasoningLevelForGlm("off")).toBe("off");
+    expect(normalizeReasoningLevelForGlm(undefined)).toBe("off");
+  });
+
+  it("maps all non-off to on", () => {
+    expect(normalizeReasoningLevelForGlm("on")).toBe("on");
+    expect(normalizeReasoningLevelForGlm("stream")).toBe("on");
   });
 });

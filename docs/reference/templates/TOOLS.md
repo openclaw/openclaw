@@ -7,7 +7,7 @@ read_when:
 
 # TOOLS.md - Local Notes
 
-Skills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup.
+**This file does not control which tools or skills the agent has.** The agent learns its available tools and skills from the system prompt each session (see OPERATING_PROCEDURES.md). This file is for _your_ specifics — the stuff that's unique to your setup.
 
 ## What Goes Here
 
@@ -40,8 +40,8 @@ Things like:
 
 ## Why Separate?
 
-Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.
+Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure. The agent's tool and skill lists are injected into its system prompt at runtime; they are not read from this file.
 
 ---
 
-Add whatever helps you do your job. This is your cheat sheet.
+Add whatever helps you do your job (cameras, SSH, TTS, devices). This is your cheat sheet. The agent can read it for context but cannot edit it (immutable).
