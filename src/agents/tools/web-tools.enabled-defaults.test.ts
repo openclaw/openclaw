@@ -155,6 +155,8 @@ describe("web_search country and language parameters", () => {
   async function runBraveSearchAndGetUrl(
     params: Partial<{
       country: string;
+      language: string;
+      search_lang: string;
       ui_lang: string;
       freshness: string;
     }>,
@@ -183,6 +185,30 @@ describe("web_search country and language parameters", () => {
 
     const url = new URL(mockFetch.mock.calls[0][0] as string);
     expect(url.searchParams.get("search_lang")).toBe("de");
+  });
+
+  it("maps legacy zh language code to Brave zh-hans search_lang", async () => {
+    const url = await runBraveSearchAndGetUrl({ language: "zh" });
+    expect(url.searchParams.get("search_lang")).toBe("zh-hans");
+  });
+
+  it("maps ja language code to Brave jp search_lang", async () => {
+    const url = await runBraveSearchAndGetUrl({ language: "ja" });
+    expect(url.searchParams.get("search_lang")).toBe("jp");
+  });
+
+  it("passes Brave extended language code variants unchanged", async () => {
+    const url = await runBraveSearchAndGetUrl({ search_lang: "zh-hant" });
+    expect(url.searchParams.get("search_lang")).toBe("zh-hant");
+  });
+
+  it("rejects unsupported Brave search_lang values before upstream request", async () => {
+    const mockFetch = installMockFetch({ web: { results: [] } });
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const result = await tool?.execute?.("call-1", { query: "test", search_lang: "xx" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "invalid_search_lang" });
   });
 
   it("rejects invalid freshness values", async () => {
