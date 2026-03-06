@@ -1,3 +1,4 @@
+import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
@@ -1337,7 +1338,14 @@ export async function runSubagentAnnounceFlow(params: {
 
     const taskLabel = params.label || params.task || "task";
     const announceSessionId = childSessionId || "unknown";
-    const findings = childCompletionFindings || reply || "(no output)";
+    let findings = childCompletionFindings || reply || "(no output)";
+    // Strip HEARTBEAT_OK so the token never leaks to end-users (#32013).
+    if (announceType === "cron job") {
+      const { text, didStrip } = stripHeartbeatToken(findings, { mode: "message" });
+      if (didStrip) {
+        findings = text || "";
+      }
+    }
 
     let requesterIsSubagent = requesterDepth >= 1;
     if (requesterIsSubagent) {
