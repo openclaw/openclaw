@@ -204,7 +204,7 @@ function isDocumentationLine(line: string, inCodeBlock: boolean): boolean {
   }
   // Lines starting with quote markers, example indicators, or list bullets
   // with status icons are likely documentation
-  return /^[\s]*[>❌✅⚠️|$#]/.test(line) || /example|detect|pattern|test/i.test(line);
+  return /^[\s]*[>❌✅⚠️|$#]/.test(line);
 }
 
 // ---------------------------------------------------------------------------
