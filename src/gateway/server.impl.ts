@@ -107,7 +107,11 @@ import {
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
-import { ensureGatewayStartupAuth } from "./startup-auth.js";
+import {
+  ensureGatewayStartupAuth,
+  mergeGatewayAuthConfig,
+  mergeGatewayTailscaleConfig,
+} from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
@@ -172,6 +176,23 @@ function logGatewayAuthSurfaceDiagnostics(prepared: {
     const details = inactiveDetails ?? state.reason;
     logSecrets.info(`[SECRETS_GATEWAY_AUTH_SURFACE] ${path} is ${stateLabel}. ${details}`);
   }
+}
+
+function applyGatewayAuthOverridesForStartupPreflight(
+  config: OpenClawConfig,
+  overrides: Pick<GatewayServerOptions, "auth" | "tailscale">,
+): OpenClawConfig {
+  if (!overrides.auth && !overrides.tailscale) {
+    return config;
+  }
+  return {
+    ...config,
+    gateway: {
+      ...config.gateway,
+      auth: mergeGatewayAuthConfig(config.gateway?.auth, overrides.auth),
+      tailscale: mergeGatewayTailscaleConfig(config.gateway?.tailscale, overrides.tailscale),
+    },
+  };
 }
 
 export type GatewayServer = {
@@ -256,17 +277,18 @@ export async function startGatewayServer(
     }
     const { config: migrated, changes } = migrateLegacyConfig(configSnapshot.parsed);
     if (!migrated) {
-      throw new Error(
-        `Legacy config entries detected but auto-migration failed. Run "${formatCliCommand("openclaw doctor")}" to migrate.`,
+      log.warn(
+        "gateway: legacy config entries detected but no auto-migration changes were produced; continuing with validation.",
       );
-    }
-    await writeConfigFile(migrated);
-    if (changes.length > 0) {
-      log.info(
-        `gateway: migrated legacy config entries:\n${changes
-          .map((entry) => `- ${entry}`)
-          .join("\n")}`,
-      );
+    } else {
+      await writeConfigFile(migrated);
+      if (changes.length > 0) {
+        log.info(
+          `gateway: migrated legacy config entries:\n${changes
+            .map((entry) => `- ${entry}`)
+            .join("\n")}`,
+        );
+      }
     }
   }
 
@@ -372,7 +394,14 @@ export async function startGatewayServer(
           : "Unknown validation issue.";
       throw new Error(`Invalid config at ${freshSnapshot.path}.\n${issues}`);
     }
-    await activateRuntimeSecrets(freshSnapshot.config, {
+    const startupPreflightConfig = applyGatewayAuthOverridesForStartupPreflight(
+      freshSnapshot.config,
+      {
+        auth: opts.auth,
+        tailscale: opts.tailscale,
+      },
+    );
+    await activateRuntimeSecrets(startupPreflightConfig, {
       reason: "startup",
       activate: false,
     });

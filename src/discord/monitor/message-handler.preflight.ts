@@ -1,4 +1,8 @@
 import { ChannelType, MessageType, type User } from "@buape/carbon";
+import {
+  ensureConfiguredAcpRouteReady,
+  resolveConfiguredAcpRoute,
+} from "../../acp/persistent-bindings.route.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
 import {
@@ -68,6 +72,10 @@ export type {
 
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 
+function isPreflightAborted(abortSignal?: AbortSignal): boolean {
+  return Boolean(abortSignal?.aborted);
+}
+
 function isBoundThreadBotSystemMessage(params: {
   isBoundThreadSession: boolean;
   isBotAuthor: boolean;
@@ -124,6 +132,9 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,
 ): Promise<DiscordMessagePreflightContext | null> {
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
   const logger = getChildLogger({ module: "discord-auto-reply" });
   const message = params.data.message;
   const author = params.data.author;
@@ -139,7 +150,9 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  const allowBots = params.discordConfig?.allowBots ?? false;
+  const allowBotsSetting = params.discordConfig?.allowBots;
+  const allowBotsMode =
+    allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting === true ? "all" : "off";
   if (params.botUserId && author.id === params.botUserId) {
     // Always ignore own messages to prevent self-reply loops
     return null;
@@ -155,6 +168,9 @@ export async function preflightDiscordMessage(
         messageId: message.id,
         config: pluralkitConfig,
       });
+      if (isPreflightAborted(params.abortSignal)) {
+        return null;
+      }
     } catch (err) {
       logVerbose(`discord: pluralkit lookup failed for ${message.id}: ${String(err)}`);
     }
@@ -166,7 +182,7 @@ export async function preflightDiscordMessage(
   });
 
   if (author.bot) {
-    if (!allowBots && !sender.isPluralKit) {
+    if (allowBotsMode === "off" && !sender.isPluralKit) {
       logVerbose("discord: drop bot message (allowBots=false)");
       return null;
     }
@@ -174,6 +190,9 @@ export async function preflightDiscordMessage(
 
   const isGuildMessage = Boolean(params.data.guild_id);
   const channelInfo = await resolveDiscordChannelInfo(params.client, messageChannelId);
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
   const isDirectMessage = channelInfo?.type === ChannelType.DM;
   const isGroupDm = channelInfo?.type === ChannelType.GroupDM;
   logDebug(
@@ -211,6 +230,9 @@ export async function preflightDiscordMessage(
       allowNameMatching,
       useAccessGroups,
     });
+    if (isPreflightAborted(params.abortSignal)) {
+      return null;
+    }
     commandAuthorized = dmAccess.commandAuthorized;
     if (dmAccess.decision !== "allow") {
       const allowMatchMeta = formatAllowlistMatchMeta(
@@ -298,6 +320,9 @@ export async function preflightDiscordMessage(
       threadChannel: earlyThreadChannel,
       channelInfo,
     });
+    if (isPreflightAborted(params.abortSignal)) {
+      return null;
+    }
     earlyThreadParentId = parentInfo.id;
     earlyThreadParentName = parentInfo.name;
     earlyThreadParentType = parentInfo.type;
@@ -307,8 +332,9 @@ export async function preflightDiscordMessage(
   const memberRoleIds = Array.isArray(params.data.rawMember?.roles)
     ? params.data.rawMember.roles.map((roleId: string) => String(roleId))
     : [];
+  const freshCfg = loadConfig();
   const route = resolveAgentRoute({
-    cfg: loadConfig(),
+    cfg: freshCfg,
     channel: "discord",
     accountId: params.accountId,
     guildId: params.data.guild_id ?? undefined,
@@ -321,13 +347,27 @@ export async function preflightDiscordMessage(
     parentPeer: earlyThreadParentId ? { kind: "channel", id: earlyThreadParentId } : undefined,
   });
   let threadBinding: SessionBindingRecord | undefined;
-  if (earlyThreadChannel) {
-    threadBinding =
-      getSessionBindingService().resolveByConversation({
-        channel: "discord",
-        accountId: params.accountId,
-        conversationId: messageChannelId,
-      }) ?? undefined;
+  threadBinding =
+    getSessionBindingService().resolveByConversation({
+      channel: "discord",
+      accountId: params.accountId,
+      conversationId: messageChannelId,
+      parentConversationId: earlyThreadParentId,
+    }) ?? undefined;
+  const configuredRoute =
+    threadBinding == null
+      ? resolveConfiguredAcpRoute({
+          cfg: freshCfg,
+          route,
+          channel: "discord",
+          accountId: params.accountId,
+          conversationId: messageChannelId,
+          parentConversationId: earlyThreadParentId,
+        })
+      : null;
+  const configuredBinding = configuredRoute?.configuredBinding ?? null;
+  if (!threadBinding && configuredBinding) {
+    threadBinding = configuredBinding.record;
   }
   if (
     shouldIgnoreBoundThreadWebhookMessage({
@@ -347,8 +387,9 @@ export async function preflightDiscordMessage(
         ...route,
         sessionKey: boundSessionKey,
         agentId: boundAgentId ?? route.agentId,
+        matchedBy: "binding.channel" as const,
       }
-    : route;
+    : (configuredRoute?.route ?? route);
   const isBoundThreadSession = Boolean(boundSessionKey && earlyThreadChannel);
   if (
     isBoundThreadBotSystemMessage({
@@ -546,7 +587,11 @@ export async function preflightDiscordMessage(
       shouldRequireMention,
       mentionRegexes,
       cfg: params.cfg,
+      abortSignal: params.abortSignal,
     });
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
 
   const mentionText = hasTypedText ? baseText : "";
   const wasMentioned =
@@ -656,6 +701,15 @@ export async function preflightDiscordMessage(
     }
   }
 
+  if (author.bot && !sender.isPluralKit && allowBotsMode === "mentions") {
+    const botMentioned = isDirectMessage || wasMentioned || implicitMention;
+    if (!botMentioned) {
+      logDebug(`[discord-preflight] drop: bot message missing mention (allowBots=mentions)`);
+      logVerbose("discord: drop bot message (allowBots=mentions, missing mention)");
+      return null;
+    }
+  }
+
   const ignoreOtherMentions =
     channelConfig?.ignoreOtherMentions ?? guildInfo?.ignoreOtherMentions ?? false;
   if (
@@ -705,6 +759,18 @@ export async function preflightDiscordMessage(
     logVerbose(`discord: drop message ${message.id} (empty content)`);
     return null;
   }
+  if (configuredBinding) {
+    const ensured = await ensureConfiguredAcpRouteReady({
+      cfg: freshCfg,
+      configuredBinding,
+    });
+    if (!ensured.ok) {
+      logVerbose(
+        `discord: configured ACP binding unavailable for channel ${configuredBinding.spec.conversationId}: ${ensured.error}`,
+      );
+      return null;
+    }
+  }
 
   logDebug(
     `[discord-preflight] success: route=${effectiveRoute.agentId} sessionKey=${effectiveRoute.sessionKey}`,
@@ -716,6 +782,7 @@ export async function preflightDiscordMessage(
     token: params.token,
     runtime: params.runtime,
     botUserId: params.botUserId,
+    abortSignal: params.abortSignal,
     guildHistories: params.guildHistories,
     historyLimit: params.historyLimit,
     mediaMaxBytes: params.mediaMaxBytes,
