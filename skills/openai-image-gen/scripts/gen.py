@@ -77,11 +77,15 @@ def get_model_defaults(model: str) -> tuple[str, str]:
 
 def normalize_background(model: str, background: str) -> str:
     """Validate --background for GPT image models."""
-    if not model.startswith("gpt-image"):
-        return ""
-
     value = background.strip().lower()
     if not value:
+        return ""
+
+    if not model.startswith("gpt-image"):
+        print(
+            f"Warning: --background is only supported for gpt-image models; ignoring for '{model}'.",
+            file=sys.stderr,
+        )
         return ""
 
     allowed = {"transparent", "opaque", "auto"}
@@ -94,11 +98,15 @@ def normalize_background(model: str, background: str) -> str:
 
 def normalize_style(model: str, style: str) -> str:
     """Validate --style for dall-e-3."""
-    if model != "dall-e-3":
-        return ""
-
     value = style.strip().lower()
     if not value:
+        return ""
+
+    if model != "dall-e-3":
+        print(
+            f"Warning: --style is only supported for dall-e-3; ignoring for '{model}'.",
+            file=sys.stderr,
+        )
         return ""
 
     allowed = {"vivid", "natural"}
