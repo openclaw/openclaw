@@ -67,13 +67,16 @@ function parseModelIds(input: string, fallback: readonly string[]): string[] {
   return deduped.length > 0 ? deduped : Array.from(fallback);
 }
 
+function hasExplicitModelIds(input: string): boolean {
+  return input.split(/[\n,]/).some((modelId) => modelId.trim().length > 0);
+}
+
 function inferReasoning(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
+  const tokenizedReasoningPattern = /(^|[/:._-])(o1|o3|o4)(?=($|[/:._-]))/;
   return (
     normalized.includes("gpt-5") ||
-    normalized.includes("o1") ||
-    normalized.includes("o3") ||
-    normalized.includes("o4") ||
+    tokenizedReasoningPattern.test(normalized) ||
     normalized.includes("reason")
   );
 }
@@ -124,9 +127,7 @@ async function runApiKeyFlow(
     message: `${flavor.label} model IDs (comma-separated)`,
     placeholder: `${flavor.modelInputHint} (blank keeps: ${flavor.defaultModels.join(", ")})`,
     validate: (value: string) =>
-      parseModelIds(value, flavor.defaultModels).length > 0
-        ? undefined
-        : "Enter at least one model id",
+      !value.trim() || hasExplicitModelIds(value) ? undefined : "Enter at least one model id",
   });
 
   const baseUrl = normalizeBaseUrl(baseUrlInput);

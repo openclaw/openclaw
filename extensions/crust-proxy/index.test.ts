@@ -62,6 +62,8 @@ describe("crust-proxy plugin", () => {
       "gemini-3-flash",
       "kimi-k2.5",
     ]);
+    expect(prompts[2]?.validate?.(" , , ")).toBe("Enter at least one model id");
+    expect(prompts[2]?.validate?.("")).toBeUndefined();
   });
 
   it("supports custom OpenAI-compatible model lists", async () => {
@@ -78,6 +80,21 @@ describe("crust-proxy plugin", () => {
     expect(
       result.configPatch.models.providers["crust-openai"].models.map((m: any) => m.id),
     ).toEqual(["kimi-k2.5", "qwen3-coder"]);
+  });
+
+  it("marks reasoning models conservatively for custom model ids", async () => {
+    const providers = createApi();
+    const provider = providers.find((entry) => entry.id === "crust-openai");
+    const { ctx } = createContext([
+      "http://localhost:9090",
+      "sk-openai-test",
+      "proto3-demo, o3-mini",
+    ]);
+    const result = await provider.auth[0].run(ctx as any);
+    const models = result.configPatch.models.providers["crust-openai"].models;
+
+    expect(models.find((model: any) => model.id === "proto3-demo")?.reasoning).toBe(false);
+    expect(models.find((model: any) => model.id === "o3-mini")?.reasoning).toBe(true);
   });
 
   it("falls back to default Anthropic routing values", async () => {
