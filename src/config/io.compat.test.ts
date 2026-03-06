@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "./io.js";
+import { getConfigRuntimeHash } from "./runtime-hash.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
@@ -75,6 +76,27 @@ describe("config io paths", () => {
       const io = createIoForHome(home, { CLAWDBOT_CONFIG_PATH: customPath } as NodeJS.ProcessEnv);
       expect(io.configPath).toBe(customPath);
       expect(io.loadConfig().gateway?.port).toBe(20003);
+    });
+  });
+
+  it("attaches stable runtime hash metadata for repeated loads of the same config file", async () => {
+    await withTempHome(async (home) => {
+      await writeConfig(home, ".openclaw", 20004, "stable-hash.json");
+      const io = createConfigIO({
+        env: {
+          OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "stable-hash.json"),
+        } as NodeJS.ProcessEnv,
+        homedir: () => home,
+      });
+
+      const first = io.loadConfig();
+      const second = io.loadConfig();
+      const firstHash = getConfigRuntimeHash(first);
+      const secondHash = getConfigRuntimeHash(second);
+
+      expect(firstHash).toBeTypeOf("string");
+      expect(firstHash).toBeTruthy();
+      expect(secondHash).toBe(firstHash);
     });
   });
 

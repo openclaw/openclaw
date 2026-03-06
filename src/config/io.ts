@@ -45,6 +45,7 @@ import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
+import { setConfigRuntimeHash } from "./runtime-hash.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
@@ -679,6 +680,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const configPath =
     candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
 
+  const withRuntimeHash = (cfg: OpenClawConfig, rawForHash: string | null): OpenClawConfig => {
+    setConfigRuntimeHash(cfg, hashConfigRaw(rawForHash));
+    return cfg;
+  };
+
   function loadConfig(): OpenClawConfig {
     try {
       maybeLoadDotEnvForConfig(deps.env);
@@ -692,7 +698,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
           });
         }
-        return {};
+        return withRuntimeHash({}, null);
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
@@ -702,7 +708,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       );
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
-        return {};
+        return withRuntimeHash({}, raw);
       }
       const preValidationDuplicates = findDuplicateAgentDirs(resolvedConfig as OpenClawConfig, {
         env: deps.env,
@@ -802,7 +808,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.delete(configPath);
       }
 
-      return applyConfigOverrides(cfgWithOwnerDisplaySecret);
+      return withRuntimeHash(applyConfigOverrides(cfgWithOwnerDisplaySecret), raw);
     } catch (err) {
       if (err instanceof DuplicateAgentDirError) {
         deps.logger.error(err.message);

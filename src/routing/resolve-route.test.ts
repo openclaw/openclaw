@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setConfigRuntimeHash } from "../config/runtime-hash.js";
 import * as routingBindings from "./bindings.js";
 import { resolveAgentRoute } from "./resolve-route.js";
 
@@ -803,6 +804,44 @@ describe("binding evaluation cache scalability", () => {
         peer: { kind: "direct", id: "user-0" },
       });
       expect(repeated.agentId).toBe("agent-0");
+      expect(listBindingsSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      listBindingsSpy.mockRestore();
+    }
+  });
+
+  test("reuses evaluated bindings across fresh config snapshots with same hash (#36915)", () => {
+    const sharedHash = "route-cache-shared-hash-36915";
+    const makeConfig = (): OpenClawConfig => ({
+      bindings: Array.from({ length: 1_500 }, (_, idx) => ({
+        agentId: `agent-${idx}`,
+        match: {
+          channel: "dingtalk",
+          accountId: `acct-${idx}`,
+          peer: { kind: "direct", id: `user-${idx}` },
+        },
+      })),
+    });
+    const firstCfg = makeConfig();
+    const secondCfg = makeConfig();
+    setConfigRuntimeHash(firstCfg, sharedHash);
+    setConfigRuntimeHash(secondCfg, sharedHash);
+    const listBindingsSpy = vi.spyOn(routingBindings, "listBindings");
+    try {
+      const firstRoute = resolveAgentRoute({
+        cfg: firstCfg,
+        channel: "dingtalk",
+        accountId: "acct-1499",
+        peer: { kind: "direct", id: "user-1499" },
+      });
+      const secondRoute = resolveAgentRoute({
+        cfg: secondCfg,
+        channel: "dingtalk",
+        accountId: "acct-1499",
+        peer: { kind: "direct", id: "user-1499" },
+      });
+      expect(firstRoute.agentId).toBe("agent-1499");
+      expect(secondRoute.agentId).toBe("agent-1499");
       expect(listBindingsSpy).toHaveBeenCalledTimes(1);
     } finally {
       listBindingsSpy.mockRestore();

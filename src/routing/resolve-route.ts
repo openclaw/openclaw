@@ -2,6 +2,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { getConfigRuntimeHash } from "../config/runtime-hash.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
@@ -183,7 +184,9 @@ type EvaluatedBindingsCache = {
 };
 
 const evaluatedBindingsCacheByCfg = new WeakMap<OpenClawConfig, EvaluatedBindingsCache>();
+const evaluatedBindingsCacheByConfigHash = new Map<string, EvaluatedBindingsCache>();
 const MAX_EVALUATED_BINDINGS_CACHE_KEYS = 2000;
+const MAX_EVALUATED_BINDINGS_HASH_CACHE_KEYS = 8;
 const resolvedRouteCacheByCfg = new WeakMap<
   OpenClawConfig,
   {
@@ -394,25 +397,49 @@ function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBin
   };
 }
 
+function createEvaluatedBindingsCache(cfg: OpenClawConfig): EvaluatedBindingsCache {
+  return {
+    bindingsRef: cfg.bindings,
+    byChannel: buildEvaluatedBindingsByChannel(cfg),
+    byChannelAccount: new Map<string, EvaluatedBinding[]>(),
+    byChannelAccountIndex: new Map<string, EvaluatedBindingsIndex>(),
+  };
+}
+
+function resolveEvaluatedBindingsCache(cfg: OpenClawConfig): EvaluatedBindingsCache {
+  const configHash = getConfigRuntimeHash(cfg);
+  if (configHash) {
+    const existing = evaluatedBindingsCacheByConfigHash.get(configHash);
+    if (existing) {
+      return existing;
+    }
+    const created = createEvaluatedBindingsCache(cfg);
+    evaluatedBindingsCacheByConfigHash.set(configHash, created);
+    if (evaluatedBindingsCacheByConfigHash.size > MAX_EVALUATED_BINDINGS_HASH_CACHE_KEYS) {
+      const oldest = evaluatedBindingsCacheByConfigHash.keys().next().value;
+      if (typeof oldest === "string") {
+        evaluatedBindingsCacheByConfigHash.delete(oldest);
+      }
+    }
+    return created;
+  }
+
+  const bindingsRef = cfg.bindings;
+  const existing = evaluatedBindingsCacheByCfg.get(cfg);
+  if (existing && existing.bindingsRef === bindingsRef) {
+    return existing;
+  }
+  const created = createEvaluatedBindingsCache(cfg);
+  evaluatedBindingsCacheByCfg.set(cfg, created);
+  return created;
+}
+
 function getEvaluatedBindingsForChannelAccount(
   cfg: OpenClawConfig,
   channel: string,
   accountId: string,
 ): EvaluatedBinding[] {
-  const bindingsRef = cfg.bindings;
-  const existing = evaluatedBindingsCacheByCfg.get(cfg);
-  const cache =
-    existing && existing.bindingsRef === bindingsRef
-      ? existing
-      : {
-          bindingsRef,
-          byChannel: buildEvaluatedBindingsByChannel(cfg),
-          byChannelAccount: new Map<string, EvaluatedBinding[]>(),
-          byChannelAccountIndex: new Map<string, EvaluatedBindingsIndex>(),
-        };
-  if (cache !== existing) {
-    evaluatedBindingsCacheByCfg.set(cfg, cache);
-  }
+  const cache = resolveEvaluatedBindingsCache(cfg);
 
   const cacheKey = `${channel}\t${accountId}`;
   const hit = cache.byChannelAccount.get(cacheKey);
@@ -443,14 +470,14 @@ function getEvaluatedBindingIndexForChannelAccount(
   accountId: string,
 ): EvaluatedBindingsIndex {
   const bindings = getEvaluatedBindingsForChannelAccount(cfg, channel, accountId);
-  const existing = evaluatedBindingsCacheByCfg.get(cfg);
+  const cache = resolveEvaluatedBindingsCache(cfg);
   const cacheKey = `${channel}\t${accountId}`;
-  const indexed = existing?.byChannelAccountIndex.get(cacheKey);
+  const indexed = cache.byChannelAccountIndex.get(cacheKey);
   if (indexed) {
     return indexed;
   }
   const built = buildEvaluatedBindingsIndex(bindings);
-  existing?.byChannelAccountIndex.set(cacheKey, built);
+  cache.byChannelAccountIndex.set(cacheKey, built);
   return built;
 }
 
