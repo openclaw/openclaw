@@ -191,6 +191,11 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(imageCreateMock).toHaveBeenCalled();
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpTimeoutMs: 120_000,
+      }),
+    );
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ msg_type: "image" }),
@@ -316,6 +321,11 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(imageGetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { image_key: imageKey },
+      }),
+    );
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpTimeoutMs: 120_000,
       }),
     );
     expect(result.buffer).toEqual(Buffer.from("image-data"));
@@ -509,6 +519,11 @@ describe("downloadMessageResourceFeishu", () => {
         params: { type: "file" },
       }),
     );
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpTimeoutMs: 120_000,
+      }),
+    );
     expect(result.buffer).toBeInstanceOf(Buffer);
   });
 
@@ -526,6 +541,11 @@ describe("downloadMessageResourceFeishu", () => {
       expect.objectContaining({
         path: { message_id: "om_img_msg", file_key: "img_key_1" },
         params: { type: "image" },
+      }),
+    );
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpTimeoutMs: 120_000,
       }),
     );
     expect(result.buffer).toBeInstanceOf(Buffer);
