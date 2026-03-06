@@ -104,7 +104,6 @@ export type ChannelManager = {
   stopChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
-  markManuallyStopped: (channelId: ChannelId, accountId: string) => void;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
 };
 
@@ -431,10 +430,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return manuallyStopped.has(restartKey(channelId, accountId));
   };
 
-  const markManuallyStopped_ = (channelId: ChannelId, accountId: string): void => {
-    manuallyStopped.add(restartKey(channelId, accountId));
-  };
-
   const resetRestartAttempts_ = (channelId: ChannelId, accountId: string): void => {
     restartAttempts.delete(restartKey(channelId, accountId));
   };
@@ -446,7 +441,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     stopChannel,
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStopped_,
-    markManuallyStopped: markManuallyStopped_,
     resetRestartAttempts: resetRestartAttempts_,
   };
 }
