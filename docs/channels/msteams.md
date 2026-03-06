@@ -38,6 +38,34 @@ OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
+## Configuration at a glance
+
+Config path: `channels.msteams`
+
+What you need:
+
+- the Microsoft Teams plugin
+- an Azure Bot app ID, app password, and tenant ID
+- a public URL or tunnel for `/api/messages`
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    msteams: {
+      enabled: true,
+      appId: "APP_ID",
+      appPassword: "APP_PASSWORD",
+      tenantId: "TENANT_ID",
+      webhook: { port: 3978, path: "/api/messages" },
+    },
+  },
+}
+```
+
+Outside the config file, install the Teams app package after the webhook endpoint is reachable.
+
 ## Quick setup (beginner)
 
 1. Install the Microsoft Teams plugin.

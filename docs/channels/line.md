@@ -31,6 +31,33 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/line
 ```
 
+## Configuration at a glance
+
+Config path: `channels.line`
+
+What you need:
+
+- the LINE plugin
+- a channel access token and channel secret
+- a public webhook URL for the gateway
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    line: {
+      enabled: true,
+      channelAccessToken: "LINE_CHANNEL_ACCESS_TOKEN",
+      channelSecret: "LINE_CHANNEL_SECRET",
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+Outside the config file, enable webhooks in LINE Developers and point them at the gateway.
+
 ## Setup
 
 1. Create a LINE Developers account and open the Console:

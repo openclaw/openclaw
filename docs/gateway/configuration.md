@@ -75,7 +75,7 @@ When validation fails:
 
 <AccordionGroup>
   <Accordion title="Set up a channel (WhatsApp, Telegram, Discord, etc.)">
-    Each channel has its own config section under `channels.<provider>`. See the dedicated channel page for setup steps:
+    Use the channel page itself as the configuration page for that channel. Each page opens with the required credentials, minimum config, and setup flow:
 
     - [WhatsApp](/channels/whatsapp) — `channels.whatsapp`
     - [Telegram](/channels/telegram) — `channels.telegram`
@@ -86,6 +86,15 @@ When validation fails:
     - [Google Chat](/channels/googlechat) — `channels.googlechat`
     - [Mattermost](/channels/mattermost) — `channels.mattermost`
     - [MS Teams](/channels/msteams) — `channels.msteams`
+    - Full catalog: [Chat Channels](/channels)
+
+    If you want channels grouped by setup model instead of provider, use the discovery pages:
+
+    - [Channel configuration overview](/gateway/channel-configuration-guides)
+    - [Bot tokens and QR login](/gateway/channel-configuration-bot-tokens-and-qr)
+    - [Webhooks and app credentials](/gateway/channel-configuration-webhooks-and-apps)
+    - [Account logins and self hosted channels](/gateway/channel-configuration-account-logins)
+    - [External clients and legacy integrations](/gateway/channel-configuration-external-clients)
 
     All channels share the same DM policy pattern:
 

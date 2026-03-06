@@ -21,6 +21,32 @@ Status: production-ready for DMs + channels via Slack app integrations. Default 
   </Card>
 </CardGroup>
 
+## Configuration at a glance
+
+Config path: `channels.slack`
+
+What you need:
+
+- Socket Mode: `appToken` + `botToken`
+- or HTTP mode: `botToken` + `signingSecret`
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    slack: {
+      enabled: true,
+      mode: "socket",
+      appToken: "xapp-...",
+      botToken: "xoxb-...",
+    },
+  },
+}
+```
+
+Socket Mode is the easiest default because it does not require a public webhook.
+
 ## Quick setup
 
 <Tabs>

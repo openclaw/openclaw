@@ -11,6 +11,33 @@ title: "BlueBubbles"
 
 Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **Recommended for iMessage integration** due to its richer API and easier setup compared to the legacy imsg channel.
 
+## Configuration at a glance
+
+Config path: `channels.bluebubbles`
+
+What you need:
+
+- a BlueBubbles server running on macOS
+- the BlueBubbles server URL and password
+- a webhook path that BlueBubbles can reach
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    bluebubbles: {
+      enabled: true,
+      serverUrl: "http://gateway-host.example:1234",
+      password: "example-password",
+      webhookPath: "/bluebubbles-webhook",
+    },
+  },
+}
+```
+
+Outside the config file, enable the BlueBubbles web API and point its webhook to the gateway using the same password.
+
 ## Overview
 
 - Runs on macOS via the BlueBubbles helper app ([bluebubbles.app](https://bluebubbles.app)).

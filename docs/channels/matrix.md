@@ -36,6 +36,33 @@ OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
+## Configuration at a glance
+
+Config path: `channels.matrix`
+
+What you need:
+
+- the Matrix plugin
+- a homeserver URL
+- either an access token, or a user ID and password so OpenClaw can fetch one
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    matrix: {
+      enabled: true,
+      homeserver: "https://matrix.example.org",
+      accessToken: "syt_***",
+      dm: { policy: "pairing" },
+    },
+  },
+}
+```
+
+If you use encrypted rooms, add `encryption: true` and verify the device from another Matrix client.
+
 ## Setup
 
 1. Install the Matrix plugin:

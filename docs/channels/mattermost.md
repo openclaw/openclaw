@@ -33,6 +33,33 @@ OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
+## Configuration at a glance
+
+Config path: `channels.mattermost`
+
+What you need:
+
+- the Mattermost plugin
+- a Mattermost bot token
+- the Mattermost base URL
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      enabled: true,
+      botToken: "mm-token",
+      baseUrl: "https://chat.example.com",
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+Outside the config file, create the bot account and keep the callback URL reachable if you enable native slash commands.
+
 ## Quick setup
 
 1. Install the Mattermost plugin.

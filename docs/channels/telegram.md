@@ -21,6 +21,32 @@ Status: production-ready for bot DMs + groups via grammY. Long polling is the de
   </Card>
 </CardGroup>
 
+## Configuration at a glance
+
+Config path: `channels.telegram`
+
+What you need:
+
+- a bot token from `@BotFather`
+- numeric Telegram user IDs if you use allowlists
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    telegram: {
+      enabled: true,
+      botToken: "123:abc",
+      dmPolicy: "pairing",
+      groups: { "*": { requireMention: true } },
+    },
+  },
+}
+```
+
+Outside the config file, create the bot in Telegram. Telegram does not use `openclaw channels login`.
+
 ## Quick setup
 
 <Steps>

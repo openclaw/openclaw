@@ -30,6 +30,33 @@ OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
+## Configuration at a glance
+
+Config path: `channels.nextcloud-talk`
+
+What you need:
+
+- the Nextcloud Talk plugin
+- a bot created with `occ talk:bot:install`
+- the Nextcloud base URL and shared bot secret
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    "nextcloud-talk": {
+      enabled: true,
+      baseUrl: "https://cloud.example.com",
+      botSecret: "shared-secret",
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+Outside the config file, create the bot on your Nextcloud server and make sure the webhook URL is reachable.
+
 ## Quick setup (beginner)
 
 1. Install the Nextcloud Talk plugin.

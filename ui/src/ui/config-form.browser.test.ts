@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { renderChannelConfigForm } from "./views/channels.config.ts";
 import { analyzeConfigSchema, renderConfigForm } from "./views/config-form.ts";
 
 const rootSchema = {
@@ -457,5 +458,121 @@ describe("config form renderer", () => {
     expect(removeButton).not.toBeNull();
     removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["accounts"], {});
+  });
+
+  it("treats whitespace-only type values as missing and infers object structure", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        channels: {
+          type: "object",
+          properties: {
+            whatsapp: {
+              type: "   ",
+              properties: {
+                enabled: { type: "boolean" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+
+    expect(analysis.unsupportedPaths).not.toContain("channels.whatsapp");
+
+    render(
+      renderChannelConfigForm({
+        channelId: "whatsapp",
+        configValue: { channels: { whatsapp: { enabled: false } } },
+        schema,
+        uiHints: {},
+        disabled: false,
+        onPatch,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Enabled");
+    expect(container.textContent).not.toContain("Use Raw mode");
+
+    const checkbox: HTMLInputElement | null = container.querySelector("input[type='checkbox']");
+    expect(checkbox).not.toBeNull();
+    if (!checkbox) {
+      return;
+    }
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["channels", "whatsapp", "enabled"], true);
+  });
+
+  it("shows a stable unsupported message for channel config nodes", () => {
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        channels: {
+          type: "object",
+          properties: {
+            whatsapp: {
+              type: "mystery",
+            },
+          },
+        },
+      },
+    };
+
+    render(
+      renderChannelConfigForm({
+        channelId: "whatsapp",
+        configValue: { channels: { whatsapp: {} } },
+        schema,
+        uiHints: {},
+        disabled: false,
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain(
+      "Channel config schema uses an unsupported format. Use Raw mode.",
+    );
+    expect(container.textContent).not.toContain("Unsupported type: . Use Raw mode.");
+  });
+
+  it("shows a stable channel-level fallback for unsupported channel schema nodes", () => {
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        channels: {
+          type: "object",
+          properties: {
+            whatsapp: {
+              type: "array",
+            },
+          },
+        },
+      },
+    };
+
+    render(
+      renderChannelConfigForm({
+        channelId: "whatsapp",
+        configValue: { channels: { whatsapp: [] } },
+        schema,
+        uiHints: {},
+        disabled: false,
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain(
+      "Channel config schema uses an unsupported format. Use Raw mode.",
+    );
+    expect(container.textContent).not.toContain("Unsupported type: . Use Raw mode.");
   });
 });

@@ -40,6 +40,32 @@ openclaw plugins install --link <path-to-openclaw>/extensions/nostr
 
 Restart the Gateway after installing or enabling plugins.
 
+## Configuration at a glance
+
+Config path: `channels.nostr`
+
+What you need:
+
+- the Nostr plugin
+- a private key in `nsec` or hex format
+- one or more relay URLs
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    nostr: {
+      privateKey: "${NOSTR_PRIVATE_KEY}",
+      relays: ["wss://relay.damus.io", "wss://nos.lol"],
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+Outside the config file, generate or import the keypair before starting the gateway.
+
 ## Quick setup
 
 1. Generate a Nostr keypair (if needed):

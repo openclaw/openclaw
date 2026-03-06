@@ -11,6 +11,8 @@ title: "Chat Channels"
 OpenClaw can talk to you on any chat app you already use. Each channel connects via the Gateway.
 Text is supported everywhere; media and reactions vary by channel.
 
+Use each channel page as the canonical configuration page for that provider. Every channel page now opens with the required credentials, minimum config, and setup flow before the deeper operational details.
+
 ## Supported channels
 
 - [BlueBubbles](/channels/bluebubbles) — **Recommended for iMessage**; uses the BlueBubbles macOS server REST API with full feature support (edit, unsend, effects, reactions, group management — edit currently broken on macOS 26 Tahoe).

@@ -9,6 +9,33 @@ title: "Google Chat"
 
 Status: ready for DMs + spaces via Google Chat API webhooks (HTTP only).
 
+## Configuration at a glance
+
+Config path: `channels.googlechat`
+
+What you need:
+
+- a Google Chat app configured for an HTTP endpoint
+- a service account JSON key on the gateway host
+- the audience settings used by your Chat app
+
+Minimum config:
+
+```json5
+{
+   channels: {
+      googlechat: {
+         serviceAccountFile: "~/.openclaw/googlechat-service-account.json",
+         audienceType: "space",
+         audience: "spaces/AAAAexample",
+         webhookPath: "/googlechat",
+      },
+   },
+}
+```
+
+Outside the config file, publish the Chat app and expose only the webhook path publicly.
+
 ## Quick setup (beginner)
 
 1. Create a Google Cloud project and enable the **Google Chat API**.

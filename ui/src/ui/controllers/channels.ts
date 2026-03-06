@@ -3,6 +3,18 @@ import type { ChannelsState } from "./channels.types.ts";
 
 export type { ChannelsState };
 
+function formatWhatsAppLoginError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const normalized = message.toLowerCase();
+  if (normalized.includes("web login provider is not available")) {
+    return "WhatsApp web login is not available in this gateway.";
+  }
+  if (normalized.includes("web login is not supported by provider")) {
+    return "WhatsApp web login is not supported by the active provider.";
+  }
+  return message;
+}
+
 export async function loadChannels(state: ChannelsState, probe: boolean) {
   if (!state.client || !state.connected) {
     return;
@@ -43,7 +55,7 @@ export async function startWhatsAppLogin(state: ChannelsState, force: boolean) {
     state.whatsappLoginQrDataUrl = res.qrDataUrl ?? null;
     state.whatsappLoginConnected = null;
   } catch (err) {
-    state.whatsappLoginMessage = String(err);
+    state.whatsappLoginMessage = formatWhatsAppLoginError(err);
     state.whatsappLoginQrDataUrl = null;
     state.whatsappLoginConnected = null;
   } finally {
@@ -69,7 +81,7 @@ export async function waitWhatsAppLogin(state: ChannelsState) {
       state.whatsappLoginQrDataUrl = null;
     }
   } catch (err) {
-    state.whatsappLoginMessage = String(err);
+    state.whatsappLoginMessage = formatWhatsAppLoginError(err);
     state.whatsappLoginConnected = null;
   } finally {
     state.whatsappBusy = false;
@@ -87,7 +99,7 @@ export async function logoutWhatsApp(state: ChannelsState) {
     state.whatsappLoginQrDataUrl = null;
     state.whatsappLoginConnected = null;
   } catch (err) {
-    state.whatsappLoginMessage = String(err);
+    state.whatsappLoginMessage = formatWhatsAppLoginError(err);
   } finally {
     state.whatsappBusy = false;
   }

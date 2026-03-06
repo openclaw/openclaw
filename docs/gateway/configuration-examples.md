@@ -11,6 +11,8 @@ title: "Configuration Examples"
 
 Examples below are aligned with the current config schema. For the exhaustive reference and per-field notes, see [Configuration](/gateway/configuration).
 
+If you want the shortest working config for one specific provider, start with that provider page in [Chat Channels](/channels). Use [Channel Configuration Guides](/gateway/channel-configuration-guides) only when you want channels grouped by setup model.
+
 ## Quick start
 
 ### Absolute minimum

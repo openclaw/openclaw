@@ -16,6 +16,10 @@ const resolveWebLoginProvider = () =>
     (plugin.gatewayMethods ?? []).some((method) => WEB_LOGIN_METHODS.has(method)),
   ) ?? null;
 
+export function hasWebLoginProvider(): boolean {
+  return resolveWebLoginProvider() != null;
+}
+
 function resolveAccountId(params: unknown): string | undefined {
   return typeof (params as { accountId?: unknown }).accountId === "string"
     ? (params as { accountId?: string }).accountId

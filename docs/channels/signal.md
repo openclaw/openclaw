@@ -10,6 +10,33 @@ title: "Signal"
 
 Status: external CLI integration. Gateway talks to `signal-cli` over HTTP JSON-RPC + SSE.
 
+## Configuration at a glance
+
+Config path: `channels.signal`
+
+What you need:
+
+- `signal-cli` installed on the gateway host
+- a dedicated Signal number or a linked Signal device
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    signal: {
+      enabled: true,
+      account: "+15551234567",
+      cliPath: "signal-cli",
+      dmPolicy: "pairing",
+      allowFrom: ["+15557654321"],
+    },
+  },
+}
+```
+
+Outside the config file, complete either QR link mode or SMS registration before starting the gateway.
+
 ## Prerequisites
 
 - OpenClaw installed on your server (Linux flow below tested on Ubuntu 24).

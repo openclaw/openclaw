@@ -22,6 +22,7 @@ import {
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { hasWebLoginProvider } from "./web.js";
 
 type ChannelLogoutPayload = {
   channel: ChannelId;
@@ -201,6 +202,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       channelDetailLabels: uiCatalog.detailLabels,
       channelSystemImages: uiCatalog.systemImages,
       channelMeta: uiCatalog.entries,
+      webLoginProviderAvailable: hasWebLoginProvider(),
       channels: {} as Record<string, unknown>,
       channelAccounts: {} as Record<string, unknown>,
       channelDefaultAccountId: {} as Record<string, unknown>,

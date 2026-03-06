@@ -28,6 +28,32 @@ Status: legacy external CLI integration. Gateway spawns `imsg rpc` and communica
   </Card>
 </CardGroup>
 
+## Configuration at a glance
+
+Config path: `channels.imessage`
+
+What you need:
+
+- a macOS host signed into Messages
+- the `imsg` CLI available on that host
+- the correct `chat.db` path for the account running the gateway
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    imessage: {
+      enabled: true,
+      cliPath: "/usr/local/bin/imsg",
+      dbPath: "/Users/<you>/Library/Messages/chat.db",
+    },
+  },
+}
+```
+
+For new iMessage setups, prefer [BlueBubbles](/channels/bluebubbles). Use this page only when you specifically need the legacy `imsg` path.
+
 ## Quick setup
 
 <Tabs>

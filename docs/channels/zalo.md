@@ -17,6 +17,31 @@ Zalo ships as a plugin and is not bundled with the core install.
 - Or select **Zalo** during onboarding and confirm the install prompt
 - Details: [Plugins](/tools/plugin)
 
+## Configuration at a glance
+
+Config path: `channels.zalo`
+
+What you need:
+
+- the Zalo plugin
+- a bot token from the Zalo Bot Platform
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    zalo: {
+      enabled: true,
+      botToken: "12345689:abc-xyz",
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+Outside the config file, generate the bot token and approve the first pairing request after the gateway starts.
+
 ## Quick setup (beginner)
 
 1. Install the Zalo plugin:

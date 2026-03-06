@@ -26,6 +26,36 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/feishu
 ```
 
+## Configuration at a glance
+
+Config path: `channels.feishu`
+
+What you need:
+
+- the Feishu plugin
+- a Feishu or Lark app ID and app secret
+- WebSocket mode, or webhook mode if you explicitly need HTTP callbacks
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    feishu: {
+      accounts: {
+        default: {
+          appId: "cli_xxx",
+          appSecret: "your-feishu-secret",
+        },
+      },
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+Outside the config file, create the app, grant permissions, and publish the bot before starting the gateway.
+
 ---
 
 ## Quickstart

@@ -18,6 +18,14 @@ export type JsonSchema = {
   nullable?: boolean;
 };
 
+function normalizeSchemaTypeName(type: unknown): string | undefined {
+  if (typeof type !== "string") {
+    return undefined;
+  }
+  const normalized = type.trim();
+  return normalized || undefined;
+}
+
 export function schemaType(schema: JsonSchema): string | undefined {
   if (!schema) {
     return undefined;
@@ -25,10 +33,13 @@ export function schemaType(schema: JsonSchema): string | undefined {
 
   let type: string | undefined;
   if (Array.isArray(schema.type)) {
-    const filtered = schema.type.filter((t) => t !== "null");
-    type = filtered[0] ?? schema.type[0];
+    const normalizedTypes = schema.type
+      .map((entry) => normalizeSchemaTypeName(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    const filtered = normalizedTypes.filter((entry) => entry !== "null");
+    type = filtered[0] ?? normalizedTypes[0];
   } else {
-    type = schema.type;
+    type = normalizeSchemaTypeName(schema.type);
   }
 
   if (type) {

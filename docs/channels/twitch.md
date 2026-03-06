@@ -27,6 +27,35 @@ openclaw plugins install ./extensions/twitch
 
 Details: [Plugins](/tools/plugin)
 
+## Configuration at a glance
+
+Config path: `channels.twitch`
+
+What you need:
+
+- the Twitch plugin
+- a bot account username
+- an OAuth access token, client ID, and target channel name
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    twitch: {
+      enabled: true,
+      username: "openclaw",
+      accessToken: "oauth:abc123...",
+      clientId: "xyz789...",
+      channel: "streamername",
+      allowFrom: ["123456789"],
+    },
+  },
+}
+```
+
+Outside the config file, generate the token and client ID before starting the gateway.
+
 ## Quick setup (beginner)
 
 1. Create a dedicated Twitch account for the bot (or use an existing account).

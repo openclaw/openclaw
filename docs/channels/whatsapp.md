@@ -21,6 +21,32 @@ Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session
   </Card>
 </CardGroup>
 
+## Configuration at a glance
+
+Config path: `channels.whatsapp`
+
+What you need:
+
+- a WhatsApp account to link on the gateway host
+- a DM policy and allowlist that match your usage model
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      dmPolicy: "pairing",
+      allowFrom: ["+15551234567"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15551234567"],
+    },
+  },
+}
+```
+
+Outside the config file, run `openclaw channels login --channel whatsapp` and scan the QR code.
+
 ## Quick setup
 
 <Steps>

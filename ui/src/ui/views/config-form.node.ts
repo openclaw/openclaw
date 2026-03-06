@@ -322,6 +322,22 @@ function renderTags(tags: string[]): TemplateResult | typeof nothing {
   `;
 }
 
+function describeUnsupportedSchema(schema: JsonSchema, type: string | undefined): string {
+  if (type) {
+    return `Unsupported schema type (${type}). Use Raw mode.`;
+  }
+
+  if (schema.anyOf || schema.oneOf || schema.allOf) {
+    return "Unsupported schema union. Use Raw mode.";
+  }
+
+  if (schema.items && !schema.properties && !schema.additionalProperties) {
+    return "Unsupported schema format for list items. Use Raw mode.";
+  }
+
+  return "Unsupported schema format. Use Raw mode.";
+}
+
 export function renderNode(params: {
   schema: JsonSchema;
   value: unknown;
@@ -343,7 +359,7 @@ export function renderNode(params: {
   if (unsupported.has(key)) {
     return html`<div class="cfg-field cfg-field--error">
       <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">Unsupported schema node. Use Raw mode.</div>
+      <div class="cfg-field__error">${describeUnsupportedSchema(schema, type)}</div>
     </div>`;
   }
   if (
@@ -524,7 +540,7 @@ export function renderNode(params: {
   return html`
     <div class="cfg-field cfg-field--error">
       <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">Unsupported schema format (${type || "unknown"}). Use Raw mode.</div>
+      <div class="cfg-field__error">${describeUnsupportedSchema(schema, type)}</div>
     </div>
   `;
 }
@@ -834,7 +850,7 @@ function renderArray(params: {
     return html`
       <div class="cfg-field cfg-field--error">
         <div class="cfg-field__label">${label}</div>
-        <div class="cfg-field__error">Unsupported array schema. Use Raw mode.</div>
+        <div class="cfg-field__error">This list is missing an item schema. Use Raw mode.</div>
       </div>
     `;
   }

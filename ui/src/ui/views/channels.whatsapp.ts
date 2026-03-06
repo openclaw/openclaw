@@ -10,12 +10,24 @@ export function renderWhatsAppCard(params: {
   accountCountLabel: unknown;
 }) {
   const { props, whatsapp, accountCountLabel } = params;
+  const loginUnavailable = !props.whatsappWebLoginAvailable;
+  const showInlineMessage =
+    props.whatsappMessage &&
+    !(loginUnavailable && props.whatsappMessage.toLowerCase().includes("not available"));
 
   return html`
     <div class="card">
       <div class="card-title">WhatsApp</div>
       <div class="card-sub">Link WhatsApp Web and monitor connection health.</div>
       ${accountCountLabel}
+
+      ${
+        loginUnavailable
+          ? html`<div class="callout" style="margin-top: 12px;">
+              WhatsApp web login is not available in this gateway.
+            </div>`
+          : nothing
+      }
 
       <div class="status-list" style="margin-top: 16px;">
         <div>
@@ -63,7 +75,7 @@ export function renderWhatsAppCard(params: {
       }
 
       ${
-        props.whatsappMessage
+        showInlineMessage
           ? html`<div class="callout" style="margin-top: 12px;">
             ${props.whatsappMessage}
           </div>`
@@ -81,21 +93,21 @@ export function renderWhatsAppCard(params: {
       <div class="row" style="margin-top: 14px; flex-wrap: wrap;">
         <button
           class="btn primary"
-          ?disabled=${props.whatsappBusy}
+          ?disabled=${props.whatsappBusy || loginUnavailable}
           @click=${() => props.onWhatsAppStart(false)}
         >
           ${props.whatsappBusy ? "Working…" : "Show QR"}
         </button>
         <button
           class="btn"
-          ?disabled=${props.whatsappBusy}
+          ?disabled=${props.whatsappBusy || loginUnavailable}
           @click=${() => props.onWhatsAppStart(true)}
         >
           Relink
         </button>
         <button
           class="btn"
-          ?disabled=${props.whatsappBusy}
+          ?disabled=${props.whatsappBusy || loginUnavailable}
           @click=${() => props.onWhatsAppWait()}
         >
           Wait for scan

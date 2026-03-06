@@ -10,6 +10,34 @@ read_when:
 Use IRC when you want OpenClaw in classic channels (`#room`) and direct messages.
 IRC ships as an extension plugin, but it is configured in the main config under `channels.irc`.
 
+## Configuration at a glance
+
+Config path: `channels.irc`
+
+What you need:
+
+- the IRC plugin
+- an IRC server host, port, nick, and one or more channels
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    irc: {
+      enabled: true,
+      host: "irc.libera.chat",
+      port: 6697,
+      tls: true,
+      nick: "openclaw-bot",
+      channels: ["#openclaw"],
+    },
+  },
+}
+```
+
+Outside the config file, add `groups` or `groupAllowFrom` when you want channel replies beyond DMs.
+
 ## Quick start
 
 1. Enable IRC config in `~/.openclaw/openclaw.json`.

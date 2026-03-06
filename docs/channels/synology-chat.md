@@ -24,6 +24,35 @@ openclaw plugins install ./extensions/synology-chat
 
 Details: [Plugins](/tools/plugin)
 
+## Configuration at a glance
+
+Config path: `channels.synology-chat`
+
+What you need:
+
+- the Synology Chat plugin
+- an outgoing webhook token and an incoming webhook URL
+- a webhook path on the gateway
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    "synology-chat": {
+      enabled: true,
+      token: "synology-outgoing-token",
+      incomingUrl: "https://nas.example.com/webapi/entry.cgi?...token=...",
+      webhookPath: "/webhook/synology",
+      dmPolicy: "allowlist",
+      allowedUserIds: ["123456"],
+    },
+  },
+}
+```
+
+Outside the config file, create both webhook integrations in Synology Chat and keep the allowlist non-empty when `dmPolicy` is `allowlist`.
+
 ## Quick setup
 
 1. Install and enable the Synology Chat plugin.

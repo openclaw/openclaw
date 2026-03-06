@@ -32,6 +32,34 @@ openclaw plugins install ./extensions/tlon
 
 Details: [Plugins](/tools/plugin)
 
+## Configuration at a glance
+
+Config path: `channels.tlon`
+
+What you need:
+
+- the Tlon plugin
+- your ship name, ship URL, and login code
+- optionally `ownerShip` so your own ship is always authorized
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    tlon: {
+      enabled: true,
+      ship: "~sampel-palnet",
+      url: "https://ship.example.com",
+      code: "lidlut-tabwed-pillex-ridrup",
+      ownerShip: "~your-main-ship",
+    },
+  },
+}
+```
+
+Outside the config file, allow private-network URLs explicitly if your ship is not publicly reachable.
+
 ## Setup
 
 1. Install the Tlon plugin.

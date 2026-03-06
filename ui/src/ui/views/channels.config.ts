@@ -85,6 +85,7 @@ function renderExtraChannelFields(value: Record<string, unknown>) {
 export function renderChannelConfigForm(props: ChannelConfigFormProps) {
   const analysis = analyzeConfigSchema(props.schema);
   const normalized = analysis.schema;
+  const channelPath = ["channels", props.channelId].join(".");
   if (!normalized) {
     return html`
       <div class="callout danger">Schema unavailable. Use Raw.</div>
@@ -94,6 +95,11 @@ export function renderChannelConfigForm(props: ChannelConfigFormProps) {
   if (!node) {
     return html`
       <div class="callout danger">Channel config schema unavailable.</div>
+    `;
+  }
+  if (analysis.unsupportedPaths.includes(channelPath)) {
+    return html`
+      <div class="callout danger">Channel config schema uses an unsupported format. Use Raw mode.</div>
     `;
   }
   const configValue = props.configValue ?? {};

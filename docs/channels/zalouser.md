@@ -22,6 +22,30 @@ Zalo Personal ships as a plugin and is not bundled with the core install.
 
 No external `zca`/`openzca` CLI binary is required.
 
+## Configuration at a glance
+
+Config path: `channels.zalouser`
+
+What you need:
+
+- the `@openclaw/zalouser` plugin
+- a personal Zalo account you can link on the gateway host
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    zalouser: {
+      enabled: true,
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+Outside the config file, run `openclaw channels login --channel zalouser` and scan the QR code in the Zalo app.
+
 ## Quick setup (beginner)
 
 1. Install the plugin (see above).

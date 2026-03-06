@@ -21,6 +21,31 @@ Status: ready for DMs and guild channels via the official Discord gateway.
   </Card>
 </CardGroup>
 
+## Configuration at a glance
+
+Config path: `channels.discord`
+
+What you need:
+
+- a Discord bot token
+- a Discord application with Message Content Intent enabled
+- a server where the bot is invited
+
+Minimum config:
+
+```json5
+{
+  channels: {
+    discord: {
+      enabled: true,
+      token: "YOUR_DISCORD_BOT_TOKEN",
+    },
+  },
+}
+```
+
+Outside the config file, create the application, enable intents, invite the bot, then start the gateway.
+
 ## Quick setup
 
 You will need to create a new application with a bot, add the bot to your server, and pair it to OpenClaw. We recommend adding your bot to your own private server. If you don't have one yet, [create one first](https://support.discord.com/hc/en-us/articles/204849977-How-do-I-create-a-server) (choose **Create My Own > For me and my friends**).

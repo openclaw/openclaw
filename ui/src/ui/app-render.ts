@@ -371,6 +371,8 @@ export function renderApp(state: AppViewState) {
                 snapshot: state.channelsSnapshot,
                 lastError: state.channelsError,
                 lastSuccessAt: state.channelsLastSuccess,
+                whatsappWebLoginAvailable:
+                  state.channelsSnapshot?.webLoginProviderAvailable !== false,
                 whatsappMessage: state.whatsappLoginMessage,
                 whatsappQrDataUrl: state.whatsappLoginQrDataUrl,
                 whatsappConnected: state.whatsappLoginConnected,

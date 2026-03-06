@@ -129,6 +129,31 @@ describe("gateway server channels", () => {
     expect(signal?.configured).toBe(false);
     expect(signal?.probe).toBeUndefined();
     expect(signal?.lastProbeAt).toBeNull();
+    expect(res.payload?.webLoginProviderAvailable).toBe(false);
+  });
+
+  test("channels.status reports web login provider when a channel exposes gateway methods", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
+    setRegistry(
+      createRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: {
+            ...createStubChannelPlugin({ id: "whatsapp", label: "WhatsApp" }),
+            gatewayMethods: ["web.login.start", "web.login.wait"],
+          },
+        },
+      ]),
+    );
+
+    const res = await rpcReq<{ webLoginProviderAvailable?: boolean }>(ws, "channels.status", {
+      probe: false,
+      timeoutMs: 2000,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.payload?.webLoginProviderAvailable).toBe(true);
   });
 
   test("channels.logout reports no session when missing", async () => {
