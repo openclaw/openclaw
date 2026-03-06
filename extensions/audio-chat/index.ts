@@ -390,7 +390,6 @@ export default function register(api: any) {
     maxChars: number;
     textLen: number;
     tipText: string;
-    replyToMessageId?: number;
   }) {
     // Avoid loops and avoid spamming when multiple hooks fire.
     const now = nowMs();
@@ -459,51 +458,56 @@ export default function register(api: any) {
       }
     }
 
-    // 1) Edge TTS -> mp3
-    const edgeTtsPython = await resolveEdgeTtsPython();
-    await api.runtime.system.runCommandWithTimeout(
-      [
-        edgeTtsPython,
-        "-m",
-        "edge_tts",
-        "--voice",
-        voice,
-        "--text",
-        text,
-        "--write-media",
-        mp3Path,
-      ],
-      { timeoutMs: 60_000 },
-    );
+    try {
+      // 1) Edge TTS -> mp3
+      const edgeTtsPython = await resolveEdgeTtsPython();
+      await api.runtime.system.runCommandWithTimeout(
+        [
+          edgeTtsPython,
+          "-m",
+          "edge_tts",
+          "--voice",
+          voice,
+          "--text",
+          text,
+          "--write-media",
+          mp3Path,
+        ],
+        { timeoutMs: 60_000 },
+      );
 
-    // 2) ffmpeg mp3 -> ogg/opus
-    await api.runtime.system.runCommandWithTimeout(
-      [
-        "ffmpeg",
-        "-y",
-        "-i",
-        mp3Path,
-        "-ar",
-        "48000",
-        "-ac",
-        "1",
-        "-c:a",
-        "libopus",
-        "-b:a",
-        "32k",
-        oggPath,
-      ],
-      { timeoutMs: 60_000 },
-    );
+      // 2) ffmpeg mp3 -> ogg/opus
+      await api.runtime.system.runCommandWithTimeout(
+        [
+          "ffmpeg",
+          "-y",
+          "-i",
+          mp3Path,
+          "-ar",
+          "48000",
+          "-ac",
+          "1",
+          "-c:a",
+          "libopus",
+          "-b:a",
+          "32k",
+          oggPath,
+        ],
+        { timeoutMs: 60_000 },
+      );
 
-    // 3) send voice bubble (asVoice=true)
-    // NOTE: Telegram send supports local media paths under allowed roots.
-    const sendMessageTelegram = resolveSendMessageTelegram();
+      // 3) send voice bubble (asVoice=true)
+      // NOTE: Telegram send supports local media paths under allowed roots.
+      const sendMessageTelegram = resolveSendMessageTelegram();
 
-    await sendMessageTelegram(params.to, "", {
-      mediaUrl: oggPath,
-      asVoice: true,
-    });
+      await sendMessageTelegram(params.to, "", {
+        mediaUrl: oggPath,
+        asVoice: true,
+      });
+    } finally {
+      // Best-effort cleanup to avoid unbounded media growth.
+      await Promise.allSettled([fs.unlink(mp3Path), fs.unlink(oggPath)]);
+    }
   }
 
   async function handleOutboundHook(
@@ -541,27 +545,16 @@ export default function register(api: any) {
 
       // (reply-to cache removed)
 
-      // Don't react to our own tip.
-      if (trimmed === pluginCfg.tooLongTip) return;
+      // Don't react to our own tip (tip adds suffix like "（len/max）").
+      if (trimmed.startsWith(pluginCfg.tooLongTip)) return;
 
       if (trimmed.length > maxChars) {
-        // Best-effort: reply to the message we just sent (if we can find its message id).
-        const replyToMessageIdRaw =
-          event?.messageId ??
-          event?.result?.messageId ??
-          event?.telegram?.messageId ??
-          event?.telegram?.result?.messageId;
-        const replyToMessageId = Number(replyToMessageIdRaw);
-
         await maybeSendTooLongTip({
           to,
           chatId,
           maxChars,
           textLen: trimmed.length,
           tipText: pluginCfg.tooLongTip,
-          replyToMessageId: Number.isFinite(replyToMessageId)
-            ? replyToMessageId
-            : undefined,
         });
         return;
       }
@@ -667,8 +660,8 @@ export default function register(api: any) {
 
       if (!trimmed) return;
 
-      // Don't react to our own tip.
-      if (trimmed === pluginCfg.tooLongTip) return;
+      // Don't react to our own tip (tip adds suffix like "（len/max）").
+      if (trimmed.startsWith(pluginCfg.tooLongTip)) return;
 
       if (trimmed.length > maxChars) {
         await maybeSendTooLongTip({
