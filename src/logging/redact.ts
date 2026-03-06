@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
+import { maskApiKey } from "../utils/mask-api-key.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { replacePatternBounded } from "./redact-bounded.js";
 
@@ -9,8 +10,6 @@ export type RedactSensitiveMode = "off" | "tools";
 
 const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
 const DEFAULT_REDACT_MIN_LENGTH = 18;
-const DEFAULT_REDACT_KEEP_START = 6;
-const DEFAULT_REDACT_KEEP_END = 4;
 
 const DEFAULT_REDACT_PATTERNS: string[] = [
   // ENV-style assignments.
@@ -69,9 +68,9 @@ function maskToken(token: string): string {
   if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
     return "***";
   }
-  const start = token.slice(0, DEFAULT_REDACT_KEEP_START);
-  const end = token.slice(-DEFAULT_REDACT_KEEP_END);
-  return `${start}…${end}`;
+  // Delegate to the shared prefix-only masking to avoid leaking the tail
+  // of the token — see openclaw/openclaw#23976.
+  return maskApiKey(token);
 }
 
 function redactPemBlock(block: string): string {
