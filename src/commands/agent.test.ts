@@ -560,6 +560,15 @@ describe("agentCommand", () => {
   it("uses continuation prompt for subagent follow-up fallback (not initial spawn)", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:subagent:followup-1";
+      // Seed a session entry WITH sessionFile to simulate a prior run.
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-followup",
+          updatedAt: Date.now(),
+          sessionFile: path.join(home, "agents", "main", "sessions", "session-followup.jsonl"),
+        },
+      });
       mockConfig(home, store, {
         model: {
           primary: "anthropic/claude-opus-4-5",
@@ -585,13 +594,13 @@ describe("agentCommand", () => {
           },
         });
 
-      // Providing sessionId makes this a follow-up (isNewSession = false),
-      // so the body should NOT be preserved on fallback retry.
+      // Session has an existing sessionFile from a prior run, so the body
+      // should NOT be preserved on fallback retry — the turn is already recorded.
       await agentCommand(
         {
           message: "Follow-up instruction",
           lane: "subagent",
-          sessionId: "session-followup",
+          sessionKey,
         },
         runtime,
       );

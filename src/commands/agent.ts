@@ -187,12 +187,12 @@ function runAgentAttempt(params: {
   storePath?: string;
   allowRateLimitCooldownProbe?: boolean;
   isSubagentLane: boolean;
-  isNewSession: boolean;
+  hasExistingTranscript: boolean;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
-    isInitialSubagentSpawn: params.isSubagentLane && params.isNewSession,
+    isInitialSubagentSpawn: params.isSubagentLane && !params.hasExistingTranscript,
   });
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
@@ -464,6 +464,9 @@ async function agentCommandInternal(
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
+  // Capture before any mutation: sessions.patch (subagent spawn) never sets
+  // sessionFile, so its absence reliably indicates the first run for this session.
+  const hasExistingTranscript = Boolean(resolvedSessionEntry?.sessionFile);
   let sessionEntry = resolvedSessionEntry;
   const runId = opts.runId?.trim() || sessionId;
   const acpManager = getAcpSessionManager();
@@ -884,7 +887,7 @@ async function agentCommandInternal(
             storePath,
             allowRateLimitCooldownProbe: runOptions?.allowRateLimitCooldownProbe,
             isSubagentLane,
-            isNewSession,
+            hasExistingTranscript,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (
