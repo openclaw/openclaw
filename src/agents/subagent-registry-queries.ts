@@ -21,12 +21,54 @@ export function findRunIdsByChildSessionKeyFromRuns(
 export function listRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
   requesterSessionKey: string,
+  options?: {
+    requesterRunId?: string;
+  },
 ): SubagentRunRecord[] {
   const key = requesterSessionKey.trim();
   if (!key) {
     return [];
   }
-  return [...runs.values()].filter((entry) => entry.requesterSessionKey === key);
+
+  const requesterRunId = options?.requesterRunId?.trim();
+  const requesterRun = requesterRunId ? runs.get(requesterRunId) : undefined;
+  const requesterRunMatchesScope =
+    requesterRun && requesterRun.childSessionKey === key ? requesterRun : undefined;
+  const lowerBound = requesterRunMatchesScope?.startedAt ?? requesterRunMatchesScope?.createdAt;
+  const upperBound = requesterRunMatchesScope?.endedAt;
+
+  return [...runs.values()].filter((entry) => {
+    if (entry.requesterSessionKey !== key) {
+      return false;
+    }
+    if (typeof lowerBound === "number" && entry.createdAt < lowerBound) {
+      return false;
+    }
+    if (typeof upperBound === "number" && entry.createdAt > upperBound) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function findLatestRunForChildSession(
+  runs: Map<string, SubagentRunRecord>,
+  childSessionKey: string,
+): SubagentRunRecord | undefined {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return undefined;
+  }
+  let latest: SubagentRunRecord | undefined;
+  for (const entry of runs.values()) {
+    if (entry.childSessionKey !== key) {
+      continue;
+    }
+    if (!latest || entry.createdAt > latest.createdAt) {
+      latest = entry;
+    }
+  }
+  return latest;
 }
 
 export function resolveRequesterForChildSessionFromRuns(
@@ -36,26 +78,28 @@ export function resolveRequesterForChildSessionFromRuns(
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
 } | null {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
-  let best: SubagentRunRecord | undefined;
-  for (const entry of runs.values()) {
-    if (entry.childSessionKey !== key) {
-      continue;
-    }
-    if (!best || entry.createdAt > best.createdAt) {
-      best = entry;
-    }
-  }
-  if (!best) {
+  const latest = findLatestRunForChildSession(runs, childSessionKey);
+  if (!latest) {
     return null;
   }
   return {
-    requesterSessionKey: best.requesterSessionKey,
-    requesterOrigin: best.requesterOrigin,
+    requesterSessionKey: latest.requesterSessionKey,
+    requesterOrigin: latest.requesterOrigin,
   };
+}
+
+export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  childSessionKey: string,
+): boolean {
+  const latest = findLatestRunForChildSession(runs, childSessionKey);
+  return Boolean(
+    latest &&
+    latest.spawnMode !== "session" &&
+    typeof latest.endedAt === "number" &&
+    typeof latest.cleanupCompletedAt === "number" &&
+    latest.cleanupCompletedAt >= latest.endedAt,
+  );
 }
 
 export function countActiveRunsForSessionFromRuns(
@@ -66,15 +110,29 @@ export function countActiveRunsForSessionFromRuns(
   if (!key) {
     return 0;
   }
+
+  const pendingDescendantCache = new Map<string, number>();
+  const pendingDescendantCount = (sessionKey: string) => {
+    if (pendingDescendantCache.has(sessionKey)) {
+      return pendingDescendantCache.get(sessionKey) ?? 0;
+    }
+    const pending = countPendingDescendantRunsInternal(runs, sessionKey);
+    pendingDescendantCache.set(sessionKey, pending);
+    return pending;
+  };
+
   let count = 0;
   for (const entry of runs.values()) {
     if (entry.requesterSessionKey !== key) {
       continue;
     }
-    if (typeof entry.endedAt === "number") {
+    if (typeof entry.endedAt !== "number") {
+      count += 1;
       continue;
     }
-    count += 1;
+    if (pendingDescendantCount(entry.childSessionKey) > 0) {
+      count += 1;
+    }
   }
   return count;
 }
