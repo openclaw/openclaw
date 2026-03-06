@@ -143,12 +143,24 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   if (isRollingPath(settings.file)) {
     pruneOldRollingLogs(path.dirname(settings.file));
   }
-  let currentFileBytes = getCurrentLogFileBytes(settings.file);
+  let currentFile = settings.file;
+  let currentFileBytes = getCurrentLogFileBytes(currentFile);
   let warnedAboutSizeCap = false;
 
   logger.attachTransport((logObj: LogObj) => {
     try {
-      const time = formatLocalIsoWithOffset(logObj.date ?? new Date());
+      const now = logObj.date ?? new Date();
+      if (isRollingPath(settings.file)) {
+        const nextFile = resolveRollingPathForDate(settings.file, now);
+        if (nextFile !== currentFile) {
+          fs.mkdirSync(path.dirname(nextFile), { recursive: true });
+          currentFile = nextFile;
+          currentFileBytes = getCurrentLogFileBytes(currentFile);
+          warnedAboutSizeCap = false;
+          pruneOldRollingLogs(path.dirname(currentFile));
+        }
+      }
+      const time = formatLocalIsoWithOffset(now);
       const line = JSON.stringify({ ...logObj, time });
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
@@ -160,16 +172,16 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
             time: formatLocalIsoWithOffset(new Date()),
             level: "warn",
             subsystem: "logging",
-            message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
+            message: `log file size cap reached; suppressing writes file=${currentFile} maxFileBytes=${settings.maxFileBytes}`,
           });
-          appendLogLine(settings.file, `${warningLine}\n`);
+          appendLogLine(currentFile, `${warningLine}\n`);
           process.stderr.write(
-            `[openclaw] log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}\n`,
+            `[openclaw] log file size cap reached; suppressing writes file=${currentFile} maxFileBytes=${settings.maxFileBytes}\n`,
           );
         }
         return;
       }
-      if (appendLogLine(settings.file, payload)) {
+      if (appendLogLine(currentFile, payload)) {
         currentFileBytes = nextBytes;
       }
     } catch {
@@ -309,6 +321,10 @@ function formatLocalDate(date: Date): string {
 function defaultRollingPathForToday(): string {
   const today = formatLocalDate(new Date());
   return path.join(DEFAULT_LOG_DIR, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
+}
+
+function resolveRollingPathForDate(file: string, date: Date): string {
+  return path.join(path.dirname(file), `${LOG_PREFIX}-${formatLocalDate(date)}${LOG_SUFFIX}`);
 }
 
 function isRollingPath(file: string): boolean {
