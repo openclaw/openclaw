@@ -544,7 +544,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           Surface: "mattermost" as const,
           MessageSid: `interaction:${opts.postId}:${opts.actionId}`,
           WasMentioned: true,
-          CommandAuthorized: true,
+          CommandAuthorized: false,
           OriginatingChannel: "mattermost" as const,
           OriginatingTo: to,
         });
