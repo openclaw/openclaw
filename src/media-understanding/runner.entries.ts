@@ -1,17 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  collectProviderApiKeysForExecution,
-  executeWithApiKeyRotation,
-} from "../agents/api-key-rotation.js";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { MsgContext } from "../auto-reply/templating.js";
-import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
+import type {
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingModelDecision,
+  MediaUnderstandingOutput,
+  MediaUnderstandingProvider,
+} from "./types.js";
+import {
+  collectProviderApiKeysForExecution,
+  executeWithApiKeyRotation,
+} from "../agents/api-key-rotation.js";
+import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { applyTemplate } from "../auto-reply/templating.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -29,13 +36,6 @@ import { extractGeminiResponse } from "./output-extract.js";
 import { describeImageWithModel } from "./providers/image.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./providers/index.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
-import type {
-  MediaUnderstandingCapability,
-  MediaUnderstandingDecision,
-  MediaUnderstandingModelDecision,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
 import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
 export type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
@@ -619,8 +619,29 @@ export async function runCliEntry(params: {
   const outputDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-cli-"),
   );
-  const mediaPath = pathResult.path;
+  let mediaPath = pathResult.path;
   const outputBase = path.join(outputDir, path.parse(mediaPath).name);
+
+  // whisper-cli only accepts WAV input; convert other audio formats via ffmpeg.
+  const cmdId = commandBase(command);
+  if ((cmdId === "whisper-cli" || cmdId === "whisper") && !mediaPath.endsWith(".wav")) {
+    const wavPath = path.join(outputDir, `${path.parse(mediaPath).name}.wav`);
+    try {
+      await runExec(
+        "ffmpeg",
+        ["-y", "-i", mediaPath, "-ar", "16000", "-ac", "1", "-f", "wav", wavPath],
+        {
+          timeoutMs: 30_000,
+        },
+      );
+      mediaPath = wavPath;
+    } catch (convErr) {
+      // ffmpeg not available or conversion failed; proceed with original path
+      if (shouldLogVerbose()) {
+        logVerbose(`ffmpeg conversion failed, proceeding with original: ${String(convErr)}`);
+      }
+    }
+  }
 
   const templCtx: MsgContext = {
     ...ctx,
