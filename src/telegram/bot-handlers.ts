@@ -962,11 +962,13 @@ export const registerTelegramHandlers = ({
       return;
     }
 
+    const hasTextOrCaption = Boolean((msg.text ?? msg.caption ?? "").trim());
     let media: Awaited<ReturnType<typeof resolveMedia>> = null;
     try {
       media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
     } catch (mediaErr) {
-      if (isMediaSizeLimitError(mediaErr)) {
+      const isSizeLimit = isMediaSizeLimitError(mediaErr);
+      if (isSizeLimit) {
         if (sendOversizeWarning) {
           const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
           await withTelegramApiErrorLogging({
@@ -979,23 +981,29 @@ export const registerTelegramHandlers = ({
           }).catch(() => {});
         }
         logger.warn({ chatId, error: String(mediaErr) }, oversizeLogMessage);
-        return;
+        if (!hasTextOrCaption) {
+          return;
+        }
       }
-      logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
-      await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        runtime,
-        fn: () =>
-          bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
-            reply_to_message_id: msg.message_id,
-          }),
-      }).catch(() => {});
-      return;
+      if (!isSizeLimit) {
+        logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+              reply_to_message_id: msg.message_id,
+            }),
+        }).catch(() => {});
+        if (!hasTextOrCaption) {
+          return;
+        }
+      }
     }
 
     // Skip sticker-only messages where the sticker was skipped (animated/video)
     // These have no media and no text content to process.
-    const hasText = Boolean((msg.text ?? msg.caption ?? "").trim());
+    const hasText = hasTextOrCaption;
     if (msg.sticker && !media && !hasText) {
       logVerbose("telegram: skipping sticker-only message (unsupported sticker type)");
       return;
