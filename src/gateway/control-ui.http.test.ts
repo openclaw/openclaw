@@ -45,6 +45,7 @@ describe("handleControlUiHttpRequest", () => {
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
     basePath?: string;
+    rootKind?: "resolved" | "bundled";
   }) {
     const { res, end } = makeMockHttpResponse();
     const handled = handleControlUiHttpRequest(
@@ -52,7 +53,7 @@ describe("handleControlUiHttpRequest", () => {
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
-        root: { kind: "resolved", path: params.rootPath },
+        root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
       },
     );
     return { res, end, handled };
@@ -136,7 +137,12 @@ describe("handleControlUiHttpRequest", () => {
             root: { kind: "resolved", path: tmp },
             config: {
               agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "</script><script>alert(1)//", avatar: "evil.png" } },
+              ui: {
+                assistant: {
+                  name: "</script><script>alert(1)//",
+                  avatar: "evil.png",
+                },
+              },
             },
           },
         );
@@ -151,13 +157,21 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
         const handled = handleControlUiHttpRequest(
-          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          {
+            url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+            method: "GET",
+          } as IncomingMessage,
           res,
           {
             root: { kind: "resolved", path: tmp },
             config: {
               agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" } },
+              ui: {
+                assistant: {
+                  name: "</script><script>alert(1)//",
+                  avatar: "</script>.png",
+                },
+              },
             },
           },
         );
@@ -176,7 +190,10 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
         const handled = handleControlUiHttpRequest(
-          { url: `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, method: "GET" } as IncomingMessage,
+          {
+            url: `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
+            method: "GET",
+          } as IncomingMessage,
           res,
           {
             basePath: "/openclaw",
@@ -483,6 +500,28 @@ describe("handleControlUiHttpRequest", () => {
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(404);
         expect(end).toHaveBeenCalledWith("Not Found");
+      },
+    });
+  });
+
+  it("serves hardlinked asset files for bundled roots (pnpm global install)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const assetsDir = path.join(tmp, "assets");
+        await fs.mkdir(assetsDir, { recursive: true });
+        await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
+        await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
+
+        const { res, end, handled } = runControlUiRequest({
+          url: "/assets/app.hl.js",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("console.log('hi');");
       },
     });
   });
