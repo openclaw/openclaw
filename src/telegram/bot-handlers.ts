@@ -1083,6 +1083,30 @@ export const registerTelegramHandlers = ({
           params,
         );
       };
+      const clearCallbackButtons = async () => {
+        const emptyKeyboard = { inline_keyboard: [] };
+        const replyMarkup = { reply_markup: emptyKeyboard };
+        const editReplyMarkupFn = (ctx as { editMessageReplyMarkup?: unknown })
+          .editMessageReplyMarkup;
+        if (typeof editReplyMarkupFn === "function") {
+          return await ctx.editMessageReplyMarkup(replyMarkup);
+        }
+        const apiEditReplyMarkupFn = (bot.api as { editMessageReplyMarkup?: unknown })
+          .editMessageReplyMarkup;
+        if (typeof apiEditReplyMarkupFn === "function") {
+          return await bot.api.editMessageReplyMarkup(
+            callbackMessage.chat.id,
+            callbackMessage.message_id,
+            replyMarkup,
+          );
+        }
+        // Fallback path for older clients that do not expose editMessageReplyMarkup.
+        const messageText = callbackMessage.text ?? callbackMessage.caption;
+        if (typeof messageText !== "string" || messageText.trim().length === 0) {
+          return undefined;
+        }
+        return await editCallbackMessage(messageText, replyMarkup);
+      };
       const deleteCallbackMessage = async () => {
         const deleteFn = (ctx as { deleteMessage?: unknown }).deleteMessage;
         if (typeof deleteFn === "function") {
@@ -1153,20 +1177,15 @@ export const registerTelegramHandlers = ({
       }
 
       if (APPROVE_CALLBACK_DATA_RE.test(data)) {
-        const messageText = callbackMessage.text ?? callbackMessage.caption;
-        if (typeof messageText === "string" && messageText.trim().length > 0) {
-          try {
-            await editCallbackMessage(messageText, {
-              reply_markup: { inline_keyboard: [] },
-            });
-          } catch (editErr) {
-            const errStr = String(editErr);
-            if (
-              !errStr.includes("message is not modified") &&
-              !errStr.includes("there is no text in the message to edit")
-            ) {
-              logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
-            }
+        try {
+          await clearCallbackButtons();
+        } catch (editErr) {
+          const errStr = String(editErr);
+          if (
+            !errStr.includes("message is not modified") &&
+            !errStr.includes("there is no text in the message to edit")
+          ) {
+            logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
           }
         }
       }
