@@ -171,6 +171,42 @@ describe("buildInlineKeyboard", () => {
 });
 
 describe("sendMessageTelegram", () => {
+  it("suppresses NO_REPLY token before Telegram API call", async () => {
+    botApi.sendMessage.mockClear();
+
+    const res = await sendMessageTelegram("123", "  NO_REPLY  ", { token: "tok" });
+
+    expect(res).toEqual({ messageId: "suppressed", chatId: "123" });
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress NO_REPLY when inline buttons are present", async () => {
+    botApi.sendMessage.mockClear();
+    botApi.sendMessage.mockResolvedValue({ message_id: 11, chat: { id: "123" } });
+
+    const res = await sendMessageTelegram("123", "NO_REPLY", {
+      token: "tok",
+      buttons: [[{ text: "Ack", callback_data: "ack" }]],
+    });
+
+    expect(res).toEqual({ messageId: "11", chatId: "123" });
+    expect(botApi.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it("does not suppress NO_REPLY when media is present", async () => {
+    botApi.sendPhoto.mockClear();
+    mockLoadedMedia({ contentType: "image/png", fileName: "x.png" });
+    botApi.sendPhoto.mockResolvedValue({ message_id: 12, chat: { id: "123" } });
+
+    const res = await sendMessageTelegram("123", "NO_REPLY", {
+      token: "tok",
+      mediaUrl: "https://example.com/x.png",
+    });
+
+    expect(res).toEqual({ messageId: "12", chatId: "123" });
+    expect(botApi.sendPhoto).toHaveBeenCalledOnce();
+  });
+
   it("applies timeoutSeconds config precedence", async () => {
     const cases = [
       {
