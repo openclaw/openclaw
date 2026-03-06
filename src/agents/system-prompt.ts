@@ -675,10 +675,18 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
+  // Only include the reasoning level line when it is non-default (non-"off").
+  // Including it unconditionally with the current value would change the system
+  // prompt every time the user toggles reasoning, invalidating the prompt cache
+  // and increasing cost on every subsequent turn. (#36520)
+  const reasoningLine =
+    reasoningLevel !== "off"
+      ? `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`
+      : "";
   lines.push(
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
-    `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
+    reasoningLine,
   );
 
   return lines.filter(Boolean).join("\n");
