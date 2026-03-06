@@ -32,6 +32,7 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
   resolvedConfig: OpenClawConfig;
   targetIds: ReadonlySet<string>;
   inactiveRefPaths?: ReadonlySet<string>;
+  allowedPaths?: ReadonlySet<string>;
 }): AnalyzeAssignmentsFromSnapshotResult {
   const defaults = params.sourceConfig.secrets?.defaults;
   const assignments: CommandSecretAssignment[] = [];
@@ -40,6 +41,9 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
   const inactive: UnresolvedCommandSecretAssignment[] = [];
 
   for (const target of discoverConfigSecretTargetsByIds(params.sourceConfig, params.targetIds)) {
+    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
+      continue;
+    }
     const { explicitRef, ref } = resolveSecretInputRef({
       value: target.value,
       refValue: target.refValue,
@@ -91,12 +95,14 @@ export function collectCommandSecretAssignmentsFromSnapshot(params: {
   commandName: string;
   targetIds: ReadonlySet<string>;
   inactiveRefPaths?: ReadonlySet<string>;
+  allowedPaths?: ReadonlySet<string>;
 }): ResolveAssignmentsFromSnapshotResult {
   const analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
     sourceConfig: params.sourceConfig,
     resolvedConfig: params.resolvedConfig,
     targetIds: params.targetIds,
     inactiveRefPaths: params.inactiveRefPaths,
+    allowedPaths: params.allowedPaths,
   });
   if (analyzed.unresolved.length > 0) {
     throw new Error(

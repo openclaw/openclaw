@@ -435,6 +435,59 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     }
   });
 
+  it("limits strict local fallback analysis to unresolved gateway paths", async () => {
+    const gatewayResolvedKey = "TALK_API_KEY_PARTIAL_GATEWAY_RESOLVED";
+    const locallyRecoveredKey = "TALK_API_KEY_PARTIAL_GATEWAY_LOCAL";
+    const priorGatewayResolvedValue = process.env[gatewayResolvedKey];
+    const priorLocallyRecoveredValue = process.env[locallyRecoveredKey];
+    delete process.env[gatewayResolvedKey];
+    process.env[locallyRecoveredKey] = "recovered-locally";
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: "talk.apiKey",
+          pathSegments: ["talk", "apiKey"],
+          value: "resolved-by-gateway",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    try {
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: {
+          talk: {
+            apiKey: { source: "env", provider: "default", id: gatewayResolvedKey },
+            providers: {
+              elevenlabs: {
+                apiKey: { source: "env", provider: "default", id: locallyRecoveredKey },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        commandName: "message send",
+        targetIds: new Set(["talk.apiKey", "talk.providers.*.apiKey"]),
+      });
+
+      expect(result.resolvedConfig.talk?.apiKey).toBe("resolved-by-gateway");
+      expect(result.resolvedConfig.talk?.providers?.elevenlabs?.apiKey).toBe("recovered-locally");
+      expect(result.hadUnresolvedTargets).toBe(false);
+      expect(result.targetStatesByPath["talk.apiKey"]).toBe("resolved_gateway");
+      expect(result.targetStatesByPath["talk.providers.elevenlabs.apiKey"]).toBe("resolved_local");
+    } finally {
+      if (priorGatewayResolvedValue === undefined) {
+        delete process.env[gatewayResolvedKey];
+      } else {
+        process.env[gatewayResolvedKey] = priorGatewayResolvedValue;
+      }
+      if (priorLocallyRecoveredValue === undefined) {
+        delete process.env[locallyRecoveredKey];
+      } else {
+        process.env[locallyRecoveredKey] = priorLocallyRecoveredValue;
+      }
+    }
+  });
+
   it("limits local fallback to targeted refs in read-only modes", async () => {
     const talkEnvKey = "TALK_API_KEY_TARGET_ONLY";
     const gatewayEnvKey = "GATEWAY_PASSWORD_UNRELATED";

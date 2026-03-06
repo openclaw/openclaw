@@ -226,6 +226,7 @@ async function resolveCommandSecretRefsLocally(params: {
     resolvedConfig,
     targetIds: params.targetIds,
     inactiveRefPaths,
+    ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
   });
   const targetStatesByPath = buildTargetStatesByPath({
     analyzed,
