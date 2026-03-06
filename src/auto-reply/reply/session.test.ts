@@ -1451,6 +1451,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect.objectContaining({
         sessionId: existingSessionId,
         storePath,
+        sessionKey,
         reason: "reset",
       }),
     );
@@ -1503,6 +1504,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         expect.objectContaining({
           sessionId: existingSessionId,
           storePath,
+          sessionKey,
           reason: "reset",
         }),
       );

@@ -132,6 +132,7 @@ function archiveSessionTranscriptsForSession(params: {
   storePath: string;
   sessionFile?: string;
   agentId?: string;
+  sessionKey?: string;
   reason: "reset" | "deleted";
 }): string[] {
   if (!params.sessionId) {
@@ -142,6 +143,7 @@ function archiveSessionTranscriptsForSession(params: {
     storePath: params.storePath,
     sessionFile: params.sessionFile,
     agentId: params.agentId,
+    sessionKey: params.sessionKey,
     reason: params.reason,
   });
 }
@@ -544,6 +546,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       storePath,
       sessionFile: oldSessionFile,
       agentId: target.agentId,
+      sessionKey: target.canonicalKey ?? key,
       reason: "reset",
     });
     if (hadExistingEntry) {

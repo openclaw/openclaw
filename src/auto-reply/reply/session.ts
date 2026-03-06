@@ -565,6 +565,7 @@ export async function initSessionState(params: {
       storePath,
       sessionFile: previousSessionEntry.sessionFile,
       agentId,
+      sessionKey,
       reason: "reset",
     });
   }

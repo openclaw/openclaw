@@ -786,4 +786,49 @@ describe("archiveSessionTranscripts", () => {
     expect(archived[0]).toContain(".deleted.");
     expect(fs.existsSync(transcriptPath)).toBe(false);
   });
+
+  test("appends session metadata to reset archives", () => {
+    const sessionId = "sess-archive-meta";
+    const sessionKey = "agent:main:discord:channel:123";
+    writeTranscript(tmpDir, sessionId, buildBasicSessionTranscript(sessionId));
+
+    const archived = archiveSessionTranscripts({
+      sessionId,
+      storePath,
+      sessionKey,
+      reason: "reset",
+    });
+
+    expect(archived).toHaveLength(1);
+    const lines = fs
+      .readFileSync(archived[0], "utf-8")
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0);
+    expect(lines).toHaveLength(4);
+    expect(JSON.parse(lines[3])).toMatchObject({
+      type: "session_archive_metadata",
+      reason: "reset",
+      sessionId,
+      sessionKey,
+    });
+  });
+
+  test("does not append session metadata to deleted archives", () => {
+    const sessionId = "sess-archive-delete";
+    writeTranscript(tmpDir, sessionId, buildBasicSessionTranscript(sessionId));
+
+    const archived = archiveSessionTranscripts({
+      sessionId,
+      storePath,
+      sessionKey: "agent:main:discord:channel:456",
+      reason: "deleted",
+    });
+
+    expect(archived).toHaveLength(1);
+    const lines = fs
+      .readFileSync(archived[0], "utf-8")
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0);
+    expect(lines).toHaveLength(3);
+  });
 });

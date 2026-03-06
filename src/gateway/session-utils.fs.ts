@@ -165,6 +165,14 @@ export function resolveSessionTranscriptCandidates(
 
 export type ArchiveFileReason = SessionArchiveReason;
 
+type ResetArchiveMetadataLine = {
+  type: "session_archive_metadata";
+  reason: "reset";
+  sessionId: string;
+  sessionKey: string;
+  resetAt: string;
+};
+
 function canonicalizePathForComparison(filePath: string): string {
   const resolved = path.resolve(filePath);
   try {
@@ -174,8 +182,35 @@ function canonicalizePathForComparison(filePath: string): string {
   }
 }
 
-export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
-  const ts = formatSessionArchiveTimestamp();
+function appendResetArchiveMetadata(filePath: string, metadata: ResetArchiveMetadataLine): void {
+  const prefix = fs.statSync(filePath).size > 0 ? "\n" : "";
+  fs.appendFileSync(filePath, `${prefix}${JSON.stringify(metadata)}\n`, "utf-8");
+}
+
+export function archiveFileOnDisk(
+  filePath: string,
+  reason: ArchiveFileReason,
+  opts?: {
+    sessionId?: string;
+    sessionKey?: string;
+    nowMs?: number;
+  },
+): string {
+  const nowMs = opts?.nowMs ?? Date.now();
+  if (reason === "reset" && opts?.sessionId && opts.sessionKey) {
+    try {
+      appendResetArchiveMetadata(filePath, {
+        type: "session_archive_metadata",
+        reason: "reset",
+        sessionId: opts.sessionId,
+        sessionKey: opts.sessionKey,
+        resetAt: new Date(nowMs).toISOString(),
+      });
+    } catch {
+      // Best-effort: keep transcript archival working even if metadata append fails.
+    }
+  }
+  const ts = formatSessionArchiveTimestamp(nowMs);
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
   return archived;
@@ -190,6 +225,7 @@ export function archiveSessionTranscripts(opts: {
   storePath: string | undefined;
   sessionFile?: string;
   agentId?: string;
+  sessionKey?: string;
   reason: "reset" | "deleted";
   /**
    * When true, only archive files resolved under the session store directory.
@@ -219,7 +255,12 @@ export function archiveSessionTranscripts(opts: {
       continue;
     }
     try {
-      archived.push(archiveFileOnDisk(candidatePath, opts.reason));
+      archived.push(
+        archiveFileOnDisk(candidatePath, opts.reason, {
+          sessionId: opts.sessionId,
+          sessionKey: opts.sessionKey,
+        }),
+      );
     } catch {
       // Best-effort.
     }
