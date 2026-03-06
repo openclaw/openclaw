@@ -121,6 +121,7 @@ Docs: https://docs.openclaw.ai
 - Security/auth labels: remove token and API-key snippets from user-facing auth status labels so `/status` and `/models` do not expose credential fragments. (#33262) thanks @cu1ch3n.
 - Auth/credential semantics: align profile eligibility + probe diagnostics with SecretRef/expiry rules and harden browser download atomic writes. (#33733) thanks @joshavant.
 - Security/audit denyCommands guidance: suggest likely exact node command IDs for unknown `gateway.nodes.denyCommands` entries so ineffective denylist entries are easier to correct. (#29713) thanks @liquidhorizon88-bot.
+- Agents/overload auth-profile state: keep overloaded prompt/assistant failures failover-eligible without recording auth-profile failure state, so transient provider overloads do not poison later profile selection on the same provider.
 - Docs/security hardening guidance: document Docker `DOCKER-USER` + UFW policy and add cross-linking from Docker install docs for VPS/public-host setups. (#27613) thanks @dorukardahan.
 - Docs/security threat-model links: replace relative `.md` links with Mintlify-compatible root-relative routes in security docs to prevent broken internal navigation. (#27698) thanks @clawdoo.
 - Plugins/Update integrity drift: avoid false integrity drift prompts when updating npm-installed plugins from unpinned specs, while keeping drift checks for exact pinned versions. (#37179) Thanks @vincentkoc.
