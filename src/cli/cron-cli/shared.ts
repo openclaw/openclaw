@@ -149,6 +149,13 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   return delta >= 0 ? `in ${label}` : `${label} ago`;
 };
 
+const formatRelativeForDisplay = (ms: number | null | undefined, nowMs: number) => {
+  if (!ms) {
+    return undefined;
+  }
+  return formatRelative(ms, nowMs);
+};
+
 const formatSchedule = (schedule: CronSchedule) => {
   if (schedule.kind === "at") {
     return `at ${formatIsoMinute(schedule.at)}`;
@@ -260,4 +267,43 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
 
     runtime.log(line.trimEnd());
   }
+}
+
+function formatJsonDateTime(ms: number | undefined): string | undefined {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) {
+    return undefined;
+  }
+  return new Date(ms).toISOString();
+}
+
+function isCronJob(value: unknown): value is CronJob {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.id === "string" &&
+    typeof record.name === "string" &&
+    record.state !== null &&
+    typeof record.state === "object" &&
+    record.schedule !== null &&
+    typeof record.schedule === "object"
+  );
+}
+
+export function formatCronJobForDisplay(value: unknown, nowMs = Date.now()): unknown {
+  if (!isCronJob(value)) {
+    return value;
+  }
+  const job = value;
+  return {
+    ...job,
+    state: {
+      ...job.state,
+      nextRunAtIso: formatJsonDateTime(job.state.nextRunAtMs),
+      nextRunIn: job.enabled ? formatRelativeForDisplay(job.state.nextRunAtMs, nowMs) : undefined,
+      lastRunAtIso: formatJsonDateTime(job.state.lastRunAtMs),
+      lastRunAgo: formatRelativeForDisplay(job.state.lastRunAtMs, nowMs),
+    },
+  };
 }

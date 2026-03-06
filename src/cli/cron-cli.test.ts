@@ -8,7 +8,7 @@ const defaultGatewayMock = async (
   _opts: unknown,
   params?: unknown,
   _timeoutMs?: number,
-) => {
+): Promise<unknown> => {
   if (method === "cron.status") {
     return { enabled: true };
   }
@@ -188,7 +188,108 @@ async function runCronRunAndCaptureExit(params: { ran: boolean; args?: string[] 
   };
 }
 
+async function getRuntimeLogSpy() {
+  const runtimeModule = await import("../runtime.js");
+  return runtimeModule.defaultRuntime.log as ReturnType<typeof vi.fn>;
+}
+
 describe("cron cli", () => {
+  it("adds human-readable state fields to cron edit output", async () => {
+    const runtimeLog = await getRuntimeLogSpy();
+    runtimeLog.mockClear();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-03-06T06:00:00.000Z"));
+    try {
+      callGatewayFromCli.mockImplementation(
+        async (method: string, _opts: unknown, params?: unknown) => {
+          if (method === "cron.status") {
+            return { enabled: true };
+          }
+          if (method === "cron.update") {
+            return {
+              id: "job-1",
+              name: "Daily March date-selection reminder",
+              enabled: true,
+              createdAtMs: 1772162768988,
+              updatedAtMs: 1772794372339,
+              schedule: { kind: "every", everyMs: 86_400_000, anchorMs: 1772668800000 },
+              sessionTarget: "main",
+              wakeMode: "now",
+              payload: { kind: "systemEvent", text: "something something" },
+              state: {
+                nextRunAtMs: Date.parse("2026-03-06T19:00:00.000Z"),
+                lastRunAtMs: Date.parse("2026-03-05T19:00:00.000Z"),
+                lastRunStatus: "ok",
+              },
+              params,
+            };
+          }
+          return { ok: true, params };
+        },
+      );
+
+      const program = buildProgram();
+      await program.parseAsync(["cron", "edit", "job-1", "--name", "Updated"], { from: "user" });
+
+      const rendered = JSON.parse(String(runtimeLog.mock.calls.at(-1)?.[0] ?? "{}")) as {
+        state?: {
+          nextRunAtIso?: string;
+          nextRunIn?: string;
+          lastRunAtIso?: string;
+          lastRunAgo?: string;
+        };
+      };
+
+      expect(rendered.state?.nextRunAtIso).toBe("2026-03-06T19:00:00.000Z");
+      expect(rendered.state?.nextRunIn).toBe("in 13h");
+      expect(rendered.state?.lastRunAtIso).toBe("2026-03-05T19:00:00.000Z");
+      expect(rendered.state?.lastRunAgo).toBe("11h ago");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("omits human-readable cron state fields when timestamps are missing", async () => {
+    const runtimeLog = await getRuntimeLogSpy();
+    runtimeLog.mockClear();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.update") {
+          return {
+            id: "job-1",
+            name: "No timestamps yet",
+            enabled: true,
+            createdAtMs: 1772162768988,
+            updatedAtMs: 1772794372339,
+            schedule: { kind: "every", everyMs: 86_400_000, anchorMs: 1772668800000 },
+            sessionTarget: "main",
+            wakeMode: "now",
+            payload: { kind: "systemEvent", text: "something something" },
+            state: {
+              lastRunStatus: "ok",
+            },
+            params,
+          };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--name", "Updated"], { from: "user" });
+
+    const rendered = JSON.parse(String(runtimeLog.mock.calls.at(-1)?.[0] ?? "{}")) as {
+      state?: Record<string, unknown>;
+    };
+
+    expect(rendered.state).not.toHaveProperty("nextRunAtIso");
+    expect(rendered.state).not.toHaveProperty("nextRunIn");
+    expect(rendered.state).not.toHaveProperty("lastRunAtIso");
+    expect(rendered.state).not.toHaveProperty("lastRunAgo");
+  });
+
   it.each([
     {
       name: "exits 0 for cron run when job executes successfully",
