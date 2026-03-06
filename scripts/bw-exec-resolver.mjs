@@ -163,13 +163,20 @@ async function main() {
   );
 }
 
-main().catch((err) => {
-  process.stdout.write(
-    JSON.stringify({
-      protocolVersion: 1,
-      values: {},
-      errors: { _fatal: { message: err.message } },
-    }),
-  );
-  process.exit(1);
-});
+// Only run when executed directly (not when imported for testing).
+const isDirectExecution =
+  typeof process.argv[1] === "string" &&
+  import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"));
+
+if (isDirectExecution) {
+  main().catch((err) => {
+    process.stdout.write(
+      JSON.stringify({
+        protocolVersion: 1,
+        values: {},
+        errors: { _fatal: { message: err.message } },
+      }),
+    );
+    process.exit(1);
+  });
+}
