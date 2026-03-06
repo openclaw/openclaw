@@ -192,4 +192,25 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
       expect(call?.model).toBe("gpt-4o");
     });
   });
+
+  it('job model override "default" falls back to system default model', async () => {
+    await withTempHome(async (home) => {
+      const call = await runSubagentModelCase({
+        home,
+        cfgOverrides: {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-sonnet-4-5",
+              workspace: path.join(home, "openclaw"),
+            },
+          },
+        },
+        jobModelOverride: "default",
+      });
+      // When model is "default", it should use the system default_model
+      // not treat it as a literal model name
+      expect(call?.provider).toBe("anthropic");
+      expect(call?.model).toBe("claude-sonnet-4-5");
+    });
+  });
 });
