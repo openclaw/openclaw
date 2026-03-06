@@ -91,7 +91,7 @@ describe("sendMessage", () => {
     expect(result).toBe(true);
 
     const httpsRequest = vi.mocked(https.request);
-    expect(httpsRequest.mock.calls.length).toBeGreaterThan(1);
+    expect(httpsRequest.mock.calls.length).toBe(3);
   });
 });
 
