@@ -75,5 +75,4 @@ browser console: WebSocket close code 1008 -- token mismatch / expired
          ~/.openclaw/agents/*/agent/auth-profiles.json || true
   ```
 
-
 _Add new rows whenever you decode a scary message. The goal is zero guesswork._
