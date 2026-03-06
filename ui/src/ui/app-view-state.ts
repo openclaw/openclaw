@@ -158,10 +158,6 @@ export type AppViewState = {
   agentSkillsError: string | null;
   agentSkillsReport: SkillStatusReport | null;
   agentSkillsAgentId: string | null;
-  agentDeleteBusy: boolean;
-  agentDeleteError: string | null;
-  agentDeleteConfirmOpen: boolean;
-  agentDeleteConfirmInput: string;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;

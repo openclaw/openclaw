@@ -129,14 +129,6 @@ export type AgentsProps = {
   onAgentSkillToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   onAgentSkillsClear: (agentId: string) => void;
   onAgentSkillsDisableAll: (agentId: string) => void;
-  agentDeleteConfirmOpen: boolean;
-  agentDeleteConfirmInput: string;
-  agentDeleteBusy: boolean;
-  agentDeleteError: string | null;
-  onDeleteConfirmOpen: (agentId: string) => void;
-  onDeleteConfirmClose: () => void;
-  onDeleteConfirmInputChange: (value: string) => void;
-  onDeleteConfirm: (agentId: string) => void;
 };
 
 export type AgentContext = {
@@ -236,14 +228,6 @@ export function renderAgents(props: AgentsProps) {
                         onConfigSave: props.onConfigSave,
                         onModelChange: props.onModelChange,
                         onModelFallbacksChange: props.onModelFallbacksChange,
-                        agentDeleteConfirmOpen: props.agentDeleteConfirmOpen,
-                        agentDeleteConfirmInput: props.agentDeleteConfirmInput,
-                        agentDeleteBusy: props.agentDeleteBusy,
-                        agentDeleteError: props.agentDeleteError,
-                        onDeleteConfirmOpen: props.onDeleteConfirmOpen,
-                        onDeleteConfirmClose: props.onDeleteConfirmClose,
-                        onDeleteConfirmInputChange: props.onDeleteConfirmInputChange,
-                        onDeleteConfirm: props.onDeleteConfirm,
                       })
                     : nothing
                 }
@@ -618,14 +602,6 @@ function renderAgentOverview(params: {
   onConfigSave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
-  agentDeleteConfirmOpen: boolean;
-  agentDeleteConfirmInput: string;
-  agentDeleteBusy: boolean;
-  agentDeleteError: string | null;
-  onDeleteConfirmOpen: (agentId: string) => void;
-  onDeleteConfirmClose: () => void;
-  onDeleteConfirmInputChange: (value: string) => void;
-  onDeleteConfirm: (agentId: string) => void;
 }) {
   const {
     agent,
@@ -641,14 +617,6 @@ function renderAgentOverview(params: {
     onConfigSave,
     onModelChange,
     onModelFallbacksChange,
-    agentDeleteConfirmOpen,
-    agentDeleteConfirmInput,
-    agentDeleteBusy,
-    agentDeleteError,
-    onDeleteConfirmOpen,
-    onDeleteConfirmClose,
-    onDeleteConfirmInputChange,
-    onDeleteConfirm,
   } = params;
   const config = resolveAgentConfig(configForm, agent.id);
   const workspaceFromFiles =
@@ -686,8 +654,6 @@ function renderAgentOverview(params: {
       ? "Unavailable"
       : "";
   const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
-  const displayName = normalizeAgentLabel(agent);
-  const deleteInputMatches = agentDeleteConfirmInput.trim() === displayName;
 
   return html`
     <section class="card">
@@ -696,18 +662,6 @@ function renderAgentOverview(params: {
           <div class="card-title">Overview</div>
           <div class="card-sub">Workspace paths and identity metadata.</div>
         </div>
-        ${
-          !isDefault
-            ? html`
-                <button
-                  class="btn btn--sm danger"
-                  @click=${() => onDeleteConfirmOpen(agent.id)}
-                >
-                  ${t("agents.delete.button")}
-                </button>
-              `
-            : nothing
-        }
       </div>
       <div class="agents-overview-grid" style="margin-top: 16px;">
         <div class="agent-kv">
@@ -788,50 +742,6 @@ function renderAgentOverview(params: {
         </div>
       </div>
 
-      ${
-        agentDeleteConfirmOpen
-          ? html`
-              <div class="agent-delete-overlay" role="dialog" aria-live="polite">
-                <div class="agent-delete-card">
-                  <div class="agent-delete-title">${t("agents.delete.title")}</div>
-                  <div class="agent-delete-warning">${t("agents.delete.warning")}</div>
-                  ${
-                    agentDeleteError
-                      ? html`<div class="callout danger" style="margin-top: 12px;">${agentDeleteError}</div>`
-                      : nothing
-                  }
-                  <label class="field" style="margin-top: 16px;">
-                    <span>${t("agents.delete.confirmLabel").replace("{name}", displayName)}</span>
-                    <input
-                      type="text"
-                      .value=${agentDeleteConfirmInput}
-                      placeholder=${displayName}
-                      ?disabled=${agentDeleteBusy}
-                      @input=${(e: Event) =>
-                        onDeleteConfirmInputChange((e.target as HTMLInputElement).value)}
-                    />
-                  </label>
-                  <div class="agent-delete-actions">
-                    <button
-                      class="btn"
-                      ?disabled=${agentDeleteBusy}
-                      @click=${onDeleteConfirmClose}
-                    >
-                      ${t("agents.delete.cancel")}
-                    </button>
-                    <button
-                      class="btn danger"
-                      ?disabled=${!deleteInputMatches || agentDeleteBusy}
-                      @click=${() => onDeleteConfirm(agent.id)}
-                    >
-                      ${agentDeleteBusy ? t("agents.delete.deleting") : t("agents.delete.confirm")}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            `
-          : nothing
-      }
     </section>
   `;
 }

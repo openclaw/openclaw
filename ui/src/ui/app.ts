@@ -251,10 +251,6 @@ export class OpenClawApp extends LitElement {
   @state() agentSkillsError: string | null = null;
   @state() agentSkillsReport: SkillStatusReport | null = null;
   @state() agentSkillsAgentId: string | null = null;
-  @state() agentDeleteBusy = false;
-  @state() agentDeleteError: string | null = null;
-  @state() agentDeleteConfirmOpen = false;
-  @state() agentDeleteConfirmInput = "";
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
