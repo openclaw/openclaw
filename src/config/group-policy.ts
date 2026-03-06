@@ -24,6 +24,8 @@ export type ContextualActivationConfig = {
   contextMessages?: number;
   /** Base probability (0-1) of even calling the decision model when peeking. Default: 1. */
   baseRate?: number;
+  /** Time-based baseRate overrides. Format: [{ time: "HH:MM-HH:MM", baseRate: 0.3 }]. First match wins. */
+  schedule?: Array<{ time: string; baseRate: number }>;
   /** Fallback timeout (seconds) after which engaged mode auto-expires if no new messages arrive. Default: 300. */
   engagedTimeout?: number;
 };
