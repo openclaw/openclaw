@@ -5,6 +5,10 @@ const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
 
+/** Known image-viewer command patterns — mirrors server-side IMAGE_VIEWER_CMD_RE. */
+const IMAGE_VIEWER_RE = /\b(?:view[-_]?image|imgcat|icat|viu|timg|catimg|chafa|kitty\s+icat)\b/i;
+const IMAGE_FILE_EXT_RE = /\.(?:png|jpe?g|gif|webp)\b/i;
+
 export type AgentEventPayload = {
   runId: string;
   seq: number;
@@ -503,9 +507,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     })();
     // Mirror server-side IMAGE_VIEWER_CMD_RE gate to avoid spurious reloads
     // from commands that merely reference image files (e.g. rm photo.png).
-    const IMAGE_VIEWER_RE =
-      /\b(?:view[-_]?image|imgcat|icat|viu|timg|catimg|chafa|kitty\s+icat)\b/i;
-    if (IMAGE_VIEWER_RE.test(cmdStr) && /\.(?:png|jpe?g|gif|webp)\b/i.test(cmdStr)) {
+    if (IMAGE_VIEWER_RE.test(cmdStr) && IMAGE_FILE_EXT_RE.test(cmdStr)) {
       host.chatRunHasMedia = true;
     }
   }
