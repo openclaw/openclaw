@@ -97,5 +97,12 @@ export function resolveModel(
       modelRegistry,
     };
   }
-  return { model: normalizeModelCompat(model), authStorage, modelRegistry };
+  // When the user configures a custom baseUrl for a provider (e.g. openai-codex
+  // pointing at chatgpt.com/backend-api instead of api.openai.com), that override
+  // should win over the built-in model registry default.
+  const providerBaseUrl = cfg?.models?.providers?.[provider]?.baseUrl;
+  const resolved = providerBaseUrl
+    ? normalizeModelCompat({ ...model, baseUrl: providerBaseUrl } as Model<Api>)
+    : normalizeModelCompat(model);
+  return { model: resolved, authStorage, modelRegistry };
 }

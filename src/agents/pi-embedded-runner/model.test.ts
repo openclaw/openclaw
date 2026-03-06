@@ -127,4 +127,41 @@ describe("resolveModel", () => {
     expect(result.model?.provider).toBe("custom");
     expect(result.model?.id).toBe("missing-model");
   });
+
+  it("applies provider config baseUrl over registry default when model is found in registry", async () => {
+    // Simulate a model found in the registry with a default baseUrl
+    const { discoverModels } = await import("@mariozechner/pi-coding-agent");
+    const mockedDiscover = vi.mocked(discoverModels);
+    mockedDiscover.mockReturnValueOnce({
+      find: vi.fn(() => ({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 32000,
+      })),
+    } as ReturnType<typeof discoverModels>);
+
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.model?.baseUrl).toBe("https://chatgpt.com/backend-api");
+    expect(result.model?.id).toBe("gpt-5.4");
+  });
 });
