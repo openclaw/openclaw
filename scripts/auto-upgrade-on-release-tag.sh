@@ -232,7 +232,7 @@ if ! flock -n 9; then
 fi
 
 latest_release_tag() {
-  git tag --list --sort=-version:refname \
+  git tag --merged "$UPSTREAM_REMOTE/main" --list --sort=-version:refname \
     | grep -E '^v?[0-9]{4}\.[0-9]{1,2}\.[0-9]+$' \
     | head -n1
 }
@@ -270,8 +270,8 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
 fi
 
 PHASE="REBASE"
-log "Rebasing $WORK_BRANCH onto $UPSTREAM_REMOTE/main"
-run git rebase "$UPSTREAM_REMOTE/main"
+log "Rebasing $WORK_BRANCH onto release tag $LATEST_TAG"
+run git rebase "$LATEST_TAG"
 
 NEW_HEAD_SHA="$(git rev-parse HEAD)"
 
