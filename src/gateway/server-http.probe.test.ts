@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTH_TOKEN,
   AUTH_NONE,
   createRequest,
   createResponse,
@@ -9,7 +10,7 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 
 describe("gateway probe endpoints", () => {
-  it("returns readiness payload for /ready when getReadiness reports ready", async () => {
+  it("returns detailed readiness payload for local /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: true,
       failing: [],
@@ -31,7 +32,7 @@ describe("gateway probe endpoints", () => {
     });
   });
 
-  it("returns 503 for /ready when getReadiness reports not ready", async () => {
+  it("returns only readiness state for unauthenticated remote /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: false,
       failing: ["discord", "telegram"],
@@ -43,7 +44,38 @@ describe("gateway probe endpoints", () => {
       resolvedAuth: AUTH_NONE,
       overrides: { getReadiness },
       run: async (server) => {
-        const req = createRequest({ path: "/ready" });
+        const req = createRequest({
+          path: "/ready",
+          remoteAddress: "10.0.0.8",
+          host: "gateway.test",
+        });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(503);
+        expect(JSON.parse(getBody())).toEqual({ ready: false });
+      },
+    });
+  });
+
+  it("returns detailed readiness payload for authenticated remote /ready requests", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      ready: false,
+      failing: ["discord", "telegram"],
+      uptimeMs: 8_000,
+    });
+
+    await withGatewayServer({
+      prefix: "probe-remote-authenticated",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const req = createRequest({
+          path: "/ready",
+          remoteAddress: "10.0.0.8",
+          host: "gateway.test",
+          authorization: "Bearer test-token",
+        });
         const { res, getBody } = createResponse();
         await dispatchRequest(server, req, res);
 
