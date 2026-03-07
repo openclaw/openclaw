@@ -15,6 +15,7 @@ import {
   writeJsonAtomic,
   writeTextAtomic,
 } from "../infra/json-files.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { CONTINUITY_FILE_BY_KIND, resolveContinuityConfig } from "./config.js";
 import { extractContinuityMatches } from "./extractor.js";
@@ -59,7 +60,7 @@ function escapeMarkdownLine(value: string): string {
 
 function resolveAgentId(cfg: OpenClawConfig, agentId?: string, sessionKey?: string): string {
   if (agentId?.trim()) {
-    return agentId.trim();
+    return normalizeAgentId(agentId);
   }
   if (sessionKey?.trim()) {
     return resolveSessionAgentId({ sessionKey, config: cfg });

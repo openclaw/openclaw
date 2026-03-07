@@ -197,6 +197,38 @@ describe("ContinuityService", () => {
     ).resolves.toEqual([]);
   });
 
+  it("normalizes explicit agent ids before continuity store reads and writes", async () => {
+    const service = createContinuityService(makeConfig());
+
+    await service.patch({
+      agentId: "../../Outside",
+      id: "missing",
+      action: "approve",
+    });
+
+    const normalizedStorePath = path.join(
+      stateDir,
+      "agents",
+      "outside",
+      "continuity",
+      "store.json",
+    );
+    const escapedStorePath = path.join(stateDir, "outside", "continuity", "store.json");
+    await expect(fs.readFile(normalizedStorePath, "utf8")).resolves.toContain('"records": []');
+    await expect(fs.access(escapedStorePath)).rejects.toThrow();
+
+    await service.captureTurn({
+      agentId: "Outside",
+      sessionId: "session-explicit-agent",
+      sessionKey: "main",
+      messages: [makeMessage("I prefer normalized continuity state paths.")],
+    });
+
+    const records = await service.list({ agentId: "outside" });
+    expect(records).toHaveLength(1);
+    expect(records[0]?.text).toContain("normalized continuity state paths");
+  });
+
   it("filters prompt-injection-shaped memory candidates", async () => {
     const service = createContinuityService(makeConfig());
 
