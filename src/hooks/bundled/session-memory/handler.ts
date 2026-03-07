@@ -262,7 +262,6 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // but requires the root to be present (resolvePathWithinRoot calls realpath
     // on it). This is normally a no-op since the workspace is created at startup.
     await fs.mkdir(workspaceDir, { recursive: true });
-    const memoryDir = path.join(workspaceDir, "memory");
 
     // Get today's date for filename
     const now = new Date(event.timestamp);
@@ -361,30 +360,35 @@ const saveSessionToMemory: HookHandler = async (event) => {
       }
     }
 
-    // If no slug, use timestamp with a random suffix to avoid collisions.
-    // Second-resolution (HHMMSS) alone can collide when automated or
-    // multi-channel setups emit rapid /new or /reset commands within the
-    // same second — both writes target the same filename and the later
-    // one silently overwrites the earlier memory entry.
-    if (!slug) {
-      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
-      const rand = Math.random().toString(36).slice(2, 6); // 4-char alphanumeric
-      slug = `${timeSlug.slice(0, 6)}-${rand}`;
-      log.debug("Using fallback timestamp slug", { slug });
+    // Slug and filename are only needed for non-redirected writes —
+    // redirected writes use the caller-supplied path directly.
+    let filename = "";
+    if (!isRedirected) {
+      // If no slug, use timestamp with a random suffix to avoid collisions.
+      // Second-resolution (HHMMSS) alone can collide when automated or
+      // multi-channel setups emit rapid /new or /reset commands within the
+      // same second — both writes target the same filename and the later
+      // one silently overwrites the earlier memory entry.
+      if (!slug) {
+        const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
+        const rand = Math.random().toString(36).slice(2, 6); // 4-char alphanumeric
+        slug = `${timeSlug.slice(0, 6)}-${rand}`;
+        log.debug("Using fallback timestamp slug", { slug });
+      }
+      filename = `${dateStr}-${slug}.md`;
     }
-
-    // Create filename with date and slug
-    const filename = `${dateStr}-${slug}.md`;
 
     // Determine write target. Redirect paths are validated by writeFileWithinRoot
     // which handles path traversal, symlink resolution, and containment checks.
     // For redirects, compute a workspace-relative path so writeFileWithinRoot
     // can validate containment. Both workspace and redirect paths are
     // canonicalized via realpath to avoid symlink aliasing issues.
-    const canonicalWorkspace =
-      isRedirected && path.isAbsolute(redirectPath)
-        ? await fs.realpath(workspaceDir)
-        : workspaceDir;
+    // Canonicalize workspace for all redirected writes (absolute and relative)
+    // so that writeFileWithinRoot's containment check and the post-write log
+    // path use a consistent root.
+    const canonicalWorkspace = isRedirected
+      ? await fs.realpath(workspaceDir).catch(() => workspaceDir)
+      : workspaceDir;
     // Canonicalize the redirect path by walking up to the nearest existing
     // ancestor. This handles macOS /tmp → /private/tmp symlinks and other
     // cases where the redirect target's parent doesn't exist yet.
@@ -404,6 +408,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
       relativePath: writeRelativePath,
     });
 
+    // memoryDir and memoryFilePath are only used for non-redirected writes.
+    const memoryDir = path.join(workspaceDir, "memory");
     const memoryFilePath = path.join(memoryDir, filename);
 
     // Format time as HH:MM:SS UTC
@@ -471,6 +477,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
         throw err;
       }
       log.debug("Memory file written successfully (redirected)");
+      // Use canonicalWorkspace (always realpath'd for redirects) so the
+      // logged path is consistent regardless of symlinks.
       const writePath = path.resolve(canonicalWorkspace, writeRelativePath);
       const relPath = writePath.replace(os.homedir(), "~");
       log.info(`Session context saved to ${relPath}`);

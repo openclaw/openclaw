@@ -872,6 +872,10 @@ describe("session-memory hook", () => {
 
     const content = await fs.readFile(redirectFile, "utf-8");
     expect(content).toContain("redirected content");
+
+    // Verify default memory/ dir was not written
+    const memoryFiles = await fs.readdir(path.join(tempDir, "memory")).catch(() => [] as string[]);
+    expect(memoryFiles.filter((f) => f.endsWith(".md"))).toHaveLength(0);
   });
 
   it("sessionSaveRedirectPath resolves relative paths against workspace", async () => {
@@ -925,6 +929,30 @@ describe("session-memory hook", () => {
     const memoryDir2 = path.join(tempDir, "memory");
     const memoryFiles2 = await fs.readdir(memoryDir2).catch(() => [] as string[]);
     expect(memoryFiles2.filter((f) => f.endsWith(".md"))).toHaveLength(0);
+  });
+
+  it("sessionSaveRedirectPath rejects relative traversal paths", async () => {
+    const tempDir = await createCaseWorkspace("redirect-rel-escape");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([{ role: "user", content: "traversal attempt" }]),
+    });
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "s1", sessionFile },
+    });
+    event.context.sessionSaveRedirectPath = "../../../etc/stolen.md";
+
+    await handler(event);
+
+    // Should fail closed — no file written anywhere
+    const memoryDir = path.join(tempDir, "memory");
+    const memoryFiles = await fs.readdir(memoryDir).catch(() => [] as string[]);
+    expect(memoryFiles.filter((f) => f.endsWith(".md"))).toHaveLength(0);
   });
 
   it("sessionSaveContent + sessionSaveRedirectPath writes custom content to redirect path", async () => {
