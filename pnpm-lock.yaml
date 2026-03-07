@@ -115,6 +115,9 @@ importers:
       grammy:
         specifier: ^1.41.1
         version: 1.41.1
+      hono:
+        specifier: 4.12.5
+        version: 4.12.5
       https-proxy-agent:
         specifier: ^7.0.6
         version: 7.0.6
@@ -11625,8 +11628,7 @@ snapshots:
 
   highlight.js@10.7.3: {}
 
-  hono@4.12.5:
-    optional: true
+  hono@4.12.5: {}
 
   hookable@6.0.1: {}
 
