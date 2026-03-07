@@ -290,7 +290,8 @@ function collectToolsWebSearchAssignments(params: {
     rawProvider === "gemini" ||
     rawProvider === "grok" ||
     rawProvider === "kimi" ||
-    rawProvider === "perplexity"
+    rawProvider === "perplexity" ||
+    rawProvider === "searxng"
       ? rawProvider
       : undefined;
   const paths = [
