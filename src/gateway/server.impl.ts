@@ -24,6 +24,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
+  isPackageProvenControlUiRootSync,
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
@@ -308,14 +309,19 @@ export async function startGatewayServer(
   if (configSnapshot.exists && !configSnapshot.valid) {
     const issues =
       configSnapshot.issues.length > 0
-        ? formatConfigIssueLines(configSnapshot.issues, "", { normalizeRoot: true }).join("\n")
+        ? formatConfigIssueLines(configSnapshot.issues, "", {
+            normalizeRoot: true,
+          }).join("\n")
         : "Unknown validation issue.";
     throw new Error(
       `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
     );
   }
 
-  const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
+  const autoEnable = applyPluginAutoEnable({
+    config: configSnapshot.config,
+    env: process.env,
+  });
   if (autoEnable.changes.length > 0) {
     try {
       await writeConfigFile(autoEnable.config);
@@ -351,7 +357,10 @@ export async function startGatewayServer(
   };
   const activateRuntimeSecrets = async (
     config: OpenClawConfig,
-    params: { reason: "startup" | "reload" | "restart-check"; activate: boolean },
+    params: {
+      reason: "startup" | "reload" | "restart-check";
+      activate: boolean;
+    },
   ) =>
     await runWithSecretsActivationLock(async () => {
       try {
@@ -402,7 +411,9 @@ export async function startGatewayServer(
     if (!freshSnapshot.valid) {
       const issues =
         freshSnapshot.issues.length > 0
-          ? formatConfigIssueLines(freshSnapshot.issues, "", { normalizeRoot: true }).join("\n")
+          ? formatConfigIssueLines(freshSnapshot.issues, "", {
+              normalizeRoot: true,
+            }).join("\n")
           : "Unknown validation issue.";
       throw new Error(`Invalid config at ${freshSnapshot.path}.\n${issues}`);
     }
@@ -449,7 +460,9 @@ export async function startGatewayServer(
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat();
   }
-  setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
+  setGatewaySigusr1RestartPolicy({
+    allowExternal: isRestartEnabled(cfgAtStart),
+  });
   setPreRestartDeferralCheck(
     () => getTotalQueueSize() + getTotalPendingReplies() + getActiveEmbeddedRunCount(),
   );
@@ -545,7 +558,16 @@ export async function startGatewayServer(
       });
     }
     controlUiRootState = resolvedRoot
-      ? { kind: "resolved", path: resolvedRoot }
+      ? {
+          kind: isPackageProvenControlUiRootSync(resolvedRoot, {
+            moduleUrl: import.meta.url,
+            argv1: process.argv[1],
+            cwd: process.cwd(),
+          })
+            ? "bundled"
+            : "resolved",
+          path: resolvedRoot,
+        }
       : { kind: "missing" };
   }
 
@@ -793,7 +815,11 @@ export async function startGatewayServer(
           targetIds: new Set(targetIds),
         });
       if (assignments.length === 0) {
-        return { assignments: [] as CommandSecretAssignment[], diagnostics, inactiveRefPaths };
+        return {
+          assignments: [] as CommandSecretAssignment[],
+          diagnostics,
+          inactiveRefPaths,
+        };
       }
       return { assignments, diagnostics, inactiveRefPaths };
     },
@@ -897,8 +923,12 @@ export async function startGatewayServer(
         log,
         isNixMode,
         onUpdateAvailableChange: (updateAvailable) => {
-          const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
-          broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
+          const payload: GatewayUpdateAvailableEventPayload = {
+            updateAvailable,
+          };
+          broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, {
+            dropIfSlow: true,
+          });
         },
       });
   const tailscaleCleanup = minimalTestGateway
@@ -990,7 +1020,10 @@ export async function startGatewayServer(
             }
           },
           onRestart: async (plan, nextConfig) => {
-            await activateRuntimeSecrets(nextConfig, { reason: "restart-check", activate: false });
+            await activateRuntimeSecrets(nextConfig, {
+              reason: "restart-check",
+              activate: false,
+            });
             requestGatewayRestart(plan, nextConfig);
           },
           log: {

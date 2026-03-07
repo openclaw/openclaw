@@ -39,6 +39,7 @@ export type ControlUiRequestOptions = {
 };
 
 export type ControlUiRootState =
+  | { kind: "bundled"; path: string }
   | { kind: "resolved"; path: string }
   | { kind: "invalid"; path: string }
   | { kind: "missing" };
@@ -152,7 +153,10 @@ function isValidAgentId(agentId: string): boolean {
 export function handleControlUiAvatarRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { basePath?: string; resolveAvatar: (agentId: string) => ControlUiAvatarResolution },
+  opts: {
+    basePath?: string;
+    resolveAvatar: (agentId: string) => ControlUiAvatarResolution;
+  },
 ): boolean {
   const urlRaw = req.url;
   if (!urlRaw) {
@@ -256,6 +260,7 @@ function resolveSafeAvatarFile(filePath: string): { path: string; fd: number } |
 function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
+  rejectHardlinks: boolean,
 ): { path: string; fd: number } | null {
   const opened = openBoundaryFileSync({
     absolutePath: filePath,
@@ -263,6 +268,7 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
+    rejectHardlinks,
   });
   if (!opened.ok) {
     if (opened.reason === "io") {
@@ -358,7 +364,9 @@ export function handleControlUiHttpRequest(
 
   const rootState = opts?.root;
   if (rootState?.kind === "invalid") {
-    respondControlUiAssetsUnavailable(res, { configuredRootPath: rootState.path });
+    respondControlUiAssetsUnavailable(res, {
+      configuredRootPath: rootState.path,
+    });
     return true;
   }
   if (rootState?.kind === "missing") {
@@ -367,7 +375,7 @@ export function handleControlUiHttpRequest(
   }
 
   const root =
-    rootState?.kind === "resolved"
+    rootState?.kind === "resolved" || rootState?.kind === "bundled"
       ? rootState.path
       : resolveControlUiRootSync({
           moduleUrl: import.meta.url,
@@ -419,7 +427,8 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const safeFile = resolveSafeControlUiFile(rootReal, filePath);
+  const rejectHardlinks = rootState?.kind === "resolved";
+  const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
   if (safeFile) {
     try {
       if (respondHeadForFile(req, res, safeFile.path)) {
@@ -448,7 +457,7 @@ export function handleControlUiHttpRequest(
 
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
-  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath);
+  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
   if (safeIndex) {
     try {
       if (respondHeadForFile(req, res, safeIndex.path)) {
