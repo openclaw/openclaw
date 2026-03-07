@@ -1584,7 +1584,7 @@ async function dispatchDiscordCommandInteraction(params: {
     : (configuredRoute?.route ?? route);
   log.info("native command routed", {
     commandName: command.nativeName ?? command.key,
-    prompt,
+    promptChars: prompt.length,
     accountId,
     applicationId:
       typeof interaction.rawData.application_id === "string"
