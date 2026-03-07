@@ -1,34 +1,45 @@
-name: Deploy to GitHub Pages
+# .github/workflows/deploy.yml
+# Primary Directive: Zero-cost revenue generation through protected IP deployment.
+
+name: Revenue-First Deployment
 
 on:
   push:
-    branches: ["main"]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
+    branches: [ main ]
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  build-and-protect:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          path: '.'
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          node-version: '20'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Protect Intellectual Property (Obfuscation)
+        # Using free 'terser' to minify and obfuscate to prevent reverse engineering of your revenue modules.
+        run: |
+          npm install terser -g
+          mkdir -p dist/protected
+          for file in src/**/*.js; do
+            terser "$file" --compress --mangle -o "dist/protected/$(basename "$file")"
+          done
+
+      - name: Generate Market-Ready Documentation
+        # Auto-generates a clean README for the 'Lite' version to drive traffic to the 'Pro' version.
+        run: |
+          echo "# Modular Venue System - Powered by OpenClaw" > dist/MARKET_LITE.md
+          echo "Professional revenue-driven venue management. For license inquiries: [Your Contact/Store]" >> dist/MARKET_LITE.md
+
+      - name: Deploy to Production (Free Tier)
+        # Deploying to GitHub Pages (Free) as a live demo/storefront.
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: dist
+          branch: gh-pages
