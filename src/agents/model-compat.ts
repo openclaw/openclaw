@@ -20,6 +20,15 @@ function isOpenAINativeEndpoint(baseUrl: string): boolean {
   }
 }
 
+function isAzureOpenAIEndpoint(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host.endsWith(".openai.azure.com");
+  } catch {
+    return false;
+  }
+}
+
 function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
   return model.api === "anthropic-messages";
 }
@@ -61,10 +70,24 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   // leave compat unchanged and let default native behavior apply.
   // Note: explicit true values are intentionally overridden for non-native
   // endpoints for safety.
+  const isAzure = baseUrl ? isAzureOpenAIEndpoint(baseUrl) : false;
   const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
   if (!needsForce) {
     return model;
   }
+
+  if (isAzure) {
+    if (compat?.supportsDeveloperRole === false) {
+      return model;
+    }
+    return {
+      ...model,
+      compat: compat
+        ? { ...compat, supportsDeveloperRole: false }
+        : { supportsDeveloperRole: false },
+    } as typeof model;
+  }
+
   if (compat?.supportsDeveloperRole === false && compat?.supportsUsageInStreaming === false) {
     return model;
   }

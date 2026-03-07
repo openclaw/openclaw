@@ -212,6 +212,30 @@ describe("normalizeModelCompat", () => {
       baseUrl: "https://my-deployment.openai.azure.com/openai",
     });
   });
+
+  it("does not force supportsUsageInStreaming off for Azure OpenAI endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "azure-openai",
+      baseUrl: "https://my-deployment.openai.azure.com/openai",
+      compat: { supportsUsageInStreaming: true },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+  });
+
+  it("preserves explicit supportsUsageInStreaming false for Azure OpenAI", () => {
+    const model = {
+      ...baseModel(),
+      provider: "azure-openai",
+      baseUrl: "https://my-deployment.openai.azure.com/openai",
+      compat: { supportsUsageInStreaming: false },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+  });
   it("forces supportsDeveloperRole off for generic custom openai-completions provider", () => {
     expectSupportsDeveloperRoleForcedOff({
       provider: "custom-cpa",
