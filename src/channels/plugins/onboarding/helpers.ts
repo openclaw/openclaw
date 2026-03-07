@@ -452,6 +452,23 @@ export function applySingleTokenPromptResult(params: {
   return next;
 }
 
+export function buildSingleChannelSecretPromptState(params: {
+  accountConfigured: boolean;
+  hasConfigToken: boolean;
+  allowEnv: boolean;
+  envValue?: string;
+}): {
+  accountConfigured: boolean;
+  hasConfigToken: boolean;
+  canUseEnv: boolean;
+} {
+  return {
+    accountConfigured: params.accountConfigured,
+    hasConfigToken: params.hasConfigToken,
+    canUseEnv: params.allowEnv && Boolean(params.envValue?.trim()) && !params.hasConfigToken,
+  };
+}
+
 export async function promptSingleChannelToken(params: {
   prompter: Pick<WizardPrompter, "confirm" | "text">;
   accountConfigured: boolean;
