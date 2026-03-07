@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "../usage-helpers.ts";
 import {
   buildAggregatesFromSessions,
@@ -89,6 +90,10 @@ function addUsageTotals(
 }
 
 export function renderUsage(props: UsageProps) {
+  const tr = (key: string, fallback: string, params?: Record<string, string>) => {
+    const v = t(key, params);
+    return v === key ? fallback : v;
+  };
   // Show loading skeleton if loading and no data yet
   if (props.loading && !props.totals) {
     // Use inline styles since main stylesheet hasn't loaded yet on initial render
@@ -106,7 +111,7 @@ export function renderUsage(props: UsageProps) {
         <div class="row" style="justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px;">
           <div style="flex: 1; min-width: 250px;">
             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 2px;">
-              <div class="card-title" style="margin: 0;">Token Usage</div>
+              <div class="card-title" style="margin: 0;">${tr("usagePage.tokenUsage", "Token Usage")}</div>
               <span style="
                 display: inline-flex;
                 align-items: center;
@@ -125,14 +130,14 @@ export function renderUsage(props: UsageProps) {
                   border-radius: 50%;
                   animation: initial-spin 0.6s linear infinite;
                 "></span>
-                Loading
+                ${tr("usagePage.loading", "Loading")}
               </span>
             </div>
           </div>
           <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
             <div style="display: flex; gap: 8px; align-items: center;">
               <input type="date" .value=${props.startDate} disabled style="padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; opacity: 0.6;" />
-              <span style="color: var(--muted);">to</span>
+              <span style="color: var(--muted);">${tr("usagePage.to", "to")}</span>
               <input type="date" .value=${props.endDate} disabled style="padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; opacity: 0.6;" />
             </div>
           </div>
@@ -334,9 +339,9 @@ export function renderUsage(props: UsageProps) {
           0
       : false);
   const datePresets = [
-    { label: "Today", days: 1 },
-    { label: "7d", days: 7 },
-    { label: "30d", days: 30 },
+    { label: tr("usagePage.presetToday", "Today"), days: 1 },
+    { label: tr("usagePage.preset7d", "7d"), days: 7 },
+    { label: tr("usagePage.preset30d", "30d"), days: 30 },
   ];
   const applyPreset = (days: number) => {
     const end = new Date();
@@ -378,7 +383,7 @@ export function renderUsage(props: UsageProps) {
             selectedCount > 0
               ? html`<span class="usage-filter-badge">${selectedCount}</span>`
               : html`
-                  <span class="usage-filter-badge">All</span>
+                  <span class="usage-filter-badge">${tr("usagePage.all", "All")}</span>
                 `
           }
         </summary>
@@ -393,7 +398,7 @@ export function renderUsage(props: UsageProps) {
               }}
               ?disabled=${allSelected}
             >
-              Select All
+              ${tr("usagePage.selectAll", "Select All")}
             </button>
             <button
               class="btn btn-sm"
@@ -404,7 +409,7 @@ export function renderUsage(props: UsageProps) {
               }}
               ?disabled=${selectedCount === 0}
             >
-              Clear
+              ${tr("usagePage.clear", "Clear")}
             </button>
           </div>
           <div class="usage-filter-options">
@@ -440,25 +445,25 @@ export function renderUsage(props: UsageProps) {
     <style>${usageStylesString}</style>
 
     <section class="usage-page-header">
-      <div class="usage-page-title">Usage</div>
-      <div class="usage-page-subtitle">See where tokens go, when sessions spike, and what drives cost.</div>
+      <div class="usage-page-title">${tr("usagePage.title", "Usage")}</div>
+      <div class="usage-page-subtitle">${tr("usagePage.subtitle", "See where tokens go, when sessions spike, and what drives cost.")}</div>
     </section>
 
     <section class="card usage-header ${props.headerPinned ? "pinned" : ""}">
       <div class="usage-header-row">
         <div class="usage-header-title">
-          <div class="card-title" style="margin: 0;">Filters</div>
+          <div class="card-title" style="margin: 0;">${tr("usagePage.filters", "Filters")}</div>
           ${
             props.loading
               ? html`
-                  <span class="usage-refresh-indicator">Loading</span>
+                  <span class="usage-refresh-indicator">${tr("usagePage.loading", "Loading")}</span>
                 `
               : nothing
           }
           ${
             isEmpty
               ? html`
-                  <span class="usage-query-hint">Select a date range and click Refresh to load usage.</span>
+                  <span class="usage-query-hint">${tr("usagePage.emptyHint", "Select a date range and click Refresh to load usage.")}</span>
                 `
               : nothing
           }
@@ -468,24 +473,24 @@ export function renderUsage(props: UsageProps) {
             displayTotals
               ? html`
                 <span class="usage-metric-badge">
-                  <strong>${formatTokens(displayTotals.totalTokens)}</strong> tokens
+                  <strong>${formatTokens(displayTotals.totalTokens)}</strong> ${tr("usagePage.tokens", "tokens")}
                 </span>
                 <span class="usage-metric-badge">
-                  <strong>${formatCost(displayTotals.totalCost)}</strong> cost
+                  <strong>${formatCost(displayTotals.totalCost)}</strong> ${tr("usagePage.cost", "cost")}
                 </span>
                 <span class="usage-metric-badge">
                   <strong>${displaySessionCount}</strong>
-                  session${displaySessionCount !== 1 ? "s" : ""}
+                  ${tr("usagePage.sessionsCount", "sessions", { count: String(displaySessionCount) })}
                 </span>
               `
               : nothing
           }
           <button
             class="usage-pin-btn ${props.headerPinned ? "active" : ""}"
-            title=${props.headerPinned ? "Unpin filters" : "Pin filters"}
+            title=${props.headerPinned ? tr("usagePage.unpinFilters", "Unpin filters") : tr("usagePage.pinFilters", "Pin filters")}
             @click=${props.onToggleHeaderPinned}
           >
-            ${props.headerPinned ? "Pinned" : "Pin"}
+            ${props.headerPinned ? tr("usagePage.pinned", "Pinned") : tr("usagePage.pin", "Pin")}
           </button>
           <details
             class="usage-export-menu"
@@ -504,7 +509,7 @@ export function renderUsage(props: UsageProps) {
               window.addEventListener("click", onClick, true);
             }}
           >
-            <summary class="usage-export-button">Export ▾</summary>
+            <summary class="usage-export-button">${tr("usagePage.export", "Export")} ▾</summary>
             <div class="usage-export-popover">
               <div class="usage-export-list">
                 <button
@@ -517,7 +522,7 @@ export function renderUsage(props: UsageProps) {
                     )}
                   ?disabled=${filteredSessions.length === 0}
                 >
-                  Sessions CSV
+                  ${tr("usagePage.sessionsCsv", "Sessions CSV")}
                 </button>
                 <button
                   class="usage-export-item"
@@ -529,7 +534,7 @@ export function renderUsage(props: UsageProps) {
                     )}
                   ?disabled=${filteredDaily.length === 0}
                 >
-                  Daily CSV
+                  ${tr("usagePage.dailyCsv", "Daily CSV")}
                 </button>
                 <button
                   class="usage-export-item"
@@ -581,23 +586,23 @@ export function renderUsage(props: UsageProps) {
           <input
             type="date"
             .value=${props.startDate}
-            title="Start Date"
+            title=${tr("usagePage.startDate", "Start Date")}
             @change=${(e: Event) => props.onStartDateChange((e.target as HTMLInputElement).value)}
           />
-          <span style="color: var(--muted);">to</span>
+          <span style="color: var(--muted);">${tr("usagePage.to", "to")}</span>
           <input
             type="date"
             .value=${props.endDate}
-            title="End Date"
+            title=${tr("usagePage.endDate", "End Date")}
             @change=${(e: Event) => props.onEndDateChange((e.target as HTMLInputElement).value)}
           />
           <select
-            title="Time zone"
+            title=${tr("usagePage.timeZone", "Time zone")}
             .value=${props.timeZone}
             @change=${(e: Event) =>
               props.onTimeZoneChange((e.target as HTMLSelectElement).value as "local" | "utc")}
           >
-            <option value="local">Local</option>
+            <option value="local">${tr("usagePage.local", "Local")}</option>
             <option value="utc">UTC</option>
           </select>
           <div class="chart-toggle">
@@ -605,13 +610,13 @@ export function renderUsage(props: UsageProps) {
               class="toggle-btn ${isTokenMode ? "active" : ""}"
               @click=${() => props.onChartModeChange("tokens")}
             >
-              Tokens
+              ${tr("usagePage.tokensTitle", "Tokens")}
             </button>
             <button
               class="toggle-btn ${!isTokenMode ? "active" : ""}"
               @click=${() => props.onChartModeChange("cost")}
             >
-              Cost
+              ${tr("usagePage.costTitle", "Cost")}
             </button>
           </div>
           <button
@@ -619,7 +624,7 @@ export function renderUsage(props: UsageProps) {
             @click=${props.onRefresh}
             ?disabled=${props.loading}
           >
-            Refresh
+            ${tr("usagePage.refresh", "Refresh")}
           </button>
         </div>
         
@@ -631,7 +636,7 @@ export function renderUsage(props: UsageProps) {
             class="usage-query-input"
             type="text"
             .value=${props.queryDraft}
-            placeholder="Filter sessions (e.g. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)"
+            placeholder=${tr("usagePage.filterPlaceholder", "Filter sessions (e.g. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)")}
             @input=${(e: Event) => props.onQueryDraftChange((e.target as HTMLInputElement).value)}
             @keydown=${(e: KeyboardEvent) => {
               if (e.key === "Enter") {
@@ -646,30 +651,35 @@ export function renderUsage(props: UsageProps) {
               @click=${props.onApplyQuery}
               ?disabled=${props.loading || (!hasDraftQuery && !hasQuery)}
             >
-              Filter (client-side)
+              ${tr("usagePage.filterClient", "Filter (client-side)")}
             </button>
             ${
               hasDraftQuery || hasQuery
-                ? html`<button class="btn btn-sm usage-action-btn usage-secondary-btn" @click=${props.onClearQuery}>Clear</button>`
+                ? html`<button class="btn btn-sm usage-action-btn usage-secondary-btn" @click=${props.onClearQuery}>${tr("usagePage.clear", "Clear")}</button>`
                 : nothing
             }
             <span class="usage-query-hint">
               ${
                 hasQuery
-                  ? `${filteredSessions.length} of ${totalSessions} sessions match`
-                  : `${totalSessions} sessions in range`
+                  ? tr("usagePage.sessionsMatch", "{matched} of {total} sessions match", {
+                      matched: String(filteredSessions.length),
+                      total: String(totalSessions),
+                    })
+                  : tr("usagePage.sessionsInRange", "{total} sessions in range", {
+                      total: String(totalSessions),
+                    })
               }
             </span>
           </div>
         </div>
         <div class="usage-filter-row">
-          ${renderFilterSelect("agent", "Agent", agentOptions)}
-          ${renderFilterSelect("channel", "Channel", channelOptions)}
-          ${renderFilterSelect("provider", "Provider", providerOptions)}
-          ${renderFilterSelect("model", "Model", modelOptions)}
-          ${renderFilterSelect("tool", "Tool", toolOptions)}
+          ${renderFilterSelect("agent", tr("usagePage.agent", "Agent"), agentOptions)}
+          ${renderFilterSelect("channel", tr("usagePage.channel", "Channel"), channelOptions)}
+          ${renderFilterSelect("provider", tr("usagePage.provider", "Provider"), providerOptions)}
+          ${renderFilterSelect("model", tr("usagePage.model", "Model"), modelOptions)}
+          ${renderFilterSelect("tool", tr("usagePage.tool", "Tool"), toolOptions)}
           <span class="usage-query-hint">
-            Tip: use filters or click bars to filter days.
+            ${tr("usagePage.tip", "Tip: use filters or click bars to filter days.")}
           </span>
         </div>
         ${
@@ -682,7 +692,7 @@ export function renderUsage(props: UsageProps) {
                       <span class="usage-query-chip">
                         ${label}
                         <button
-                          title="Remove filter"
+                          title=${tr("usagePage.removeFilter", "Remove filter")}
                           @click=${() =>
                             props.onQueryDraftChange(removeQueryToken(props.queryDraft, label))}
                         >
@@ -737,7 +747,7 @@ export function renderUsage(props: UsageProps) {
         props.sessionsLimitReached
           ? html`
               <div class="callout warning" style="margin-top: 12px">
-                Showing first 1,000 sessions. Narrow date range for complete results.
+                ${tr("usagePage.limitWarning", "Showing first 1,000 sessions. Narrow date range for complete results.")}
               </div>
             `
           : nothing
