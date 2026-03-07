@@ -5,6 +5,8 @@ import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
+import { ErrorCodes } from "../protocol/index.js";
+import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
@@ -325,6 +327,34 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(payload)).toBe("");
   });
 
+  it("rejects oversized chat.send session keys before dispatch", async () => {
+    createTranscriptFixture("openclaw-chat-send-session-key-too-long-");
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: `agent:main:${"x".repeat(CHAT_SEND_SESSION_KEY_MAX_LENGTH)}`,
+        message: "hello",
+        idempotencyKey: "idem-session-key-too-long",
+      },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+      }),
+    );
+    expect(context.broadcast).not.toHaveBeenCalled();
+  });
+
   it("chat.inject strips external untrusted wrapper metadata from final payload text", async () => {
     createTranscriptFixture("openclaw-chat-inject-untrusted-meta-");
     const respond = vi.fn();
@@ -362,7 +392,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(payload)).toBe("hello");
   });
 
-  it("chat.send inherits originating routing metadata from session delivery context", async () => {
+  it("chat.send keeps explicit delivery routes for channel-scoped sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-origin-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -393,13 +423,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.objectContaining({
         OriginatingChannel: "telegram",
         OriginatingTo: "telegram:6812765697",
+        ExplicitDeliverRoute: true,
         AccountId: "default",
         MessageThreadId: 42,
       }),
     );
   });
 
-  it("chat.send inherits Feishu routing metadata from session delivery context", async () => {
+  it("chat.send keeps explicit delivery routes for Feishu channel-scoped sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-feishu-origin-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -428,12 +459,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.objectContaining({
         OriginatingChannel: "feishu",
         OriginatingTo: "ou_feishu_direct_123",
+        ExplicitDeliverRoute: true,
         AccountId: "default",
       }),
     );
   });
 
-  it("chat.send inherits routing metadata for per-account channel-peer session keys", async () => {
+  it("chat.send keeps explicit delivery routes for per-account channel-peer sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-per-account-channel-peer-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -462,12 +494,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.objectContaining({
         OriginatingChannel: "telegram",
         OriginatingTo: "telegram:6812765697",
+        ExplicitDeliverRoute: true,
         AccountId: "account-a",
       }),
     );
   });
 
-  it("chat.send inherits routing metadata for legacy channel-peer session keys", async () => {
+  it("chat.send keeps explicit delivery routes for legacy channel-peer sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-legacy-channel-peer-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -496,12 +529,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.objectContaining({
         OriginatingChannel: "telegram",
         OriginatingTo: "telegram:6812765697",
+        ExplicitDeliverRoute: true,
         AccountId: "default",
       }),
     );
   });
 
-  it("chat.send inherits routing metadata for legacy channel-peer thread session keys", async () => {
+  it("chat.send keeps explicit delivery routes for legacy thread sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-legacy-thread-channel-peer-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -532,6 +566,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.objectContaining({
         OriginatingChannel: "telegram",
         OriginatingTo: "telegram:6812765697",
+        ExplicitDeliverRoute: true,
         AccountId: "default",
         MessageThreadId: "42",
       }),
@@ -566,6 +601,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.objectContaining({
         OriginatingChannel: "webchat",
         OriginatingTo: undefined,
+        ExplicitDeliverRoute: false,
         AccountId: undefined,
       }),
     );
@@ -640,6 +676,44 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             id: "cli",
           },
         },
+      } as unknown,
+      sessionKey: "agent:main:work",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "whatsapp:+8613800138000",
+        AccountId: "default",
+      }),
+    );
+  });
+
+  it("chat.send keeps configured main delivery inheritance when connect metadata omits client details", async () => {
+    createTranscriptFixture("openclaw-chat-send-config-main-connect-no-client-");
+    mockState.mainSessionKey = "work";
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "whatsapp:+8613800138000",
+        accountId: "default",
+      },
+      lastChannel: "whatsapp",
+      lastTo: "whatsapp:+8613800138000",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-config-main-connect-no-client",
+      client: {
+        connect: {},
       } as unknown,
       sessionKey: "agent:main:work",
       deliver: true,

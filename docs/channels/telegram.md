@@ -524,6 +524,13 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     This is currently scoped to forum topics in groups and supergroups.
 
+    **Thread-bound ACP spawn from chat**:
+
+    - `/acp spawn <agent> --thread here|auto` can bind the current Telegram topic to a new ACP session.
+    - Follow-up topic messages route to the bound ACP session directly (no `/acp steer` required).
+    - OpenClaw pins the spawn confirmation message in-topic after a successful bind.
+    - Requires `channels.telegram.threadBindings.spawnAcpSessions=true`.
+
     Template context includes:
 
     - `MessageThreadId`
@@ -717,7 +724,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   <Accordion title="Limits, retry, and CLI targets">
     - `channels.telegram.textChunkLimit` default is 4000.
     - `channels.telegram.chunkMode="newline"` prefers paragraph boundaries (blank lines) before length splitting.
-    - `channels.telegram.mediaMaxMb` (default 5) caps inbound Telegram media download/processing size.
+    - `channels.telegram.mediaMaxMb` (default 100) caps inbound and outbound Telegram media size.
     - `channels.telegram.timeoutSeconds` overrides Telegram API client timeout (if unset, grammY default applies).
     - group context history uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables.
     - DM history controls:
@@ -731,6 +738,28 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 openclaw message send --channel telegram --target 123456789 --message "hi"
 openclaw message send --channel telegram --target @name --message "hi"
 ```
+
+    Telegram polls use `openclaw message poll` and support forum topics:
+
+```bash
+openclaw message poll --channel telegram --target 123456789 \
+  --poll-question "Ship it?" --poll-option "Yes" --poll-option "No"
+openclaw message poll --channel telegram --target -1001234567890:topic:42 \
+  --poll-question "Pick a time" --poll-option "10am" --poll-option "2pm" \
+  --poll-duration-seconds 300 --poll-public
+```
+
+    Telegram-only poll flags:
+
+    - `--poll-duration-seconds` (5-600)
+    - `--poll-anonymous`
+    - `--poll-public`
+    - `--thread-id` for forum topics (or use a `:topic:` target)
+
+    Action gating:
+
+    - `channels.telegram.actions.sendMessage=false` disables outbound Telegram messages, including polls
+    - `channels.telegram.actions.poll=false` disables Telegram poll creation while leaving regular sends enabled
 
   </Accordion>
 </AccordionGroup>
@@ -775,7 +804,7 @@ openclaw message send --channel telegram --target @name --message "hi"
 ```yaml
 channels:
   telegram:
-    proxy: socks5://user:pass@proxy-host:1080
+    proxy: socks5://<user>:<password>@proxy-host:1080
 ```
 
     - Node 22+ defaults to `autoSelectFamily=true` (except WSL2) and `dnsResultOrder=ipv4first`.
@@ -813,6 +842,7 @@ Primary reference:
 - `channels.telegram.tokenFile`: read token from file path.
 - `channels.telegram.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.telegram.allowFrom`: DM allowlist (numeric Telegram user IDs). `allowlist` requires at least one sender ID. `open` requires `"*"`. `openclaw doctor --fix` can resolve legacy `@username` entries to IDs and can recover allowlist entries from pairing-store files in allowlist migration flows.
+- `channels.telegram.actions.poll`: enable or disable Telegram poll creation (default: enabled; still requires `sendMessage`).
 - `channels.telegram.defaultTo`: default Telegram target used by CLI `--deliver` when no explicit `--reply-to` is provided.
 - `channels.telegram.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `channels.telegram.groupAllowFrom`: group sender allowlist (numeric Telegram user IDs). `openclaw doctor --fix` can resolve legacy `@username` entries to IDs. Non-numeric entries are ignored at auth time. Group auth does not use DM pairing-store fallback (`2026.2.25+`).
@@ -843,7 +873,7 @@ Primary reference:
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
 - `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `partial`; `progress` maps to `partial`; `block` is legacy preview mode compatibility). In DMs, `partial` uses native `sendMessageDraft` when available.
-- `channels.telegram.mediaMaxMb`: inbound Telegram media download/processing cap (MB).
+- `channels.telegram.mediaMaxMb`: inbound/outbound Telegram media cap (MB, default: 100).
 - `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
 - `channels.telegram.network.dnsResultOrder`: override DNS result order (`ipv4first` or `verbatim`). Defaults to `ipv4first` on Node 22+.

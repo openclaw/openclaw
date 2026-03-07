@@ -179,8 +179,8 @@ Request payload (stdin):
 
 Response payload (stdout):
 
-```json
-{ "protocolVersion": 1, "values": { "providers/openai/apiKey": "sk-..." } }
+```jsonc
+{ "protocolVersion": 1, "values": { "providers/openai/apiKey": "<openai-api-key>" } } // pragma: allowlist secret
 ```
 
 Optional per-id errors:
@@ -339,10 +339,22 @@ Behavior:
 
 ## Command-path resolution
 
-Credential-sensitive command paths that opt in (for example `openclaw memory` remote-memory paths and `openclaw qr --remote`) can resolve supported SecretRefs via gateway snapshot RPC.
+Command paths can opt into supported SecretRef resolution via gateway snapshot RPC.
 
-- When gateway is running, those command paths read from the active snapshot.
-- If a configured SecretRef is required and gateway is unavailable, command resolution fails fast with actionable diagnostics.
+There are two broad behaviors:
+
+- Strict command paths (for example `openclaw memory` remote-memory paths and `openclaw qr --remote`) read from the active snapshot and fail fast when a required SecretRef is unavailable.
+- Read-only command paths (for example `openclaw status`, `openclaw status --all`, `openclaw channels status`, `openclaw channels resolve`, and read-only doctor/config repair flows) also prefer the active snapshot, but degrade instead of aborting when a targeted SecretRef is unavailable in that command path.
+
+Read-only behavior:
+
+- When the gateway is running, these commands read from the active snapshot first.
+- If gateway resolution is incomplete or the gateway is unavailable, they attempt targeted local fallback for the specific command surface.
+- If a targeted SecretRef is still unavailable, the command continues with degraded read-only output and explicit diagnostics such as “configured but unavailable in this command path”.
+- This degraded behavior is command-local only. It does not weaken runtime startup, reload, or send/auth paths.
+
+Other notes:
+
 - Snapshot refresh after backend secret rotation is handled by `openclaw secrets reload`.
 - Gateway RPC method used by these command paths: `secrets.resolve`.
 

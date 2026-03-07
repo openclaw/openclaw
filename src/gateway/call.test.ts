@@ -468,6 +468,23 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.urlSource).toBe("config gateway.remote.url");
   });
 
+  it("allows ws:// hostname remote URLs when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
+    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: { url: "ws://openclaw-gateway.ai:18789" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://openclaw-gateway.ai:18789");
+    expect(details.urlSource).toBe("config gateway.remote.url");
+  });
+
   it("allows ws:// for loopback addresses in local mode", () => {
     setLocalLoopbackGatewayConfig();
 
