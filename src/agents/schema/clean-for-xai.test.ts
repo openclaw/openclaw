@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isXaiProvider, stripXaiUnsupportedKeywords } from "./clean-for-xai.js";
+import {
+  isVolcengineProvider,
+  isXaiProvider,
+  stripXaiUnsupportedKeywords,
+} from "./clean-for-xai.js";
 
 describe("isXaiProvider", () => {
   it("matches direct xai provider", () => {
@@ -40,6 +44,36 @@ describe("isXaiProvider", () => {
 
   it("does not match venice provider with non-grok model id", () => {
     expect(isXaiProvider("venice", "llama-3.3-70b")).toBe(false);
+  });
+});
+
+describe("isVolcengineProvider", () => {
+  it("matches volcengine provider", () => {
+    expect(isVolcengineProvider("volcengine")).toBe(true);
+  });
+
+  it("matches ark provider", () => {
+    expect(isVolcengineProvider("ark")).toBe(true);
+  });
+
+  it("matches kimi model id regardless of provider", () => {
+    expect(isVolcengineProvider("openrouter", "kimi-k2-5")).toBe(true);
+  });
+
+  it("matches kimi model id with provider prefix", () => {
+    expect(isVolcengineProvider("volcengine", "volcengine/kimi-2.5")).toBe(true);
+  });
+
+  it("does not match unrelated provider", () => {
+    expect(isVolcengineProvider("openai")).toBe(false);
+  });
+
+  it("does not match unrelated model id", () => {
+    expect(isVolcengineProvider("openrouter", "openai/gpt-4o")).toBe(false);
+  });
+
+  it("handles undefined provider", () => {
+    expect(isVolcengineProvider(undefined)).toBe(false);
   });
 });
 
