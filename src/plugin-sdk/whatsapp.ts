@@ -55,5 +55,6 @@ export { collectWhatsAppStatusIssues } from "../channels/plugins/status-issues/w
 export { WhatsAppConfigSchema } from "../config/zod-schema.providers-whatsapp.js";
 
 export { createActionGate, readStringParam } from "../agents/tools/common.js";
+export { resolveReactionMessageId } from "../channels/plugins/actions/reaction-message-id.js";
 
 export { normalizeE164 } from "../utils.js";

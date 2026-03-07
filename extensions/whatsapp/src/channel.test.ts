@@ -1,5 +1,64 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/whatsapp";
 import { describe, expect, it, vi } from "vitest";
 import { whatsappPlugin } from "./channel.js";
+
+const handleWhatsAppAction = vi.fn(async () => ({ details: { ok: true } }));
+vi.mock("./runtime.js", () => ({
+  getWhatsAppRuntime: () => ({
+    channel: {
+      whatsapp: { handleWhatsAppAction },
+      text: { chunkText: (t: string) => [t] },
+    },
+  }),
+}));
+
+const reactCfg = {
+  channels: { whatsapp: { actions: { reactions: true } } },
+} as OpenClawConfig;
+
+describe("whatsappPlugin actions react", () => {
+  it("falls back to toolContext.currentMessageId when messageId is omitted", async () => {
+    handleWhatsAppAction.mockClear();
+    await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { chatJid: "123@s.whatsapp.net", emoji: "👍" },
+      cfg: reactCfg,
+      toolContext: { currentMessageId: "msg-ctx-42" },
+    });
+    expect(handleWhatsAppAction).toHaveBeenCalledTimes(1);
+    expect(handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "msg-ctx-42" }),
+      reactCfg,
+    );
+  });
+
+  it("prefers explicit messageId over toolContext fallback", async () => {
+    handleWhatsAppAction.mockClear();
+    await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { chatJid: "123@s.whatsapp.net", messageId: "explicit-1", emoji: "🔥" },
+      cfg: reactCfg,
+      toolContext: { currentMessageId: "ctx-fallback" },
+    });
+    expect(handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "explicit-1" }),
+      reactCfg,
+    );
+  });
+
+  it("rejects reaction when neither messageId nor toolContext is available", async () => {
+    await expect(
+      whatsappPlugin.actions!.handleAction!({
+        channel: "whatsapp",
+        action: "react",
+        params: { chatJid: "123@s.whatsapp.net", emoji: "✅" },
+        cfg: reactCfg,
+      }),
+    ).rejects.toThrow(/messageId required/);
+  });
+});
 
 describe("whatsappPlugin outbound sendMedia", () => {
   it("forwards mediaLocalRoots to sendMessageWhatsApp", async () => {
