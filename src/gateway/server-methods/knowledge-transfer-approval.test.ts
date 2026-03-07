@@ -22,7 +22,7 @@ const baseRequestParams = {
 
 function buildRequestContext(params: {
   broadcasts: Array<{ event: string; payload: unknown }>;
-  hasExecApprovalClients?: () => boolean;
+  hasExecApprovalClients?: (opts?: { excludeConnId?: string | null }) => boolean;
 }): RequestArgs["context"] {
   return {
     broadcast: (event: string, payload: unknown) => {
@@ -120,6 +120,29 @@ describe("knowledge transfer approval handlers", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ id: approvalId, decision: "allow" }),
+      undefined,
+    );
+  });
+
+  it("auto-expires when requester is the only approvals client connected", async () => {
+    const manager = new KnowledgeTransferApprovalManager();
+    const handlers = createKnowledgeTransferApprovalHandlers(manager);
+    const respond = vi.fn();
+    const broadcasts: Array<{ event: string; payload: unknown }> = [];
+
+    await requestApproval({
+      handlers,
+      respond,
+      context: buildRequestContext({
+        broadcasts,
+        hasExecApprovalClients: (opts) => opts?.excludeConnId !== "conn-1",
+      }),
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ decision: null }),
       undefined,
     );
   });

@@ -43,9 +43,12 @@ function clampTimeoutMs(value: unknown): number {
   return Math.max(MIN_APPROVAL_TIMEOUT_MS, Math.min(MAX_APPROVAL_TIMEOUT_MS, numeric));
 }
 
-function hasApprovalClients(context: { hasExecApprovalClients?: () => boolean }): boolean {
+function hasApprovalClients(
+  context: { hasExecApprovalClients?: (opts?: { excludeConnId?: string | null }) => boolean },
+  requesterConnId?: string | null,
+): boolean {
   if (typeof context.hasExecApprovalClients === "function") {
-    return context.hasExecApprovalClients();
+    return context.hasExecApprovalClients({ excludeConnId: requesterConnId ?? undefined });
   }
   return false;
 }
@@ -161,7 +164,7 @@ export function createKnowledgeTransferApprovalHandlers(
         { dropIfSlow: true },
       );
 
-      if (!hasApprovalClients(context)) {
+      if (!hasApprovalClients(context, client?.connId ?? null)) {
         manager.expire(approvalRecord.id, "auto-expire:no-approver-clients");
       }
 
