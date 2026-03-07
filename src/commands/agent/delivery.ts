@@ -18,7 +18,7 @@ import {
 } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { isDeliverableMessageChannel, isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<
@@ -96,7 +96,14 @@ export async function deliverAgentCommandResult(params: {
   });
   let deliveryChannel = deliveryPlan.resolvedChannel;
   const explicitChannelHint = (opts.replyChannel ?? opts.channel)?.trim();
-  if (deliver && isInternalMessageChannel(deliveryChannel) && !explicitChannelHint) {
+  // Only auto-resolve the delivery channel when the turn originated from an
+  // external (deliverable) channel.  When the turn source is webchat / TUI
+  // (an internal channel that is NOT deliverable), we must NOT fall back to
+  // "the single configured channel" — doing so causes TUI replies to be
+  // forwarded to Telegram (or whichever channel is the sole configured one).
+  const turnSourceIsExternal =
+    turnSourceChannel != null && isDeliverableMessageChannel(turnSourceChannel);
+  if (deliver && isInternalMessageChannel(deliveryChannel) && !explicitChannelHint && turnSourceIsExternal) {
     try {
       const selection = await resolveMessageChannelSelection({ cfg });
       deliveryChannel = selection.channel;
