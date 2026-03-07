@@ -124,6 +124,19 @@ export const en: TranslationMap = {
     de: "Deutsch (German)",
     es: "Español (Spanish)",
   },
+  agents: {
+    delete: {
+      button: "Delete",
+      title: "Delete Agent",
+      warning:
+        "This will permanently delete all contents inside the agent folder, including workspace files, session transcripts, and configuration. This action cannot be reversed.",
+      confirmLabel: "Type the agent name ({name}) to confirm.",
+      confirmPlaceholder: "Agent name",
+      cancel: "Cancel",
+      confirm: "Delete Agent",
+      deleting: "Deleting…",
+    },
+  },
   cron: {
     summary: {
       enabled: "Enabled",

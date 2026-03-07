@@ -8,7 +8,7 @@ import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
+import { deleteAgent, loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -66,8 +66,12 @@ import {
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
-import { resolveConfiguredCronModelSuggestions, sortLocaleStrings } from "./views/agents-utils.ts";
-import { renderAgents } from "./views/agents.ts";
+import {
+  normalizeAgentLabel,
+  resolveConfiguredCronModelSuggestions,
+  sortLocaleStrings,
+} from "./views/agents-utils.ts";
+import { renderAgents, renderDeleteAgentModal } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderConfig } from "./views/config.ts";
@@ -574,6 +578,12 @@ export function renderApp(state: AppViewState) {
                 toolsCatalogError: state.toolsCatalogError,
                 toolsCatalogResult: state.toolsCatalogResult,
                 skillsFilter: state.skillsFilter,
+                onDeleteConfirmOpen: (agentId: string) => {
+                  state.agentDeleteConfirmAgentId = agentId;
+                  state.agentDeleteConfirmOpen = true;
+                  state.agentDeleteConfirmInput = "";
+                  state.agentDeleteError = null;
+                },
                 onRefresh: async () => {
                   await loadAgents(state);
                   const nextSelected =
@@ -592,6 +602,10 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   state.agentsSelectedId = agentId;
+                  state.agentDeleteConfirmOpen = false;
+                  state.agentDeleteConfirmInput = "";
+                  state.agentDeleteConfirmAgentId = null;
+                  state.agentDeleteError = null;
                   state.agentFilesList = null;
                   state.agentFilesError = null;
                   state.agentFilesLoading = false;
@@ -1163,6 +1177,50 @@ export function renderApp(state: AppViewState) {
       </main>
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}
+      ${renderDeleteAgentModal({
+        open: state.agentDeleteConfirmOpen,
+        agentId: state.agentDeleteConfirmAgentId ?? "",
+        displayName: (() => {
+          const agent = state.agentsList?.agents.find(
+            (a) => a.id === state.agentDeleteConfirmAgentId,
+          );
+          return agent ? normalizeAgentLabel(agent) : (state.agentDeleteConfirmAgentId ?? "");
+        })(),
+        confirmInput: state.agentDeleteConfirmInput,
+        busy: state.agentDeleteBusy,
+        error: state.agentDeleteError,
+        onClose: () => {
+          state.agentDeleteConfirmOpen = false;
+          state.agentDeleteConfirmInput = "";
+          state.agentDeleteConfirmAgentId = null;
+          state.agentDeleteError = null;
+        },
+        onInputChange: (value) => {
+          state.agentDeleteConfirmInput = value;
+        },
+        onConfirm: async (agentId) => {
+          await deleteAgent(state, agentId);
+          if (!state.agentDeleteError) {
+            state.agentDeleteConfirmOpen = false;
+            state.agentDeleteConfirmInput = "";
+            state.agentDeleteConfirmAgentId = null;
+            state.agentFilesList = null;
+            state.agentFilesError = null;
+            state.agentFilesLoading = false;
+            state.agentFileActive = null;
+            state.agentFileContents = {};
+            state.agentFileDrafts = {};
+            state.agentSkillsReport = null;
+            state.agentSkillsError = null;
+            state.agentSkillsAgentId = null;
+            const nextId = state.agentsSelectedId;
+            if (nextId) {
+              void loadAgentIdentity(state, nextId);
+              void loadToolsCatalog(state, nextId);
+            }
+          }
+        },
+      })}
     </div>
   `;
 }

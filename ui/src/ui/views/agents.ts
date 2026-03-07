@@ -1,4 +1,6 @@
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
+import { t } from "../../i18n/index.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -88,6 +90,7 @@ export type AgentsProps = {
   onAgentSkillToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   onAgentSkillsClear: (agentId: string) => void;
   onAgentSkillsDisableAll: (agentId: string) => void;
+  onDeleteConfirmOpen: (agentId: string) => void;
 };
 
 export type AgentContext = {
@@ -184,6 +187,7 @@ export function renderAgents(props: AgentsProps) {
                         onConfigSave: props.onConfigSave,
                         onModelChange: props.onModelChange,
                         onModelFallbacksChange: props.onModelFallbacksChange,
+                        onDeleteConfirmOpen: props.onDeleteConfirmOpen,
                       })
                     : nothing
                 }
@@ -359,6 +363,7 @@ function renderAgentOverview(params: {
   onConfigSave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
+  onDeleteConfirmOpen: (agentId: string) => void;
 }) {
   const {
     agent,
@@ -374,6 +379,7 @@ function renderAgentOverview(params: {
     onConfigSave,
     onModelChange,
     onModelFallbacksChange,
+    onDeleteConfirmOpen,
   } = params;
   const config = resolveAgentConfig(configForm, agent.id);
   const workspaceFromFiles =
@@ -414,8 +420,24 @@ function renderAgentOverview(params: {
 
   return html`
     <section class="card">
-      <div class="card-title">Overview</div>
-      <div class="card-sub">Workspace paths and identity metadata.</div>
+      <div class="row" style="justify-content: space-between; align-items: flex-start;">
+        <div>
+          <div class="card-title">Overview</div>
+          <div class="card-sub">Workspace paths and identity metadata.</div>
+        </div>
+        ${
+          !isDefault
+            ? html`
+                <button
+                  class="btn btn--sm danger"
+                  @click=${() => onDeleteConfirmOpen(agent.id)}
+                >
+                  ${t("agents.delete.button")}
+                </button>
+              `
+            : nothing
+        }
+      </div>
       <div class="agents-overview-grid" style="margin-top: 16px;">
         <div class="agent-kv">
           <div class="label">Workspace</div>
@@ -494,6 +516,76 @@ function renderAgentOverview(params: {
           </button>
         </div>
       </div>
+
     </section>
+  `;
+}
+
+export type DeleteAgentModalProps = {
+  open: boolean;
+  agentId: string;
+  displayName: string;
+  confirmInput: string;
+  busy: boolean;
+  error: string | null;
+  onClose: () => void;
+  onInputChange: (value: string) => void;
+  onConfirm: (agentId: string) => void;
+};
+
+export function renderDeleteAgentModal(props: DeleteAgentModalProps) {
+  if (!props.open) {
+    return nothing;
+  }
+  const inputMatches = props.confirmInput.trim() === props.displayName;
+  return html`
+    <div class="agent-delete-overlay" role="dialog" aria-modal="true" aria-labelledby="agent-delete-title" aria-live="polite" tabindex="-1"
+      @keydown=${(e: KeyboardEvent) => {
+        if (e.key === "Escape" && !props.busy) {
+          props.onClose();
+        }
+      }}>
+      <div class="agent-delete-card">
+        <div class="agent-delete-title" id="agent-delete-title">${t("agents.delete.title")}</div>
+        <div class="agent-delete-warning">${t("agents.delete.warning")}</div>
+        ${
+          props.error
+            ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
+            : nothing
+        }
+        <label class="field" style="margin-top: 16px;">
+          <span>${t("agents.delete.confirmLabel").replace("{name}", props.displayName)}</span>
+          <input
+            type="text"
+            .value=${props.confirmInput}
+            placeholder=${props.displayName}
+            ?disabled=${props.busy}
+            @input=${(e: Event) => props.onInputChange((e.target as HTMLInputElement).value)}
+            ${ref((el) => {
+              if (el instanceof HTMLInputElement && !el.dataset.focused) {
+                el.dataset.focused = "1";
+                el.focus();
+              }
+            })}
+          />
+        </label>
+        <div class="agent-delete-actions">
+          <button
+            class="btn"
+            ?disabled=${props.busy}
+            @click=${props.onClose}
+          >
+            ${t("agents.delete.cancel")}
+          </button>
+          <button
+            class="btn danger"
+            ?disabled=${!inputMatches || props.busy}
+            @click=${() => props.onConfirm(props.agentId)}
+          >
+            ${props.busy ? t("agents.delete.deleting") : t("agents.delete.confirm")}
+          </button>
+        </div>
+      </div>
+    </div>
   `;
 }
