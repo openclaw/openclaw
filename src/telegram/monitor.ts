@@ -373,6 +373,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           throw err;
         }
         const isConflict = isGetUpdatesConflict(err);
+        if (isConflict) {
+          webhookCleared = false;
+        }
         const isRecoverable = isRecoverableTelegramNetworkError(err, { context: "polling" });
         if (!isConflict && !isRecoverable) {
           throw err;
