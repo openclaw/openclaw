@@ -509,7 +509,9 @@ function hasEnvManipulationBeforeShellWrapperInternal(
   depth: number,
   envManipulationSeen: boolean,
 ): boolean {
-  if (depth >= MAX_DISPATCH_WRAPPER_DEPTH) {
+  // The wrapper found exactly at the configured dispatch depth boundary still needs
+  // to participate in approval classification; only paths beyond that boundary fail closed.
+  if (depth > MAX_DISPATCH_WRAPPER_DEPTH) {
     return false;
   }
 
@@ -607,7 +609,9 @@ function extractShellWrapperCommandInternal(
   rawCommand: string | null,
   depth: number,
 ): ShellWrapperCommand {
-  if (depth >= MAX_DISPATCH_WRAPPER_DEPTH) {
+  // The shell wrapper reached at the boundary depth is still semantically relevant.
+  // Only deeper wrapper stacks should be dropped as overflow.
+  if (depth > MAX_DISPATCH_WRAPPER_DEPTH) {
     return { isWrapper: false, command: null };
   }
 

@@ -54,6 +54,17 @@ describe("system run command helpers", () => {
         "echo hi",
       ]),
     ).toBe("echo hi");
+    expect(
+      extractShellCommandFromArgv([
+        "/usr/bin/env",
+        "/usr/bin/env",
+        "/usr/bin/env",
+        "/usr/bin/env",
+        "/bin/sh",
+        "-c",
+        "echo hi",
+      ]),
+    ).toBe("echo hi");
   });
 
   test("extractShellCommandFromArgv supports fish and pwsh wrappers", () => {

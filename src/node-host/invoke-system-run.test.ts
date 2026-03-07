@@ -858,6 +858,46 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
   });
 
+  it("denies env-wrapped shell payloads at the dispatch depth boundary", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { runCommand, sendInvokeResult, sendNodeEvent } = createInvokeSpies({
+      runCommand: vi.fn(async () => {
+        throw new Error("runCommand should not be called for depth-boundary shell wrappers");
+      }),
+    });
+
+    await withTempApprovalsHome({
+      approvals: createAllowlistOnMissApprovals({
+        agents: {
+          main: {
+            allowlist: [{ pattern: "/usr/bin/env" }],
+          },
+        },
+      }),
+      run: async ({ tempHome }) => {
+        const marker = path.join(tempHome, "depth4-pwned.txt");
+        await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: buildNestedEnvShellCommand({
+            depth: 4,
+            payload: `echo PWNED > ${marker}`,
+          }),
+          security: "allowlist",
+          ask: "on-miss",
+          runCommand,
+          sendInvokeResult,
+          sendNodeEvent,
+        });
+        expect(fs.existsSync(marker)).toBe(false);
+      },
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
+  });
+
   it("denies nested env shell payloads when wrapper depth is exceeded", async () => {
     if (process.platform === "win32") {
       return;

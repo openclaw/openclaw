@@ -305,6 +305,7 @@ Docs: https://docs.openclaw.ai
 - Media/mime unknown-kind handling: return `undefined` (not `"unknown"`) for missing/unrecognized MIME kinds and use document-size fallback caps for unknown remote media, preventing phantom `<media:unknown>` Signal events from being treated as real messages. (#39199) Thanks @nicolasgrasset.
 - Nodes/system.run allow-always persistence: honor shell comment semantics during allowlist analysis so `#`-tailed payloads that never execute are not persisted as trusted follow-up commands. Thanks @tdjackey for reporting.
 - Signal/inbound attachment fan-in: forward all successfully fetched inbound attachments through `MediaPaths`/`MediaUrls`/`MediaTypes` (instead of only the first), and improve multi-attachment placeholder summaries in mention-gated pending history. (#39212) Thanks @joeykrug.
+- Nodes/system.run dispatch-wrapper boundary: keep shell-wrapper approval classification active at the depth boundary so `env` wrapper stacks cannot reach `/bin/sh -c` execution without the expected approval gate. Thanks @tdjackey for reporting.
 
 ## 2026.3.2
 
