@@ -1,7 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  buildOpenGroupPolicyConfigureRouteAllowlistWarning,
-  buildOpenGroupPolicyWarning,
+  collectOpenGroupPolicyConfiguredRouteWarnings,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -199,27 +198,24 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       const channelAllowlistConfigured =
         Boolean(account.config.channels) && Object.keys(account.config.channels ?? {}).length > 0;
 
-      if (groupPolicy === "open") {
-        if (channelAllowlistConfigured) {
-          warnings.push(
-            buildOpenGroupPolicyConfigureRouteAllowlistWarning({
-              surface: "Slack channels",
-              openScope: "any channel not explicitly denied",
-              groupPolicyPath: "channels.slack.groupPolicy",
-              routeAllowlistPath: "channels.slack.channels",
-            }),
-          );
-        } else {
-          warnings.push(
-            buildOpenGroupPolicyWarning({
-              surface: "Slack channels",
-              openBehavior: "with no channel allowlist; any channel can trigger (mention-gated)",
-              remediation:
-                'Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels',
-            }),
-          );
-        }
-      }
+      warnings.push(
+        ...collectOpenGroupPolicyConfiguredRouteWarnings({
+          groupPolicy,
+          routeAllowlistConfigured: channelAllowlistConfigured,
+          configureRouteAllowlist: {
+            surface: "Slack channels",
+            openScope: "any channel not explicitly denied",
+            groupPolicyPath: "channels.slack.groupPolicy",
+            routeAllowlistPath: "channels.slack.channels",
+          },
+          missingRouteAllowlist: {
+            surface: "Slack channels",
+            openBehavior: "with no channel allowlist; any channel can trigger (mention-gated)",
+            remediation:
+              'Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels',
+          },
+        }),
+      );
 
       return warnings;
     },

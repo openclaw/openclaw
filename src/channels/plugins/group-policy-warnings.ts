@@ -51,3 +51,44 @@ export function buildOpenGroupPolicyConfigureRouteAllowlistWarning(params: {
     remediation: `Set ${params.groupPolicyPath}="allowlist" and configure ${params.routeAllowlistPath}`,
   });
 }
+
+export function collectOpenGroupPolicyRestrictSendersWarnings(
+  params: Parameters<typeof buildOpenGroupPolicyRestrictSendersWarning>[0] & {
+    groupPolicy: "open" | "allowlist" | "disabled";
+  },
+): string[] {
+  if (params.groupPolicy !== "open") {
+    return [];
+  }
+  return [buildOpenGroupPolicyRestrictSendersWarning(params)];
+}
+
+export function collectOpenGroupPolicyRouteAllowlistWarnings(params: {
+  groupPolicy: "open" | "allowlist" | "disabled";
+  routeAllowlistConfigured: boolean;
+  restrictSenders: Parameters<typeof buildOpenGroupPolicyRestrictSendersWarning>[0];
+  noRouteAllowlist: Parameters<typeof buildOpenGroupPolicyNoRouteAllowlistWarning>[0];
+}): string[] {
+  if (params.groupPolicy !== "open") {
+    return [];
+  }
+  if (params.routeAllowlistConfigured) {
+    return [buildOpenGroupPolicyRestrictSendersWarning(params.restrictSenders)];
+  }
+  return [buildOpenGroupPolicyNoRouteAllowlistWarning(params.noRouteAllowlist)];
+}
+
+export function collectOpenGroupPolicyConfiguredRouteWarnings(params: {
+  groupPolicy: "open" | "allowlist" | "disabled";
+  routeAllowlistConfigured: boolean;
+  configureRouteAllowlist: Parameters<typeof buildOpenGroupPolicyConfigureRouteAllowlistWarning>[0];
+  missingRouteAllowlist: Parameters<typeof buildOpenGroupPolicyWarning>[0];
+}): string[] {
+  if (params.groupPolicy !== "open") {
+    return [];
+  }
+  if (params.routeAllowlistConfigured) {
+    return [buildOpenGroupPolicyConfigureRouteAllowlistWarning(params.configureRouteAllowlist)];
+  }
+  return [buildOpenGroupPolicyWarning(params.missingRouteAllowlist)];
+}

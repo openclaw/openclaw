@@ -1,6 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  buildOpenGroupPolicyRestrictSendersWarning,
+  collectOpenGroupPolicyRestrictSendersWarnings,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -175,18 +175,14 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         groupPolicy: account.config.groupPolicy,
         defaultGroupPolicy,
       });
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        buildOpenGroupPolicyRestrictSendersWarning({
-          surface: "Signal groups",
-          openScope: "any member",
-          groupPolicyPath: "channels.signal.groupPolicy",
-          groupAllowFromPath: "channels.signal.groupAllowFrom",
-          mentionGated: false,
-        }),
-      ];
+      return collectOpenGroupPolicyRestrictSendersWarnings({
+        groupPolicy,
+        surface: "Signal groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.signal.groupPolicy",
+        groupAllowFromPath: "channels.signal.groupAllowFrom",
+        mentionGated: false,
+      });
     },
   },
   messaging: {
