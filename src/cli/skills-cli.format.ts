@@ -104,7 +104,10 @@ function normalizeSkillLookupToken(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-function resolveSkillByName(report: SkillStatusReport, requestedName: string): SkillStatusEntry | null {
+function resolveSkillByName(
+  report: SkillStatusReport,
+  requestedName: string,
+): SkillStatusEntry | null {
   const raw = requestedName.trim();
   if (!raw) {
     return null;
