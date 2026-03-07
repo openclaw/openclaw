@@ -1,4 +1,4 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   hasConfiguredSecretInput,
   promptSingleChannelSecretInput,
@@ -12,7 +12,7 @@ import {
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
 } from "./mattermost/accounts.js";
-import { promptAccountId } from "./onboarding-helpers.js";
+import { resolveAccountIdForConfigure } from "./onboarding-helpers.js";
 
 const channel = "mattermost" as const;
 
@@ -65,19 +65,16 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
     };
   },
   configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
-    const override = accountOverrides.mattermost?.trim();
     const defaultAccountId = resolveDefaultMattermostAccountId(cfg);
-    let accountId = override ? normalizeAccountId(override) : defaultAccountId;
-    if (shouldPromptAccountIds && !override) {
-      accountId = await promptAccountId({
-        cfg,
-        prompter,
-        label: "Mattermost",
-        currentId: accountId,
-        listAccountIds: listMattermostAccountIds,
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "Mattermost",
+      accountOverride: accountOverrides.mattermost,
+      shouldPromptAccountIds,
+      listAccountIds: listMattermostAccountIds,
+      defaultAccountId,
+    });
 
     let next = cfg;
     const resolvedAccount = resolveMattermostAccount({
