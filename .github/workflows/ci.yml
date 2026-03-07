@@ -101,7 +101,9 @@ jobs:
           use-sticky-disk: "true"
 
       - name: Build dist
-        run: pnpm build
+        run: |
+          pnpm build
+          pnpm ui:build
 
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
