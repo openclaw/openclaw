@@ -5,6 +5,10 @@ import type {
   ReactionTypeEmoji,
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
+import type { RetryConfig } from "../infra/retry.js";
+import type { MediaKind } from "../media/constants.js";
+import type { TelegramInlineButtons } from "./button-types.js";
+import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
@@ -12,10 +16,8 @@ import { recordChannelActivity } from "../infra/channel-activity.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
-import type { RetryConfig } from "../infra/retry.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { MediaKind } from "../media/constants.js";
 import { buildOutboundMediaLoadOptions } from "../media/load-options.js";
 import { isGifMedia, kindFromMime } from "../media/mime.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
@@ -23,7 +25,6 @@ import { loadWebMedia } from "../web/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
-import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
@@ -463,8 +464,17 @@ export async function sendMessageTelegram(
   text: string,
   opts: TelegramSendOpts = {},
 ): Promise<TelegramSendResult> {
-  const { cfg, account, api } = resolveTelegramApiContext(opts);
   const target = parseTelegramTarget(to);
+  const mediaUrl = opts.mediaUrl?.trim();
+  const replyMarkup = buildInlineKeyboard(opts.buttons);
+  const trimmedText = text?.trim() ?? "";
+
+  if (isSilentReplyText(trimmedText) && !mediaUrl && !replyMarkup) {
+    logVerbose("telegram send: suppressed NO_REPLY token before API call");
+    return { messageId: "suppressed", chatId: target.chatId };
+  }
+
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
@@ -472,11 +482,9 @@ export async function sendMessageTelegram(
     persistTarget: to,
     verbose: opts.verbose,
   });
-  const mediaUrl = opts.mediaUrl?.trim();
   const mediaMaxBytes =
     opts.maxBytes ??
     (typeof account.config.mediaMaxMb === "number" ? account.config.mediaMaxMb : 100) * 1024 * 1024;
-  const replyMarkup = buildInlineKeyboard(opts.buttons);
 
   const threadParams = buildTelegramThreadReplyParams({
     targetMessageThreadId: target.messageThreadId,
