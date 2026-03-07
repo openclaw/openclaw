@@ -40,6 +40,7 @@ const reattachPending = new Set()
 // Reconnect state for exponential backoff.
 let reconnectAttempt = 0
 let reconnectTimer = null
+let reconnectScheduled = false
 
 function nowStack() {
   try {
@@ -223,6 +224,7 @@ function scheduleReconnect() {
     reconnectTimer = null
   }
 
+  reconnectScheduled = true
   const delay = reconnectDelayMs(reconnectAttempt)
   reconnectAttempt++
 
@@ -230,6 +232,7 @@ function scheduleReconnect() {
 
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null
+    reconnectScheduled = false
     try {
       await ensureRelayConnection()
       reconnectAttempt = 0
@@ -251,6 +254,7 @@ function cancelReconnect() {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
+  reconnectScheduled = false
   reconnectAttempt = 0
 }
 
@@ -927,7 +931,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
   // If relay is down and no reconnect is in progress, trigger one.
   if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
-    if (!relayConnectPromise && !reconnectTimer) {
+    if (!relayConnectPromise && !reconnectTimer && !reconnectScheduled) {
       console.log('Keepalive: WebSocket unhealthy, triggering reconnect')
       await ensureRelayConnection().catch(() => {
         // ensureRelayConnection may throw without triggering onRelayClosed

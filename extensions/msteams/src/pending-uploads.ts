@@ -22,11 +22,17 @@ const pendingUploads = new Map<string, PendingUpload>();
 /** TTL for pending uploads: 5 minutes */
 const PENDING_UPLOAD_TTL_MS = 5 * 60 * 1000;
 
+/** Maximum number of pending uploads to prevent unbounded memory growth */
+const MAX_PENDING_UPLOADS = 1000;
+
 /**
  * Store a file pending user consent.
  * Returns the upload ID to include in the FileConsentCard context.
  */
 export function storePendingUpload(upload: Omit<PendingUpload, "id" | "createdAt">): string {
+  if (pendingUploads.size >= MAX_PENDING_UPLOADS) {
+    throw new Error(`Too many pending uploads (limit: ${MAX_PENDING_UPLOADS})`);
+  }
   const id = crypto.randomUUID();
   const entry: PendingUpload = {
     ...upload,
