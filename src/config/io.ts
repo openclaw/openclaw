@@ -13,6 +13,7 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
@@ -714,7 +715,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const validated = validateConfigObjectWithPlugins(resolvedConfig);
       if (!validated.ok) {
         const details = validated.issues
-          .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
+          .map(
+            (iss) =>
+              `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
+          )
           .join("\n");
         if (!loggedInvalidConfigs.has(configPath)) {
           loggedInvalidConfigs.add(configPath);
@@ -727,7 +731,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       if (validated.warnings.length > 0) {
         const details = validated.warnings
-          .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
+          .map(
+            (iss) =>
+              `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
+          )
           .join("\n");
         deps.logger.warn(`Config warnings:\\n${details}`);
       }
