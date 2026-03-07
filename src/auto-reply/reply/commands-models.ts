@@ -221,6 +221,7 @@ export async function resolveModelsCommandReply(params: {
   commandBodyNormalized: string;
   surface?: string;
   currentModel?: string;
+  agentId?: string;
   agentDir?: string;
   sessionEntry?: SessionEntry;
 }): Promise<ReplyPayload | null> {
@@ -232,7 +233,7 @@ export async function resolveModelsCommandReply(params: {
   const argText = body.replace(/^\/models\b/i, "").trim();
   const { provider, page, pageSize, all } = parseModelsArgs(argText);
 
-  const { byProvider, providers } = await buildModelsProviderData(params.cfg);
+  const { byProvider, providers } = await buildModelsProviderData(params.cfg, params.agentId);
   const isTelegram = params.surface === "telegram";
 
   // Provider list (no provider specified)
@@ -387,6 +388,7 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
     commandBodyNormalized,
     surface: params.ctx.Surface,
     currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
+    agentId: modelsAgentId,
     agentDir: modelsAgentDir,
     sessionEntry: params.sessionEntry,
   });
