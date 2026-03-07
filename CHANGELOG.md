@@ -55,6 +55,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/media downloads: time out only stalled body reads so polling recovers from hung file downloads without aborting slow downloads that are still streaming data. (#40098) thanks @tysoncung.
 - Telegram/DM routing: dedupe inbound Telegram DMs per agent instead of per session key so the same DM cannot trigger duplicate replies when both `agent:main:main` and `agent:main:telegram:direct:<id>` resolve for one agent. Fixes #40005. Supersedes #40116. (#40519) thanks @obviyus.
 - Matrix/DM routing: add safer fallback detection for broken `m.direct` homeservers, honor explicit room bindings over DM classification, and preserve room-bound agent selection for Matrix DM rooms. (#19736) Thanks @derbronko.
+- Slack/channel history context when requireMention is false: retain a sliding window of recent channel messages after each reply instead of clearing the history map, so `requireMention=false` channels with `replyToMode=all` no longer process each message in complete isolation without context of the surrounding conversation. Thanks @syedamaann.
 
 ## 2026.3.7
 
