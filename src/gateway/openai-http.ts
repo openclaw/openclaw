@@ -484,10 +484,26 @@ export async function handleOpenAiHttpRequest(
 
       const content = resolveAgentResponseText(result);
       const agentUsage = (
-        result as { meta?: { agentMeta?: { usage?: { input?: number; output?: number } } } }
+        result as {
+          meta?: {
+            agentMeta?: {
+              usage?: {
+                input?: number;
+                output?: number;
+                cacheRead?: number;
+                cacheWrite?: number;
+                total?: number;
+              };
+            };
+          };
+        }
       )?.meta?.agentMeta?.usage;
       const promptTokens = agentUsage?.input ?? 0;
       const completionTokens = agentUsage?.output ?? 0;
+      const cacheRead = agentUsage?.cacheRead ?? 0;
+      const cacheWrite = agentUsage?.cacheWrite ?? 0;
+      const totalTokens =
+        agentUsage?.total ?? promptTokens + completionTokens + cacheRead + cacheWrite;
 
       sendJson(res, 200, {
         id: runId,
@@ -504,7 +520,7 @@ export async function handleOpenAiHttpRequest(
         usage: {
           prompt_tokens: promptTokens,
           completion_tokens: completionTokens,
-          total_tokens: promptTokens + completionTokens,
+          total_tokens: totalTokens,
         },
       });
     } catch (err) {

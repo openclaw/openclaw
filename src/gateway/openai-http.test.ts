@@ -593,6 +593,38 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(usage?.total_tokens).toBe(59);
       }
 
+      // usage includes cache tokens in total
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "hi back" }],
+          meta: { agentMeta: { usage: { input: 10, output: 5, cacheRead: 20, cacheWrite: 3 } } },
+        } as never);
+        const json = await postSyncUserMessage("hi");
+        const usage = json.usage as
+          | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+          | undefined;
+        expect(usage?.prompt_tokens).toBe(10);
+        expect(usage?.completion_tokens).toBe(5);
+        expect(usage?.total_tokens).toBe(38);
+      }
+
+      // usage respects precomputed total from agentMeta
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "hi back" }],
+          meta: { agentMeta: { usage: { input: 10, output: 5, total: 100 } } },
+        } as never);
+        const json = await postSyncUserMessage("hi");
+        const usage = json.usage as
+          | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+          | undefined;
+        expect(usage?.prompt_tokens).toBe(10);
+        expect(usage?.completion_tokens).toBe(5);
+        expect(usage?.total_tokens).toBe(100);
+      }
+
       // usage defaults to zeros when agentMeta has no usage
       {
         agentCommand.mockClear();
