@@ -1,5 +1,6 @@
 import type { Writable } from "node:stream";
-import { loadConfig } from "../../config/config.js";
+import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
+import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -97,6 +98,29 @@ async function resolveServiceLoadedOrFail(params: {
   }
 }
 
+/**
+ * Best-effort config validation. Returns a string describing the issues if
+ * config exists and is invalid, or null if config is valid/missing/unreadable.
+ *
+ * Note: This reads the config file snapshot in the current CLI environment.
+ * Configs using env vars only available in the service context (launchd/systemd)
+ * may produce false positives, but the check is intentionally best-effort —
+ * a false positive here is safer than a crash on startup. (#35862)
+ */
+async function getConfigValidationError(): Promise<string | null> {
+  try {
+    const snapshot = await readConfigFileSnapshot();
+    if (!snapshot.exists || snapshot.valid) {
+      return null;
+    }
+    return snapshot.issues.length > 0
+      ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
+      : "Unknown validation issue.";
+  } catch {
+    return null;
+  }
+}
+
 export async function runServiceUninstall(params: {
   serviceNoun: string;
   service: GatewayService;
@@ -177,6 +201,17 @@ export async function runServiceStart(params: {
     });
     return;
   }
+  // Pre-flight config validation (#35862)
+  {
+    const configError = await getConfigValidationError();
+    if (configError) {
+      fail(
+        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+      );
+      return;
+    }
+  }
+
   try {
     await params.service.restart({ env: process.env, stdout });
   } catch (err) {
@@ -311,6 +346,17 @@ export async function runServiceRestart(params: {
           defaultRuntime.log(`\n⚠️  ${warning}\n`);
         }
       }
+    }
+  }
+
+  // Pre-flight config validation (#35862)
+  {
+    const configError = await getConfigValidationError();
+    if (configError) {
+      fail(
+        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+      );
+      return false;
     }
   }
 
