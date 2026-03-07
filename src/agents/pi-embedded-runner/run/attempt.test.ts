@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  buildAfterToolsResolvedToolMetadata,
   buildAfterTurnLegacyCompactionParams,
   composeSystemPromptWithHookContext,
+  decodeHtmlEntitiesInObject,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
@@ -11,10 +13,29 @@ import {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldInjectOllamaCompatNumCtx,
-  decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
+
+describe("buildAfterToolsResolvedToolMetadata", () => {
+  it("passes parameters by reference", () => {
+    const parameters = {
+      type: "object",
+      properties: { command: { type: "string" } },
+    };
+    const tools = [{ name: "exec", parameters }];
+
+    const metadata = buildAfterToolsResolvedToolMetadata(tools);
+    expect(metadata[0]?.parameters).toBe(parameters);
+  });
+
+  it("keeps tools with undefined parameters", () => {
+    const metadata = buildAfterToolsResolvedToolMetadata([{ name: "client_tool" }]);
+    expect(metadata).toHaveLength(1);
+    expect(metadata[0]).toMatchObject({ name: "client_tool" });
+    expect(metadata[0]?.parameters).toBeUndefined();
+  });
+});
 
 function createOllamaProviderConfig(injectNumCtxForOpenAICompat: boolean): OpenClawConfig {
   return {
@@ -30,7 +51,6 @@ function createOllamaProviderConfig(injectNumCtxForOpenAICompat: boolean): OpenC
     },
   };
 }
-
 describe("resolvePromptBuildHookResult", () => {
   function createLegacyOnlyHookRunner() {
     return {
