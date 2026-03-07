@@ -369,7 +369,7 @@ function parseMergeForwardContent(params: {
     msg_type?: string;
     body?: { content?: string };
     sender?: { id?: string };
-    mentions?: Array<{ key?: string; id?: string; name?: string }>;
+    mentions?: Array<{ key?: string; id?: string | { open_id?: string; user_id?: string }; name?: string }>;
     upper_message_id?: string;
     create_time?: string;
   }>;
@@ -418,7 +418,8 @@ function parseMergeForwardContent(params: {
       const sorted = [...item.mentions].sort((a, b) => (b.key?.length ?? 0) - (a.key?.length ?? 0));
       for (const m of sorted) {
         if (m.key) {
-          const display = m.name && m.id ? `${m.name}(${m.id})` : m.name || m.id || m.key;
+          const mId = typeof m.id === "string" ? m.id : m.id?.open_id || m.id?.user_id || "";
+          const display = m.name && mId ? `${m.name}(${mId})` : m.name || mId || m.key;
           resolved = resolved.replaceAll(m.key, `@${display}`);
         }
       }
