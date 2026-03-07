@@ -1,4 +1,8 @@
 import {
+  buildOpenGroupPolicyNoRouteAllowlistWarning,
+  buildOpenGroupPolicyRestrictSendersWarning,
+} from "openclaw/plugin-sdk";
+import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
   collectWhatsAppStatusIssues,
@@ -149,11 +153,22 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         Boolean(account.groups) && Object.keys(account.groups ?? {}).length > 0;
       if (groupAllowlistConfigured) {
         return [
-          `- WhatsApp groups: groupPolicy="open" allows any member in allowed groups to trigger (mention-gated). Set channels.whatsapp.groupPolicy="allowlist" + channels.whatsapp.groupAllowFrom to restrict senders.`,
+          buildOpenGroupPolicyRestrictSendersWarning({
+            surface: "WhatsApp groups",
+            openScope: "any member in allowed groups",
+            groupPolicyPath: "channels.whatsapp.groupPolicy",
+            groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
+          }),
         ];
       }
       return [
-        `- WhatsApp groups: groupPolicy="open" with no channels.whatsapp.groups allowlist; any group can add + ping (mention-gated). Set channels.whatsapp.groupPolicy="allowlist" + channels.whatsapp.groupAllowFrom or configure channels.whatsapp.groups.`,
+        buildOpenGroupPolicyNoRouteAllowlistWarning({
+          surface: "WhatsApp groups",
+          routeAllowlistPath: "channels.whatsapp.groups",
+          routeScope: "group",
+          groupPolicyPath: "channels.whatsapp.groupPolicy",
+          groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
+        }),
       ];
     },
   },

@@ -1,3 +1,7 @@
+import {
+  buildOpenGroupPolicyRestrictSendersWarning,
+  buildOpenGroupPolicyWarning,
+} from "openclaw/plugin-sdk";
 import type {
   ChannelAccountSnapshot,
   ChannelDock,
@@ -171,11 +175,21 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         explicitGroupAllowFrom.length > 0 ? explicitGroupAllowFrom : dmAllowFrom;
       if (effectiveAllowFrom.length > 0) {
         return [
-          `- Zalo groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.zalo.groupPolicy="allowlist" + channels.zalo.groupAllowFrom to restrict senders.`,
+          buildOpenGroupPolicyRestrictSendersWarning({
+            surface: "Zalo groups",
+            openScope: "any member",
+            groupPolicyPath: "channels.zalo.groupPolicy",
+            groupAllowFromPath: "channels.zalo.groupAllowFrom",
+          }),
         ];
       }
       return [
-        `- Zalo groups: groupPolicy="open" with no groupAllowFrom/allowFrom allowlist; any member can trigger (mention-gated). Set channels.zalo.groupPolicy="allowlist" + channels.zalo.groupAllowFrom.`,
+        buildOpenGroupPolicyWarning({
+          surface: "Zalo groups",
+          openBehavior:
+            "with no groupAllowFrom/allowFrom allowlist; any member can trigger (mention-gated)",
+          remediation: 'Set channels.zalo.groupPolicy="allowlist" + channels.zalo.groupAllowFrom',
+        }),
       ];
     },
   },

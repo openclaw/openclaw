@@ -1,4 +1,8 @@
 import {
+  buildOpenGroupPolicyConfigureRouteAllowlistWarning,
+  buildOpenGroupPolicyWarning,
+} from "openclaw/plugin-sdk";
+import {
   applyAccountNameToChannelSection,
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
@@ -151,11 +155,22 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       if (groupPolicy === "open") {
         if (channelAllowlistConfigured) {
           warnings.push(
-            `- Discord guilds: groupPolicy="open" allows any channel not explicitly denied to trigger (mention-gated). Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels.`,
+            buildOpenGroupPolicyConfigureRouteAllowlistWarning({
+              surface: "Discord guilds",
+              openScope: "any channel not explicitly denied",
+              groupPolicyPath: "channels.discord.groupPolicy",
+              routeAllowlistPath: "channels.discord.guilds.<id>.channels",
+            }),
           );
         } else {
           warnings.push(
-            `- Discord guilds: groupPolicy="open" with no guild/channel allowlist; any channel can trigger (mention-gated). Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels.`,
+            buildOpenGroupPolicyWarning({
+              surface: "Discord guilds",
+              openBehavior:
+                "with no guild/channel allowlist; any channel can trigger (mention-gated)",
+              remediation:
+                'Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels',
+            }),
           );
         }
       }

@@ -1,3 +1,4 @@
+import { buildOpenGroupPolicyRestrictSendersWarning } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
@@ -305,7 +306,12 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         return [];
       }
       return [
-        `- Mattermost channels: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.mattermost.groupPolicy="allowlist" + channels.mattermost.groupAllowFrom to restrict senders.`,
+        buildOpenGroupPolicyRestrictSendersWarning({
+          surface: "Mattermost channels",
+          openScope: "any member",
+          groupPolicyPath: "channels.mattermost.groupPolicy",
+          groupAllowFromPath: "channels.mattermost.groupAllowFrom",
+        }),
       ];
     },
   },

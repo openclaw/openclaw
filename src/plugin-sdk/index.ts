@@ -524,6 +524,12 @@ export {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
+export {
+  buildOpenGroupPolicyConfigureRouteAllowlistWarning,
+  buildOpenGroupPolicyNoRouteAllowlistWarning,
+  buildOpenGroupPolicyRestrictSendersWarning,
+  buildOpenGroupPolicyWarning,
+} from "../channels/plugins/group-policy-warnings.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 

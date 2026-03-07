@@ -1,3 +1,4 @@
+import { buildOpenGroupPolicyRestrictSendersWarning } from "openclaw/plugin-sdk";
 import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import {
   buildProbeChannelStatusSummary,
@@ -268,7 +269,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       });
       if (groupPolicy !== "open") return [];
       return [
-        `- Feishu[${account.accountId}] groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.feishu.groupPolicy="allowlist" + channels.feishu.groupAllowFrom to restrict senders.`,
+        buildOpenGroupPolicyRestrictSendersWarning({
+          surface: `Feishu[${account.accountId}] groups`,
+          openScope: "any member",
+          groupPolicyPath: "channels.feishu.groupPolicy",
+          groupAllowFromPath: "channels.feishu.groupAllowFrom",
+        }),
       ];
     },
   },
