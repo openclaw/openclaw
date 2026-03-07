@@ -15,11 +15,12 @@ export function resolveChannelMediaMaxBytes(params: {
     cfg: params.cfg,
     accountId,
   });
-  if (channelLimit) {
+  if (channelLimit !== undefined) {
     return channelLimit * MB;
   }
-  if (params.cfg.agents?.defaults?.mediaMaxMb) {
-    return params.cfg.agents.defaults.mediaMaxMb * MB;
+  const defaultLimit = params.cfg.agents?.defaults?.mediaMaxMb;
+  if (defaultLimit !== undefined) {
+    return defaultLimit * MB;
   }
   return undefined;
 }

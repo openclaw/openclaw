@@ -164,7 +164,7 @@ const FeishuSharedConfigShape = {
   textChunkLimit: z.number().int().positive().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema,
-  mediaMaxMb: z.number().positive().optional(),
+  mediaMaxMb: z.number().nonnegative().optional(),
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,

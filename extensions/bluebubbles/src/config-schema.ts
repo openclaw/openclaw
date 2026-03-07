@@ -41,7 +41,7 @@ const bluebubblesAccountSchema = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
-    mediaMaxMb: z.number().int().positive().optional(),
+    mediaMaxMb: z.number().int().nonnegative().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
     sendReadReceipts: z.boolean().optional(),
     allowPrivateNetwork: z.boolean().optional(),

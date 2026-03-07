@@ -109,13 +109,13 @@ export const WhatsAppAccountSchema = WhatsAppSharedSchema.extend({
   enabled: z.boolean().optional(),
   /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
   authDir: z.string().optional(),
-  mediaMaxMb: z.number().int().positive().optional(),
+  mediaMaxMb: z.number().int().nonnegative().optional(),
 }).strict();
 
 export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
   accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
-  mediaMaxMb: z.number().int().positive().optional().default(50),
+  mediaMaxMb: z.number().int().nonnegative().optional().default(50),
   actions: z
     .object({
       reactions: z.boolean().optional(),

@@ -179,7 +179,7 @@ export const TelegramAccountSchemaBase = z
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     // Legacy key kept for automatic migration to `streaming`.
     streamMode: z.enum(["off", "partial", "block"]).optional(),
-    mediaMaxMb: z.number().positive().optional(),
+    mediaMaxMb: z.number().nonnegative().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     retry: RetryConfigSchema,
     network: z
@@ -439,7 +439,7 @@ export const DiscordAccountSchema = z
     streamMode: z.enum(["partial", "block", "off"]).optional(),
     draftChunk: BlockStreamingChunkSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
-    mediaMaxMb: z.number().positive().optional(),
+    mediaMaxMb: z.number().nonnegative().optional(),
     retry: RetryConfigSchema,
     actions: z
       .object({
@@ -730,7 +730,7 @@ export const GoogleChatAccountSchema = z
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     streamMode: z.enum(["replace", "status_final", "append"]).optional().default("replace"),
-    mediaMaxMb: z.number().positive().optional(),
+    mediaMaxMb: z.number().nonnegative().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     actions: z
       .object({
@@ -819,7 +819,7 @@ export const SlackAccountSchema = z
     streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
     nativeStreaming: z.boolean().optional(),
     streamMode: z.enum(["replace", "status_final", "append"]).optional(),
-    mediaMaxMb: z.number().positive().optional(),
+    mediaMaxMb: z.number().nonnegative().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
     replyToMode: ReplyToModeSchema.optional(),
@@ -966,7 +966,7 @@ export const SignalAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    mediaMaxMb: z.number().int().positive().optional(),
+    mediaMaxMb: z.number().int().nonnegative().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
     actions: z
@@ -1088,7 +1088,7 @@ export const IrcAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    mediaMaxMb: z.number().positive().optional(),
+    mediaMaxMb: z.number().nonnegative().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
   })
@@ -1198,7 +1198,7 @@ export const IMessageAccountSchemaBase = z
     remoteAttachmentRoots: z
       .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
       .optional(),
-    mediaMaxMb: z.number().int().positive().optional(),
+    mediaMaxMb: z.number().int().nonnegative().optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
@@ -1321,7 +1321,7 @@ export const BlueBubblesAccountSchemaBase = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
-    mediaMaxMb: z.number().int().positive().optional(),
+    mediaMaxMb: z.number().int().nonnegative().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
     sendReadReceipts: z.boolean().optional(),
     blockStreaming: z.boolean().optional(),
@@ -1440,7 +1440,7 @@ export const MSTeamsConfigSchema = z
     replyStyle: MSTeamsReplyStyleSchema.optional(),
     teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
     /** Max media size in MB (default: 100MB for OneDrive upload support). */
-    mediaMaxMb: z.number().positive().optional(),
+    mediaMaxMb: z.number().nonnegative().optional(),
     /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2") */
     sharePointSiteId: z.string().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
