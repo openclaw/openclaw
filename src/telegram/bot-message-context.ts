@@ -12,6 +12,11 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { normalizeCommandBody } from "../auto-reply/commands-registry.js";
+import {
+  engagementStates,
+  shouldParticipateInGroup,
+  shouldRespondToMention,
+} from "../auto-reply/contextual-activation.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import {
   buildPendingHistoryContextFromMap,
@@ -63,6 +68,7 @@ import {
   normalizeAllowFrom,
   normalizeDmAllowFromWithStore,
 } from "./bot-access.js";
+import { latestGroupMessageIds } from "./bot.js";
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -85,12 +91,14 @@ import { enforceTelegramDmAccess } from "./dm-access.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
   buildTelegramStatusReactionVariants,
   resolveTelegramAllowedEmojiReactions,
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
+import { getCachedSticker } from "./sticker-cache.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -165,6 +173,21 @@ async function resolveStickerVisionSupport(params: {
   } catch {
     return false;
   }
+}
+
+// oxlint-disable-next-line typescript/no-explicit-any
+function formatStickerReplyBody(sticker: any): string {
+  // Try to get cached description from sticker cache
+  const cached = sticker?.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
+  if (cached?.description) {
+    const emoji = sticker?.emoji ?? cached.emoji ?? "";
+    const setName = cached.setName ? ` from "${cached.setName}"` : "";
+    return `[sticker${emoji ? ` ${emoji}` : ""}${setName}] ${cached.description}`;
+  }
+  // Fallback: emoji + set name
+  const emoji = sticker?.emoji ?? "";
+  const setName = sticker?.set_name ? ` from "${sticker.set_name}"` : "";
+  return `[sticker${emoji ? ` ${emoji}` : ""}${setName}]`;
 }
 
 export const buildTelegramMessageContext = async ({
@@ -500,6 +523,30 @@ export const buildTelegramMessageContext = async ({
   }
 
   let bodyText = rawBody;
+
+  // Extract reply metadata once for use in history entries
+  const replyMsg = msg.reply_to_message;
+  const historyReplyToId = replyMsg?.message_id != null ? String(replyMsg.message_id) : undefined;
+  const historyReplyToBody =
+    replyMsg?.text ??
+    replyMsg?.caption ??
+    (replyMsg?.photo
+      ? "[image]"
+      : replyMsg?.sticker
+        ? formatStickerReplyBody(replyMsg.sticker)
+        : replyMsg?.video
+          ? "[video]"
+          : replyMsg?.voice
+            ? "[voice message]"
+            : replyMsg?.animation
+              ? "[GIF]"
+              : replyMsg?.document
+                ? `[file: ${replyMsg.document.file_name ?? "unknown"}]`
+                : undefined);
+  const historyReplyToSender = replyMsg?.from?.first_name
+    ? `${replyMsg.from.first_name}${replyMsg.from.last_name ? ` ${replyMsg.from.last_name}` : ""}`
+    : (replyMsg?.from?.username ?? undefined);
+
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
 
   const disableAudioPreflight =
@@ -605,12 +652,156 @@ export const buildTelegramMessageContext = async ({
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
+  const contextualConfig = (groupConfig as TelegramGroupConfig | undefined)?.contextualActivation;
+  const groupKey = historyKey ?? "";
+  let contextualActivationHint: string | undefined;
+
+  // Check whether a newer message is already queued for this chat/topic.
+  // If so, skip the expensive decision-model call and just record history —
+  // the newer message will carry the full context window anyway.
+  const seqKey = getTelegramSequentialKey(primaryCtx);
+  const latestMsgId = latestGroupMessageIds.get(seqKey);
+  const isStaleMessage =
+    typeof msg.message_id === "number" &&
+    typeof latestMsgId === "number" &&
+    msg.message_id < latestMsgId;
+
+  // When engaged via contextual activation, skip mention gating entirely and ask
+  // the model whether to continue or disengage.
+  if (isGroup && contextualConfig?.model) {
+    const engagement = engagementStates.get(groupKey);
+    if (engagement?.mode === "engaged") {
+      if (isStaleMessage) {
+        logVerbose(
+          `[contextual-activation] Telegram group ${chatId}: skipping stale message #${msg.message_id} (latest: #${latestMsgId})`,
+        );
+        // Fall through to normal mention gating — will record history and skip
+      } else {
+        const decision = await callTelegramContextualDecision({
+          cfg,
+          contextualConfig,
+          groupHistories,
+          groupKey,
+          msg,
+          rawBody,
+          senderId: senderId || chatId,
+          botName: primaryCtx.me?.first_name ?? primaryCtx.me?.username,
+          allMedia,
+        });
+        if (decision.shouldProcess) {
+          contextualActivationHint = decision.reason;
+          // Stay engaged, skip mention gate — fall through to process
+        } else {
+          // Model disengaged — fall through to normal mention gating below
+        }
+      }
+    }
+  }
+
   if (isGroup && requireMention && canDetectMention) {
     if (mentionGate.shouldSkip) {
-      logger.info({ chatId, reason: "no-mention" }, "skipping group message");
+      // Contextual activation (peeking): ask the decision model before skipping
+      if (contextualConfig?.model) {
+        if (isStaleMessage) {
+          logVerbose(
+            `[contextual-activation] Telegram group ${chatId}: skipping stale message #${msg.message_id} (latest: #${latestMsgId})`,
+          );
+          // Skip decision call — just record history and return
+        } else {
+          const decision = await callTelegramContextualDecision({
+            cfg,
+            contextualConfig,
+            groupHistories,
+            groupKey,
+            msg,
+            rawBody,
+            senderId: senderId || chatId,
+            botName: primaryCtx.me?.first_name ?? primaryCtx.me?.username,
+            allMedia,
+          });
+          if (decision.shouldProcess) {
+            contextualActivationHint = decision.reason;
+            logVerbose(`[contextual-activation] Telegram group ${chatId}: decided to participate`);
+            // Fall through — treat as if mentioned
+          } else {
+            if (decision.error) {
+              logVerbose(
+                `[contextual-activation] Telegram group ${chatId}: error: ${decision.error}`,
+              );
+            }
+            // Fall through to record history and skip below
+          }
+        }
+        if (!contextualActivationHint) {
+          logger.info({ chatId, reason: "no-mention-contextual-skip" }, "skipping group message");
+          recordPendingHistoryEntryIfEnabled({
+            historyMap: groupHistories,
+            historyKey: groupKey,
+            limit: historyLimit,
+            entry: historyKey
+              ? {
+                  sender: buildSenderLabel(msg, senderId || chatId),
+                  body: rawBody,
+                  timestamp: msg.date ? msg.date * 1000 : undefined,
+                  messageId:
+                    typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+                  replyToId: historyReplyToId,
+                  replyToBody: historyReplyToBody,
+                  replyToSender: historyReplyToSender,
+                }
+              : null,
+          });
+          return null;
+        }
+      } else {
+        logger.info({ chatId, reason: "no-mention" }, "skipping group message");
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: groupHistories,
+          historyKey: groupKey,
+          limit: historyLimit,
+          entry: historyKey
+            ? {
+                sender: buildSenderLabel(msg, senderId || chatId),
+                body: rawBody,
+                timestamp: msg.date ? msg.date * 1000 : undefined,
+                messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+                replyToId: historyReplyToId,
+                replyToBody: historyReplyToBody,
+                replyToSender: historyReplyToSender,
+              }
+            : null,
+        });
+        return null;
+      }
+    }
+  }
+
+  // Mention filter: when mentioned/replied to, optionally ask the model if a response is warranted
+  if (
+    isGroup &&
+    !mentionGate.shouldSkip &&
+    !contextualActivationHint &&
+    contextualConfig?.model &&
+    contextualConfig.mentionFilter?.enabled
+  ) {
+    const decision = await callTelegramMentionFilterDecision({
+      cfg,
+      contextualConfig,
+      groupHistories,
+      groupKey,
+      msg,
+      rawBody,
+      senderId: senderId || chatId,
+      botName: primaryCtx.me?.first_name ?? primaryCtx.me?.username,
+      allMedia,
+    });
+    if (!decision.shouldProcess) {
+      logVerbose(
+        `[contextual-activation] Telegram group ${chatId}: mention filtered — ${decision.reason ?? "not warranted"}`,
+      );
       recordPendingHistoryEntryIfEnabled({
         historyMap: groupHistories,
-        historyKey: historyKey ?? "",
+        historyKey: groupKey,
         limit: historyLimit,
         entry: historyKey
           ? {
@@ -618,6 +809,9 @@ export const buildTelegramMessageContext = async ({
               body: rawBody,
               timestamp: msg.date ? msg.date * 1000 : undefined,
               messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+              replyToId: historyReplyToId,
+              replyToBody: historyReplyToBody,
+              replyToSender: historyReplyToSender,
             }
           : null,
       });
@@ -838,7 +1032,17 @@ export const buildTelegramMessageContext = async ({
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,
     GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
-    GroupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
+    GroupSystemPrompt:
+      isGroup || (!isGroup && groupConfig)
+        ? contextualActivationHint
+          ? [
+              groupSystemPrompt,
+              `\nYou've been silently reading the group chat. You noticed: "${contextualActivationHint}". Join the conversation naturally, like a human group member chiming in.`,
+            ]
+              .filter(Boolean)
+              .join("\n")
+          : groupSystemPrompt
+        : undefined,
     SenderName: senderName,
     SenderId: senderId || undefined,
     SenderUsername: senderUsername || undefined,
@@ -976,6 +1180,143 @@ export const buildTelegramMessageContext = async ({
     accountId: account.accountId,
   };
 };
+
+async function callTelegramContextualDecision(params: {
+  cfg: OpenClawConfig;
+  contextualConfig: NonNullable<TelegramGroupConfig["contextualActivation"]>;
+  groupHistories: Map<string, HistoryEntry[]>;
+  groupKey: string;
+  // oxlint-disable-next-line typescript/no-explicit-any
+  msg: any;
+  rawBody: string;
+  senderId: string | number;
+  botName?: string;
+  allMedia?: TelegramMediaRef[];
+}) {
+  const existingHistory = params.groupHistories.get(params.groupKey) ?? [];
+  const recentMessages = existingHistory.map((h) => ({
+    sender: h.sender,
+    body: h.body,
+    timestamp: h.timestamp,
+    messageId: h.messageId,
+    replyToId: h.replyToId,
+    replyToBody: h.replyToBody,
+    replyToSender: h.replyToSender,
+  }));
+  const imagePaths = (params.allMedia ?? [])
+    .filter((m) => m.path && m.contentType?.startsWith("image/"))
+    .map((m) => m.path);
+  // Extract reply context from the Telegram message
+  const replyTo = params.msg.reply_to_message;
+  const replyToId = replyTo?.message_id != null ? String(replyTo.message_id) : undefined;
+  const replyToBody =
+    replyTo?.text ??
+    replyTo?.caption ??
+    (replyTo?.photo
+      ? "[image]"
+      : replyTo?.sticker
+        ? formatStickerReplyBody(replyTo.sticker)
+        : replyTo?.video
+          ? "[video]"
+          : replyTo?.voice
+            ? "[voice message]"
+            : replyTo?.animation
+              ? "[GIF]"
+              : replyTo?.document
+                ? `[file: ${replyTo.document?.file_name ?? "unknown"}]`
+                : undefined);
+  const replyToSender = replyTo
+    ? replyTo.from?.first_name
+      ? `${replyTo.from.first_name}${replyTo.from.last_name ? ` ${replyTo.from.last_name}` : ""}`
+      : (replyTo.from?.username ?? undefined)
+    : undefined;
+  return shouldParticipateInGroup({
+    cfg: params.cfg,
+    config: params.contextualConfig,
+    recentMessages,
+    currentMessage: {
+      sender: buildSenderLabel(params.msg as never, params.senderId),
+      body: params.rawBody,
+      timestamp: params.msg.date ? params.msg.date * 1000 : undefined,
+      imagePaths: imagePaths.length > 0 ? imagePaths : undefined,
+      messageId:
+        typeof params.msg.message_id === "number" ? String(params.msg.message_id) : undefined,
+      replyToId,
+      replyToBody,
+      replyToSender,
+    },
+    groupKey: params.groupKey,
+    botName: params.botName,
+  });
+}
+
+async function callTelegramMentionFilterDecision(params: {
+  cfg: OpenClawConfig;
+  contextualConfig: NonNullable<TelegramGroupConfig["contextualActivation"]>;
+  groupHistories: Map<string, HistoryEntry[]>;
+  groupKey: string;
+  // oxlint-disable-next-line typescript/no-explicit-any
+  msg: any;
+  rawBody: string;
+  senderId: string | number;
+  botName?: string;
+  allMedia?: TelegramMediaRef[];
+}) {
+  const existingHistory = params.groupHistories.get(params.groupKey) ?? [];
+  const recentMessages = existingHistory.map((h) => ({
+    sender: h.sender,
+    body: h.body,
+    timestamp: h.timestamp,
+    messageId: h.messageId,
+    replyToId: h.replyToId,
+    replyToBody: h.replyToBody,
+    replyToSender: h.replyToSender,
+  }));
+  const imagePaths = (params.allMedia ?? [])
+    .filter((m) => m.path && m.contentType?.startsWith("image/"))
+    .map((m) => m.path);
+  const replyTo = params.msg.reply_to_message;
+  const replyToId = replyTo?.message_id != null ? String(replyTo.message_id) : undefined;
+  const replyToBody =
+    replyTo?.text ??
+    replyTo?.caption ??
+    (replyTo?.photo
+      ? "[image]"
+      : replyTo?.sticker
+        ? formatStickerReplyBody(replyTo.sticker)
+        : replyTo?.video
+          ? "[video]"
+          : replyTo?.voice
+            ? "[voice message]"
+            : replyTo?.animation
+              ? "[GIF]"
+              : replyTo?.document
+                ? `[file: ${replyTo.document?.file_name ?? "unknown"}]`
+                : undefined);
+  const replyToSender = replyTo
+    ? replyTo.from?.first_name
+      ? `${replyTo.from.first_name}${replyTo.from.last_name ? ` ${replyTo.from.last_name}` : ""}`
+      : (replyTo.from?.username ?? undefined)
+    : undefined;
+  return shouldRespondToMention({
+    cfg: params.cfg,
+    config: params.contextualConfig,
+    recentMessages,
+    currentMessage: {
+      sender: buildSenderLabel(params.msg as never, params.senderId),
+      body: params.rawBody,
+      timestamp: params.msg.date ? params.msg.date * 1000 : undefined,
+      imagePaths: imagePaths.length > 0 ? imagePaths : undefined,
+      messageId:
+        typeof params.msg.message_id === "number" ? String(params.msg.message_id) : undefined,
+      replyToId,
+      replyToBody,
+      replyToSender,
+    },
+    groupKey: params.groupKey,
+    botName: params.botName,
+  });
+}
 
 export type TelegramMessageContext = NonNullable<
   Awaited<ReturnType<typeof buildTelegramMessageContext>>

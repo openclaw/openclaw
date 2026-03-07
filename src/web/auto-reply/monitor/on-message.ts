@@ -37,6 +37,7 @@ export function createWebOnMessageHandler(params: {
     opts?: {
       groupHistory?: GroupHistoryEntry[];
       suppressGroupHistoryClear?: boolean;
+      contextualActivationHint?: string;
     },
   ) =>
     processMessage({
@@ -52,6 +53,7 @@ export function createWebOnMessageHandler(params: {
       replyResolver: params.replyResolver,
       replyLogger: params.replyLogger,
       backgroundTasks: params.backgroundTasks,
+      contextualActivationHint: opts?.contextualActivationHint,
       rememberSentText: params.echoTracker.rememberText,
       echoHas: params.echoTracker.has,
       echoForget: params.echoTracker.forget,
@@ -95,6 +97,7 @@ export function createWebOnMessageHandler(params: {
       return;
     }
 
+    let contextualActivationHint: string | undefined;
     if (msg.chatType === "group") {
       const metaCtx = {
         From: msg.from,
@@ -124,7 +127,7 @@ export function createWebOnMessageHandler(params: {
         warn: params.replyLogger.warn.bind(params.replyLogger),
       });
 
-      const gating = applyGroupGating({
+      const gating = await applyGroupGating({
         cfg: params.cfg,
         msg,
         conversationId,
@@ -142,6 +145,7 @@ export function createWebOnMessageHandler(params: {
       if (!gating.shouldProcess) {
         return;
       }
+      contextualActivationHint = gating.contextualActivationHint;
     } else {
       // Ensure `peerId` for DMs is stable and stored as E.164 when possible.
       if (!msg.senderE164 && peerId && peerId.startsWith("+")) {
@@ -165,6 +169,8 @@ export function createWebOnMessageHandler(params: {
       return;
     }
 
-    await processForRoute(msg, route, groupHistoryKey);
+    await processForRoute(msg, route, groupHistoryKey, {
+      contextualActivationHint,
+    });
   };
 }

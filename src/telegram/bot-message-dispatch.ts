@@ -7,6 +7,7 @@ import {
 } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
+import { touchEngagement } from "../auto-reply/contextual-activation.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -790,4 +791,7 @@ export const dispatchTelegramMessage = async ({
     });
   }
   clearGroupHistory();
+  if (isGroup && historyKey) {
+    touchEngagement(historyKey);
+  }
 };

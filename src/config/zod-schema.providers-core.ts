@@ -59,6 +59,38 @@ const TelegramCapabilitiesSchema = z.union([
     .strict(),
 ]);
 
+const ScheduleRuleSchema = z
+  .object({
+    time: z.string().regex(/^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/),
+    baseRate: z.number().min(0).max(1),
+  })
+  .strict();
+
+export const ContextualActivationSchema = z
+  .object({
+    model: z.string(),
+    fallbacks: z.array(z.string()).optional(),
+    prompt: z.string().optional(),
+    promptExtra: z.string().optional(),
+    disengagePrompt: z.string().optional(),
+    disengagePromptExtra: z.string().optional(),
+    contextMessages: z.number().int().min(1).max(50).optional(),
+    baseRate: z.number().min(0).max(1).optional(),
+    schedule: z.array(ScheduleRuleSchema).optional(),
+    timezone: z.string().optional(),
+    engagedTimeout: z.number().int().min(10).max(3600).optional(),
+    mentionFilter: z
+      .object({
+        enabled: z.boolean().optional(),
+        prompt: z.string().optional(),
+        promptExtra: z.string().optional(),
+        rate: z.number().min(0).max(1).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -75,6 +107,7 @@ export const TelegramTopicSchema = z
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    contextualActivation: ContextualActivationSchema.optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     tools: ToolPolicySchema,

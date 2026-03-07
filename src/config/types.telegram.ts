@@ -198,6 +198,8 @@ export type TelegramTopicConfig = {
 
 export type TelegramGroupConfig = {
   requireMention?: boolean;
+  /** Contextual activation config for AI-driven group participation decisions. */
+  contextualActivation?: import("./group-policy.js").ContextualActivationConfig;
   /** Per-group override for group message policy (open|disabled|allowlist). */
   groupPolicy?: GroupPolicy;
   /** Optional tool policy overrides for this group. */

@@ -1,3 +1,7 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import chalk from "chalk";
 import type { Command } from "commander";
 import { gatewayStatusCommand } from "../../commands/gateway-status.js";
 import { formatHealthChannelLines, type HealthSummary } from "../../commands/health.js";
@@ -9,6 +13,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { styleHealthChannelLine } from "../../terminal/health-style.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
+import { resolveHomeDir } from "../../utils.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { inheritOptionFromParent } from "../command-options.js";
@@ -274,4 +279,196 @@ export function registerGatewayCli(program: Command) {
         }
       }, "gateway discover failed");
     });
+
+  gateway
+    .command("decisions")
+    .description("Tail contextual-activation decision logs in real-time")
+    .option("-n, --lines <count>", "Number of initial lines to show", "20")
+    .option("--json", "Output raw JSONL (default: human-readable)", false)
+    .option("--clean [days]", "Delete log files older than N days (default: 7)")
+    .option("--tz <timezone>", "IANA timezone for display (e.g. Asia/Shanghai), default: UTC")
+    .action(
+      async (opts: { lines?: string; json?: boolean; clean?: string | true; tz?: string }) => {
+        const home = resolveHomeDir();
+        if (!home) {
+          defaultRuntime.error("Cannot resolve home directory");
+          defaultRuntime.exit(1);
+          return;
+        }
+        const logDir = path.join(home, ".openclaw", "logs", "contextual-activation");
+        if (!fs.existsSync(logDir)) {
+          defaultRuntime.error(
+            `No contextual-activation logs found at ${logDir}\nEnsure contextualActivation is configured in group settings.`,
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+
+        // --clean: remove old log files
+        if (opts.clean != null) {
+          const days =
+            opts.clean === true ? 7 : Math.max(0, Number.parseInt(String(opts.clean), 10) || 7);
+          const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+          const files = fs.readdirSync(logDir).filter((f) => f.endsWith(".jsonl"));
+          let removed = 0;
+          let totalBytes = 0;
+          for (const file of files) {
+            const fp = path.join(logDir, file);
+            const stat = fs.statSync(fp);
+            if (stat.mtimeMs < cutoff) {
+              totalBytes += stat.size;
+              fs.unlinkSync(fp);
+              removed++;
+            }
+          }
+          const sizeStr =
+            totalBytes > 1024 * 1024
+              ? `${(totalBytes / 1024 / 1024).toFixed(1)} MB`
+              : `${(totalBytes / 1024).toFixed(1)} KB`;
+          defaultRuntime.log(
+            removed > 0
+              ? `Removed ${removed} log file(s) older than ${days} day(s) (${sizeStr} freed)`
+              : `No log files older than ${days} day(s)`,
+          );
+          return;
+        }
+
+        const rich = isRich();
+        const displayTz = opts.tz || undefined;
+        const lines = Math.max(1, Number.parseInt(String(opts.lines ?? "20"), 10) || 20);
+
+        if (opts.json) {
+          // Raw JSONL tail
+          const tail = spawn("tail", ["-F", "-n", String(lines), "--glob=*.jsonl"], {
+            cwd: logDir,
+            stdio: "inherit",
+            shell: true,
+          });
+          tail.on("error", (err) => {
+            // Fallback: find files manually
+            defaultRuntime.error(`tail failed: ${err.message}`);
+            defaultRuntime.exit(1);
+          });
+          process.on("SIGINT", () => {
+            tail.kill();
+            process.exit(0);
+          });
+          return new Promise<void>(() => {});
+        }
+
+        // Human-readable mode: tail all JSONL files and format
+        defaultRuntime.log(
+          colorize(rich, theme.heading, "Contextual Activation Decision Logs") +
+            "  " +
+            colorize(rich, theme.muted, `(${logDir})`),
+        );
+        defaultRuntime.log(colorize(rich, theme.muted, "Press Ctrl+C to stop.\n"));
+
+        const tail = spawn(
+          "bash",
+          [
+            "-c",
+            `find ${JSON.stringify(logDir)} -name '*.jsonl' | xargs tail -F -n ${lines} 2>/dev/null`,
+          ],
+          { stdio: ["ignore", "pipe", "ignore"] },
+        );
+
+        const decisionColors: Record<string, (s: string) => string> = {
+          join: (s: string) => colorize(rich, theme.success, s),
+          stay: (s: string) => colorize(rich, theme.info, s),
+          skip: (s: string) => colorize(rich, theme.muted, s),
+          disengage: (s: string) => colorize(rich, theme.warn, s),
+        };
+
+        let buffer = "";
+        tail.stdout.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString();
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            // Skip tail file headers like "==> ... <=="
+            if (line.startsWith("==>") || line.trim() === "") {
+              continue;
+            }
+            try {
+              const entry = JSON.parse(line);
+              let time = "??:??:??";
+              if (entry.t) {
+                if (displayTz) {
+                  try {
+                    const d = new Date(entry.t);
+                    const parts = new Intl.DateTimeFormat("en-GB", {
+                      timeZone: displayTz,
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                      hour12: false,
+                    }).formatToParts(d);
+                    time = parts
+                      .filter((p) => p.type !== "literal" || p.value === ":")
+                      .map((p) => p.value)
+                      .join("");
+                  } catch {
+                    time = entry.t.slice(11, 19);
+                  }
+                } else {
+                  time = entry.t.slice(11, 19);
+                }
+              }
+              const mode = entry.mode === "engaged" ? "ENG" : "PEEK";
+              const dec = (entry.decision ?? "?").toUpperCase();
+              const colorFn = decisionColors[entry.decision] ?? ((s: string) => s);
+              const model = entry.model ?? "?";
+              const ms = entry.ms != null ? `${entry.ms}ms` : "";
+              const msgId = entry.msgId ? `#${entry.msgId}` : "";
+
+              // Build reply hint
+              let replyHint = "";
+              if (entry.replyId || entry.replySender) {
+                const idPart = entry.replyId ? `#${entry.replyId}` : "";
+                const senderPart = entry.replySender ?? "";
+                const bodyPart = entry.replyBody
+                  ? `"${entry.replyBody.slice(0, 40)}${entry.replyBody.length > 40 ? "…" : ""}"`
+                  : "";
+                let raw = "";
+                if (idPart && senderPart && bodyPart) {
+                  raw = ` ↩${idPart}[${senderPart}: ${bodyPart}]`;
+                } else if (idPart && senderPart) {
+                  raw = ` ↩${idPart}[${senderPart}]`;
+                } else if (senderPart && bodyPart) {
+                  raw = ` ↩[${senderPart}: ${bodyPart}]`;
+                } else if (idPart) {
+                  raw = ` ↩${idPart}`;
+                }
+                replyHint = colorize(rich, theme.warn, raw);
+              }
+
+              const sender = entry.sender ? ` [${entry.sender}]` : "";
+              const body = entry.body
+                ? ` "${entry.body.slice(0, 60)}${entry.body.length > 60 ? "…" : ""}"`
+                : "";
+              const reason = entry.reason ?? "";
+              defaultRuntime.log(
+                `${colorize(rich, theme.muted, time)} ${mode} ${colorFn(dec.padEnd(10))} ${colorize(rich, theme.muted, ms.padEnd(7))} ${model}  ${msgId}${replyHint}${sender}${body}`,
+              );
+              if (reason) {
+                const teal = (s: string) => chalk.hex("#5BC0BE")(s);
+                defaultRuntime.log(
+                  `  ${colorize(rich, theme.muted, "→")} ${colorize(rich, teal, reason)}`,
+                );
+              }
+            } catch {
+              // Not JSON — print as-is (e.g. tail headers)
+              defaultRuntime.log(line);
+            }
+          }
+        });
+
+        process.on("SIGINT", () => {
+          tail.kill();
+          process.exit(0);
+        });
+        return new Promise<void>(() => {});
+      },
+    );
 }

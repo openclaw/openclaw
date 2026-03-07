@@ -66,6 +66,14 @@ export type TelegramBotOptions = {
 
 export { getTelegramSequentialKey };
 
+/**
+ * Per-group latest message_id tracker.  Updated **before** sequentialize so
+ * that handlers running inside the sequential queue can detect whether newer
+ * messages are already waiting.  Key = sequential-key, value = highest
+ * message_id seen for that key.
+ */
+export const latestGroupMessageIds = new Map<string, number>();
+
 export function createTelegramBot(opts: TelegramBotOptions) {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   const cfg = opts.config ?? loadConfig();
@@ -189,6 +197,22 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         maybePersistSafeWatermark();
       }
     }
+  });
+
+  // Track the latest message_id per sequential key BEFORE sequentialize.
+  // This lets handlers inside the queue detect if newer messages are waiting,
+  // so they can skip expensive decision-model calls and just record history.
+  bot.use((ctx, next) => {
+    const seqKey = getTelegramSequentialKey(ctx);
+    const msgId =
+      ctx.message?.message_id ?? ctx.channelPost?.message_id ?? ctx.update?.message?.message_id;
+    if (typeof msgId === "number") {
+      const prev = latestGroupMessageIds.get(seqKey);
+      if (prev === undefined || msgId > prev) {
+        latestGroupMessageIds.set(seqKey, msgId);
+      }
+    }
+    return next();
   });
 
   bot.use(sequentialize(getTelegramSequentialKey));

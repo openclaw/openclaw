@@ -1,8 +1,14 @@
 import { hasControlCommand } from "../../../auto-reply/command-detection.js";
+import {
+  engagementStates,
+  shouldParticipateInGroup,
+  shouldRespondToMention,
+} from "../../../auto-reply/contextual-activation.js";
 import { parseActivationCommand } from "../../../auto-reply/group-activation.js";
 import { recordPendingHistoryEntryIfEnabled } from "../../../auto-reply/reply/history.js";
 import { resolveMentionGating } from "../../../channels/mention-gating.js";
 import type { loadConfig } from "../../../config/config.js";
+import { resolveChannelGroupContextualActivation } from "../../../config/group-policy.js";
 import { normalizeE164 } from "../../../utils.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
@@ -17,6 +23,9 @@ export type GroupHistoryEntry = {
   timestamp?: number;
   id?: string;
   senderJid?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
 };
 
 type ApplyGroupGatingParams = {
@@ -64,6 +73,9 @@ function recordPendingGroupHistoryEntry(params: {
       timestamp: params.msg.timestamp,
       id: params.msg.id,
       senderJid: params.msg.senderJid,
+      replyToId: params.msg.replyToId,
+      replyToBody: params.msg.replyToBody,
+      replyToSender: params.msg.replyToSender,
     },
   });
 }
@@ -79,7 +91,7 @@ function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verbose
   return { shouldProcess: false } as const;
 }
 
-export function applyGroupGating(params: ApplyGroupGatingParams) {
+export async function applyGroupGating(params: ApplyGroupGatingParams) {
   const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId);
   if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
     params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
@@ -145,12 +157,136 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     shouldBypassMention,
   });
   params.msg.wasMentioned = mentionGate.effectiveWasMentioned;
+
+  // Resolve contextual activation config once for both engaged and peeking paths
+  const contextualConfig = resolveChannelGroupContextualActivation({
+    cfg: params.cfg,
+    channel: "whatsapp",
+    groupId: params.conversationId,
+  });
+
+  // When engaged via contextual activation, skip mention gating and ask the model
+  // whether to continue or disengage.
+  if (contextualConfig?.model) {
+    const engagement = engagementStates.get(params.groupHistoryKey);
+    if (engagement?.mode === "engaged") {
+      const decision = await callContextualDecision(params, contextualConfig);
+      if (decision.shouldProcess) {
+        return { shouldProcess: true, contextualActivationHint: decision.reason };
+      }
+      // Model decided to disengage — fall through to normal mention gating below
+    }
+  }
+
   if (!shouldBypassMention && requireMention && mentionGate.shouldSkip) {
+    // Contextual activation (peeking): ask a decision model before skipping
+    if (contextualConfig?.model) {
+      const decision = await callContextualDecision(params, contextualConfig);
+      if (decision.shouldProcess) {
+        return { shouldProcess: true, contextualActivationHint: decision.reason };
+      }
+      if (decision.error) {
+        params.logVerbose(
+          `[contextual-activation] WhatsApp group ${params.conversationId}: error: ${decision.error}`,
+        );
+      }
+    }
     return skipGroupMessageAndStoreHistory(
       params,
       `Group message stored for context (no mention detected) in ${params.conversationId}: ${params.msg.body}`,
     );
   }
 
+  // Mention filter: when mentioned/replied to, optionally ask the model if a response is warranted
+  if (contextualConfig?.model && contextualConfig.mentionFilter?.enabled) {
+    const decision = await callMentionFilterDecision(params, contextualConfig);
+    if (!decision.shouldProcess) {
+      return skipGroupMessageAndStoreHistory(
+        params,
+        `[mention-filter] WhatsApp group ${params.conversationId}: filtered mention — ${decision.reason ?? "not warranted"}`,
+      );
+    }
+  }
+
   return { shouldProcess: true };
+}
+
+async function callMentionFilterDecision(
+  params: ApplyGroupGatingParams,
+  contextualConfig: NonNullable<ReturnType<typeof resolveChannelGroupContextualActivation>>,
+) {
+  const existingHistory = params.groupHistories.get(params.groupHistoryKey) ?? [];
+  const recentMessages = existingHistory.map((h) => ({
+    sender: h.sender,
+    body: h.body,
+    timestamp: h.timestamp,
+    messageId: h.id,
+    replyToId: h.replyToId,
+    replyToBody: h.replyToBody,
+    replyToSender: h.replyToSender,
+  }));
+  const senderLabel =
+    params.msg.senderName && params.msg.senderE164
+      ? `${params.msg.senderName} (${params.msg.senderE164})`
+      : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
+  const imagePaths =
+    params.msg.mediaPath && params.msg.mediaType?.startsWith("image/")
+      ? [params.msg.mediaPath]
+      : undefined;
+  return shouldRespondToMention({
+    cfg: params.cfg,
+    config: contextualConfig,
+    recentMessages,
+    currentMessage: {
+      sender: senderLabel,
+      body: params.msg.body,
+      timestamp: params.msg.timestamp,
+      imagePaths,
+      messageId: params.msg.id,
+      replyToId: params.msg.replyToId,
+      replyToBody: params.msg.replyToBody,
+      replyToSender: params.msg.replyToSender,
+    },
+    groupKey: params.groupHistoryKey,
+  });
+}
+
+async function callContextualDecision(
+  params: ApplyGroupGatingParams,
+  contextualConfig: NonNullable<ReturnType<typeof resolveChannelGroupContextualActivation>>,
+) {
+  const existingHistory = params.groupHistories.get(params.groupHistoryKey) ?? [];
+  const recentMessages = existingHistory.map((h) => ({
+    sender: h.sender,
+    body: h.body,
+    timestamp: h.timestamp,
+    messageId: h.id,
+    replyToId: h.replyToId,
+    replyToBody: h.replyToBody,
+    replyToSender: h.replyToSender,
+  }));
+  const senderLabel =
+    params.msg.senderName && params.msg.senderE164
+      ? `${params.msg.senderName} (${params.msg.senderE164})`
+      : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
+  const imagePaths =
+    params.msg.mediaPath && params.msg.mediaType?.startsWith("image/")
+      ? [params.msg.mediaPath]
+      : undefined;
+  return shouldParticipateInGroup({
+    cfg: params.cfg,
+    config: contextualConfig,
+    recentMessages,
+    currentMessage: {
+      sender: senderLabel,
+      body: params.msg.body,
+      timestamp: params.msg.timestamp,
+      imagePaths,
+      messageId: params.msg.id,
+      replyToId: params.msg.replyToId,
+      replyToBody: params.msg.replyToBody,
+      replyToSender: params.msg.replyToSender,
+    },
+    groupKey: params.groupHistoryKey,
+  });
 }
