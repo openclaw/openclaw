@@ -22,6 +22,7 @@
 ## Client / Server / Shared Boundaries
 
 ### Client (`client/`)
+
 - **Framework**: React 18 SPA (NOT SSR/SSG)
 - **Router**: Wouter (client-side only)
 - **Build**: Vite → `dist/public/`
@@ -30,6 +31,7 @@
 - **Entry**: `client/index.html` → `client/src/main.tsx` → `client/src/App.tsx`
 
 ### Server (`server/`)
+
 - **Framework**: Express.js 4 (NOT Express 5)
 - **Build**: esbuild → `dist/index.js`
 - **Entry**: `server/index.ts`
@@ -37,6 +39,7 @@
 - **Auth**: Passport.js (magic link, Google, Microsoft)
 
 ### Shared (`shared/`)
+
 - **Schema**: Drizzle table definitions + Zod validation schemas
 - **Time estimation**: Processing time calculator
 - **Blog/feedback/support schemas**: Zod types shared between client and server
@@ -60,23 +63,23 @@
 
 ## Key Server Modules
 
-| Module | File | Purpose |
-|--------|------|---------|
-| Main routes | `routes.ts` (2,749 lines) | Upload, processing, download, debug |
-| Auth | `auth-service.ts`, `auth-routes.ts` | Magic link + OAuth |
-| Video processing | `enhanced-process.ts` | FFmpeg orchestration |
-| FFmpeg progress | `ffmpeg-progress.ts` | Real-time progress via WebSocket |
-| Job manager | `background-job-manager.ts` | Job lifecycle + email notifications |
-| Storage | `r2-storage.ts` | Cloudflare R2 operations |
-| Database | `storage.ts` | CRUD operations via Drizzle |
-| Email | `email-service.ts` | Resend templates |
-| Stripe | `stripe-webhook.ts` | Webhook handler |
-| Credits | `services/credit-service.ts` | Credit wallet logic |
-| Subscriptions | `services/subscription-service.ts` | Stripe subscription management |
-| Referrals | `services/referral-service.ts` | Referral program |
-| Download tokens | `download-tokens.ts` | Secure download links |
-| URL security | `url-security.ts` | AES-256-CBC URL encryption |
-| Timeouts | `timeout-config.ts` | Adaptive deadline system |
+| Module           | File                                | Purpose                             |
+| ---------------- | ----------------------------------- | ----------------------------------- |
+| Main routes      | `routes.ts` (2,749 lines)           | Upload, processing, download, debug |
+| Auth             | `auth-service.ts`, `auth-routes.ts` | Magic link + OAuth                  |
+| Video processing | `enhanced-process.ts`               | FFmpeg orchestration                |
+| FFmpeg progress  | `ffmpeg-progress.ts`                | Real-time progress via WebSocket    |
+| Job manager      | `background-job-manager.ts`         | Job lifecycle + email notifications |
+| Storage          | `r2-storage.ts`                     | Cloudflare R2 operations            |
+| Database         | `storage.ts`                        | CRUD operations via Drizzle         |
+| Email            | `email-service.ts`                  | Resend templates                    |
+| Stripe           | `stripe-webhook.ts`                 | Webhook handler                     |
+| Credits          | `services/credit-service.ts`        | Credit wallet logic                 |
+| Subscriptions    | `services/subscription-service.ts`  | Stripe subscription management      |
+| Referrals        | `services/referral-service.ts`      | Referral program                    |
+| Download tokens  | `download-tokens.ts`                | Secure download links               |
+| URL security     | `url-security.ts`                   | AES-256-CBC URL encryption          |
+| Timeouts         | `timeout-config.ts`                 | Adaptive deadline system            |
 
 ## Data Flow: Video Processing
 
@@ -120,3 +123,34 @@ users ──1:N──> credit_transactions
 users ──1:N──> referral_events (as referrer)
 users ──1:N──> referral_events (as referred)
 ```
+
+## Relationship to OpenClaw Cluster
+
+CUTMV lives inside the OpenClaw monorepo at `packages/cutmv-app/`. This
+enables the cluster to interact with CUTMV as a product to be improved,
+marketed, and sold — but the cluster does NOT serve as CUTMV's compute
+layer.
+
+### What the cluster does for CUTMV
+
+- **Code changes**: edit source, ship features, fix bugs, optimize UX
+- **Marketing**: generate ad copy, build landing pages, test offers
+- **Growth**: improve onboarding, optimize pricing, refine conversion
+- **Ops**: monitor site health, patch issues, deploy changes
+- **Analysis**: track metrics, analyze campaigns, measure retention
+
+### What stays internal to CUTMV's own runtime
+
+- Video upload handling and R2 storage
+- FFmpeg processing (cutdowns, GIFs, thumbnails, Canvas loops)
+- Background job execution and progress tracking
+- ZIP packaging and download serving
+- WebSocket progress broadcasting
+
+These are product-level concerns. They run on CUTMV's own deployment
+infrastructure (currently Railway), not on the OpenClaw cluster nodes.
+
+The cluster may help _build and improve_ this processing code. It does
+not _become_ the processing infrastructure.
+
+See `fd/workspace/CLUSTER_PHILOSOPHY.md` for the full philosophy.

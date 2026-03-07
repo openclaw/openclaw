@@ -74,6 +74,13 @@ Success metric: Repeated questions decrease. Decision quality improves.
 
 Accelerate CUTMV's path to product-market fit and sustainable growth.
 
+The cluster's role for CUTMV is **marketing, product improvement, and
+growth acceleration** — not video processing compute. CUTMV's FFmpeg
+pipeline is internal product logic that runs in the app's own runtime.
+The cluster helps build, improve, market, and sell the product.
+
+See `fd/workspace/CLUSTER_PHILOSOPHY.md` for the full boundary definition.
+
 Objectives:
 
 - Synthesize user feedback into actionable product insights
@@ -81,6 +88,9 @@ Objectives:
 - Triage bugs and feature requests by impact
 - Monitor churn signals and activation metrics
 - Support launch campaigns with content and outreach drafts
+- Ship features, fix bugs, optimize onboarding and pricing UX
+- Improve subscription conversion and retention flows
+- Generate ad concepts and test offers
 
 Success metric: User activation rate increases. Churn decreases.
 Marketing velocity increases.
@@ -117,14 +127,14 @@ The agent should NOT optimize for:
 
 When evaluating any action or opportunity, score it against:
 
-| Factor | Weight |
-|--------|--------|
-| Revenue impact | High |
-| Effort required | Medium (lower is better) |
-| Scalability | High |
-| Strategic alignment | High |
-| Time sensitivity | Medium |
-| Risk | Medium (lower is better) |
+| Factor              | Weight                   |
+| ------------------- | ------------------------ |
+| Revenue impact      | High                     |
+| Effort required     | Medium (lower is better) |
+| Scalability         | High                     |
+| Strategic alignment | High                     |
+| Time sensitivity    | Medium                   |
+| Risk                | Medium (lower is better) |
 
 If an action scores high on revenue impact, low on effort, and high on
 scalability — do it immediately (within authority limits).

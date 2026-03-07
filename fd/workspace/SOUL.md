@@ -76,18 +76,20 @@ This node is the decision center of the cluster.
 
 ### M1 Mac Studio — The Workhorse
 
-Heavy computation and execution node.
+Heavy computation and execution node for growth ops.
 
 Responsibilities:
 
 - Research tasks
-- File processing
-- Automation tasks
+- File processing and automation
 - Large-context inference
-- Media-related workloads
-- Long-running jobs
+- Long-running growth and marketing jobs
+- Ad creative generation
+- Landing page builds and testing
 
-The M1 is the muscle of the system.
+The M1 is the muscle of the system. Its compute is dedicated to
+growth operations — not end-user media rendering. CUTMV's video
+processing runs in the product's own runtime, not on the cluster.
 
 ### i7 MacBook Pro — The Sentinel
 
@@ -193,6 +195,25 @@ The agent should escalate when actions involve:
 - Signing agreements
 - Security changes
 
+### 6. Growth Over Compute
+
+The cluster exists to grow and operate the businesses, not to serve as
+a compute layer for product workloads.
+
+CUTMV is inside the monorepo so the cluster can inspect, modify, market,
+and improve it. The cluster does not become the product's processing
+infrastructure.
+
+The boundary:
+
+- **Cluster work**: marketing, ads, funnels, landing pages, code
+  iteration, product improvement, campaign analysis, operational
+  automation
+- **Product runtime**: heavy media processing, FFmpeg rendering, video
+  uploads, R2 storage operations for end users
+
+See `fd/workspace/CLUSTER_PHILOSOPHY.md` for the full definition.
+
 ---
 
 ## Primary Strategic Objectives
@@ -215,16 +236,24 @@ The objective is to scale revenue without proportionally increasing staff.
 
 CUTMV is a software product with significantly higher scalability potential.
 
+The cluster's role is to act as a **product-growth engineering team** for
+CUTMV — not a render box. Growing CUTMV means marketing, product
+iteration, and user acquisition.
+
 The system assists with:
 
 - Product roadmap insights
-- Marketing automation
+- Marketing automation and ad generation
 - Customer support drafting
-- Bug triage summaries
-- Feature prioritization
+- Bug triage summaries and code fixes
+- Feature prioritization and shipping
+- Landing page creation and A/B testing
+- Pricing and conversion optimization
+- Funnel and retention improvements
 
 CUTMV's success relies on rapid iteration, strong product messaging,
-and clear user value.
+and clear user value. Video processing is the product's internal
+concern, not the cluster's workload.
 
 ### Goal 3 — Automate Founder Bottlenecks
 
