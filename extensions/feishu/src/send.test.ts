@@ -237,6 +237,148 @@ describe("getMessageFeishu", () => {
     );
   });
 
+  it("extracts header + elements from interactive card with header", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_card_header",
+            chat_id: "oc_1",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                header: { title: { content: "Card Title", tag: "plain_text" } },
+                elements: [{ tag: "markdown", content: "body text" }],
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_card_header",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        content: "Card Title\nbody text",
+      }),
+    );
+  });
+
+  it("extracts content from i18n_elements when top-level elements is absent", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_i18n",
+            chat_id: "oc_1",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                i18n_elements: {
+                  zh_cn: [{ tag: "markdown", content: "中文内容" }],
+                },
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_i18n",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        content: "中文内容",
+      }),
+    );
+  });
+
+  it("extracts template_variable values from template cards", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_tpl",
+            chat_id: "oc_1",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                type: "template",
+                data: {
+                  template_id: "tpl_xxx",
+                  template_variable: {
+                    title: "Alert Title",
+                    content: "Something happened",
+                  },
+                },
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_tpl",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        content: "Alert Title\nSomething happened",
+      }),
+    );
+  });
+
+  it("extracts content from column_set elements", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_cols",
+            chat_id: "oc_1",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                elements: [
+                  {
+                    tag: "column_set",
+                    columns: [
+                      { elements: [{ tag: "markdown", content: "col1 text" }] },
+                      { elements: [{ tag: "div", text: { content: "col2 text" } }] },
+                    ],
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_cols",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        content: "col1 text\ncol2 text",
+      }),
+    );
+  });
+
   it("supports single-object response shape from Feishu API", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,

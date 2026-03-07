@@ -179,22 +179,12 @@ async function sendReplyOrFallbackDirect(
   return toFeishuSendResult(response, params.directParams.receiveId);
 }
 
-function parseInteractiveCardContent(parsed: unknown): string {
-  if (!parsed || typeof parsed !== "object") {
-    return "[Interactive Card]";
-  }
-
-  // Support both schema 1.0 (top-level `elements`) and 2.0 (`body.elements`).
-  const candidate = parsed as { elements?: unknown; body?: { elements?: unknown } };
-  const elements = Array.isArray(candidate.elements)
-    ? candidate.elements
-    : Array.isArray(candidate.body?.elements)
-      ? candidate.body.elements
-      : null;
-  if (!elements) {
-    return "[Interactive Card]";
-  }
-
+/**
+ * Extract readable text from an array of Feishu card elements.
+ * Handles div (plain_text/lark_md), markdown, column_set, and other
+ * common interactive card element types.
+ */
+function extractTextsFromElements(elements: unknown[]): string[] {
   const texts: string[] = [];
   for (const element of elements) {
     if (!element || typeof element !== "object") {
@@ -203,7 +193,9 @@ function parseInteractiveCardContent(parsed: unknown): string {
     const item = element as {
       tag?: string;
       content?: string;
-      text?: { content?: string };
+      text?: { content?: string; tag?: string };
+      columns?: unknown[];
+      elements?: unknown[];
     };
     if (item.tag === "div" && typeof item.text?.content === "string") {
       texts.push(item.text.content);
@@ -211,8 +203,89 @@ function parseInteractiveCardContent(parsed: unknown): string {
     }
     if (item.tag === "markdown" && typeof item.content === "string") {
       texts.push(item.content);
+      continue;
+    }
+    // column_set → recurse into each column's elements
+    if (item.tag === "column_set" && Array.isArray(item.columns)) {
+      for (const col of item.columns) {
+        if (
+          col &&
+          typeof col === "object" &&
+          Array.isArray((col as { elements?: unknown[] }).elements)
+        ) {
+          texts.push(...extractTextsFromElements((col as { elements: unknown[] }).elements));
+        }
+      }
+      continue;
+    }
+    // Generic nested elements (e.g. form, collapsible)
+    if (Array.isArray(item.elements)) {
+      texts.push(...extractTextsFromElements(item.elements));
     }
   }
+  return texts;
+}
+
+/**
+ * Parse interactive card (message_type=interactive) into readable text.
+ *
+ * Feishu interactive cards come in several shapes:
+ * 1. Flat v1: `{ "elements": [...] }`
+ * 2. With header: `{ "header": { "title": { "content": "..." } }, "elements": [...] }`
+ * 3. i18n: `{ "i18n_elements": { "zh_cn": [...] } }`
+ * 4. Template: `{ "type": "template", "data": { "template_variable": {...} } }`
+ * 5. Body wrapper (card kit v2): `{ "body": { "elements": [...] } }`
+ */
+function parseInteractiveCardContent(parsed: unknown): string {
+  if (!parsed || typeof parsed !== "object") {
+    return "[Interactive Card]";
+  }
+
+  const card = parsed as {
+    header?: { title?: { content?: string } };
+    elements?: unknown[];
+    i18n_elements?: Record<string, unknown[]>;
+    body?: { elements?: unknown[] };
+    type?: string;
+    data?: { template_variable?: Record<string, unknown> };
+  };
+
+  const texts: string[] = [];
+
+  // Extract header title if present
+  if (typeof card.header?.title?.content === "string" && card.header.title.content.trim()) {
+    texts.push(card.header.title.content);
+  }
+
+  // Resolve the elements array from multiple possible locations
+  let elements: unknown[] | undefined = card.elements;
+  if (!Array.isArray(elements)) {
+    // Try body.elements (card kit v2)
+    elements = card.body?.elements;
+  }
+  if (!Array.isArray(elements)) {
+    // Try i18n_elements — pick zh_cn first, then first available locale
+    if (card.i18n_elements && typeof card.i18n_elements === "object") {
+      elements =
+        card.i18n_elements.zh_cn ??
+        (Object.values(card.i18n_elements).find((v) => Array.isArray(v)) as unknown[] | undefined);
+    }
+  }
+
+  if (Array.isArray(elements)) {
+    texts.push(...extractTextsFromElements(elements));
+  }
+
+  // Template cards: extract template_variable values as last resort
+  if (texts.length === 0 && card.type === "template" && card.data?.template_variable) {
+    const vars = card.data.template_variable;
+    for (const val of Object.values(vars)) {
+      if (typeof val === "string" && val.trim()) {
+        texts.push(val);
+      }
+    }
+  }
+
   return texts.join("\n").trim() || "[Interactive Card]";
 }
 
