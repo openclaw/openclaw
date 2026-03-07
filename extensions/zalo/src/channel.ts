@@ -3,11 +3,13 @@ import type {
   ChannelDock,
   ChannelPlugin,
   OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/zalo";
 import {
   applyAccountNameToChannelSection,
+  buildBaseAccountStatusSnapshot,
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
+  buildChannelSendResult,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   chunkTextForOutbound,
@@ -15,12 +17,15 @@ import {
   formatPairingApproveHint,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
+  isNumericTargetId,
   PAIRING_APPROVED_MESSAGE,
+  resolveOutboundMediaUrls,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveChannelAccountConfigBasePath,
+  sendPayloadWithChunkedTextAndMedia,
   setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/zalo";
 import {
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
@@ -182,13 +187,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   messaging: {
     normalizeTarget: normalizeZaloMessagingTarget,
     targetResolver: {
-      looksLikeId: (raw) => {
-        const trimmed = raw.trim();
-        if (!trimmed) {
-          return false;
-        }
-        return /^\d{3,}$/.test(trimmed);
-      },
+      looksLikeId: isNumericTargetId,
       hint: "<chatId>",
     },
   },
@@ -303,51 +302,21 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
     chunker: chunkTextForOutbound,
     chunkerMode: "text",
     textChunkLimit: 2000,
-    sendPayload: async (ctx) => {
-      const text = ctx.payload.text ?? "";
-      const urls = ctx.payload.mediaUrls?.length
-        ? ctx.payload.mediaUrls
-        : ctx.payload.mediaUrl
-          ? [ctx.payload.mediaUrl]
-          : [];
-      if (!text && urls.length === 0) {
-        return { channel: "zalo", messageId: "" };
-      }
-      if (urls.length > 0) {
-        let lastResult = await zaloPlugin.outbound!.sendMedia!({
-          ...ctx,
-          text,
-          mediaUrl: urls[0],
-        });
-        for (let i = 1; i < urls.length; i++) {
-          lastResult = await zaloPlugin.outbound!.sendMedia!({
-            ...ctx,
-            text: "",
-            mediaUrl: urls[i],
-          });
-        }
-        return lastResult;
-      }
-      const outbound = zaloPlugin.outbound!;
-      const limit = outbound.textChunkLimit;
-      const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
-      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
-      for (const chunk of chunks) {
-        lastResult = await outbound.sendText!({ ...ctx, text: chunk });
-      }
-      return lastResult!;
-    },
+    sendPayload: async (ctx) =>
+      await sendPayloadWithChunkedTextAndMedia({
+        ctx,
+        textChunkLimit: zaloPlugin.outbound!.textChunkLimit,
+        chunker: zaloPlugin.outbound!.chunker,
+        sendText: (nextCtx) => zaloPlugin.outbound!.sendText!(nextCtx),
+        sendMedia: (nextCtx) => zaloPlugin.outbound!.sendMedia!(nextCtx),
+        emptyResult: { channel: "zalo", messageId: "" },
+      }),
     sendText: async ({ to, text, accountId, cfg }) => {
       const result = await sendMessageZalo(to, text, {
         accountId: accountId ?? undefined,
         cfg: cfg,
       });
-      return {
-        channel: "zalo",
-        ok: result.ok,
-        messageId: result.messageId ?? "",
-        error: result.error ? new Error(result.error) : undefined,
-      };
+      return buildChannelSendResult("zalo", result);
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) => {
       const result = await sendMessageZalo(to, text, {
@@ -355,12 +324,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         mediaUrl,
         cfg: cfg,
       });
-      return {
-        channel: "zalo",
-        ok: result.ok,
-        messageId: result.messageId ?? "",
-        error: result.error ? new Error(result.error) : undefined,
-      };
+      return buildChannelSendResult("zalo", result);
     },
   },
   status: {
@@ -377,19 +341,19 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       probeZalo(account.token, timeoutMs, resolveZaloProxyFetch(account.config.proxy)),
     buildAccountSnapshot: ({ account, runtime }) => {
       const configured = Boolean(account.token?.trim());
+      const base = buildBaseAccountStatusSnapshot({
+        account: {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured,
+        },
+        runtime,
+      });
       return {
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured,
+        ...base,
         tokenSource: account.tokenSource,
-        running: runtime?.running ?? false,
-        lastStartAt: runtime?.lastStartAt ?? null,
-        lastStopAt: runtime?.lastStopAt ?? null,
-        lastError: runtime?.lastError ?? null,
         mode: account.config.webhookUrl ? "webhook" : "polling",
-        lastInboundAt: runtime?.lastInboundAt ?? null,
-        lastOutboundAt: runtime?.lastOutboundAt ?? null,
         dmPolicy: account.config.dmPolicy ?? "pairing",
       };
     },
