@@ -262,6 +262,9 @@ export async function launchOpenClawChrome(
       args.push("--no-sandbox");
       args.push("--disable-setuid-sandbox");
     }
+    if (resolved.ignoreCertificateErrors) {
+      args.push("--ignore-certificate-errors");
+    }
     if (process.platform === "linux") {
       args.push("--disable-dev-shm-usage");
     }
