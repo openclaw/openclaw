@@ -1626,16 +1626,22 @@ export async function processMcpToolResult(params: {
   }
 
   // --- Two-pass gating (MCP) ---
+  const isMcpAdminUndeclaredSchemaFail =
+    validationCfg.context.rejectUndeclaredToolSchemas &&
+    mcpPreFilter.schema.ruleIds.includes("schema.missing-field") &&
+    mcpPreFilter.schema.violations.some((v) => v.includes("tool has no declared output schema"));
+
   const isMcpTwoPassDefinitiveFail =
-    validationCfg.twoPass.enabled &&
-    mcpFrequencyTier === "none" && // Frequency tier1+ overrides two-pass skip
-    !mcpPreFilter.pass &&
-    mcpPreFilter.allRuleIds.some((id) => validationCfg.twoPass.hardBlockRules.includes(id));
+    isMcpAdminUndeclaredSchemaFail ||
+    (validationCfg.twoPass.enabled &&
+      mcpFrequencyTier === "none" && // Frequency tier1+ overrides two-pass skip
+      !mcpPreFilter.pass &&
+      mcpPreFilter.allRuleIds.some((id) => validationCfg.twoPass.hardBlockRules.includes(id)));
 
   if (isMcpTwoPassDefinitiveFail) {
-    const blockRuleIds = mcpPreFilter.allRuleIds.filter((id) =>
-      validationCfg.twoPass.hardBlockRules.includes(id),
-    );
+    const blockRuleIds = isMcpAdminUndeclaredSchemaFail
+      ? [...new Set([...mcpPreFilter.allRuleIds, "schema.missing-field"])]
+      : mcpPreFilter.allRuleIds.filter((id) => validationCfg.twoPass.hardBlockRules.includes(id));
     await gatedAudit(
       {
         agentId: params.agentId,
@@ -1654,7 +1660,13 @@ export async function processMcpToolResult(params: {
       alertDeps,
       auditEnabled,
     );
-    return buildBlockedResult(mcpPreFilter.allFlags, "blocked: syntactic hard block rule", 1);
+    return buildBlockedResult(
+      mcpPreFilter.allFlags,
+      isMcpAdminUndeclaredSchemaFail
+        ? "blocked: undeclared MCP tool schema"
+        : "blocked: syntactic hard block rule",
+      1,
+    );
   }
 
   // Build tier2 enhanced scrutiny note

@@ -22,6 +22,7 @@ function createConfig(overrides?: {
   trustedServers?: string[];
   blockOnSandboxUnavailable?: boolean;
   mcpServers?: Record<string, { tools: string[] }>;
+  sanitizationOverrides?: Record<string, unknown>;
 }): OpenClawConfig {
   return {
     memory: {
@@ -33,6 +34,7 @@ function createConfig(overrides?: {
             trustedServers: overrides?.trustedServers ?? [],
             blockOnSandboxUnavailable: overrides?.blockOnSandboxUnavailable ?? true,
           },
+          ...(overrides?.sanitizationOverrides ?? {}),
         },
       },
     },
@@ -343,6 +345,37 @@ describe("processMcpToolResult", () => {
       expect(runner).toHaveBeenCalled();
       expect(result.safe).toBe(true);
       expect(result.tier).toBe(2);
+    });
+
+    it("admin profile blocks undeclared MCP schemas even when twoPass hardBlockRules do not include schema.missing-field", async () => {
+      const cfg = createConfig({
+        sanitizationOverrides: {
+          context: { profile: "admin" },
+          twoPass: {
+            enabled: false,
+            hardBlockRules: ["injection.ignore-previous"],
+          },
+        },
+      });
+      const runner = vi.fn().mockResolvedValue(mcpChildResult(true));
+      const result = await processMcpToolResult({
+        ...baseParams(cfg, {
+          rawResult: { results: [{ title: "ok", snippet: "clean content" }] },
+        }),
+        helperDeps: { runner },
+      });
+
+      expect(result.safe).toBe(false);
+      expect(result.tier).toBe(1);
+      expect(result.contextNote).toBe("blocked: undeclared MCP tool schema");
+      expect(runner).not.toHaveBeenCalled();
+
+      const audits = await readSessionMemoryAuditEntries({
+        agentId: AGENT_ID,
+        sessionId: SESSION_ID,
+      });
+      expect(audits.some((a) => a.event === "schema_fail")).toBe(true);
+      expect(audits.some((a) => a.event === "twopass_hard_block")).toBe(true);
     });
   });
 
