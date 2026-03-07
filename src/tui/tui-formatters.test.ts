@@ -228,7 +228,7 @@ describe("sanitizeRenderableText", () => {
 
   it("preserves long filesystem paths verbatim for copy safety", () => {
     const input =
-      "/Users/jasonshawn/PerfectXiao/a_very_long_directory_name_designed_specifically_to_test_the_line_wrapping_issue/file.txt";
+      "/Users/jasonshawn/PerfectXiao/a_very_long_directory_name_designed_specifically_to_test_the_line_wrapping_issue/file.txt"; // pragma: allowlist secret (fixture path)
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
@@ -236,14 +236,28 @@ describe("sanitizeRenderableText", () => {
 
   it("preserves long urls verbatim for copy safety", () => {
     const input =
-      "https://example.com/this/is/a/very/long/url/segment/that/should/remain/contiguous/when/rendered";
+      "https://example.com/this/is/a/very/long/url/segment/that/should/remain/contiguous/when/rendered"; // pragma: allowlist secret (fixture url)
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
   });
 
   it("preserves long file-like underscore tokens for copy safety", () => {
-    const input = "administrators_authorized_keys_with_extra_suffix".repeat(2);
+    const input = "administrators_authorized_keys_with_extra_suffix".repeat(2); // pragma: allowlist secret (fixture token)
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long credential-like mixed alnum tokens for copy safety", () => {
+    const input = "e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93"; // pragma: allowlist secret (fixture token)
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves quoted credential-like mixed alnum tokens for copy safety", () => {
+    const input = "'e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93'"; // pragma: allowlist secret (fixture token)
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
