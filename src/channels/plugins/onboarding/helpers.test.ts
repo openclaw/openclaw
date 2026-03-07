@@ -984,7 +984,7 @@ describe("setTopLevelChannelDmPolicyWithAllowFrom", () => {
       channel: "nextcloud-talk",
       dmPolicy: "open",
       getAllowFrom: (inputCfg) =>
-        (inputCfg.channels?.["nextcloud-talk"]?.allowFrom ?? []).map((entry) => String(entry)),
+        normalizeAllowFromEntries(inputCfg.channels?.["nextcloud-talk"]?.allowFrom ?? []),
     });
     expect(next.channels?.["nextcloud-talk"]?.allowFrom).toEqual(["alice", "*"]);
   });
