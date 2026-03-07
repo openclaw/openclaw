@@ -32,7 +32,7 @@ describe("config .bak fallback on invalid primary config", () => {
     });
   });
 
-  it("throws when both primary and .bak are invalid", async () => {
+  it("returns empty config when both primary and .bak are invalid", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
@@ -43,11 +43,12 @@ describe("config .bak fallback on invalid primary config", () => {
       await fs.writeFile(`${configPath}.bak`, JSON.stringify({ gateway: { port: "also-bad" } }));
 
       const io = createConfigIO({ env: {} as NodeJS.ProcessEnv, homedir: () => home });
-      expect(() => io.loadConfig()).toThrow("Invalid config");
+      const cfg = io.loadConfig();
+      expect(cfg).toEqual({});
     });
   });
 
-  it("throws when primary is invalid and no .bak exists", async () => {
+  it("returns empty config when primary is invalid and no .bak exists", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
@@ -57,7 +58,8 @@ describe("config .bak fallback on invalid primary config", () => {
       // No .bak file
 
       const io = createConfigIO({ env: {} as NodeJS.ProcessEnv, homedir: () => home });
-      expect(() => io.loadConfig()).toThrow("Invalid config");
+      const cfg = io.loadConfig();
+      expect(cfg).toEqual({});
     });
   });
 

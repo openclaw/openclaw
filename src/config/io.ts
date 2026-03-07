@@ -729,19 +729,26 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           try {
             const bakRaw = deps.fs.readFileSync(bakPath, "utf-8");
             const bakParsed = deps.json5.parse(bakRaw);
+            // Use a cloned env so invalid .bak config entries don't pollute process env
+            const bakEnv = { ...deps.env };
             const { resolvedConfigRaw: bakResolved } = resolveConfigForRead(
               resolveConfigIncludesForRead(bakParsed, bakPath, deps),
-              deps.env,
+              bakEnv,
             );
+            warnOnConfigMiskeys(bakResolved, deps.logger);
             const bakValidated = validateConfigObjectWithPlugins(bakResolved);
             if (bakValidated.ok) {
+              // Merge env changes only after validation succeeds
+              Object.assign(deps.env, bakEnv);
               deps.logger.warn(
                 `Loaded fallback config from ${bakPath} (primary config was invalid)`,
               );
               validated = bakValidated;
             }
-          } catch {
-            // .bak is also broken — fall through to throw the original error.
+          } catch (bakErr) {
+            deps.logger.warn(
+              `Fallback config at ${bakPath} could not be loaded: ${String(bakErr)}`,
+            );
           }
         }
 
