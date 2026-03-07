@@ -283,6 +283,10 @@ async function processMessageWithPipeline(params: {
   }
   let typingMessageName: string | undefined;
 
+  // Resolve replyToMode — only thread outbound messages when mode is not "off".
+  const replyToMode = config.channels?.["googlechat"]?.replyToMode ?? "off";
+  const effectiveThread = replyToMode !== "off" ? message.thread?.name : undefined;
+
   // Start typing indicator (message mode only, reaction mode not supported with app auth)
   if (typingIndicator === "message") {
     try {
@@ -295,7 +299,7 @@ async function processMessageWithPipeline(params: {
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: message.thread?.name,
+        thread: effectiveThread,
       });
       typingMessageName = result?.messageName;
     } catch (err) {
@@ -375,6 +379,10 @@ async function deliverGoogleChatReply(params: {
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
     params;
+  // Trust the upstream reply threading pipeline (applyReplyToMode) which already
+  // strips implicit replyToId when replyToMode is "off" while preserving explicit
+  // reply tags/directives. Do not apply a second filter here.
+  const thread = payload.replyToId;
   const mediaList = payload.mediaUrls?.length
     ? payload.mediaUrls
     : payload.mediaUrl
@@ -431,7 +439,7 @@ async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],
@@ -463,7 +471,7 @@ async function deliverGoogleChatReply(params: {
             account,
             space: spaceId,
             text: chunk,
-            thread: payload.replyToId,
+            thread,
           });
         }
         statusSink?.({ lastOutboundAt: Date.now() });
