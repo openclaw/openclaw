@@ -67,6 +67,17 @@ vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
 }));
 
+vi.mock("openclaw/plugin-sdk", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    getSessionBindingService: () => ({
+      resolveByConversation: () => undefined,
+      touch: vi.fn(),
+    }),
+  };
+});
+
 function createRuntimeEnv(): RuntimeEnv {
   return {
     log: vi.fn(),
@@ -1524,6 +1535,110 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("backs off sender name lookup per sender when Feishu returns no user authority", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    const mockGetUser = vi.fn().mockRejectedValue({
+      response: {
+        data: {
+          code: 41050,
+          msg: "no user authority error",
+        },
+      },
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: mockGetUser,
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_noauth",
+          appSecret: "sec_noauth",
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const eventA: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-noauth-a",
+        },
+      },
+      message: {
+        message_id: "msg-noauth-1",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello group A" }),
+      },
+    };
+    const eventARepeat: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-noauth-a",
+        },
+      },
+      message: {
+        message_id: "msg-noauth-2",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello group A repeat" }),
+      },
+    };
+    const eventB: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-noauth-b",
+        },
+      },
+      message: {
+        message_id: "msg-noauth-3",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello group B" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event: eventA });
+    await dispatchMessage({ cfg, event: eventARepeat });
+    await dispatchMessage({ cfg, event: eventB });
+
+    expect(mockGetUser).toHaveBeenCalledTimes(2);
+    expect(mockCreateFeishuClient).toHaveBeenCalledTimes(2);
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(3);
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("ou-noauth-a: hello group A"),
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("ou-noauth-a: hello group A repeat"),
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("ou-noauth-b: hello group B"),
+      }),
+    );
+    for (const [arg] of mockFinalizeInboundContext.mock.calls) {
+      const body = (arg as { BodyForAgent?: string }).BodyForAgent ?? "";
+      expect(body).not.toContain("Permission grant URL");
+    }
+  });
+
   it("routes group sessions by sender when groupSessionScope=group_sender", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
@@ -1919,7 +2034,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_quote_reply",
-        rootId: "om_original_msg",
+        rootId: undefined,
       }),
     );
   });
@@ -1957,7 +2072,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_topic_root",
-        rootId: "om_topic_root",
+        rootId: undefined,
       }),
     );
   });
@@ -1995,7 +2110,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_topic_sender_root",
-        rootId: "om_topic_sender_root",
+        rootId: undefined,
       }),
     );
   });

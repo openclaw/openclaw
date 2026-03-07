@@ -52,6 +52,8 @@ export type CreateFeishuReplyDispatcherParams = {
   rootId?: string;
   mentionTargets?: MentionTarget[];
   accountId?: string;
+  /** Bot open_id used to identify this app's typing reaction during cleanup lookup. */
+  botOpenId?: string;
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
@@ -143,6 +145,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         cfg,
         messageId: replyToMessageId,
         accountId,
+        botOpenId: params.botOpenId,
         runtime: params.runtime,
       });
     },
@@ -193,6 +196,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingStartPromise: Promise<void> | null = null;
   let finalTextEmitted = false;
   let replaceNextPartialAfterTool = false;
+  const deliveredFinalTexts = new Set<string>();
 
   const emitFinalTextIfNeeded = async (
     text: string,
@@ -447,6 +451,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
+        deliveredFinalTexts.clear();
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -462,12 +467,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               : [];
         const hasText = Boolean(text.trim());
         const hasMedia = mediaList.length > 0;
+        // Suppress only exact duplicate final text payloads to avoid
+        // dropping legitimate multi-part final replies.
+        const skipTextForDuplicateFinal =
+          info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
+        const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
 
-        if (!hasText && !hasMedia) {
+        if (!shouldDeliverText && !hasMedia) {
           return;
         }
 
-        if (hasText) {
+        if (shouldDeliverText) {
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
           if (info?.kind === "block") {
@@ -499,6 +509,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "final") {
               streamText = text;
               await closeStreaming({ emitFinalText: true });
+              deliveredFinalTexts.add(text);
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
@@ -566,6 +577,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
           }
           if (info?.kind === "final") {
+            deliveredFinalTexts.add(text);
             emitMessageSent({ content: text, success: true, messageId: lastMessageId });
             await emitFinalTextIfNeeded(text, {
               ...(lastMessageId ? { messageId: lastMessageId } : {}),

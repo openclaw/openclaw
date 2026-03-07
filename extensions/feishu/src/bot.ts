@@ -1,3 +1,4 @@
+import { getSessionBindingService } from "openclaw/plugin-sdk";
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 import {
   buildAgentMediaPayload,
@@ -5,7 +6,6 @@ import {
   clearHistoryEntriesIfEnabled,
   createScopedPairingAccess,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  getSessionBindingService,
   type HistoryEntry,
   normalizeAgentId,
   recordPendingHistoryEntryIfEnabled,
@@ -44,6 +44,7 @@ type PermissionError = {
 };
 
 const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
+const SOFT_SENDER_LOOKUP_ERROR_CODES = new Set([41050]);
 
 // Feishu API sometimes returns incorrect scope names in permission error
 // responses (e.g. "contact:contact.base:readonly" instead of the valid
@@ -99,6 +100,8 @@ function extractPermissionError(err: unknown): PermissionError | null {
 // Cache display names by sender id (open_id/user_id) to avoid an API call on every message.
 const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
 const senderNameCache = new Map<string, { name: string; expireAt: number }>();
+const senderLookupBackoffUntilByAccountSender = new Map<string, number>();
+const SENDER_LOOKUP_BACKOFF_MS = 10 * 60 * 1000;
 
 // Cache permission errors to avoid spamming the user with repeated notifications.
 // Key: appId or "default", Value: timestamp of last notification
@@ -110,6 +113,11 @@ type SenderNameResult = {
   permissionError?: PermissionError;
 };
 
+type SenderLookupSoftError = {
+  code: number;
+  message: string;
+};
+
 function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "union_id" {
   const trimmed = senderId.trim();
   if (trimmed.startsWith("ou_")) {
@@ -119,6 +127,33 @@ function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "u
     return "union_id";
   }
   return "user_id";
+}
+
+function extractSenderLookupSoftError(err: unknown): SenderLookupSoftError | null {
+  if (!err || typeof err !== "object") return null;
+
+  const axiosErr = err as { response?: { data?: unknown } };
+  const data = axiosErr.response?.data;
+  if (!data || typeof data !== "object") return null;
+
+  const feishuErr = data as { code?: number; msg?: string };
+  const code = feishuErr.code;
+  const message = typeof feishuErr.msg === "string" ? feishuErr.msg : "";
+  if (typeof code === "number" && SOFT_SENDER_LOOKUP_ERROR_CODES.has(code)) {
+    return { code, message };
+  }
+  if (message.toLowerCase().includes("no user authority")) {
+    return { code: typeof code === "number" ? code : 41050, message };
+  }
+  return null;
+}
+
+function resolveSenderLookupBackoffKey(
+  account: ResolvedFeishuAccount,
+  normalizedSenderId: string,
+): string {
+  const accountKey = account.accountId?.trim() || account.appId?.trim() || "default";
+  return `${accountKey}:${normalizedSenderId}`;
 }
 
 async function resolveFeishuSenderName(params: {
@@ -135,6 +170,9 @@ async function resolveFeishuSenderName(params: {
   const cached = senderNameCache.get(normalizedSenderId);
   const now = Date.now();
   if (cached && cached.expireAt > now) return { name: cached.name };
+  const lookupBackoffKey = resolveSenderLookupBackoffKey(account, normalizedSenderId);
+  const backoffUntil = senderLookupBackoffUntilByAccountSender.get(lookupBackoffKey) ?? 0;
+  if (backoffUntil > now) return {};
 
   try {
     const client = createFeishuClient(account);
@@ -159,6 +197,19 @@ async function resolveFeishuSenderName(params: {
 
     return {};
   } catch (err) {
+    const softErr = extractSenderLookupSoftError(err);
+    if (softErr) {
+      const priorBackoffUntil = senderLookupBackoffUntilByAccountSender.get(lookupBackoffKey) ?? 0;
+      senderLookupBackoffUntilByAccountSender.set(lookupBackoffKey, now + SENDER_LOOKUP_BACKOFF_MS);
+      if (priorBackoffUntil <= now) {
+        const accountKey = account.accountId?.trim() || account.appId?.trim() || "default";
+        log(
+          `feishu: sender name lookup temporarily disabled for account=${accountKey} sender=${normalizedSenderId} code=${softErr.code}`,
+        );
+      }
+      return {};
+    }
+
     // Check if this is a permission error
     const permErr = extractPermissionError(err);
     if (permErr) {
@@ -954,6 +1005,7 @@ export async function handleFeishuMessage(params: {
   event: FeishuMessageEvent;
   botOpenId?: string;
   botName?: string;
+  botOpenIdsByAccount?: Record<string, string | undefined>;
   runtime?: RuntimeEnv;
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;
@@ -1451,6 +1503,30 @@ export async function handleFeishuMessage(params: {
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
         GroupSystemPrompt: isGroup ? groupConfig?.systemPrompt?.trim() || undefined : undefined,
+        ChannelData: {
+          messageId: ctx.messageId,
+          chatId: ctx.chatId,
+          chatType: ctx.chatType,
+          accountId: account.accountId,
+          accountBotOpenId: botOpenId,
+          botOpenIdsByAccount: params.botOpenIdsByAccount,
+          messageType: event.message.message_type,
+          rawContent: event.message.content,
+          rootId: ctx.rootId,
+          parentId: ctx.parentId,
+          mentions: event.message.mentions ?? [],
+          senderType: event.sender.sender_type,
+          senderOpenId: ctx.senderOpenId,
+          senderUnionId: event.sender.sender_id.union_id,
+          ...(mediaList.length > 0
+            ? {
+                mediaPath: mediaList[0].path,
+                mediaType: mediaList[0].contentType,
+                mediaPaths: mediaList.map((m) => m.path),
+                mediaTypes: mediaList.filter((m) => m.contentType).map((m) => m.contentType!),
+              }
+            : {}),
+        },
         ...mediaPayload,
       });
 
@@ -1544,6 +1620,7 @@ export async function handleFeishuMessage(params: {
             threadReply: replyInThread && threadReply,
             mentionTargets: ctx.mentionTargets,
             accountId: account.accountId,
+            botOpenId,
             messageCreateTimeMs,
             onFinalTextDelivered,
           });
@@ -1709,6 +1786,7 @@ export async function handleFeishuMessage(params: {
         threadReply: boundSessionKey ? true : replyInThread && threadReply,
         mentionTargets: ctx.mentionTargets,
         accountId: account.accountId,
+        botOpenId,
         messageCreateTimeMs,
         onFinalTextDelivered,
       });

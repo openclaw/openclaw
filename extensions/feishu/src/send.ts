@@ -66,6 +66,7 @@ async function sendFallbackDirect(
     msgType: string;
   },
   errorPrefix: string,
+  mentionMeta?: Record<string, unknown>,
 ): Promise<FeishuSendResult> {
   const response = await client.im.message.create({
     params: { receive_id_type: params.receiveIdType },
@@ -76,7 +77,10 @@ async function sendFallbackDirect(
     },
   });
   assertFeishuMessageApiSuccess(response, errorPrefix);
-  return toFeishuSendResult(response, params.receiveId);
+  return {
+    ...toFeishuSendResult(response, params.receiveId),
+    ...(mentionMeta ? { meta: mentionMeta } : {}),
+  };
 }
 
 export type FeishuMessageInfo = {
@@ -259,9 +263,9 @@ export async function getMessageFeishu(params: {
 
     const msgType = item.msg_type ?? "text";
     const rawContent = item.body?.content ?? "";
-    const content = parseQuotedMessageContent(rawContent, msgType);
+    const parsedContent = parseQuotedMessageContent(rawContent, msgType);
 
-    content = enrichMentionPlaceholders(content, item.mentions);
+    const content = enrichMentionPlaceholders(parsedContent, item.mentions);
 
     return {
       messageId: item.message_id ?? messageId,
@@ -402,10 +406,10 @@ export async function sendMessageFeishu(
       if (!isWithdrawnReplyError(err)) {
         throw err;
       }
-      return sendFallbackDirect(client, directParams, "Feishu send failed");
+      return sendFallbackDirect(client, directParams, "Feishu send failed", mentionMeta);
     }
     if (shouldFallbackFromReplyTarget(response)) {
-      return sendFallbackDirect(client, directParams, "Feishu send failed");
+      return sendFallbackDirect(client, directParams, "Feishu send failed", mentionMeta);
     }
     assertFeishuMessageApiSuccess(response, "Feishu reply failed");
     return {
@@ -414,7 +418,7 @@ export async function sendMessageFeishu(
     };
   }
 
-  return sendFallbackDirect(client, directParams, "Feishu send failed");
+  return sendFallbackDirect(client, directParams, "Feishu send failed", mentionMeta);
 }
 
 export type SendFeishuCardParams = {
@@ -451,10 +455,10 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
       if (!isWithdrawnReplyError(err)) {
         throw err;
       }
-      return sendFallbackDirect(client, directParams, "Feishu card send failed");
+      return sendFallbackDirect(client, directParams, "Feishu card send failed", mentionMeta);
     }
     if (shouldFallbackFromReplyTarget(response)) {
-      return sendFallbackDirect(client, directParams, "Feishu card send failed");
+      return sendFallbackDirect(client, directParams, "Feishu card send failed", mentionMeta);
     }
     assertFeishuMessageApiSuccess(response, "Feishu card reply failed");
     return {
@@ -463,7 +467,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
     };
   }
 
-  return sendFallbackDirect(client, directParams, "Feishu card send failed");
+  return sendFallbackDirect(client, directParams, "Feishu card send failed", mentionMeta);
 }
 
 export async function updateCardFeishu(params: {
