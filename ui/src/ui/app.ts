@@ -16,6 +16,9 @@ import {
 } from "./app-channels.ts";
 import {
   handleAbortChat as handleAbortChatInternal,
+  handleChatDraftChange as handleChatDraftChangeInternal,
+  navigateChatInputHistory as navigateChatInputHistoryInternal,
+  resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
 } from "./app-chat.ts";
@@ -154,6 +157,10 @@ export class OpenClawApp extends LitElement {
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
+  chatInputHistorySessionKey: string | null = null;
+  chatInputHistoryItems: string[] | null = null;
+  chatInputHistoryIndex = -1;
+  chatDraftBeforeHistory: string | null = null;
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
   @state() sidebarContent: string | null = null;
@@ -483,6 +490,26 @@ export class OpenClawApp extends LitElement {
 
   async handleAbortChat() {
     await handleAbortChatInternal(this as unknown as Parameters<typeof handleAbortChatInternal>[0]);
+  }
+
+  handleChatDraftChange(next: string) {
+    handleChatDraftChangeInternal(
+      this as unknown as Parameters<typeof handleChatDraftChangeInternal>[0],
+      next,
+    );
+  }
+
+  handleChatInputHistoryNavigate(direction: "up" | "down"): boolean {
+    return navigateChatInputHistoryInternal(
+      this as unknown as Parameters<typeof navigateChatInputHistoryInternal>[0],
+      direction,
+    );
+  }
+
+  resetChatInputHistoryNavigation() {
+    resetChatInputHistoryNavigationInternal(
+      this as unknown as Parameters<typeof resetChatInputHistoryNavigationInternal>[0],
+    );
   }
 
   removeQueuedMessage(id: string) {

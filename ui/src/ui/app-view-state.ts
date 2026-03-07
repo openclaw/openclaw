@@ -66,6 +66,10 @@ export type AppViewState = {
   chatThinkingLevel: string | null;
   chatQueue: ChatQueueItem[];
   chatManualRefreshInFlight: boolean;
+  chatInputHistorySessionKey: string | null;
+  chatInputHistoryItems: string[] | null;
+  chatInputHistoryIndex: number;
+  chatDraftBeforeHistory: string | null;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
@@ -307,6 +311,9 @@ export type AppViewState = {
     setPassword: (next: string) => void;
     setSessionKey: (next: string) => void;
     setChatMessage: (next: string) => void;
+    handleChatDraftChange: (next: string) => void;
+    handleChatInputHistoryNavigate: (direction: "up" | "down") => boolean;
+    resetChatInputHistoryNavigation: () => void;
     handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
     handleAbortChat: () => Promise<void>;
     removeQueuedMessage: (id: string) => void;

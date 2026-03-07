@@ -224,4 +224,77 @@ describe("chat view", () => {
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
   });
+
+  it("navigates history up when cursor is at start of draft", () => {
+    const container = document.createElement("div");
+    const onHistoryNavigateUp = vi.fn(() => true);
+    render(
+      renderChat(
+        createProps({
+          draft: "hello",
+          onHistoryNavigateUp,
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.selectionStart = 0;
+    textarea.selectionEnd = 0;
+    const event = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
+    textarea.dispatchEvent(event);
+
+    expect(onHistoryNavigateUp).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("does not navigate history up when cursor is not at start", () => {
+    const container = document.createElement("div");
+    const onHistoryNavigateUp = vi.fn(() => true);
+    render(
+      renderChat(
+        createProps({
+          draft: "hello",
+          onHistoryNavigateUp,
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.selectionStart = 2;
+    textarea.selectionEnd = 2;
+    const event = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
+    textarea.dispatchEvent(event);
+
+    expect(onHistoryNavigateUp).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("navigates history down when cursor is at end of draft", () => {
+    const container = document.createElement("div");
+    const onHistoryNavigateDown = vi.fn(() => true);
+    render(
+      renderChat(
+        createProps({
+          draft: "hello",
+          onHistoryNavigateDown,
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.selectionStart = textarea.value.length;
+    textarea.selectionEnd = textarea.value.length;
+    const event = new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(event);
+
+    expect(onHistoryNavigateDown).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
 });

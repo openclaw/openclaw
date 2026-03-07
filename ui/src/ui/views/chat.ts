@@ -6,6 +6,7 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
+import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
@@ -73,6 +74,8 @@ export type ChatProps = {
   onToggleFocusMode: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
+  onHistoryNavigateUp?: () => boolean;
+  onHistoryNavigateDown?: () => boolean;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
@@ -88,6 +91,29 @@ const FALLBACK_TOAST_DURATION_MS = 8000;
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
+}
+
+function shouldHandleHistoryNavigation(event: KeyboardEvent, target: HTMLTextAreaElement): boolean {
+  if (
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey ||
+    event.isComposing ||
+    event.keyCode === 229
+  ) {
+    return false;
+  }
+  if (target.selectionStart !== target.selectionEnd) {
+    return false;
+  }
+  if (event.key === "ArrowUp") {
+    return target.selectionStart === 0;
+  }
+  if (event.key === "ArrowDown") {
+    return target.selectionStart === target.value.length;
+  }
+  return false;
 }
 
 function renderCompactionIndicator(status: CompactionIndicatorStatus | null | undefined) {
@@ -431,6 +457,21 @@ export function renderChat(props: ChatProps) {
               dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                  const target = e.target as HTMLTextAreaElement;
+                  if (!shouldHandleHistoryNavigation(e, target)) {
+                    return;
+                  }
+                  const navigate =
+                    e.key === "ArrowUp" ? props.onHistoryNavigateUp : props.onHistoryNavigateDown;
+                  if (!navigate) {
+                    return;
+                  }
+                  if (navigate()) {
+                    e.preventDefault();
+                  }
+                  return;
+                }
                 if (e.key !== "Enter") {
                   return;
                 }
@@ -478,8 +519,6 @@ export function renderChat(props: ChatProps) {
     </section>
   `;
 }
-
-const CHAT_HISTORY_RENDER_LIMIT = 200;
 
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
