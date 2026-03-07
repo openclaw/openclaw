@@ -179,9 +179,9 @@ const SELF_TALK_PATTERNS = [
   // Legacy bracket format
   /\n\[User\]\n/,
   /\n\[Assistant\]/,
-  // XML tag format
-  /\n<user>\n/,
-  /\n<assistant>\n/,
+  // XML tag format (opening and closing tags)
+  /\n<\/?user>\s*\n?/,
+  /\n<\/?assistant>\s*\n?/,
   // Bracket labels at the very start of a line (after a newline)
   /\n\[User\]\s*\n/,
 ];

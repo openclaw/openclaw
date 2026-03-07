@@ -33,6 +33,11 @@ export function parseReplyDirectives(
   // Strip stray end-of-sequence tokens that may leak from model output
   text = text.replace(/<\/s>\s*$/g, "").trimEnd();
 
+  // Strip self-talk: model fabricating conversation turn tags.
+  // Truncate at the first occurrence of a conversation tag and
+  // remove everything after it (hallucinated user/assistant turns).
+  text = text.replace(/\n*<\/?(?:user|assistant)>[\s\S]*$/g, "").trimEnd();
+
   const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent = isSilentReplyText(text, silentToken);
   if (isSilent) {
