@@ -32,6 +32,7 @@ require_secret GOG_KEYRING_PASSWORD GOG_KEYRING_PASSWORD_PATH
 require_secret PERPLEXITY_API_KEY PERPLEXITY_API_KEY_PATH
 require_secret GEMINI_API_KEY GEMINI_API_KEY_PATH
 require_secret NOTION_API_KEY NOTION_API_KEY_PATH
+require_secret GITHUB_TOKEN GITHUB_TOKEN_PATH
 
 # Backward-compat aliases for older local scripts/workflows.
 if [ -z "${NOTION_KEY:-}" ]; then
