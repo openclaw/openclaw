@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
+import {
+  type EnvSubstitutionWarning,
+  MissingEnvVarError,
+  resolveConfigEnvVars,
+} from "./env-substitution.js";
 
 type SubstitutionScenario = {
   name: string;
@@ -262,6 +266,50 @@ describe("resolveConfigEnvVars", () => {
       for (const scenario of scenarios) {
         expect(resolveConfigEnvVars(scenario.config, {})).toEqual(scenario.expected);
       }
+    });
+  });
+
+  describe("graceful missing env var handling (onMissing)", () => {
+    it("collects warnings and preserves placeholder when onMissing is set", () => {
+      const warnings: EnvSubstitutionWarning[] = [];
+      const result = resolveConfigEnvVars(
+        { key: "${MISSING_VAR}", present: "${PRESENT}" },
+        { PRESENT: "ok" } as NodeJS.ProcessEnv,
+        { onMissing: (w) => warnings.push(w) },
+      );
+      expect(result).toEqual({ key: "${MISSING_VAR}", present: "ok" });
+      expect(warnings).toEqual([{ varName: "MISSING_VAR", configPath: "key" }]);
+    });
+
+    it("collects multiple warnings across nested paths", () => {
+      const warnings: EnvSubstitutionWarning[] = [];
+      const result = resolveConfigEnvVars(
+        {
+          providers: {
+            tts: { apiKey: "${TTS_KEY}" },
+            stt: { apiKey: "${STT_KEY}" },
+          },
+          gateway: { token: "${GW_TOKEN}" },
+        },
+        { GW_TOKEN: "secret" } as NodeJS.ProcessEnv,
+        { onMissing: (w) => warnings.push(w) },
+      );
+      expect(result).toEqual({
+        providers: {
+          tts: { apiKey: "${TTS_KEY}" },
+          stt: { apiKey: "${STT_KEY}" },
+        },
+        gateway: { token: "secret" },
+      });
+      expect(warnings).toHaveLength(2);
+      expect(warnings[0]).toEqual({ varName: "TTS_KEY", configPath: "providers.tts.apiKey" });
+      expect(warnings[1]).toEqual({ varName: "STT_KEY", configPath: "providers.stt.apiKey" });
+    });
+
+    it("still throws when onMissing is not set", () => {
+      expect(() => resolveConfigEnvVars({ key: "${MISSING}" }, {} as NodeJS.ProcessEnv)).toThrow(
+        MissingEnvVarError,
+      );
     });
   });
 

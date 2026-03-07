@@ -75,7 +75,22 @@ function parseEnvTokenAt(value: string, index: number): EnvToken | null {
   return null;
 }
 
-function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: string): string {
+export type EnvSubstitutionWarning = {
+  varName: string;
+  configPath: string;
+};
+
+type SubstituteOptions = {
+  /** When set, missing vars call this instead of throwing and the original placeholder is preserved. */
+  onMissing?: (warning: EnvSubstitutionWarning) => void;
+};
+
+function substituteString(
+  value: string,
+  env: NodeJS.ProcessEnv,
+  configPath: string,
+  opts?: SubstituteOptions,
+): string {
   if (!value.includes("$")) {
     return value;
   }
@@ -98,6 +113,13 @@ function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: str
     if (token?.kind === "substitution") {
       const envValue = env[token.name];
       if (envValue === undefined || envValue === "") {
+        if (opts?.onMissing) {
+          opts.onMissing({ varName: token.name, configPath });
+          // Preserve the original placeholder so the value is visibly unresolved.
+          chunks.push(`\${${token.name}}`);
+          i = token.end;
+          continue;
+        }
         throw new MissingEnvVarError(token.name, configPath);
       }
       chunks.push(envValue);
@@ -136,20 +158,25 @@ export function containsEnvVarReference(value: string): boolean {
   return false;
 }
 
-function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): unknown {
+function substituteAny(
+  value: unknown,
+  env: NodeJS.ProcessEnv,
+  path: string,
+  opts?: SubstituteOptions,
+): unknown {
   if (typeof value === "string") {
-    return substituteString(value, env, path);
+    return substituteString(value, env, path, opts);
   }
 
   if (Array.isArray(value)) {
-    return value.map((item, index) => substituteAny(item, env, `${path}[${index}]`));
+    return value.map((item, index) => substituteAny(item, env, `${path}[${index}]`, opts));
   }
 
   if (isPlainObject(value)) {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {
       const childPath = path ? `${path}.${key}` : key;
-      result[key] = substituteAny(val, env, childPath);
+      result[key] = substituteAny(val, env, childPath, opts);
     }
     return result;
   }
@@ -163,9 +190,14 @@ function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): un
  *
  * @param obj - The parsed config object (after JSON5 parse and $include resolution)
  * @param env - Environment variables to use for substitution (defaults to process.env)
+ * @param opts - Options: `onMissing` callback to collect warnings instead of throwing.
  * @returns The config object with env vars substituted
- * @throws {MissingEnvVarError} If a referenced env var is not set or empty
+ * @throws {MissingEnvVarError} If a referenced env var is not set or empty (unless `onMissing` is set)
  */
-export function resolveConfigEnvVars(obj: unknown, env: NodeJS.ProcessEnv = process.env): unknown {
-  return substituteAny(obj, env, "");
+export function resolveConfigEnvVars(
+  obj: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+  opts?: SubstituteOptions,
+): unknown {
+  return substituteAny(obj, env, "", opts);
 }
