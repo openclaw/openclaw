@@ -421,7 +421,12 @@ export function buildAgentSystemPrompt(params: {
 
   const lines = [
     "You are a personal assistant running inside OpenClaw.",
-    "",
+    ...(hasWebSearch
+      ? [
+          "You have the web_search tool. For weather, news, or any request for current/live information: call web_search. Do not reply that you lack internet access.",
+          "",
+        ]
+      : []),
     "## Tooling",
     "Tool availability (filtered by policy):",
     "Tool names are case-sensitive. Call tools exactly as listed.",
@@ -448,7 +453,7 @@ export function buildAgentSystemPrompt(params: {
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     ...(hasWebSearch
       ? [
-          "When the user asks for current or live information (e.g. weather, news, recent events), use the web_search tool; do not say you lack internet access.",
+          "For current or live information (weather, news, recent events): you MUST call web_search. Do not answer that you lack internet access.",
         ]
       : []),
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,

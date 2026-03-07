@@ -850,7 +850,7 @@ function normalizeFreshness(
   }
 
   if (PERPLEXITY_RECENCY_VALUES.has(lower)) {
-    return provider === "perplexity" ? lower : RECENCY_TO_FRESHNESS[lower];
+    return provider === "perplexity" || provider === "serpstack" ? lower : RECENCY_TO_FRESHNESS[lower];
   }
 
   // Brave date range support
@@ -1458,7 +1458,8 @@ async function runWebSearch(params: {
       periodStart = params.dateAfter;
       periodEnd = params.dateBefore;
     } else if (params.freshness) {
-      period = SERPSTACK_PERIOD_MAP[params.freshness] ?? undefined;
+      const serpstackKey = FRESHNESS_TO_RECENCY[params.freshness] ?? params.freshness;
+      period = SERPSTACK_PERIOD_MAP[serpstackKey] ?? undefined;
     }
     const results = await runSerpstackSearch({
       query: params.query,

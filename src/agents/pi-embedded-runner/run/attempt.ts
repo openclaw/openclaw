@@ -270,6 +270,31 @@ function isToolCallBlockType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
 }
 
+/** True when the user message likely asks for live/current info (weather, search, news, etc.). */
+function looksLikeSearchOrLiveInfoRequest(prompt: string): boolean {
+  const lower = prompt.trim().toLowerCase();
+  if (!lower) return false;
+  const triggers = [
+    "weather",
+    "search the web",
+    "search for",
+    "search the internet",
+    "current ",
+    "latest ",
+    "today's",
+    "today’s",
+    "news",
+    "what's the",
+    "what’s the",
+    "how's the",
+    "how’s the",
+    "stock price",
+    "look up",
+    "find out",
+  ];
+  return triggers.some((t) => lower.includes(t));
+}
+
 function normalizeToolCallIdsInMessage(message: unknown): void {
   if (!message || typeof message !== "object") {
     return;
@@ -692,31 +717,14 @@ export async function runEmbeddedAttempt(
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     const toolNames = tools.map((t) => t.name);
     const hasWebSearch = toolNames.includes("web_search");
-    process.stderr.write(
-      `[openclaw web_search debug] embedded run tools: web_search=${hasWebSearch ? "YES" : "NO"} list=${toolNames.join(",")}\n`,
-    );
-    // #region agent log
-    fetch("http://127.0.0.1:7812/ingest/f4f56089-d2ca-4d5b-b01e-f046e03d0550", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "de43c7" },
-      body: JSON.stringify({
-        sessionId: "de43c7",
-        location: "attempt.ts:tools",
-        message: "embedded run tools",
-        data: { toolNames, hasWebSearch, count: toolNames.length },
-        timestamp: Date.now(),
-        hypothesisId: "A,B,C",
-      }),
-    }).catch(() => {});
-    // #endregion
+    if (process.env.OPENCLAW_DEBUG_EMBEDDED_TOOLS === "1") {
+      process.stderr.write(
+        `[openclaw embedded tools] web_search=${hasWebSearch ? "YES" : "NO"} list=${toolNames.join(",")}\n`,
+      );
+    }
     log.info(
       `embedded run tools: ${toolNames.join(", ")} (web_search=${hasWebSearch ? "yes" : "no"})`,
     );
-    if (!hasWebSearch) {
-      log.warn("[web_search debug] web_search is NOT in the tool list.", {
-        toolNames: toolNames.join(", "),
-      });
-    }
     const allowedToolNames = collectAllowedToolNames({
       tools,
       clientTools: params.clientTools,
@@ -1438,6 +1446,10 @@ export async function runEmbeddedAttempt(
             systemPromptText = legacySystemPrompt;
             log.debug(`hooks: applied systemPrompt override (${legacySystemPrompt.length} chars)`);
           }
+        }
+
+        if (hasWebSearch && looksLikeSearchOrLiveInfoRequest(effectivePrompt)) {
+          effectivePrompt = "Use the web_search tool to get current information.\n\n" + effectivePrompt;
         }
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
