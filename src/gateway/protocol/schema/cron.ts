@@ -220,6 +220,7 @@ export const CronJobStateSchema = Type.Object(
     lastStatus: Type.Optional(CronRunStatusSchema),
     lastError: Type.Optional(Type.String()),
     lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastModel: Type.Optional(Type.String()),
     consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
     lastDelivered: Type.Optional(Type.Boolean()),
     lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
