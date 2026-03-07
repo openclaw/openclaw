@@ -72,6 +72,36 @@ describe("normalizeMessageActionInput", () => {
     expect(normalized.channel).toBe("slack");
   });
 
+  it("infers react messageId from toolContext.currentMessageTs", () => {
+    const normalized = normalizeMessageActionInput({
+      action: "react",
+      args: {
+        target: "channel:C1",
+        emoji: "👍",
+      },
+      toolContext: {
+        currentMessageTs: "1710000000.123456",
+      },
+    });
+
+    expect(normalized.messageId).toBe("1710000000.123456");
+  });
+
+  it("does not infer react messageId from generic currentMessageId", () => {
+    const normalized = normalizeMessageActionInput({
+      action: "react",
+      args: {
+        target: "channel:C1",
+        emoji: "👍",
+      },
+      toolContext: {
+        currentMessageId: 12345,
+      },
+    });
+
+    expect(normalized.messageId).toBeUndefined();
+  });
+
   it("throws when required target remains unresolved", () => {
     expect(() =>
       normalizeMessageActionInput({

@@ -66,6 +66,7 @@ export function buildThreadingToolContext(params: {
     ...context,
     currentChannelProvider: provider!, // guaranteed non-null since dock exists
     currentMessageId: context.currentMessageId ?? currentMessageId,
+    currentMessageTs: context.currentMessageTs,
   };
 }
 
