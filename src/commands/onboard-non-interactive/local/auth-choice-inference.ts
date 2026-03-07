@@ -32,6 +32,7 @@ type AuthChoiceFlagOptions = Pick<
   | "qianfanApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
+  | "featherlessApiKey"
   | "customBaseUrl"
   | "customModelId"
   | "customApiKey"

@@ -26,6 +26,7 @@ import {
   applySyntheticConfig,
   applyVeniceConfig,
   applyTogetherConfig,
+  applyFeatherlessConfig,
   applyHuggingfaceConfig,
   applyVercelAiGatewayConfig,
   applyLitellmConfig,
@@ -52,6 +53,7 @@ import {
   setXaiApiKey,
   setVeniceApiKey,
   setTogetherApiKey,
+  setFeatherlessApiKey,
   setHuggingfaceApiKey,
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
@@ -894,6 +896,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyTogetherConfig(nextConfig);
+  }
+
+  if (authChoice === "featherless-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "featherless",
+      cfg: baseConfig,
+      flagValue: opts.featherlessApiKey,
+      flagName: "--featherless-api-key",
+      envVar: "FEATHERLESS_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setFeatherlessApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "featherless:default",
+      provider: "featherless",
+      mode: "api_key",
+    });
+    return applyFeatherlessConfig(nextConfig);
   }
 
   if (authChoice === "huggingface-api-key") {
