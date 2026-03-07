@@ -503,55 +503,6 @@ export function createAgentEventHandler({
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
-  /** Flush any pending throttled chat delta so clients receive text before a tool start event. */
-  const flushPendingChatDelta = (
-    sessionKey: string,
-    clientRunId: string,
-    sourceRunId: string,
-    seq: number,
-  ) => {
-    const bufferedText = stripInlineDirectiveTagsForDisplay(
-      chatRunState.buffers.get(clientRunId) ?? "",
-    ).text.trim();
-    const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
-      runId: clientRunId,
-      sourceRunId,
-      text: bufferedText,
-    });
-    const text = normalizedHeartbeatText.text.trim();
-    const shouldSuppressSilent =
-      normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
-    const shouldSuppressSilentLeadFragment = isSilentReplyLeadFragment(text);
-    const shouldSuppressHeartbeatStreaming = shouldHideHeartbeatChatOutput(
-      clientRunId,
-      sourceRunId,
-    );
-    if (
-      text &&
-      !shouldSuppressSilent &&
-      !shouldSuppressSilentLeadFragment &&
-      !shouldSuppressHeartbeatStreaming
-    ) {
-      const lastBroadcastLen = chatRunState.deltaLastBroadcastLen.get(clientRunId) ?? 0;
-      if (text.length > lastBroadcastLen) {
-        const flushPayload = {
-          runId: clientRunId,
-          sessionKey,
-          seq,
-          state: "delta" as const,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text }],
-            timestamp: Date.now(),
-          },
-        };
-        broadcast("chat", flushPayload, { dropIfSlow: true });
-        nodeSendToSession(sessionKey, "chat", flushPayload);
-        chatRunState.deltaLastBroadcastLen.set(clientRunId, text.length);
-      }
-    }
-  };
-
   const resolveToolVerboseLevel = (runId: string, sessionKey?: string) => {
     const runContext = getAgentRunContext(runId);
     const runVerbose = normalizeVerboseLevel(runContext?.verboseLevel);
@@ -618,21 +569,11 @@ export function createAgentEventHandler({
     }
     agentRunSeq.set(evt.runId, evt.seq);
     if (isToolEvent) {
-<<<<<<< Updated upstream
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
       // Flush pending assistant text before tool-start events so clients can
       // render complete pre-tool text above tool cards (not truncated by delta throttle).
       if (toolPhase === "start" && isControlUiVisible && sessionKey && !isAborted) {
         flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, evt.runId, evt.seq);
-=======
-      // Flush pending chat delta before tool start so Control UI receives full text before the tool card.
-      if (
-        evt.data?.phase === "start" &&
-        sessionKey &&
-        isControlUiVisible
-      ) {
-        flushPendingChatDelta(sessionKey, clientRunId, evt.runId, evt.seq);
->>>>>>> Stashed changes
       }
       // Always broadcast tool events to registered WS recipients with
       // tool-events capability, regardless of verboseLevel. The verbose
