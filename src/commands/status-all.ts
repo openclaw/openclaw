@@ -140,7 +140,7 @@ export async function statusAllCommand(
           service.readRuntime(process.env).catch(() => undefined),
           service.readCommand(process.env).catch(() => null),
         ]);
-        const installed = command != null;
+        const installed = command != null || loaded || runtimeInfo?.status === "running";
         return {
           label: service.label,
           installed,

@@ -307,7 +307,7 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
-    expect(api.deleteWebhook).toHaveBeenCalledWith({ drop_pending_updates: false });
+    expect(api.deleteWebhook).toHaveBeenCalledWith({ drop_pending_updates: false }, abort.signal);
     expect(order).toEqual(["deleteWebhook", "run"]);
   });
 
@@ -488,5 +488,97 @@ describe("monitorTelegramProvider (grammY)", () => {
       }),
     );
     expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it("calls bot.init with abort signal before starting polling", async () => {
+    const abort = new AbortController();
+    const order: string[] = [];
+    initSpy.mockImplementationOnce(async () => {
+      order.push("init");
+    });
+    api.deleteWebhook.mockReset();
+    api.deleteWebhook.mockImplementationOnce(async () => {
+      order.push("deleteWebhook");
+      return true;
+    });
+    runSpy.mockImplementationOnce(() => {
+      order.push("run");
+      return makeRunnerStub({
+        task: async () => {
+          abort.abort();
+        },
+      });
+    });
+
+    await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+    expect(initSpy).toHaveBeenCalledWith(abort.signal);
+    expect(order).toEqual(["deleteWebhook", "init", "run"]);
+  });
+
+  it("retries bot.init on recoverable network errors", async () => {
+    const abort = new AbortController();
+    const initError = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect timeout"), {
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    });
+    initSpy.mockRejectedValueOnce(initError).mockResolvedValueOnce(undefined);
+    runSpy.mockImplementationOnce(() =>
+      makeRunnerStub({
+        task: async () => {
+          abort.abort();
+        },
+      }),
+    );
+
+    await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+    expect(initSpy).toHaveBeenCalledTimes(2);
+    expect(computeBackoff).toHaveBeenCalled();
+    expect(sleepWithAbort).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries createPollingBot on recoverable error instead of returning undefined", async () => {
+    const abort = new AbortController();
+    const setupError = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect timeout"), {
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    });
+    createTelegramBotErrors.push(setupError);
+    runSpy.mockImplementationOnce(() =>
+      makeRunnerStub({
+        task: async () => {
+          abort.abort();
+        },
+      }),
+    );
+
+    await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+    // Bot creation should have been attempted twice (first fails, second succeeds)
+    // and polling should have run once
+    expect(computeBackoff).toHaveBeenCalled();
+    expect(sleepWithAbort).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes abort signal to deleteWebhook", async () => {
+    const abort = new AbortController();
+    api.deleteWebhook.mockReset();
+    api.deleteWebhook.mockResolvedValueOnce(true);
+    runSpy.mockImplementationOnce(() =>
+      makeRunnerStub({
+        task: async () => {
+          abort.abort();
+        },
+      }),
+    );
+
+    await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+    expect(api.deleteWebhook).toHaveBeenCalledWith({ drop_pending_updates: false }, abort.signal);
   });
 });

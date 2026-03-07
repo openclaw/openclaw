@@ -20,7 +20,7 @@ async function buildDaemonStatusSummary(
       service.readRuntime(process.env).catch(() => undefined),
       service.readCommand(process.env).catch(() => null),
     ]);
-    const installed = command != null;
+    const installed = command != null || loaded || runtime?.status === "running";
     const loadedText = loaded ? service.loadedText : service.notLoadedText;
     const runtimeShort = formatDaemonRuntimeShort(runtime);
     return { label: service.label, installed, loadedText, runtimeShort };
