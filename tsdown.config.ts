@@ -49,6 +49,7 @@ const pluginSdkEntrypoints = [
   "zalouser",
   "account-id",
   "keyed-async-queue",
+  "ecs",
 ] as const;
 
 export default defineConfig([

@@ -177,6 +177,7 @@ const pluginSdkScopedAliasEntries = [
     srcFile: "keyed-async-queue.ts",
     distFile: "keyed-async-queue.js",
   },
+  { subpath: "ecs", srcFile: "ecs.ts", distFile: "ecs.js" },
 ] as const;
 
 const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
