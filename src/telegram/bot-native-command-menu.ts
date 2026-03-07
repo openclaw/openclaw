@@ -128,6 +128,10 @@ function resolveCommandHashPath(accountId?: string, botIdentity?: string): strin
   return path.join(stateDir, "telegram", `command-hash-${normalizedAccount}-${botHash}.txt`);
 }
 
+function formatNativeCommandCount(count: number): string {
+  return `${count} native command${count === 1 ? "" : "s"}`;
+}
+
 async function readCachedCommandHash(
   accountId?: string,
   botIdentity?: string,
@@ -192,6 +196,7 @@ export function syncTelegramMenuCommands(params: {
         return;
       }
       await writeCachedCommandHash(accountId, botIdentity, currentHash);
+      runtime.log?.("telegram: cleared native command menu");
       return;
     }
 
@@ -204,6 +209,7 @@ export function syncTelegramMenuCommands(params: {
           fn: () => bot.api.setMyCommands(retryCommands),
         });
         await writeCachedCommandHash(accountId, botIdentity, currentHash);
+        runtime.log?.(`telegram: synced ${formatNativeCommandCount(retryCommands.length)}`);
         return;
       } catch (err) {
         if (!isBotCommandsTooMuchError(err)) {

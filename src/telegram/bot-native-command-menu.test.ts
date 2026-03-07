@@ -131,6 +131,49 @@ describe("bot-native-command-menu", () => {
     expect(callOrder).toEqual(["delete", "set"]);
   });
 
+  it("logs successful native command syncs", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const runtimeLog = vi.fn();
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: [{ command: "status", description: "Show status" }],
+      accountId: `test-success-log-${Date.now()}`,
+      botIdentity: "bot-a",
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalledTimes(1);
+    });
+
+    expect(runtimeLog).toHaveBeenCalledWith("telegram: synced 1 native command");
+  });
+
+  it("logs when the Telegram native command menu is cleared", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const runtimeLog = vi.fn();
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: [],
+      accountId: `test-clear-log-${Date.now()}`,
+      botIdentity: "bot-a",
+    });
+
+    await vi.waitFor(() => {
+      expect(deleteMyCommands).toHaveBeenCalledTimes(1);
+    });
+
+    expect(setMyCommands).not.toHaveBeenCalled();
+    expect(runtimeLog).toHaveBeenCalledWith("telegram: cleared native command menu");
+  });
+
   it("produces a stable hash regardless of command order (#32017)", () => {
     const commands = [
       { command: "bravo", description: "B" },
