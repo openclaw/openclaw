@@ -41,6 +41,7 @@ function withGatewayAuthEnv<T>(env: NodeJS.ProcessEnv, fn: () => T): T {
   const keys = [
     "OPENCLAW_GATEWAY_TOKEN",
     "OPENCLAW_GATEWAY_PASSWORD",
+    "OPENCLAW_SERVICE_KIND",
     "CLAWDBOT_GATEWAY_TOKEN",
     "CLAWDBOT_GATEWAY_PASSWORD",
   ] as const;
@@ -136,6 +137,29 @@ describe("gateway credential precedence parity", () => {
         probe: { token: undefined, password: undefined },
         status: { token: undefined, password: undefined },
         auth: { token: undefined, password: undefined },
+      },
+    },
+    {
+      name: "local mode in gateway service runtime uses config-first token precedence",
+      cfg: {
+        gateway: {
+          mode: "local",
+          auth: {
+            token: "config-token",
+            password: "config-password",
+          },
+        },
+      } as OpenClawConfig,
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-password",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      } as NodeJS.ProcessEnv,
+      expected: {
+        call: { token: "config-token", password: "env-password" },
+        probe: { token: "config-token", password: "env-password" },
+        status: { token: "config-token", password: "env-password" },
+        auth: { token: "config-token", password: "config-password" },
       },
     },
   ];

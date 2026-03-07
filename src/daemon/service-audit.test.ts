@@ -79,11 +79,14 @@ describe("auditGatewayServiceConfig", () => {
       },
     });
     expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenEmbedded),
+    ).toBe(true);
+    expect(
       audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
     ).toBe(true);
   });
 
-  it("does not flag gateway token mismatch when service token matches config token", async () => {
+  it("flags embedded service token even when it matches config token", async () => {
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },
       platform: "linux",
@@ -96,6 +99,29 @@ describe("auditGatewayServiceConfig", () => {
         },
       },
     });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenEmbedded),
+    ).toBe(true);
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
+    ).toBe(false);
+  });
+
+  it("does not flag token issues when service token is not embedded", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "linux",
+      expectedGatewayToken: "new-token",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: {
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+        },
+      },
+    });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenEmbedded),
+    ).toBe(false);
     expect(
       audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
     ).toBe(false);
@@ -143,10 +169,9 @@ describe("checkTokenDrift", () => {
     expect(result?.message).toContain("differs from service token");
   });
 
-  it("detects drift when config has token but service has no token", () => {
+  it("returns null when config has token but service has no token", () => {
     const result = checkTokenDrift({ serviceToken: undefined, configToken: "new-token" });
-    expect(result).not.toBeNull();
-    expect(result?.code).toBe(SERVICE_AUDIT_CODES.gatewayTokenDrift);
+    expect(result).toBeNull();
   });
 
   it("returns null when service has token but config does not", () => {

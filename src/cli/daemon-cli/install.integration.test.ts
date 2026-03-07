@@ -116,7 +116,7 @@ describe("runDaemonInstall integration", () => {
     expect(joined).toContain("MISSING_GATEWAY_TOKEN");
   });
 
-  it("auto-mints token when no source exists and persists the same token used for install env", async () => {
+  it("auto-mints token when no source exists without embedding it into service env", async () => {
     await fs.writeFile(
       configPath,
       JSON.stringify(
@@ -143,6 +143,6 @@ describe("runDaemonInstall integration", () => {
     expect((persistedToken ?? "").length).toBeGreaterThan(0);
 
     const installEnv = serviceMock.install.mock.calls[0]?.[0]?.environment;
-    expect(installEnv?.OPENCLAW_GATEWAY_TOKEN).toBe(persistedToken);
+    expect(installEnv?.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
   });
 });
