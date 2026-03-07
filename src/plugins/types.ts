@@ -354,6 +354,7 @@ export const PLUGIN_HOOK_NAMES = [
   "message_sent",
   "before_tool_call",
   "after_tool_call",
+  "tool_result_before_model",
   "tool_result_persist",
   "before_message_write",
   "session_start",

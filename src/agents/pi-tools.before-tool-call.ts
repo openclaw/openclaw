@@ -283,6 +283,12 @@ export function wrapToolWithBeforeToolCallHook(
         if (toolCallId) {
           const adjustedParamsKey = buildAdjustedParamsKey({ runId: ctx?.runId, toolCallId });
           adjustedParamsByToolCallId.set(adjustedParamsKey, outcome.params);
+          if (adjustedParamsByToolCallId.size > MAX_TRACKED_ADJUSTED_PARAMS) {
+            const oldest = adjustedParamsByToolCallId.keys().next().value;
+            if (oldest) {
+              adjustedParamsByToolCallId.delete(oldest);
+            }
+          }
         }
         return runToolResultBeforeModelHook({
           toolName,
