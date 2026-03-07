@@ -249,7 +249,8 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
-  if (normalizeProviderId(provider) !== "google-gemini-cli") {
+  const normalizedReqProvider = normalizeProviderId(provider);
+  if (normalizedReqProvider !== "google-gemini-cli" && normalizedReqProvider !== "google") {
     return undefined;
   }
   const trimmed = modelId.trim();
@@ -269,7 +270,7 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
     trimmedModelId: trimmed,
     templateIds: [...templateIds],
     modelRegistry,
-    patch: { reasoning: true },
+    patch: { provider: normalizedReqProvider, reasoning: true },
   });
 }
 
