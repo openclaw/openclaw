@@ -10,6 +10,8 @@ describe("classifyContinuitySource", () => {
     expect(classifyContinuitySource("discord:group:team-room")).toBe("group");
     expect(classifyContinuitySource("slack:channel:eng-updates")).toBe("channel");
     expect(classifyContinuitySource("agent:alpha:discord:direct:bob")).toBe("paired_direct");
+    expect(classifyContinuitySource("agent:alpha:discord:work:direct:bob")).toBe("paired_direct");
+    expect(classifyContinuitySource("agent:alpha:subagent:task-123")).toBe("channel");
   });
 });
 
@@ -27,13 +29,14 @@ describe("isContinuityScopeAllowed", () => {
           match: {
             chatType: "direct",
             channel: "discord",
-            keyPrefix: "discord:direct",
+            keyPrefix: "discord",
           },
         },
       ],
     } satisfies SessionSendPolicyConfig;
 
     expect(isContinuityScopeAllowed(scope, "agent:alpha:discord:direct:bob")).toBe(true);
+    expect(isContinuityScopeAllowed(scope, "agent:alpha:discord:work:direct:bob")).toBe(true);
     expect(isContinuityScopeAllowed(scope, "agent:alpha:discord:group:bob")).toBe(false);
   });
 
