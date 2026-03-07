@@ -425,7 +425,6 @@
       "form-data": "2.5.4",
       "minimatch": "10.2.4",
       "qs": "6.14.2",
-      "node-domexception": "npm:@nolyfill/domexception@^1.0.28",
       "@sinclair/typebox": "0.34.48",
       "tar": "7.5.10",
       "tough-cookie": "4.1.3"
