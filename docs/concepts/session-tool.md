@@ -173,7 +173,7 @@ Behavior:
 
 - Starts a new `agent:<agentId>:subagent:<uuid>` session with `deliver: false`.
 - Sub-agents default to the full tool set **minus session tools** (configurable via `tools.subagents.tools`).
-- Sub-agents are not allowed to call `sessions_spawn` (no sub-agent → sub-agent spawning).
+- By default sub-agents cannot call `sessions_spawn` (`maxSpawnDepth: 1`). With `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents are allowed `sessions_spawn` to spawn worker sub-agents. See [Sub-agents — Nested sub-agents](/tools/subagents#nested-sub-agents).
 - Always non-blocking: returns `{ status: "accepted", runId, childSessionKey }` immediately.
 - With `thread=true`, channel plugins can bind delivery/routing to a thread target (Discord support is controlled by `session.threadBindings.*` and `channels.discord.threadBindings.*`).
 - After completion, OpenClaw runs a sub-agent **announce step** and posts the result to the requester chat channel.
