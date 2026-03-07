@@ -476,13 +476,13 @@ async function replyWithDiscordModelPickerProviders(params: {
   threadBindings: ThreadBindingManager;
   preferFollowUp: boolean;
 }) {
-  const data = await loadDiscordModelPickerData(params.cfg);
   const route = await resolveDiscordModelPickerRoute({
     interaction: params.interaction,
     cfg: params.cfg,
     accountId: params.accountId,
     threadBindings: params.threadBindings,
   });
+  const data = await loadDiscordModelPickerData(params.cfg, route.agentId);
   const currentModel = resolveDiscordModelPickerCurrentModel({
     cfg: params.cfg,
     route,
@@ -637,13 +637,13 @@ async function handleDiscordModelPickerInteraction(
     return;
   }
 
-  const pickerData = await loadDiscordModelPickerData(ctx.cfg);
   const route = await resolveDiscordModelPickerRoute({
     interaction,
     cfg: ctx.cfg,
     accountId: ctx.accountId,
     threadBindings: ctx.threadBindings,
   });
+  const pickerData = await loadDiscordModelPickerData(ctx.cfg, route.agentId);
   const currentModelRef = resolveDiscordModelPickerCurrentModel({
     cfg: ctx.cfg,
     route,
