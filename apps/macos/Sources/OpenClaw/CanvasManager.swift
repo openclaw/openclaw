@@ -1,7 +1,7 @@
 import AppKit
+import Foundation
 import OpenClawIPC
 import OpenClawKit
-import Foundation
 import OSLog
 
 @MainActor

@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { loadWebMedia, resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/msteams";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/msteams";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
   classifyMSTeamsSendError,
@@ -28,6 +28,7 @@ export type SendMSTeamsMessageParams = {
   text: string;
   /** Optional media URL */
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
 };
 
 export type SendMSTeamsMessageResult = {
@@ -93,7 +94,7 @@ export type SendMSTeamsCardResult = {
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, to, text, mediaUrl } = params;
+  const { cfg, to, text, mediaUrl, mediaLocalRoots } = params;
   const tableMode = getMSTeamsRuntime().channel.text.resolveMarkdownTableMode({
     cfg,
     channel: "msteams",
@@ -111,7 +112,7 @@ export async function sendMessageMSTeams(
     sharePointSiteId,
   } = ctx;
 
-  log.debug("sending proactive message", {
+  log.debug?.("sending proactive message", {
     conversationId,
     conversationType,
     textLength: messageText.length,
@@ -120,18 +121,17 @@ export async function sendMessageMSTeams(
 
   // Handle media if present
   if (mediaUrl) {
-    const mediaMaxBytes =
-      resolveChannelMediaMaxBytes({
-        cfg,
-        resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
-      }) ?? MSTEAMS_MAX_MEDIA_BYTES;
-    const media = await loadWebMedia(mediaUrl, mediaMaxBytes);
+    const mediaMaxBytes = ctx.mediaMaxBytes ?? MSTEAMS_MAX_MEDIA_BYTES;
+    const media = await loadOutboundMediaFromUrl(mediaUrl, {
+      maxBytes: mediaMaxBytes,
+      mediaLocalRoots,
+    });
     const isLargeFile = media.buffer.length >= FILE_CONSENT_THRESHOLD_BYTES;
     const isImage = media.contentType?.startsWith("image/") ?? false;
     const fallbackFileName = await extractFilename(mediaUrl);
     const fileName = media.fileName ?? fallbackFileName;
 
-    log.debug("processing media", {
+    log.debug?.("processing media", {
       fileName,
       contentType: media.contentType,
       size: media.buffer.length,
@@ -155,7 +155,7 @@ export async function sendMessageMSTeams(
         description: messageText || undefined,
       });
 
-      log.debug("sending file consent card", { uploadId, fileName, size: media.buffer.length });
+      log.debug?.("sending file consent card", { uploadId, fileName, size: media.buffer.length });
 
       const baseRef = buildConversationReference(ref);
       const proactiveRef = { ...baseRef, activityId: undefined };
@@ -205,7 +205,7 @@ export async function sendMessageMSTeams(
     try {
       if (sharePointSiteId) {
         // Use SharePoint upload + Graph API for native file card
-        log.debug("uploading to SharePoint for native file card", {
+        log.debug?.("uploading to SharePoint for native file card", {
           fileName,
           conversationType,
           siteId: sharePointSiteId,
@@ -221,7 +221,7 @@ export async function sendMessageMSTeams(
           usePerUserSharing: conversationType === "groupChat",
         });
 
-        log.debug("SharePoint upload complete", {
+        log.debug?.("SharePoint upload complete", {
           itemId: uploaded.itemId,
           shareUrl: uploaded.shareUrl,
         });
@@ -233,7 +233,7 @@ export async function sendMessageMSTeams(
           tokenProvider,
         });
 
-        log.debug("driveItem properties retrieved", {
+        log.debug?.("driveItem properties retrieved", {
           eTag: driveItem.eTag,
           webDavUrl: driveItem.webDavUrl,
         });
@@ -265,7 +265,7 @@ export async function sendMessageMSTeams(
       }
 
       // Fallback: no SharePoint site configured, use OneDrive with markdown link
-      log.debug("uploading to OneDrive (no SharePoint site configured)", {
+      log.debug?.("uploading to OneDrive (no SharePoint site configured)", {
         fileName,
         conversationType,
       });
@@ -277,7 +277,7 @@ export async function sendMessageMSTeams(
         tokenProvider,
       });
 
-      log.debug("OneDrive upload complete", {
+      log.debug?.("OneDrive upload complete", {
         itemId: uploaded.itemId,
         shareUrl: uploaded.shareUrl,
       });
@@ -349,7 +349,7 @@ async function sendTextWithMedia(
       messages: [{ text: text || undefined, mediaUrl }],
       retry: {},
       onRetry: (event) => {
-        log.debug("retrying send", { conversationId, ...event });
+        log.debug?.("retrying send", { conversationId, ...event });
       },
       tokenProvider,
       sharePointSiteId,
@@ -374,6 +374,45 @@ async function sendTextWithMedia(
   };
 }
 
+type ProactiveActivityParams = {
+  adapter: MSTeamsProactiveContext["adapter"];
+  appId: string;
+  ref: MSTeamsProactiveContext["ref"];
+  activity: Record<string, unknown>;
+  errorPrefix: string;
+};
+
+async function sendProactiveActivity({
+  adapter,
+  appId,
+  ref,
+  activity,
+  errorPrefix,
+}: ProactiveActivityParams): Promise<string> {
+  const baseRef = buildConversationReference(ref);
+  const proactiveRef = {
+    ...baseRef,
+    activityId: undefined,
+  };
+
+  let messageId = "unknown";
+  try {
+    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
+      const response = await ctx.sendActivity(activity);
+      messageId = extractMessageId(response) ?? "unknown";
+    });
+    return messageId;
+  } catch (err) {
+    const classification = classifyMSTeamsSendError(err);
+    const hint = formatMSTeamsSendErrorHint(classification);
+    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+    throw new Error(
+      `${errorPrefix} failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+      { cause: err },
+    );
+  }
+}
+
 /**
  * Send a poll (Adaptive Card) to a Teams conversation or user.
  */
@@ -392,7 +431,7 @@ export async function sendPollMSTeams(
     maxSelections,
   });
 
-  log.debug("sending poll", {
+  log.debug?.("sending poll", {
     conversationId,
     pollId: pollCard.pollId,
     optionCount: pollCard.options.length,
@@ -409,27 +448,13 @@ export async function sendPollMSTeams(
   };
 
   // Send poll via proactive conversation (Adaptive Cards require direct activity send)
-  const baseRef = buildConversationReference(ref);
-  const proactiveRef = {
-    ...baseRef,
-    activityId: undefined,
-  };
-
-  let messageId = "unknown";
-  try {
-    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
-      const response = await ctx.sendActivity(activity);
-      messageId = extractMessageId(response) ?? "unknown";
-    });
-  } catch (err) {
-    const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-    throw new Error(
-      `msteams poll send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-      { cause: err },
-    );
-  }
+  const messageId = await sendProactiveActivity({
+    adapter,
+    appId,
+    ref,
+    activity,
+    errorPrefix: "msteams poll send",
+  });
 
   log.info("sent poll", { conversationId, pollId: pollCard.pollId, messageId });
 
@@ -452,7 +477,7 @@ export async function sendAdaptiveCardMSTeams(
     to,
   });
 
-  log.debug("sending adaptive card", {
+  log.debug?.("sending adaptive card", {
     conversationId,
     cardType: card.type,
     cardVersion: card.version,
@@ -469,27 +494,13 @@ export async function sendAdaptiveCardMSTeams(
   };
 
   // Send card via proactive conversation
-  const baseRef = buildConversationReference(ref);
-  const proactiveRef = {
-    ...baseRef,
-    activityId: undefined,
-  };
-
-  let messageId = "unknown";
-  try {
-    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
-      const response = await ctx.sendActivity(activity);
-      messageId = extractMessageId(response) ?? "unknown";
-    });
-  } catch (err) {
-    const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-    throw new Error(
-      `msteams card send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-      { cause: err },
-    );
-  }
+  const messageId = await sendProactiveActivity({
+    adapter,
+    appId,
+    ref,
+    activity,
+    errorPrefix: "msteams card send",
+  });
 
   log.info("sent adaptive card", { conversationId, messageId });
 

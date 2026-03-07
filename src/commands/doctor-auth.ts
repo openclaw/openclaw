@@ -1,11 +1,10 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../agents/auth-health.js";
 import {
+  type AuthCredentialReasonCode,
   CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
@@ -15,7 +14,9 @@ import {
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { note } from "../terminal/note.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 
 export async function maybeRepairAnthropicOAuthProfileId(
   cfg: OpenClawConfig,
@@ -203,10 +204,29 @@ type AuthIssue = {
   profileId: string;
   provider: string;
   status: string;
+  reasonCode?: AuthCredentialReasonCode;
   remainingMs?: number;
 };
 
+export function resolveUnusableProfileHint(params: {
+  kind: "cooldown" | "disabled";
+  reason?: string;
+}): string {
+  if (params.kind === "disabled") {
+    if (params.reason === "billing") {
+      return "Top up credits (provider billing) or switch provider.";
+    }
+    if (params.reason === "auth_permanent" || params.reason === "auth") {
+      return "Refresh or replace credentials, then retry.";
+    }
+  }
+  return "Wait for cooldown or switch provider.";
+}
+
 function formatAuthIssueHint(issue: AuthIssue): string | null {
+  if (issue.reasonCode === "invalid_expires") {
+    return "Invalid token expires metadata. Set a future Unix ms timestamp or remove expires.";
+  }
   if (issue.provider === "anthropic" && issue.profileId === CLAUDE_CLI_PROFILE_ID) {
     return `Deprecated profile. Use ${formatCliCommand("openclaw models auth setup-token")} or ${formatCliCommand(
       "openclaw configure",
@@ -224,7 +244,8 @@ function formatAuthIssueLine(issue: AuthIssue): string {
   const remaining =
     issue.remainingMs !== undefined ? ` (${formatRemainingShort(issue.remainingMs)})` : "";
   const hint = formatAuthIssueHint(issue);
-  return `- ${issue.profileId}: ${issue.status}${remaining}${hint ? ` — ${hint}` : ""}`;
+  const reason = issue.reasonCode ? ` [${issue.reasonCode}]` : "";
+  return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
 }
 
 export async function noteAuthProfileHealth(params: {
@@ -245,13 +266,14 @@ export async function noteAuthProfileHealth(params: {
       }
       const stats = store.usageStats?.[profileId];
       const remaining = formatRemainingShort(until - now);
-      const kind =
-        typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
-          ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
-          : "cooldown";
-      const hint = kind.startsWith("disabled:billing")
-        ? "Top up credits (provider billing) or switch provider."
-        : "Wait for cooldown or switch provider.";
+      const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
+      const kind = disabledActive
+        ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
+        : "cooldown";
+      const hint = resolveUnusableProfileHint({
+        kind: disabledActive ? "disabled" : "cooldown",
+        reason: stats?.disabledReason,
+      });
       out.push(`- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`);
     }
     return out;
@@ -324,6 +346,7 @@ export async function noteAuthProfileHealth(params: {
             profileId: issue.profileId,
             provider: issue.provider,
             status: issue.status,
+            reasonCode: issue.reasonCode,
             remainingMs: issue.remainingMs,
           }),
         )

@@ -1,4 +1,3 @@
-import type { AnyAgentTool } from "./tools/common.js";
 import {
   expandToolGroups,
   normalizeToolList,
@@ -6,6 +5,7 @@ import {
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy-shared.js";
+import type { AnyAgentTool } from "./tools/common.js";
 export {
   expandToolGroups,
   normalizeToolList,

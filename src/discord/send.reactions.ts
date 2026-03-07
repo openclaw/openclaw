@@ -1,13 +1,12 @@
 import { Routes } from "discord-api-types/v10";
-import type { DiscordReactionSummary, DiscordReactOpts } from "./send.types.js";
 import { loadConfig } from "../config/config.js";
 import {
   buildReactionIdentifier,
   createDiscordClient,
   formatReactionEmoji,
   normalizeReactionEmoji,
-  resolveDiscordRest,
 } from "./send.shared.js";
+import type { DiscordReactionSummary, DiscordReactOpts } from "./send.types.js";
 
 export async function reactMessageDiscord(
   channelId: string,
@@ -15,7 +14,7 @@ export async function reactMessageDiscord(
   emoji: string,
   opts: DiscordReactOpts = {},
 ) {
-  const cfg = loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   const { rest, request } = createDiscordClient(opts, cfg);
   const encoded = normalizeReactionEmoji(emoji);
   await request(
@@ -31,7 +30,8 @@ export async function removeReactionDiscord(
   emoji: string,
   opts: DiscordReactOpts = {},
 ) {
-  const rest = resolveDiscordRest(opts);
+  const cfg = opts.cfg ?? loadConfig();
+  const { rest } = createDiscordClient(opts, cfg);
   const encoded = normalizeReactionEmoji(emoji);
   await rest.delete(Routes.channelMessageOwnReaction(channelId, messageId, encoded));
   return { ok: true };
@@ -42,7 +42,8 @@ export async function removeOwnReactionsDiscord(
   messageId: string,
   opts: DiscordReactOpts = {},
 ): Promise<{ ok: true; removed: string[] }> {
-  const rest = resolveDiscordRest(opts);
+  const cfg = opts.cfg ?? loadConfig();
+  const { rest } = createDiscordClient(opts, cfg);
   const message = (await rest.get(Routes.channelMessage(channelId, messageId))) as {
     reactions?: Array<{ emoji: { id?: string | null; name?: string | null } }>;
   };
@@ -73,7 +74,8 @@ export async function fetchReactionsDiscord(
   messageId: string,
   opts: DiscordReactOpts & { limit?: number } = {},
 ): Promise<DiscordReactionSummary[]> {
-  const rest = resolveDiscordRest(opts);
+  const cfg = opts.cfg ?? loadConfig();
+  const { rest } = createDiscordClient(opts, cfg);
   const message = (await rest.get(Routes.channelMessage(channelId, messageId))) as {
     reactions?: Array<{
       count: number;

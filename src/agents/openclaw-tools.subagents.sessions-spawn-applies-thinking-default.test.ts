@@ -1,74 +1,85 @@
-import { describe, expect, it, vi } from "vitest";
-import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import "./test-helpers/fast-core-tools.js";
+import * as harness from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
+import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => ({
-      agents: {
-        defaults: {
-          subagents: {
-            thinking: "high",
-          },
-        },
-      },
-      routing: {
-        sessions: {
-          mainKey: "agent:test:main",
-        },
-      },
-    }),
-  };
-});
+const MAIN_SESSION_KEY = "agent:test:main";
 
-vi.mock("../gateway/call.js", () => {
-  return {
-    callGateway: vi.fn(async ({ method }: { method: string }) => {
-      if (method === "agent") {
-        return { runId: "run-123" };
-      }
-      return {};
-    }),
-  };
-});
+type ThinkingLevel = "high" | "medium" | "low";
+
+function applyThinkingDefault(thinking: ThinkingLevel) {
+  harness.setSessionsSpawnConfigOverride({
+    session: { mainKey: "main", scope: "per-sender" },
+    agents: { defaults: { subagents: { thinking } } },
+  });
+}
+
+function findSubagentThinking(
+  calls: Array<{ method?: string; params?: unknown }>,
+): string | undefined {
+  for (const call of calls) {
+    if (call.method !== "agent") {
+      continue;
+    }
+    const params = call.params as { lane?: string; thinking?: string } | undefined;
+    if (params?.lane === "subagent") {
+      return params.thinking;
+    }
+  }
+  return undefined;
+}
+
+function findPatchedThinking(
+  calls: Array<{ method?: string; params?: unknown }>,
+): string | undefined {
+  for (let index = calls.length - 1; index >= 0; index -= 1) {
+    const entry = calls[index];
+    if (!entry || entry.method !== "sessions.patch") {
+      continue;
+    }
+    const params = entry.params as { thinkingLevel?: string } | undefined;
+    if (params?.thinkingLevel) {
+      return params.thinkingLevel;
+    }
+  }
+  return undefined;
+}
+
+async function expectThinkingPropagation(input: {
+  callId: string;
+  payload: Record<string, unknown>;
+  expected: ThinkingLevel;
+}) {
+  const gateway = harness.setupSessionsSpawnGatewayMock({});
+  const tool = await harness.getSessionsSpawnTool({ agentSessionKey: MAIN_SESSION_KEY });
+  const result = await tool.execute(input.callId, input.payload);
+  expect(result.details).toMatchObject({ status: "accepted" });
+
+  expect(findSubagentThinking(gateway.calls)).toBe(input.expected);
+  expect(findPatchedThinking(gateway.calls)).toBe(input.expected);
+}
 
 describe("sessions_spawn thinking defaults", () => {
+  beforeEach(() => {
+    harness.resetSessionsSpawnConfigOverride();
+    resetSubagentRegistryForTests();
+    harness.getCallGatewayMock().mockClear();
+    applyThinkingDefault("high");
+  });
+
   it("applies agents.defaults.subagents.thinking when thinking is omitted", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
-    const result = await tool.execute("call-1", { task: "hello" });
-    expect(result.details).toMatchObject({ status: "accepted" });
-
-    const { callGateway } = await import("../gateway/call.js");
-    const calls = (callGateway as unknown as ReturnType<typeof vi.fn>).mock.calls;
-
-    const agentCall = calls
-      .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
-      .findLast((call) => call.method === "agent");
-    const thinkingPatch = calls
-      .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
-      .findLast((call) => call.method === "sessions.patch" && call.params?.thinkingLevel);
-
-    expect(agentCall?.params?.thinking).toBe("high");
-    expect(thinkingPatch?.params?.thinkingLevel).toBe("high");
+    await expectThinkingPropagation({
+      callId: "call-1",
+      payload: { task: "hello" },
+      expected: "high",
+    });
   });
 
   it("prefers explicit sessions_spawn.thinking over config default", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
-    const result = await tool.execute("call-2", { task: "hello", thinking: "low" });
-    expect(result.details).toMatchObject({ status: "accepted" });
-
-    const { callGateway } = await import("../gateway/call.js");
-    const calls = (callGateway as unknown as ReturnType<typeof vi.fn>).mock.calls;
-
-    const agentCall = calls
-      .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
-      .findLast((call) => call.method === "agent");
-    const thinkingPatch = calls
-      .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
-      .findLast((call) => call.method === "sessions.patch" && call.params?.thinkingLevel);
-
-    expect(agentCall?.params?.thinking).toBe("low");
-    expect(thinkingPatch?.params?.thinkingLevel).toBe("low");
+    await expectThinkingPropagation({
+      callId: "call-2",
+      payload: { task: "hello", thinking: "low" },
+      expected: "low",
+    });
   });
 });

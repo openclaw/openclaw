@@ -15,6 +15,10 @@ export type UsageLike = {
   completion_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
+  cached_tokens?: number;
+  // Kimi K2 uses prompt_tokens_details.cached_tokens for automatic prefix caching.
+  prompt_tokens_details?: { cached_tokens?: number };
   // Some agents/logs emit alternate naming.
   totalTokens?: number;
   total_tokens?: number;
@@ -29,6 +33,38 @@ export type NormalizedUsage = {
   cacheWrite?: number;
   total?: number;
 };
+
+export type AssistantUsageSnapshot = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+};
+
+export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+}
 
 const asFiniteNumber = (value: unknown): number | undefined => {
   if (typeof value !== "number") {
@@ -54,9 +90,13 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     return undefined;
   }
 
-  const input = asFiniteNumber(
+  // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
+  // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
+  // negative, which is nonsensical.  Clamp to 0.
+  const rawInput = asFiniteNumber(
     raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
   );
+  const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
   const output = asFiniteNumber(
     raw.output ??
       raw.outputTokens ??
@@ -64,7 +104,13 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.completionTokens ??
       raw.completion_tokens,
   );
-  const cacheRead = asFiniteNumber(raw.cacheRead ?? raw.cache_read ?? raw.cache_read_input_tokens);
+  const cacheRead = asFiniteNumber(
+    raw.cacheRead ??
+      raw.cache_read ??
+      raw.cache_read_input_tokens ??
+      raw.cached_tokens ??
+      raw.prompt_tokens_details?.cached_tokens,
+  );
   const cacheWrite = asFiniteNumber(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
@@ -107,30 +153,38 @@ export function derivePromptTokens(usage?: {
 export function deriveSessionTotalTokens(params: {
   usage?: {
     input?: number;
+    output?: number;
     total?: number;
     cacheRead?: number;
     cacheWrite?: number;
   };
   contextTokens?: number;
+  promptTokens?: number;
 }): number | undefined {
+  const promptOverride = params.promptTokens;
+  const hasPromptOverride =
+    typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0;
+
   const usage = params.usage;
-  if (!usage) {
-    return undefined;
-  }
-  const input = usage.input ?? 0;
-  const promptTokens = derivePromptTokens({
-    input: usage.input,
-    cacheRead: usage.cacheRead,
-    cacheWrite: usage.cacheWrite,
-  });
-  let total = promptTokens ?? usage.total ?? input;
-  if (!(total > 0)) {
+  if (!usage && !hasPromptOverride) {
     return undefined;
   }
 
-  const contextTokens = params.contextTokens;
-  if (typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0) {
-    total = Math.min(total, contextTokens);
+  // NOTE: SessionEntry.totalTokens is used as a prompt/context snapshot.
+  // It intentionally excludes completion/output tokens.
+  const promptTokens = hasPromptOverride
+    ? promptOverride
+    : derivePromptTokens({
+        input: usage?.input,
+        cacheRead: usage?.cacheRead,
+        cacheWrite: usage?.cacheWrite,
+      });
+
+  if (!(typeof promptTokens === "number") || !Number.isFinite(promptTokens) || promptTokens <= 0) {
+    return undefined;
   }
-  return total;
+
+  // Keep this value unclamped; display layers are responsible for capping
+  // percentages for terminal output.
+  return promptTokens;
 }

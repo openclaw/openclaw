@@ -1,5 +1,4 @@
 import type { OpenClawApp } from "./app.ts";
-import type { NostrProfile } from "./types.ts";
 import {
   loadChannels,
   logoutWhatsApp,
@@ -7,6 +6,7 @@ import {
   waitWhatsAppLogin,
 } from "./controllers/channels.ts";
 import { loadConfig, saveConfig } from "./controllers/config.ts";
+import type { NostrProfile } from "./types.ts";
 import { createNostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
 export async function handleWhatsAppStart(host: OpenClawApp, force: boolean) {
@@ -64,6 +64,27 @@ function resolveNostrAccountId(host: OpenClawApp): string {
 
 function buildNostrProfileUrl(accountId: string, suffix = ""): string {
   return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
+}
+
+function resolveGatewayHttpAuthHeader(host: OpenClawApp): string | null {
+  const deviceToken = host.hello?.auth?.deviceToken?.trim();
+  if (deviceToken) {
+    return `Bearer ${deviceToken}`;
+  }
+  const token = host.settings.token.trim();
+  if (token) {
+    return `Bearer ${token}`;
+  }
+  const password = host.password.trim();
+  if (password) {
+    return `Bearer ${password}`;
+  }
+  return null;
+}
+
+function buildGatewayHttpHeaders(host: OpenClawApp): Record<string, string> {
+  const authorization = resolveGatewayHttpAuthHeader(host);
+  return authorization ? { Authorization: authorization } : {};
 }
 
 export function handleNostrProfileEdit(
@@ -133,6 +154,7 @@ export async function handleNostrProfileSave(host: OpenClawApp) {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
+        ...buildGatewayHttpHeaders(host),
       },
       body: JSON.stringify(state.values),
     });
@@ -203,6 +225,7 @@ export async function handleNostrProfileImport(host: OpenClawApp) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...buildGatewayHttpHeaders(host),
       },
       body: JSON.stringify({ autoMerge: true }),
     });

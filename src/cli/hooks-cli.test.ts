@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
 import { formatHooksCheck, formatHooksList } from "./hooks-cli.js";
+import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 
 const report: HookStatusReport = {
   workspaceDir: "/tmp/workspace",
@@ -16,28 +17,13 @@ const report: HookStatusReport = {
       handlerPath: "/tmp/hooks/session-memory/handler.js",
       hookKey: "session-memory",
       emoji: "💾",
-      homepage: "https://docs.openclaw.ai/hooks#session-memory",
+      homepage: "https://docs.openclaw.ai/automation/hooks#session-memory",
       events: ["command:new"],
       always: false,
       disabled: false,
       eligible: true,
       managedByPlugin: false,
-      requirements: {
-        bins: [],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
-      missing: {
-        bins: [],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
-      configChecks: [],
-      install: [],
+      ...createEmptyInstallChecks(),
     },
   ],
 };
@@ -75,22 +61,7 @@ describe("hooks cli formatting", () => {
           disabled: false,
           eligible: true,
           managedByPlugin: true,
-          requirements: {
-            bins: [],
-            anyBins: [],
-            env: [],
-            config: [],
-            os: [],
-          },
-          missing: {
-            bins: [],
-            anyBins: [],
-            env: [],
-            config: [],
-            os: [],
-          },
-          configChecks: [],
-          install: [],
+          ...createEmptyInstallChecks(),
         },
       ],
     };

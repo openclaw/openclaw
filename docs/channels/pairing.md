@@ -36,14 +36,21 @@ openclaw pairing list telegram
 openclaw pairing approve telegram <CODE>
 ```
 
-Supported channels: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`.
+Supported channels: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`, `feishu`.
 
 ### Where the state lives
 
 Stored under `~/.openclaw/credentials/`:
 
 - Pending requests: `<channel>-pairing.json`
-- Approved allowlist store: `<channel>-allowFrom.json`
+- Approved allowlist store:
+  - Default account: `<channel>-allowFrom.json`
+  - Non-default account: `<channel>-<accountId>-allowFrom.json`
+
+Account scoping behavior:
+
+- Non-default accounts read/write only their scoped allowlist file.
+- Default account uses the channel-scoped unscoped allowlist file.
 
 Treat these as sensitive (they gate access to your assistant).
 
@@ -51,6 +58,23 @@ Treat these as sensitive (they gate access to your assistant).
 
 Nodes connect to the Gateway as **devices** with `role: node`. The Gateway
 creates a device pairing request that must be approved.
+
+### Pair via Telegram (recommended for iOS)
+
+If you use the `device-pair` plugin, you can do first-time device pairing entirely from Telegram:
+
+1. In Telegram, message your bot: `/pair`
+2. The bot replies with two messages: an instruction message and a separate **setup code** message (easy to copy/paste in Telegram).
+3. On your phone, open the OpenClaw iOS app → Settings → Gateway.
+4. Paste the setup code and connect.
+5. Back in Telegram: `/pair approve`
+
+The setup code is a base64-encoded JSON payload that contains:
+
+- `url`: the Gateway WebSocket URL (`ws://...` or `wss://...`)
+- `token`: a short-lived pairing token
+
+Treat the setup code like a password while it is valid.
 
 ### Approve a node device
 

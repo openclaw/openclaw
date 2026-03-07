@@ -1,5 +1,7 @@
 const KEY = "openclaw.control.settings.v1";
 
+import { isSupportedLocale } from "../i18n/index.ts";
+import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import type { ThemeMode } from "./theme.ts";
 
 export type UiSettings = {
@@ -13,12 +15,20 @@ export type UiSettings = {
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
+  locale?: string;
 };
 
 export function loadSettings(): UiSettings {
   const defaultUrl = (() => {
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    return `${proto}://${location.host}`;
+    const configured =
+      typeof window !== "undefined" &&
+      typeof window.__OPENCLAW_CONTROL_UI_BASE_PATH__ === "string" &&
+      window.__OPENCLAW_CONTROL_UI_BASE_PATH__.trim();
+    const basePath = configured
+      ? normalizeBasePath(configured)
+      : inferBasePathFromPathname(location.pathname);
+    return `${proto}://${location.host}${basePath}`;
   })();
 
   const defaults: UiSettings = {
@@ -77,6 +87,7 @@ export function loadSettings(): UiSettings {
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
+      locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
   } catch {
     return defaults;

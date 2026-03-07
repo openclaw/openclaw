@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { isFileMissingError } from "./fs-utils.js";
 
 export type MemoryFileEntry = {
   path: string;
@@ -150,9 +152,25 @@ export function hashText(value: string): string {
 export async function buildFileEntry(
   absPath: string,
   workspaceDir: string,
-): Promise<MemoryFileEntry> {
-  const stat = await fs.stat(absPath);
-  const content = await fs.readFile(absPath, "utf-8");
+): Promise<MemoryFileEntry | null> {
+  let stat;
+  try {
+    stat = await fs.stat(absPath);
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return null;
+    }
+    throw err;
+  }
+  let content: string;
+  try {
+    content = await fs.readFile(absPath, "utf-8");
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return null;
+    }
+    throw err;
+  }
   const hash = hashText(content);
   return {
     path: path.relative(workspaceDir, absPath).replace(/\\/g, "/"),
@@ -246,6 +264,27 @@ export function chunkMarkdown(
   return chunks;
 }
 
+/**
+ * Remap chunk startLine/endLine from content-relative positions to original
+ * source file positions using a lineMap.  Each entry in lineMap gives the
+ * 1-indexed source line for the corresponding 0-indexed content line.
+ *
+ * This is used for session JSONL files where buildSessionEntry() flattens
+ * messages into a plain-text string before chunking.  Without remapping the
+ * stored line numbers would reference positions in the flattened text rather
+ * than the original JSONL file.
+ */
+export function remapChunkLines(chunks: MemoryChunk[], lineMap: number[] | undefined): void {
+  if (!lineMap || lineMap.length === 0) {
+    return;
+  }
+  for (const chunk of chunks) {
+    // startLine/endLine are 1-indexed; lineMap is 0-indexed by content line
+    chunk.startLine = lineMap[chunk.startLine - 1] ?? chunk.startLine;
+    chunk.endLine = lineMap[chunk.endLine - 1] ?? chunk.endLine;
+  }
+}
+
 export function parseEmbedding(raw: string): number[] {
   try {
     const parsed = JSON.parse(raw) as number[];
@@ -280,35 +319,12 @@ export async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   limit: number,
 ): Promise<T[]> {
-  if (tasks.length === 0) {
-    return [];
-  }
-  const resolvedLimit = Math.max(1, Math.min(limit, tasks.length));
-  const results: T[] = Array.from({ length: tasks.length });
-  let next = 0;
-  let firstError: unknown = null;
-
-  const workers = Array.from({ length: resolvedLimit }, async () => {
-    while (true) {
-      if (firstError) {
-        return;
-      }
-      const index = next;
-      next += 1;
-      if (index >= tasks.length) {
-        return;
-      }
-      try {
-        results[index] = await tasks[index]();
-      } catch (err) {
-        firstError = err;
-        return;
-      }
-    }
+  const { results, firstError, hasError } = await runTasksWithConcurrency({
+    tasks,
+    limit,
+    errorMode: "stop",
   });
-
-  await Promise.allSettled(workers);
-  if (firstError) {
+  if (hasError) {
     throw firstError;
   }
   return results;
