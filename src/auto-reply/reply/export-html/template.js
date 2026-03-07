@@ -1712,6 +1712,22 @@
     return text.replace(/<(?=[a-zA-Z/])/g, "&lt;");
   }
 
+  const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
+
+  function normalizeMarkdownImageLabel(text) {
+    const trimmed = typeof text === "string" ? text.trim() : "";
+    return trimmed || "image";
+  }
+
+  function renderMarkdownImage(token) {
+    const label = normalizeMarkdownImageLabel(token?.text);
+    const href = typeof token?.href === "string" ? token.href.trim() : "";
+    if (!INLINE_DATA_IMAGE_RE.test(href)) {
+      return escapeHtml(label);
+    }
+    return `<img src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
+  }
+
   // Configure marked with syntax highlighting and HTML escaping for text
   marked.use({
     breaks: true,
@@ -1749,6 +1765,9 @@
       // Raw HTML blocks/inline HTML: escape to prevent script execution.
       html(token) {
         return escapeHtml(token.text);
+      },
+      image(token) {
+        return renderMarkdownImage(token);
       },
     },
   });
