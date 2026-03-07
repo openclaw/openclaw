@@ -445,7 +445,8 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  | "before_response_emit";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -472,6 +473,7 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_ended",
   "gateway_start",
   "gateway_stop",
+  "before_response_emit",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -886,6 +888,35 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// ============================================================================
+// Response Emit Hook
+// ============================================================================
+
+// before_response_emit hook (modifying — sequential)
+export type PluginHookBeforeResponseEmitEvent = {
+  /** The final assistant response text about to be delivered. */
+  content: string;
+  /** All assistant response texts from the current run (multi-turn).
+   *  Enables full PII redaction across tool-loop iterations.
+   *  Bounded to the original assistantTexts.length — plugins cannot inject messages. */
+  allContent: string[];
+  /** Channel identifier (e.g. "telegram", "discord"). */
+  channel?: string;
+  /** Number of messages in the session at the time of the hook. */
+  messageCount: number;
+};
+
+export type PluginHookBeforeResponseEmitResult = {
+  /** Replace the final response text (first-writer-wins, mutually exclusive with allContent). */
+  content?: string;
+  /** Replace all assistant texts from the current run (first-writer-wins, takes precedence over content). */
+  allContent?: string[];
+  /** Block the response entirely (one-way latch). Clears all current-run assistant content from session history. */
+  block?: boolean;
+  /** Reason for blocking (first-writer-wins). */
+  blockReason?: string;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -984,6 +1015,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  before_response_emit: (
+    event: PluginHookBeforeResponseEmitEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHookBeforeResponseEmitResult | void>
+    | PluginHookBeforeResponseEmitResult
+    | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {
