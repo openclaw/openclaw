@@ -2,13 +2,25 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
-  const resolveRunModelFallbacksOverrideMock = vi.fn();
-  return { resolveRunModelFallbacksOverrideMock };
+  const resolveEffectiveModelFallbacksMock = vi.fn();
+  const resolveFallbackAgentIdMock = vi.fn();
+  const resolveDefaultModelForAgentMock = vi.fn();
+  return {
+    resolveEffectiveModelFallbacksMock,
+    resolveFallbackAgentIdMock,
+    resolveDefaultModelForAgentMock,
+  };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveRunModelFallbacksOverride: (...args: unknown[]) =>
-    hoisted.resolveRunModelFallbacksOverrideMock(...args),
+  resolveEffectiveModelFallbacks: (...args: unknown[]) =>
+    hoisted.resolveEffectiveModelFallbacksMock(...args),
+  resolveFallbackAgentId: (...args: unknown[]) => hoisted.resolveFallbackAgentIdMock(...args),
+}));
+
+vi.mock("../../agents/model-selection.js", () => ({
+  resolveDefaultModelForAgent: (...args: unknown[]) =>
+    hoisted.resolveDefaultModelForAgentMock(...args),
 }));
 
 const {
@@ -44,19 +56,31 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 
 describe("agent-runner-utils", () => {
   beforeEach(() => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
+    hoisted.resolveEffectiveModelFallbacksMock.mockClear();
+    hoisted.resolveFallbackAgentIdMock.mockClear();
+    hoisted.resolveDefaultModelForAgentMock.mockClear();
+    // Default: configured primary matches run model (no session override).
+    hoisted.resolveFallbackAgentIdMock.mockReturnValue("agent-1");
+    hoisted.resolveDefaultModelForAgentMock.mockReturnValue({
+      provider: "openai",
+      model: "gpt-4.1",
+    });
   });
 
   it("resolves model fallback options from run context", () => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
     const run = makeRun();
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
-      cfg: run.config,
+    expect(hoisted.resolveFallbackAgentIdMock).toHaveBeenCalledWith({
       agentId: run.agentId,
       sessionKey: run.sessionKey,
+    });
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
+      cfg: run.config,
+      agentId: "agent-1",
+      hasSessionModelOverride: false,
     });
     expect(resolved).toEqual({
       cfg: run.config,
@@ -68,17 +92,106 @@ describe("agent-runner-utils", () => {
   });
 
   it("passes through missing agentId for helper-based fallback resolution", () => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
+    hoisted.resolveFallbackAgentIdMock.mockReturnValue("default");
     const run = makeRun({ agentId: undefined });
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
-      cfg: run.config,
+    expect(hoisted.resolveFallbackAgentIdMock).toHaveBeenCalledWith({
       agentId: undefined,
       sessionKey: run.sessionKey,
     });
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
+  });
+
+  it("detects session model override when provider differs from agent-aware primary", () => {
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["anthropic/claude-haiku-3-5"]);
+    hoisted.resolveDefaultModelForAgentMock.mockReturnValue({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    });
+    const run = makeRun({
+      provider: "openrouter",
+      model: "meta-llama/llama-3.3-70b-instruct:free",
+    });
+
+    resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hasSessionModelOverride: true }),
+    );
+  });
+
+  it("detects session model override when model differs from agent-aware primary", () => {
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["anthropic/claude-haiku-3-5"]);
+    hoisted.resolveDefaultModelForAgentMock.mockReturnValue({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    });
+    const run = makeRun({
+      provider: "openai",
+      model: "gpt-5.3-codex",
+    });
+
+    resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hasSessionModelOverride: true }),
+    );
+  });
+
+  it("does not flag session model override when run matches agent-aware primary", () => {
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(undefined);
+    hoisted.resolveDefaultModelForAgentMock.mockReturnValue({
+      provider: "openai",
+      model: "gpt-4.1",
+    });
+    const run = makeRun({
+      provider: "openai",
+      model: "gpt-4.1",
+    });
+
+    resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hasSessionModelOverride: false }),
+    );
+  });
+
+  it("does not flag per-agent model.primary as a session override", () => {
+    // Simulate an agent configured with its own model.primary (anthropic/claude-sonnet-4)
+    // that differs from the global default (openai/gpt-4.1).
+    // resolveDefaultModelForAgent returns the per-agent primary, so the run model
+    // should match and hasSessionModelOverride should be false.
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(undefined);
+    hoisted.resolveDefaultModelForAgentMock.mockReturnValue({
+      provider: "anthropic",
+      model: "claude-sonnet-4-20250514",
+    });
+    const run = makeRun({
+      provider: "anthropic",
+      model: "claude-sonnet-4-20250514",
+    });
+
+    resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveDefaultModelForAgentMock).toHaveBeenCalledWith({
+      cfg: run.config,
+      agentId: run.agentId,
+    });
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hasSessionModelOverride: false }),
+    );
+  });
+
+  it("returns undefined fallbacksOverride when cfg is falsy", () => {
+    const run = makeRun({ config: undefined } as unknown as Partial<FollowupRun["run"]>);
+
+    const resolved = resolveModelFallbackOptions(run);
+
+    expect(resolved.fallbacksOverride).toBeUndefined();
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
