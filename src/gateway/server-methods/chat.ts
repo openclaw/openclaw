@@ -18,6 +18,7 @@ import {
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "../../utils/directive-tags.js";
 import {
+  GATEWAY_CLIENT_NAMES,
   INTERNAL_MESSAGE_CHANNEL,
   isWebchatClient,
   normalizeMessageChannel,
@@ -891,8 +892,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         typeof sessionScopeParts[1] === "string" &&
         sessionChannelHint === routeChannelCandidate;
       const clientMode = client?.connect?.client?.mode;
+      const clientId = client?.connect?.client?.id;
+      // Only treat actual webchat/control UI clients as webchat for reply routing.
+      // TUI uses UI mode but should get its own replies, not be routed to webchat.
       const isFromWebchatClient =
-        isWebchatClient(client?.connect?.client) || clientMode === GATEWAY_CLIENT_MODES.UI;
+        isWebchatClient(client?.connect?.client) ||
+        (clientMode === GATEWAY_CLIENT_MODES.UI &&
+          (clientId === GATEWAY_CLIENT_NAMES.WEBCHAT_UI ||
+            clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI));
       const configuredMainKey = (cfg.session?.mainKey ?? "main").trim().toLowerCase();
       const isConfiguredMainSessionScope =
         normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
