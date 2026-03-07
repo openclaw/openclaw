@@ -327,6 +327,58 @@ export const buildTelegramMessageContext = async ({
   ) {
     return null;
   }
+
+  // C1: Parallelize independent async operations after access check passes.
+  // Compute all synchronous conditions needed for independent async ops first.
+
+  // sessionKey must be computed before requireMention (used in resolveGroupActivation)
+  const baseSessionKey = route.sessionKey;
+  // DMs: use thread suffix for session isolation (works regardless of dmScope)
+  const threadKeys =
+    dmThreadId != null
+      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
+      : null;
+  const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
+
+  const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
+  const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
+  // hasUserText mirrors the original computation: rawText (expanded links) or locationText
+  // Note: placeholder (sticker/media) does NOT count as user text for preflight purposes
+  const rawTextForPreflight = (msg.text ?? msg.caption ?? "").trim();
+  const locationDataForPreflight = extractTelegramLocation(msg);
+  const hasUserText = Boolean(rawTextForPreflight || locationDataForPreflight);
+  const disableAudioPreflight =
+    firstDefined(
+      topicConfig?.disableAudioPreflight,
+      (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight,
+    ) === true;
+
+  // Compute requireMention after access checks and final route selection.
+  const activationOverride = resolveGroupActivation({
+    chatId,
+    messageThreadId: resolvedThreadId,
+    sessionKey: sessionKey,
+    agentId: route.agentId,
+  });
+  const baseRequireMention = resolveGroupRequireMention(chatId);
+  const requireMention = firstDefined(
+    activationOverride,
+    topicConfig?.requireMention,
+    (groupConfig as TelegramGroupConfig | undefined)?.requireMention,
+    baseRequireMention,
+  );
+
+  // Determine which independent async operations we need
+  const needsStickerVision = msg.sticker;
+  const needsPreflightTranscription =
+    isGroup &&
+    requireMention &&
+    hasAudio &&
+    !hasUserText &&
+    mentionRegexes.length > 0 &&
+    !disableAudioPreflight;
+
+  // Define ensureConfiguredBindingReady (called after command gate)
   const ensureConfiguredBindingReady = async (): Promise<boolean> => {
     if (!configuredBinding) {
       return true;
@@ -353,29 +405,38 @@ export const buildTelegramMessageContext = async ({
     return false;
   };
 
-  const baseSessionKey = route.sessionKey;
-  // DMs: use thread suffix for session isolation (works regardless of dmScope)
-  const threadKeys =
-    dmThreadId != null
-      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
-      : null;
-  const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
-  const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
-  // Compute requireMention after access checks and final route selection.
-  const activationOverride = resolveGroupActivation({
-    chatId,
-    messageThreadId: resolvedThreadId,
-    sessionKey: sessionKey,
-    agentId: route.agentId,
-  });
-  const baseRequireMention = resolveGroupRequireMention(chatId);
-  const requireMention = firstDefined(
-    activationOverride,
-    topicConfig?.requireMention,
-    (groupConfig as TelegramGroupConfig | undefined)?.requireMention,
-    baseRequireMention,
-  );
+  // Run independent async operations in parallel (sticker vision and audio transcription):
+  // Binding check is NOT included - it must run AFTER command gate to avoid unnecessary ACP initialization
+  const [stickerVisionResult, preflightTranscriptResult] = await Promise.all([
+    needsStickerVision ? resolveStickerVisionSupport({ cfg, agentId: route.agentId }) : null,
+    needsPreflightTranscription
+      ? (async () => {
+          try {
+            const tempCtx: MsgContext = {
+              MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
+              MediaTypes:
+                allMedia.length > 0
+                  ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
+                  : undefined,
+            };
+            return await transcribeFirstAudio({
+              ctx: tempCtx,
+              cfg,
+              agentDir: undefined,
+            });
+          } catch (err) {
+            logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
+            return undefined;
+          }
+        })()
+      : null,
+  ]);
 
+  // Extract results
+  const stickerSupportsVision = needsStickerVision ? (stickerVisionResult ?? false) : false;
+  const preflightTranscript = preflightTranscriptResult ?? undefined;
+
+  // Record channel activity after access check passes
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
@@ -406,9 +467,6 @@ export const buildTelegramMessageContext = async ({
 
   // Check if sticker has a cached description - if so, use it instead of sending the image
   const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
-  const stickerSupportsVision = msg.sticker
-    ? await resolveStickerVisionSupport({ cfg, agentId: route.agentId })
-    : false;
   const stickerCacheHit = Boolean(cachedStickerDescription) && !stickerSupportsVision;
   if (stickerCacheHit) {
     // Format cached description with sticker context
@@ -422,7 +480,6 @@ export const buildTelegramMessageContext = async ({
   const locationText = locationData ? formatLocationText(locationData) : undefined;
   const rawTextSource = msg.text ?? msg.caption ?? "";
   const rawText = expandTextLinks(rawTextSource, msg.entities ?? msg.caption_entities).trim();
-  const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
     rawBody = placeholder;
@@ -432,44 +489,6 @@ export const buildTelegramMessageContext = async ({
   }
 
   let bodyText = rawBody;
-  const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
-
-  const disableAudioPreflight =
-    firstDefined(
-      topicConfig?.disableAudioPreflight,
-      (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight,
-    ) === true;
-
-  // Preflight audio transcription for mention detection in groups
-  // This allows voice notes to be checked for mentions before being dropped
-  let preflightTranscript: string | undefined;
-  const needsPreflightTranscription =
-    isGroup &&
-    requireMention &&
-    hasAudio &&
-    !hasUserText &&
-    mentionRegexes.length > 0 &&
-    !disableAudioPreflight;
-
-  if (needsPreflightTranscription) {
-    try {
-      // Build a minimal context for transcription
-      const tempCtx: MsgContext = {
-        MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
-        MediaTypes:
-          allMedia.length > 0
-            ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
-            : undefined,
-      };
-      preflightTranscript = await transcribeFirstAudio({
-        ctx: tempCtx,
-        cfg,
-        agentDir: undefined,
-      });
-    } catch (err) {
-      logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
-    }
-  }
 
   // Replace audio placeholder with transcript when preflight succeeds.
   if (hasAudio && bodyText === "<media:audio>" && preflightTranscript) {
@@ -556,7 +575,10 @@ export const buildTelegramMessageContext = async ({
     }
   }
 
-  if (!(await ensureConfiguredBindingReady())) {
+  // Binding check happens AFTER command and mention gates
+  // This avoids unnecessary ACP session initialization for unauthorized/irrelevant messages
+  const bindingReady = await ensureConfiguredBindingReady();
+  if (!bindingReady) {
     return null;
   }
 
