@@ -139,7 +139,10 @@ export async function resolveConnectAuthState(params: {
   const sharedAuthOk =
     (sharedAuthResult?.ok === true &&
       (sharedAuthResult.method === "token" || sharedAuthResult.method === "password")) ||
-    (authResult.ok && authResult.method === "trusted-proxy");
+    (authResult.ok &&
+      (authResult.method === "trusted-proxy" ||
+        authResult.method === "token" ||
+        authResult.method === "password"));
 
   return {
     authResult,
