@@ -218,7 +218,7 @@ This composes entirely from existing primitives:
 | 2a+ | Hard Identity Gate    | message_sending hook + strengthened before_agent_start for hard gate enforcement | **complete** | 2a      | `.claude/PRPs/plans/completed/auth-gate-railway-rebase.plan.md` |
 | 2b  | Chat API Bearer Token | Extract JWT from `/chat` Bearer header, auto-verify on connect                   | pending      | Layer 1 | -                                                               |
 | 2c  | Memory Write Tagging  | `agent_end` hook tags stored memories with canonical `user_id`                   | pending      | 2a      | -                                                               |
-| 2d  | Integration Tests     | E2E: cross-channel recall, isolation, auth rejection                             | pending      | 2a, 2b  | -                                                               |
+| 2d  | Integration Tests     | E2E: cross-channel recall, isolation, auth rejection                             | complete     | 2a      | `.claude/PRPs/plans/identity-scoped-memory-e2e.plan.md`         |
 
 ### Key Design Decisions (Revised)
 

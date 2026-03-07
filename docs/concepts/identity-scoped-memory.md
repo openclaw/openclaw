@@ -519,6 +519,45 @@ variables in the Railway dashboard:
 - `GETZEP_API_KEY` — Zep Cloud API key (if using managed graph memory)
 - `OPENCLAW_HARD_GATE` — set to `0` to disable hard gate (default: `1`)
 
+## Testing
+
+### E2E Integration Tests
+
+The identity pipeline has a comprehensive E2E test suite that validates the full
+4-plugin chain against a real PostgreSQL database and (optionally) Zep Cloud.
+
+```bash
+# Run with DB only (Zep tests skipped)
+./scripts/test-identity-e2e.sh --setup
+
+# Run with Zep Cloud isolation tests
+GETZEP_API_KEY=z_... ./scripts/test-identity-e2e.sh --setup
+
+# Cleanup test DB after
+./scripts/test-identity-e2e.sh --teardown
+```
+
+The test suite covers 7 groups (~37 test cases):
+
+| Group                     | What it tests                                                                                            |
+| ------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Session key parsing       | `deriveChannel`/`derivePeerId` agree across auth-memory-gate and memory-graphiti for all channel formats |
+| Hard gate flow            | Unregistered → `/register` → `/verify` lifecycle, gate inject + clear                                    |
+| Multi-channel convergence | Same user across WhatsApp + Slack shares `scope_key`; guest user isolated                                |
+| Zep Cloud isolation       | Episodes scoped to `userA` are not visible to `userB`                                                    |
+| messageProvider override  | `messageProvider` takes precedence over session key for channel derivation                               |
+| JWT verification          | Valid/invalid/expired tokens, missing `sub` claim                                                        |
+| Full pipeline agreement   | `resolveScope` and `resolveIdentityScopeKey` produce identical keys for all channels                     |
+
+### Extension-Level Integration Test
+
+Each plugin also has its own test. The auth-memory-gate integration test can run
+standalone against any PostgreSQL database:
+
+```bash
+DATABASE_URL=postgresql://... pnpm vitest run extensions/auth-memory-gate/src/integration.test.ts
+```
+
 ## Plugin Documentation
 
 | Plugin                | Documentation                                                                                                                   |
