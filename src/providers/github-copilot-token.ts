@@ -1,6 +1,10 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+// Internal use; also re-exported below for backward-compat with existing importers.
+import { DEFAULT_COPILOT_API_BASE_URL } from "./github-copilot-constants.js";
+
+export { DEFAULT_COPILOT_API_BASE_URL } from "./github-copilot-constants.js";
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
@@ -51,8 +55,6 @@ function parseCopilotTokenResponse(value: unknown): {
 
   return { token, expiresAt: expiresAtMs };
 }
-
-export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
 
 export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   const trimmed = token.trim();

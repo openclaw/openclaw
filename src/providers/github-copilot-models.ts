@@ -1,7 +1,5 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
-
-const DEFAULT_CONTEXT_WINDOW = 128_000;
-const DEFAULT_MAX_TOKENS = 8192;
+import { buildCopilotModelMetadata } from "./github-copilot-constants.js";
 
 // Copilot model ids vary by plan/org and can change.
 // We keep this list intentionally broad; if a model isn't available Copilot will
@@ -9,6 +7,7 @@ const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_MODEL_IDS = [
   "claude-sonnet-4.6",
   "claude-sonnet-4.5",
+  "gpt-5.4",
   "gpt-4o",
   "gpt-4.1",
   "gpt-4.1-mini",
@@ -34,10 +33,6 @@ export function buildCopilotModelDefinition(modelId: string): ModelDefinitionCon
     // We use OpenAI-compatible responses API, while keeping the provider id as
     // "github-copilot" (pi-ai uses that to attach Copilot-specific headers).
     api: "openai-responses",
-    reasoning: false,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    ...buildCopilotModelMetadata(id),
   };
 }

@@ -2,10 +2,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  DEFAULT_COPILOT_API_BASE_URL,
-  resolveCopilotApiToken,
-} from "../providers/github-copilot-token.js";
+import { DEFAULT_COPILOT_API_BASE_URL } from "../providers/github-copilot-constants.js";
+import { resolveCopilotApiToken } from "../providers/github-copilot-token.js";
 import {
   KILOCODE_BASE_URL,
   KILOCODE_DEFAULT_CONTEXT_WINDOW,

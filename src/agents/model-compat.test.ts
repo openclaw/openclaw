@@ -1,6 +1,11 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
+import {
+  COPILOT_GPT_54_CONTEXT_WINDOW,
+  COPILOT_GPT_54_MAX_TOKENS,
+  DEFAULT_COPILOT_API_BASE_URL,
+} from "../providers/github-copilot-constants.js";
 import { isModernModelRef } from "./live-model-filter.js";
 import { normalizeModelCompat } from "./model-compat.js";
 import { resolveForwardCompatModel } from "./model-forward-compat.js";
@@ -72,10 +77,29 @@ function createOpenAICodexTemplateModel(id: string): Model<Api> {
   } as Model<Api>;
 }
 
+function createGitHubCopilotTemplateModel(id: string): Model<Api> {
+  return {
+    id,
+    name: id,
+    provider: "github-copilot",
+    api: "openai-responses",
+    baseUrl: DEFAULT_COPILOT_API_BASE_URL,
+    input: ["text", "image"],
+    reasoning: true,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 32_768,
+  } as Model<Api>;
+}
+
 function createRegistry(models: Record<string, Model<Api>>): ModelRegistry {
+  const allModels = Object.values(models);
   return {
     find(provider: string, modelId: string) {
       return models[`${provider}/${modelId}`] ?? null;
+    },
+    getAll() {
+      return allModels;
     },
   } as ModelRegistry;
 }
@@ -353,6 +377,69 @@ describe("resolveForwardCompatModel", () => {
     expect(model?.baseUrl).toBe("https://api.openai.com/v1");
     expect(model?.contextWindow).toBe(1_050_000);
     expect(model?.maxTokens).toBe(128_000);
+  });
+
+  it("resolves github-copilot gpt-5.4 via copilot gpt-5 template", () => {
+    const registry = createRegistry({
+      "github-copilot/gpt-5": createGitHubCopilotTemplateModel("gpt-5"),
+    });
+    const model = resolveForwardCompatModel("github-copilot", "gpt-5.4", registry);
+    expectResolvedForwardCompat(model, { provider: "github-copilot", id: "gpt-5.4" });
+    expect(model?.api).toBe("openai-responses");
+    expect(model?.baseUrl).toBe(DEFAULT_COPILOT_API_BASE_URL);
+    expect(model?.reasoning).toBe(true);
+    expect(model?.contextWindow).toBe(COPILOT_GPT_54_CONTEXT_WINDOW);
+    expect(model?.maxTokens).toBe(COPILOT_GPT_54_MAX_TOKENS);
+  });
+
+  it("resolves github-copilot gpt-5.4 without templates using normalized fallback defaults", () => {
+    const registry = createRegistry({});
+
+    const model = resolveForwardCompatModel("github-copilot", "gpt-5.4", registry);
+
+    expectResolvedForwardCompat(model, { provider: "github-copilot", id: "gpt-5.4" });
+    expect(model?.api).toBe("openai-responses");
+    expect(model?.baseUrl).toBe(DEFAULT_COPILOT_API_BASE_URL);
+    expect(model?.input).toEqual(["text", "image"]);
+    expect(model?.reasoning).toBe(true);
+    expect(model?.contextWindow).toBe(COPILOT_GPT_54_CONTEXT_WINDOW);
+    expect(model?.maxTokens).toBe(COPILOT_GPT_54_MAX_TOKENS);
+    expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it("reuses an existing copilot baseUrl in the no-template fallback", () => {
+    const registry = createRegistry({
+      "github-copilot/gpt-4o": {
+        ...createGitHubCopilotTemplateModel("gpt-4o"),
+        baseUrl: "https://copilot-proxy.example.test",
+      },
+    });
+
+    const model = resolveForwardCompatModel("github-copilot", "gpt-5.4", registry);
+
+    expect(model?.baseUrl).toBe("https://copilot-proxy.example.test");
+    expect(model?.contextWindow).toBe(COPILOT_GPT_54_CONTEXT_WINDOW);
+    expect(model?.maxTokens).toBe(COPILOT_GPT_54_MAX_TOKENS);
+  });
+
+  it("reuses registry baseUrl when a copilot template exists without baseUrl", () => {
+    const { baseUrl: _ignoredBaseUrl, ...templateWithoutBaseUrl } =
+      createGitHubCopilotTemplateModel("gpt-5");
+
+    const registry = createRegistry({
+      "github-copilot/gpt-5": templateWithoutBaseUrl as Model<Api>,
+      "github-copilot/gpt-4o": {
+        ...createGitHubCopilotTemplateModel("gpt-4o"),
+        baseUrl: "https://copilot-proxy.example.test",
+      },
+    });
+
+    const model = resolveForwardCompatModel("github-copilot", "gpt-5.4", registry);
+
+    expect(model?.baseUrl).toBe("https://copilot-proxy.example.test");
+    expect(model?.reasoning).toBe(true);
+    expect(model?.contextWindow).toBe(COPILOT_GPT_54_CONTEXT_WINDOW);
+    expect(model?.maxTokens).toBe(COPILOT_GPT_54_MAX_TOKENS);
   });
 
   it("resolves openai-codex gpt-5.4 via codex template fallback", () => {
