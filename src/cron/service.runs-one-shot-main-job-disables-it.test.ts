@@ -192,7 +192,6 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 beforeEach(() => {
   fsState.entries.clear();
   fsState.nowMs = 0;
-  fsState.fixtureCount = 0;
   ensureDir(fixturesRoot);
 });
 
@@ -541,13 +540,13 @@ describe("CronService", () => {
 
     const runPromise = cron.run(job.id, "force");
     // `cron.run()` now persists the running marker before executing the job.
-    // Allow more microtask turns so the post-lock execution can start.
-    for (let i = 0; i < 500; i++) {
+    // Poll through a read op so we wait for the run lock to release and the
+    // post-lock execution path to invoke runHeartbeatOnce.
+    for (let i = 0; i < 200; i++) {
       if (runHeartbeatOnce.mock.calls.length > 0) {
         break;
       }
-      // Let the locked() chain progress.
-      await Promise.resolve();
+      await cron.status();
     }
 
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);

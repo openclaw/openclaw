@@ -300,7 +300,11 @@ async function resolveImagesForRequest(
   for (const url of urls) {
     const source = parseImageUrlToSource(url);
     if (source.type === "base64") {
-      totalBytes += estimateBase64DecodedBytes(source.data);
+      const sourceData = source.data;
+      if (typeof sourceData !== "string" || sourceData.length === 0) {
+        throw new Error("image_url data URI is missing payload data");
+      }
+      totalBytes += estimateBase64DecodedBytes(sourceData);
       if (totalBytes > limits.maxTotalImageBytes) {
         throw new Error(
           `Total image payload too large (${totalBytes}; limit ${limits.maxTotalImageBytes})`,
