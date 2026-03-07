@@ -1,7 +1,7 @@
 """
 Brigade: OpenClaw
 Role: Memory GC (Anchored Iterative Context Compressor v2)
-Model: llama3.2
+Model: gemma3:12b
 
 Replaces naive one-shot summarization with anchored iterative compression:
 - Maintains a persistent summary across invocations
@@ -33,13 +33,13 @@ class MemoryGarbageCollector:
     """
 
     # Compression triggers
-    TOKEN_THRESHOLD = 1200  # Trigger compression above this token count
+    TOKEN_THRESHOLD = 2400  # Trigger compression above this token count (doubled for CUDA 16GB)
     MIN_MESSAGES_TO_COMPRESS = 4  # Don't compress very short histories
-    MAX_SUMMARY_TOKENS = 400  # Target size for compressed summary
+    MAX_SUMMARY_TOKENS = 800  # Target size for compressed summary (expanded for gemma3:12b 128K ctx)
 
     def __init__(self, ollama_url: Optional[str] = None):
         self.ollama_url = ollama_url or os.environ.get("OLLAMA_URL", "http://localhost:11434")
-        self.model = "llama3.2"
+        self.model = "gemma3:12b"
         self._persistent_summary: str = ""
         self._compression_count: int = 0
 
@@ -56,6 +56,9 @@ class MemoryGarbageCollector:
         1. If history is short (< MIN_MESSAGES_TO_COMPRESS non-system msgs) → skip
         2. If estimated tokens < TOKEN_THRESHOLD → skip
         3. Otherwise → compress incrementally and return new history
+        
+        [QMD INTEGRATION]: Note that actual deep retrieval for the .memory-bank
+        will use local hybrid vector search (QMD) instead of standard grep.
         """
         # Separate system prompts from conversation
         system_msgs = []
@@ -134,7 +137,7 @@ class MemoryGarbageCollector:
             "prompt": prompt,
             "stream": False,
             "keep_alive": "30s",
-            "options": {"num_ctx": 2048},
+            "options": {"num_ctx": 4096},
         }
 
         async def _run_inference():

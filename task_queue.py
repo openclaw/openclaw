@@ -4,9 +4,11 @@ from typing import Dict, List, Callable, Tuple
 class ModelTaskQueue:
     """
     Groups LLM inference requests by model name to prevent VRAM thrashing
-    on GPUs with limited memory (e.g., AMD RX 6600 8GB).
+    on GPUs with limited memory (NVIDIA CUDA 16GB).
     It guarantees that if multiple tasks request the same model, they are
     executed sequentially without unloading the model in between.
+    Heavy models (orchestrator-27b, qwen2.5-coder:14b) require forced
+    VRAM unload before switching — handled by PipelineExecutor.
     """
     def __init__(self):
         # model -> list of (future, func, args, kwargs)

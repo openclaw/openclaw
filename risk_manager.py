@@ -13,11 +13,11 @@ class RiskManager:
     """
     Brigade: Dmarket
     Role: Risk Manager
-    Model: deepseek-r1:8b (or similar reasoning model)
+    Model: deepseek-r1:14b (CUDA reasoning model)
     """
     def __init__(self, ollama_url: Optional[str] = None):
         self.ollama_url = ollama_url or os.environ.get("OLLAMA_URL", "http://localhost:11434")
-        self.model = "deepseek-r1:8b"
+        self.model = "deepseek-r1:14b"
 
     async def validate_transaction(self, endpoint: str, payload: dict) -> bool:
         """
@@ -40,7 +40,7 @@ class RiskManager:
             "stream": False,
             "keep_alive": "30s", # Smart flush for batching instead of instant 0
             "options": {
-                "num_ctx": 2048
+                "num_ctx": 4096
             }
         }
 

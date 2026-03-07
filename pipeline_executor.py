@@ -12,35 +12,65 @@ Each step in the chain receives:
 3. Its own system prompt from openclaw_config.json
 
 Uses task_queue.py for VRAM management to prevent model thrashing.
+Integrates .memory-bank architecture and the 90/10 STAR Framework for agent planning.
 """
 
 import asyncio
 import json
 import logging
+import os
 import re
 from typing import Any, Dict, List, Optional
-
+import time
 import aiohttp
+import structlog
+from contextlib import asynccontextmanager
+from task_queue import ModelTaskQueue
 
-logger = logging.getLogger("PipelineExecutor")
+# Injecting MCP Client
+from mcp_client import OpenClawMCPClient
+
+logger = structlog.get_logger(__name__)
+
+
+# Models that require full VRAM (cannot coexist)
+HEAVY_MODELS = {"deepseek-r1:14b", "qwen2.5-coder:14b", "gemma3:12b"}
 
 
 class PipelineExecutor:
     """
     Executes a chain of agent roles sequentially, passing compressed
-    context between each step. Respects the 8GB VRAM constraint by
+    context between each step. Respects the 16GB VRAM constraint by
     loading one model at a time via the ModelTaskQueue.
+    Uses forced VRAM unload (keep_alive=0) when switching between
+    heavy models (e.g. deepseek-r1:14b ~9GB + qwen2.5-coder:14b ~9GB = 18GB > 16GB).
     """
 
     def __init__(self, config: Dict[str, Any], ollama_url: str):
         self.config = config
         self.ollama_url = ollama_url
+        self.gc_model = config.get("memory", {}).get("model", "gemma3:12b")
 
         # Default chain definitions per brigade (can be overridden in config)
         self.default_chains = {
             "Dmarket": ["Planner", "Executor", "Security_Auditor"],
             "OpenClaw": ["Planner"],
         }
+        
+        # Initialize Isolated MCP Clients
+        # Using specific paths: OpenClaw root and Dmarket_bot root
+        workspace_root = os.path.abspath(os.path.dirname(__file__))
+        dmarket_root = os.path.abspath(os.path.join(workspace_root, "..", "Dmarket_bot"))
+        db_path = os.path.join(dmarket_root, "data", "dmarket_history.db")
+        
+        self.openclaw_mcp = OpenClawMCPClient(db_path=None, fs_allowed_dirs=[workspace_root])
+        self.dmarket_mcp = OpenClawMCPClient(db_path=db_path, fs_allowed_dirs=[dmarket_root])
+
+    async def initialize(self):
+        """Initializes internal components like MCP"""
+        await self.openclaw_mcp.initialize()
+        await self.dmarket_mcp.initialize()
+        logger.info("Pipeline MCP clients initialized (Isolated Contexts)")
 
     def get_chain(self, brigade: str) -> List[str]:
         """
@@ -109,6 +139,14 @@ class PipelineExecutor:
             model = role_config.get("model", "llama3.2")
             system_prompt = role_config.get("system_prompt", "You are an AI assistant.")
 
+            # Append memory bank and agentic tooling / planning instructions
+            system_prompt += (
+                "\n\n[AGENT PROTOCOL]"
+                "\n1. Memory Bank: You have access to a .memory-bank directory for project documentation. Maintain context over time by writing your plans and schemas there."
+                "\n2. Tooling: Utilize bash utilities (jq, ripgrep, yq) when inspecting codebases or configs instead of writing heavy Python scripts."
+                "\n3. 90/10 Rule (STAR Framework): Spend 90% of your effort Planning and creating check-lists (e.g., task.md), and only 10% coding. Be deterministic."
+            )
+
             # Build context-aware prompt for this step
             if i == 0:
                 # First step: gets the raw user prompt
@@ -134,8 +172,12 @@ class PipelineExecutor:
 
             logger.info(f"Pipeline step {i + 1}/{len(chain)}: {role_name} ({model})")
 
-            # Execute inference
-            response = await self._call_ollama(model, system_prompt, step_prompt)
+            prev_model = steps_results[-1]["model"] if steps_results else None
+            
+            async with self._vram_protection(model, prev_model):
+                # Execute inference
+                active_mcp = self.openclaw_mcp if brigade == "OpenClaw" else self.dmarket_mcp
+                response = await self._call_ollama(model, system_prompt, step_prompt, role_name, role_config, active_mcp)
 
             steps_results.append(
                 {
@@ -144,6 +186,14 @@ class PipelineExecutor:
                     "response": response,
                 }
             )
+
+            # Git Hygiene: Auto-commit after each successful pipeline execution step
+            try:
+                import subprocess
+                commit_msg = f"Auto-commit [PoW]: Pipeline step {role_name} ({model}) completed"
+                subprocess.run(["git", "commit", "-am", commit_msg], cwd=os.path.dirname(__file__), capture_output=True)
+            except Exception as e:
+                logger.debug(f"Git auto-commit failed: {e}")
 
             # Prepare context briefing for the next step (compressed)
             context_briefing = self._compress_for_next_step(role_name, response)
@@ -159,7 +209,7 @@ class PipelineExecutor:
             "steps": steps_results,
         }
 
-    async def _call_ollama(self, model: str, system_prompt: str, user_prompt: str) -> str:
+    async def _call_ollama(self, model: str, system_prompt: str, user_prompt: str, role_name: str, role_config: Dict[str, Any], mcp_client: OpenClawMCPClient) -> str:
         """
         Calls Ollama API for a single inference step.
         Uses keep_alive=0 to immediately free VRAM for the next step.
@@ -169,20 +219,34 @@ class PipelineExecutor:
         )
 
         # Auto-scaling context window based on input length
-        # 4 chars roughly equals 1 token. Add 512 tokens buffer. Max 8192 for RX 6600.
+        # 4 chars roughly equals 1 token. Add 512 tokens buffer. Max 16384 for NVIDIA CUDA.
         estimated_content_tokens = len(user_prompt + system_prompt) // 4
-        dynamic_ctx = min(8192, max(2048, estimated_content_tokens + 512))
+        dynamic_ctx = min(16384, max(2048, estimated_content_tokens + 512))
 
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        # For specific roles, inject tools
+        model_tools = []
+        if role_name in ("Executor_API", "Executor_Parser", "Executor_Tools", "Latency_Optimizer") and role_config.get("model") == "qwen2.5-coder:14b":
+            model_tools = mcp_client.available_tools_for_ollama
+            if model_tools:
+                logger.debug(f"Injecting {len(model_tools)} tools for role {role_name}")
+                # Ollama tool calling requires tools to be in the payload, not in messages
+                # The messages array will contain tool_calls and tool_results
+        
         payload = {
             "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            "messages": messages,
             "stream": False,
-            "keep_alive": 0,  # Flush VRAM immediately for pipeline chain
+            "keep_alive": 0,  # Flush VRAM immediately for pipeline chain (critical for 16GB)
             "options": {"num_ctx": dynamic_ctx},
         }
+
+        if model_tools:
+            payload["tools"] = model_tools
 
         async def _run_inference():
             async with aiohttp.ClientSession() as session:
@@ -195,10 +259,60 @@ class PipelineExecutor:
                     ) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            text = data["message"]["content"].strip()
-                            # Strip <think>...</think> blocks (DeepSeek-R1)
-                            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-                            return text
+                            
+                            # Handle tool calls if present
+                            if data.get("message") and data["message"].get("tool_calls"):
+                                tool_calls = data["message"]["tool_calls"]
+                                logger.info(f"Model requested tool calls: {tool_calls}")
+                                
+                                tool_results = []
+                                for tool_call in tool_calls:
+                                    function_name = tool_call["function"]["name"]
+                                    function_args = tool_call["function"]["arguments"]
+                                    
+                                    logger.info(f"Executing tool: {function_name} with args: {function_args}")
+                                    
+                                    try:
+                                        result = await mcp_client.call_tool(function_name, **function_args)
+                                        tool_results.append({
+                                            "type": "tool_result",
+                                            "tool_code": tool_call["id"],
+                                            "content": json.dumps(result) # Tool results should be stringified JSON
+                                        })
+                                        logger.info(f"Tool {function_name} executed successfully. Result: {result}")
+                                    except Exception as e:
+                                        error_message = f"Error executing tool {function_name}: {e}"
+                                        tool_results.append({
+                                            "type": "tool_result",
+                                            "tool_code": tool_call["id"],
+                                            "content": json.dumps({"error": error_message})
+                                        })
+                                        logger.error(error_message)
+                                
+                                # Add tool calls and results to messages for the next turn
+                                messages.append(data["message"]) # The model's tool_calls message
+                                messages.extend(tool_results) # The results of the tool calls
+                                
+                                # Re-call Ollama with the updated messages
+                                payload["messages"] = messages
+                                async with session.post(
+                                    f"{self.ollama_url}/api/chat",
+                                    json=payload,
+                                    timeout=timeout,
+                                ) as resp_tool_response:
+                                    if resp_tool_response.status == 200:
+                                        data_tool_response = await resp_tool_response.json()
+                                        text = data_tool_response["message"]["content"].strip()
+                                        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+                                        return text
+                                    else:
+                                        return f"⚠️ API Error after tool call ({resp_tool_response.status})"
+                            else:
+                                # No tool calls, just return the content
+                                text = data["message"]["content"].strip()
+                                # Strip <think>...</think> blocks (DeepSeek-R1)
+                                text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+                                return text
                         else:
                             return f"⚠️ API Error ({resp.status})"
                 except asyncio.TimeoutError:
@@ -209,6 +323,58 @@ class PipelineExecutor:
         from task_queue import model_queue
 
         return await model_queue.enqueue(model, _run_inference)
+
+    async def _force_unload(self, model: str):
+        """
+        Force unload a model from VRAM via Ollama API.
+        Critical for CUDA 16GB when switching between heavy models
+        (deepseek-r1:14b, qwen2.5-coder:14b, gemma3:12b) which cannot coexist in VRAM.
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "model": model,
+                    "prompt": "",
+                    "keep_alive": 0,
+                    "stream": False,
+                }
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with session.post(
+                    f"{self.ollama_url}/api/generate",
+                    json=payload,
+                    timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        logger.info(f"Force unloaded {model} from VRAM")
+                    else:
+                        logger.warning(f"Failed to unload {model}: HTTP {resp.status}")
+        except Exception as e:
+            logger.warning(f"Failed to force unload {model}: {e}")
+
+    @asynccontextmanager
+    async def _vram_protection(self, target_model: str, prev_model: Optional[str]):
+        """Context manager to ensure strict VRAM unloading and logging heavy switches."""
+        switch_start = time.time()
+        
+        # Unload prev model if heavy and different
+        if prev_model and prev_model in HEAVY_MODELS and target_model in HEAVY_MODELS and prev_model != target_model:
+            logger.info(f"[VRAM Guard] Anti-thrash: unloading {prev_model} before loading {target_model}")
+            unload_start = time.time()
+            await self._force_unload(prev_model)
+            unload_duration = time.time() - unload_start
+            if unload_duration > 10:
+                logger.warning(f"⚠️ [VRAM ALERT] Unloading {prev_model} took excessive time: {unload_duration:.2f}s!")
+                
+        try:
+            yield
+        finally:
+            # Enforce unload of the current model
+            if target_model in HEAVY_MODELS:
+                unload_start = time.time()
+                await self._force_unload(target_model)
+                unload_duration = time.time() - unload_start
+                if unload_duration > 10:
+                    logger.warning(f"⚠️ [VRAM ALERT] Final unloading of target {target_model} took >10s ({unload_duration:.2f}s)!")
 
     def _compress_for_next_step(self, role_name: str, response: str) -> str:
         """

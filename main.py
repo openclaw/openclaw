@@ -1,22 +1,21 @@
 import asyncio
 import atexit
+import base64
 import json
 import logging
 import os
 import re
 import subprocess
 import sys
-import base64
 from typing import Optional
 
+import structlog
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message
-
-import structlog
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from prometheus_client import Counter, Gauge, start_http_server
-from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 from archivist_telegram import TelegramArchivist
 from memory_gc import MemoryGarbageCollector
@@ -136,26 +135,63 @@ class OpenClawGateway:
         self.dp.message.register(self.cmd_test, Command("test"))
         self.dp.message.register(self.cmd_test_all_models, Command("test_all_models"))
         self.dp.message.register(self.handle_photo, F.photo)
-        self.dp.message.register(self.handle_prompt)
+        
+        # Заглушка для неизвестных команд
+        self.dp.message.register(self.handle_unknown_command, F.text.startswith('/'))
+        
+        # Перехват только текста, который НЕ является командой
+        self.dp.message.register(self.handle_prompt, F.text & ~F.text.startswith('/'))
+        
+        # Callback query handler for inline buttons
+        self.dp.callback_query.register(self.handle_callback_query)
+
+    async def handle_callback_query(self, callback: CallbackQuery):
+        """Handle inline button presses."""
+        if callback.from_user.id != self.admin_id:
+            await callback.answer("⛔ Access Denied.")
+            return
+            
+        action = callback.data
+        if action == "cmd_status":
+            await self.cmd_status(callback.message, from_callback=True)
+            await callback.answer()
+        elif action == "cmd_models":
+            await self.cmd_models(callback.message, from_callback=True)
+            await callback.answer()
+        elif action == "cmd_test":
+            await callback.answer("Запускаю VRAM тест...")
+            await self.cmd_test(callback.message)
+        else:
+            await callback.answer()
+
+    async def handle_unknown_command(self, message: Message):
+        """Ignore or warn about unknown Telegram menu commands."""
+        if message.from_user.id != self.admin_id:
+            return
+        await message.reply("⚠️ Неизвестная команда. Если это кнопка из меню, убедитесь, что она реализована.")
 
     async def cmd_start(self, message: Message):
         if message.from_user.id != self.admin_id:
             await message.reply("⛔ Access Denied. Locked to Admin.")
             return
+            
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Статус Системы", callback_data="cmd_status")],
+            [InlineKeyboardButton(text="🧠 Список Моделей", callback_data="cmd_models")],
+            [InlineKeyboardButton(text="🔬 VRAM Тест", callback_data="cmd_test")]
+        ])
+            
         await message.reply(
             "🦞 *OpenClaw v2026: Dual-Brigade Online*\n\n"
             f"🛠️ GPU: {self.config['system']['hardware']['target_gpu']}\n"
-            f"🧠 Моделей: 16 уникальных / 20 ролей\n"
+            f"🧠 Триада: deepseek-r1:14b / qwen2.5-coder:14b / gemma3:12b\n"
             f"📡 Ollama: `{self.ollama_url}`\n\n"
-            "*Команды:*\n"
-            "/status — статус системы\n"
-            "/models — список моделей и ролей\n"
-            "/test — запуск VRAM-теста\n\n"
-            "Отправь задачу текстом для роутинга в бригаду.",
+            "Выбери нужный раздел меню ниже или отправь задачу текстом для роутинга в бригаду.",
             parse_mode="Markdown",
+            reply_markup=keyboard
         )
 
-    async def cmd_status(self, message: Message):
+    async def cmd_status(self, message: Message, from_callback: bool = False):
         if message.from_user.id != self.admin_id:
             return
 
@@ -188,7 +224,18 @@ class OpenClawGateway:
             f"🏴 Бригады: Dmarket + OpenClaw ({total_roles} ролей)\n"
             f"🧠 Inference: {self.config['system']['hardware']['inference_engine']}"
         )
-        await message.reply(status_msg, parse_mode="Markdown")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить статус", callback_data="cmd_status")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="cmd_models")] 
+        ])
+
+        if from_callback:
+            try:
+                await message.edit_text(status_msg, parse_mode="Markdown", reply_markup=keyboard)
+            except Exception:
+                pass # Message is not modified
+        else:
+            await message.reply(status_msg, parse_mode="Markdown", reply_markup=keyboard)
 
     async def reload_config(self):
         try:
@@ -204,8 +251,8 @@ class OpenClawGateway:
         # If it was intended to have content, it needs to be provided.
         return []
 
-    async def cmd_models(self, message: Message):
-        if message.from_user.id != self.admin_id:
+    async def cmd_models(self, message: Message, from_callback: bool = False):
+        if message.from_user.id != self.admin_id and not from_callback:
             return
 
         models_msg = "🧠 *Модели по бригадам:*\n\n"
@@ -222,7 +269,17 @@ class OpenClawGateway:
                 all_models.add(data["model"])
         models_msg += f"📊 *Уникальных моделей:* {len(all_models)}"
 
-        await message.reply(models_msg, parse_mode="Markdown")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Статус системы", callback_data="cmd_status")]
+        ])
+
+        if from_callback:
+            try:
+                await message.edit_text(models_msg, parse_mode="Markdown", reply_markup=keyboard)
+            except Exception:
+                pass
+        else:
+            await message.reply(models_msg, parse_mode="Markdown", reply_markup=keyboard)
 
     async def cmd_test(self, message: Message):
         if message.from_user.id != self.admin_id:
@@ -363,7 +420,7 @@ class OpenClawGateway:
     async def classify_intent(self, prompt: str) -> str:
         """
         LLM-based intent classification.
-        Uses a lightweight model (qwen2.5:1.5b) for fast routing.
+        Uses gemma3:12b for fast and accurate routing.
         Falls back to keyword matching if Ollama is unavailable.
         """
         # Check cache first
@@ -410,11 +467,11 @@ class OpenClawGateway:
                 f"Reply with ONLY the brigade name, nothing else."
             )
             payload = {
-                "model": "qwen2.5:1.5b",
+                "model": "gemma3:12b",
                 "prompt": classify_prompt,
                 "stream": False,
                 "keep_alive": 0,
-                "options": {"num_ctx": 512, "temperature": 0.1},
+                "options": {"num_ctx": 1024, "temperature": 0.1},
             }
             async with aiohttp.ClientSession() as session:
                 timeout = aiohttp.ClientTimeout(total=10)
@@ -446,6 +503,20 @@ class OpenClawGateway:
         PROMPT_COUNTER.inc()
         prompt = message.text
         logger.info("received_prompt", prompt=prompt)
+
+        # Session Management: Context Auto-Reset
+        if not hasattr(self, '_session_msg_count'):
+            self._session_msg_count = 0
+        self._session_msg_count += 1
+        
+        reset_limit = self.config.get("system", {}).get("session_management", {}).get("auto_reset_context_messages", 15)
+        if self._session_msg_count >= reset_limit:
+            self._session_msg_count = 0
+            if hasattr(self, 'memory_gc'):
+                self.memory_gc._persistent_summary = ""
+                self.memory_gc._compression_count = 0
+            logger.info("Session context auto-reset triggered (reached max msgs)", limit=reset_limit)
+            await message.reply(f"🔄 **Внимание:** Достигнут лимит сессии ({reset_limit} сообщений). Окно контекста и память очищены для экономии VRAM.", parse_mode="Markdown")
 
         # 1. Intent Classification (LLM-based with keyword fallback)
         brigade = await self.classify_intent(prompt)

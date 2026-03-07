@@ -1,5 +1,6 @@
 # Repository Guidelines
 
+- **[CRITICAL] Proof of Work Doctrine:** Запрещено использовать статусы "Готово" или "Сделано" без предоставления абсолютных путей к измененным файлам, PID запущенных процессов или реальных логов терминала/базы данных (PoW).
 - Repo: https://github.com/openclaw/openclaw
 - In chat replies, file references must be repo-root relative only (example: `extensions/bluebubbles/src/channel.ts:80`); never absolute paths or `~/...`.
 - GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".

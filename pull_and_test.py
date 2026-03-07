@@ -95,7 +95,7 @@ async def test_model_vram(session: aiohttp.ClientSession, ollama_url: str, model
 async def main():
     print("=============================================")
     print(" OpenClaw v2026: Ultimate VRAM Hardware Test")
-    print(" AMD RX 6600 (8GB) — 20 ролей, 16 моделей")
+    print(" NVIDIA CUDA (16GB) — 20 ролей, Триада моделей")
     print("=============================================")
 
     with open('openclaw_config.json', 'r', encoding='utf-8') as f:
@@ -151,7 +151,7 @@ async def main():
             }
 
     # 4. Генерация Диагностической Матрицы
-    matrix_output = "📊 *Диагностическая Матрица VRAM (AMD RX 6600):*\n\n"
+    matrix_output = "📊 *Диагностическая Матрица VRAM (NVIDIA CUDA 16GB):*\n\n"
 
     # Группируем по бригадам
     for brigade in ["Dmarket", "OpenClaw"]:
@@ -169,11 +169,11 @@ async def main():
 
     pass_count = sum(1 for d in test_results.values() if d["status"] == "PASS")
     total_count = len(test_results)
-    matrix_output += f"*Итог:* {pass_count}/{total_count} ролей прошли VRAM тест на 8GB.\n"
+    matrix_output += f"*Итог:* {pass_count}/{total_count} ролей прошли VRAM тест на NVIDIA CUDA 16GB.\n"
     matrix_output += f"*Уникальных моделей:* {len(unique_models)} | *Загружено:* {pulled_count}"
 
     print("\n[*] Отправка матрицы в Telegram...")
-    await archivist.send_summary("Матрица Диагностики (AMD RX 6600)", matrix_output)
+    await archivist.send_summary("Матрица Диагностики (NVIDIA CUDA 16GB)", matrix_output)
     print("[+] Готово! Проверьте Telegram.")
 
 if __name__ == "__main__":
