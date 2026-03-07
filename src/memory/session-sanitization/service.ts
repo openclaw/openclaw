@@ -1724,11 +1724,9 @@ export async function processMcpToolResult(params: {
       mcpHardBlockRuleIds.length > 0);
 
   if (isMcpTwoPassDefinitiveFail) {
-    const blockRuleIds = isMcpAdminUndeclaredSchemaFail
-      ? [...new Set([...mcpPreFilter.allRuleIds, "schema.missing-field"])]
-      : mcpHardBlockRuleIds;
-    await gatedAudit(
-      {
+  const blockRuleIds = isMcpAdminUndeclaredSchemaFail
+    ? mcpPreFilter.allRuleIds
+    : mcpHardBlockRuleIds;
         agentId: params.agentId,
         sessionId: params.sessionId,
         entry: {
