@@ -87,7 +87,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const manuallyStopped = new Set<string>();
   // P2: Tracks pending Discord stagger delays so stopChannel can cancel them.
   // Each entry holds the timer handle and a cancel() fn that settles the promise.
-  const pendingStaggerTimers = new Map<string, { handle: ReturnType<typeof setTimeout>; cancel: () => void }>();
+  const pendingStaggerTimers = new Map<
+    string,
+    { handle: ReturnType<typeof setTimeout>; cancel: () => void }
+  >();
 
   const restartKey = (channelId: ChannelId, accountId: string) => `${channelId}:${accountId}`;
 
@@ -315,7 +318,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       Array.from(knownIds.values()).map(async (id) => {
         const abort = store.aborts.get(id);
         const task = store.tasks.get(id);
-        if (!abort && !task && !pendingStaggerTimers.has(restartKey(channelId, id)) && !plugin?.gateway?.stopAccount) {
+        if (
+          !abort &&
+          !task &&
+          !pendingStaggerTimers.has(restartKey(channelId, id)) &&
+          !plugin?.gateway?.stopAccount
+        ) {
           return;
         }
         const rKeyStop = restartKey(channelId, id);

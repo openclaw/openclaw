@@ -872,7 +872,7 @@ describe("applyExtraParamsToAgent", () => {
         id: "gpt-4o",
         baseUrl: "https://example.openai.azure.com/openai/v1",
         compat: { supportsStore: false },
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(false);
   });
