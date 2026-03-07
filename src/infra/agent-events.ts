@@ -17,6 +17,12 @@ export type AgentRunContext = {
   isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
+  /** RFC-A2A-RESPONSE-ROUTING: Session to receive skill_response */
+  returnTo?: string;
+  /** RFC-A2A-RESPONSE-ROUTING: Correlation ID for response matching */
+  correlationId?: string;
+  /** RFC-A2A-RESPONSE-ROUTING: Timeout in seconds for A2A call */
+  timeout?: number;
 };
 
 // Keep per-run counters so streams stay strictly monotonic per runId.
@@ -33,6 +39,7 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
     runContextById.set(runId, { ...context });
     return;
   }
+  // Update session-level fields
   if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
     existing.sessionKey = context.sessionKey;
   }
@@ -44,6 +51,16 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
+  }
+  // RFC-A2A-RESPONSE-ROUTING: Update A2A routing fields
+  if (context.returnTo && existing.returnTo !== context.returnTo) {
+    existing.returnTo = context.returnTo;
+  }
+  if (context.correlationId && existing.correlationId !== context.correlationId) {
+    existing.correlationId = context.correlationId;
+  }
+  if (context.timeout !== undefined && existing.timeout !== context.timeout) {
+    existing.timeout = context.timeout;
   }
 }
 
@@ -57,6 +74,36 @@ export function clearAgentRunContext(runId: string) {
 
 export function resetAgentRunContextForTest() {
   runContextById.clear();
+}
+
+/**
+ * RFC-A2A-RESPONSE-ROUTING: Extract routing info from skill_invocation message.
+ * Returns { correlationId, returnTo, timeout? } if message is a valid skill_invocation.
+ */
+export function extractSkillInvocationRouting(
+  message: string,
+): { correlationId: string; returnTo: string; timeout?: number } | null {
+  try {
+    const parsed = JSON.parse(message);
+    if (parsed?.kind === "skill_invocation") {
+      const correlationId =
+        typeof parsed.correlationId === "string" && parsed.correlationId.trim()
+          ? parsed.correlationId.trim()
+          : undefined;
+      const returnTo =
+        typeof parsed.returnTo === "string" && parsed.returnTo.trim()
+          ? parsed.returnTo.trim()
+          : undefined;
+      const timeout =
+        typeof parsed.timeout === "number" && parsed.timeout > 0 ? parsed.timeout : undefined;
+      if (correlationId && returnTo) {
+        return { correlationId, returnTo, timeout };
+      }
+    }
+  } catch {
+    // Not JSON or not skill_invocation - return null
+  }
+  return null;
 }
 
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {

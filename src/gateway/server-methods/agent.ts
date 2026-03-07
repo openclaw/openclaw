@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
-import { agentCommandFromIngress } from "../../commands/agent.js";
+import { agentCommand } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
   mergeSessionEntry,
@@ -12,12 +12,15 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { logVerbose } from "../../globals.js";
+import {
+  registerAgentRunContext,
+  extractSkillInvocationRouting,
+} from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
-import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -51,13 +54,6 @@ import {
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
-import {
-  readTerminalSnapshotFromGatewayDedupe,
-  setGatewayDedupeEntry,
-  type AgentWaitTerminalSnapshot,
-  waitForTerminalGatewayDedupe,
-} from "./agent-wait-dedupe.js";
-import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { sessionsHandlers } from "./sessions.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
@@ -66,6 +62,77 @@ const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
+}
+
+/**
+ * Extract confidence from agent response text.
+ * Looks for structured JSON with confidence field, or common patterns.
+ * Returns undefined if no confidence can be extracted.
+ * @internal Exported for testing only
+ */
+export function extractConfidenceFromResponse(text: string): number | undefined {
+  if (!text || typeof text !== "string") {
+    return undefined;
+  }
+
+  // Try to find JSON objects with confidence field
+  // Match patterns like: {"confidence": 0.85} or {"confidence": 0.85, ...}
+  const confidencePatterns = [
+    /"confidence"\s*:\s*([0-9]+\.?[0-9]*)/i,
+    /"confidence"\s*:\s*([0-9]+\.?[0-9]*)\s*[,}]/i,
+  ];
+
+  for (const pattern of confidencePatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const value = parseFloat(match[1]);
+      if (Number.isFinite(value) && value >= 0 && value <= 1) {
+        return value;
+      }
+      // Handle confidence as percentage (e.g., 85 instead of 0.85)
+      if (Number.isFinite(value) && value > 1 && value <= 100) {
+        return value / 100;
+      }
+    }
+  }
+
+  // Try to parse entire text as JSON
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object") {
+      // Check common field names
+      const confidenceFields = ["confidence", "certainty", "probability", "score"];
+      for (const field of confidenceFields) {
+        if (typeof parsed[field] === "number") {
+          const value = parsed[field];
+          if (value >= 0 && value <= 1) {
+            return value;
+          }
+          if (value > 1 && value <= 100) {
+            return value / 100;
+          }
+        }
+      }
+      // Check nested output structure
+      if (parsed.output && typeof parsed.output === "object") {
+        for (const field of confidenceFields) {
+          if (typeof parsed.output[field] === "number") {
+            const value = parsed.output[field];
+            if (value >= 0 && value <= 1) {
+              return value;
+            }
+            if (value > 1 && value <= 100) {
+              return value / 100;
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // Not valid JSON, continue
+  }
+
+  return undefined;
 }
 
 function isGatewayErrorShape(value: unknown): value is { code: string; message: string } {
@@ -207,10 +274,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       internalEvents?: AgentInternalEvent[];
       idempotencyKey: string;
       timeout?: number;
-      bestEffortDeliver?: boolean;
       label?: string;
       spawnedBy?: string;
       inputProvenance?: InputProvenance;
+      bestEffortDeliver?: boolean;
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const cfg = loadConfig();
@@ -232,11 +299,29 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(request.attachments);
+    const normalizedAttachments =
+      request.attachments
+        ?.map((a) => ({
+          type: typeof a?.type === "string" ? a.type : undefined,
+          mimeType: typeof a?.mimeType === "string" ? a.mimeType : undefined,
+          fileName: typeof a?.fileName === "string" ? a.fileName : undefined,
+          content:
+            typeof a?.content === "string"
+              ? a.content
+              : ArrayBuffer.isView(a?.content)
+                ? Buffer.from(
+                    a.content.buffer,
+                    a.content.byteOffset,
+                    a.content.byteLength,
+                  ).toString("base64")
+                : undefined,
+        }))
+        .filter((a) => a.content) ?? [];
+
     const requestedBestEffortDeliver =
       typeof request.bestEffortDeliver === "boolean" ? request.bestEffortDeliver : undefined;
 
-    let message = (request.message ?? "").trim();
+    let message = request.message.trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
     if (normalizedAttachments.length > 0) {
       try {
@@ -250,6 +335,25 @@ export const agentHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
         return;
       }
+    }
+
+    // RFC-A2A-RESPONSE-ROUTING: Parse skill_invocation for A2A response routing.
+    // Extract correlationId, returnTo from skill_invocation messages to route
+    // responses back to the caller session.
+    let skillInvocationCorrelationId: string | undefined;
+    let skillInvocationReturnTo: string | undefined;
+    try {
+      const parsed = JSON.parse(message);
+      if (parsed?.kind === "skill_invocation") {
+        if (typeof parsed.correlationId === "string" && parsed.correlationId.trim()) {
+          skillInvocationCorrelationId = parsed.correlationId.trim();
+        }
+        if (typeof parsed.returnTo === "string" && parsed.returnTo.trim()) {
+          skillInvocationReturnTo = parsed.returnTo.trim();
+        }
+      }
+    } catch {
+      // Not JSON or not skill_invocation - ignore
     }
 
     const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
@@ -420,7 +524,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         providerOverride: entry?.providerOverride,
         label: labelValue,
         spawnedBy: spawnedByValue,
-        spawnDepth: entry?.spawnDepth,
         channel: entry?.channel ?? request.channel?.trim(),
         groupId: resolvedGroupId ?? entry?.groupId,
         groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
@@ -476,7 +579,18 @@ export const agentHandlers: GatewayRequestHandlers = {
           bestEffortDeliver = true;
         }
       }
-      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+      // RFC-A2A-RESPONSE-ROUTING: Extract response routing from skill_invocation
+      const routing = extractSkillInvocationRouting(request.message);
+      if (routing) {
+        registerAgentRunContext(idem, {
+          sessionKey: canonicalSessionKey,
+          returnTo: routing.returnTo,
+          correlationId: routing.correlationId,
+          timeout: routing.timeout,
+        });
+      } else {
+        registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+      }
     }
 
     const runId = idem;
@@ -531,36 +645,17 @@ export const agentHandlers: GatewayRequestHandlers = {
       turnSourceThreadId: explicitThreadId,
     });
 
-    let resolvedChannel = deliveryPlan.resolvedChannel;
-    let deliveryTargetMode = deliveryPlan.deliveryTargetMode;
-    let resolvedAccountId = deliveryPlan.resolvedAccountId;
+    const resolvedChannel = deliveryPlan.resolvedChannel;
+    const deliveryTargetMode = deliveryPlan.deliveryTargetMode;
+    const resolvedAccountId = deliveryPlan.resolvedAccountId;
     let resolvedTo = deliveryPlan.resolvedTo;
-    let effectivePlan = deliveryPlan;
-
-    if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
-      const cfgResolved = cfgForAgent ?? cfg;
-      try {
-        const selection = await resolveMessageChannelSelection({ cfg: cfgResolved });
-        resolvedChannel = selection.channel;
-        deliveryTargetMode = deliveryTargetMode ?? "implicit";
-        effectivePlan = {
-          ...deliveryPlan,
-          resolvedChannel,
-          deliveryTargetMode,
-          resolvedAccountId,
-        };
-      } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
-        return;
-      }
-    }
 
     if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
       const cfgResolved = cfgForAgent ?? cfg;
       const fallback = resolveAgentOutboundTarget({
         cfg: cfgResolved,
-        plan: effectivePlan,
-        targetMode: deliveryTargetMode ?? "implicit",
+        plan: deliveryPlan,
+        targetMode: "implicit",
         validateExplicitTarget: false,
       });
       if (fallback.resolvedTarget?.ok) {
@@ -591,7 +686,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         ? INTERNAL_MESSAGE_CHANNEL
         : resolvedChannel);
 
-    const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
+    const deliver = request.deliver === true && isDeliverableMessageChannel(resolvedChannel);
 
     const accepted = {
       runId,
@@ -599,20 +694,16 @@ export const agentHandlers: GatewayRequestHandlers = {
       acceptedAt: Date.now(),
     };
     // Store an in-flight ack so retries do not spawn a second run.
-    setGatewayDedupeEntry({
-      dedupe: context.dedupe,
-      key: `agent:${idem}`,
-      entry: {
-        ts: Date.now(),
-        ok: true,
-        payload: accepted,
-      },
+    context.dedupe.set(`agent:${idem}`, {
+      ts: Date.now(),
+      ok: true,
+      payload: accepted,
     });
     respond(true, accepted, undefined, { runId });
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
-    void agentCommandFromIngress(
+    void agentCommand(
       {
         message,
         images,
@@ -657,15 +748,52 @@ export const agentHandlers: GatewayRequestHandlers = {
           summary: "completed",
           result,
         };
-        setGatewayDedupeEntry({
-          dedupe: context.dedupe,
-          key: `agent:${idem}`,
-          entry: {
-            ts: Date.now(),
-            ok: true,
-            payload,
-          },
+        context.dedupe.set(`agent:${idem}`, {
+          ts: Date.now(),
+          ok: true,
+          payload,
         });
+
+        // RFC-A2A-RESPONSE-ROUTING: Route response to returnTo session if this was a skill_invocation.
+        // This enables agent_call responses to flow back to the caller session via the gateway
+        // instead of going to a delivery channel.
+        if (skillInvocationReturnTo && skillInvocationCorrelationId) {
+          const payloads = result?.payloads ?? [];
+          const textContent = payloads
+            .map((p: { text?: string }) => p.text)
+            .filter(Boolean)
+            .join("\n");
+          // RFC-A2A-RESPONSE-ROUTING: Extract confidence from response if available
+          const extractedConfidence = extractConfidenceFromResponse(textContent);
+          const skillResponse = {
+            kind: "skill_response",
+            correlationId: skillInvocationCorrelationId,
+            returnToSessionKey: skillInvocationReturnTo,
+            output: textContent || result,
+            confidence: extractedConfidence ?? 0.5, // Default only if not extracted
+            status: "completed" as const,
+            timestamp: Date.now(),
+          };
+          // RFC-A2A-RESPONSE-ROUTING: Track extracted confidence for observability
+          if (extractedConfidence !== undefined) {
+            logVerbose?.(
+              `[A2A] Extracted confidence ${extractedConfidence} for correlationId=${skillInvocationCorrelationId}`,
+            );
+          }
+
+          // Store in the global responses map keyed by correlationId for later retrieval
+          context.skillResponses.set(skillInvocationCorrelationId, skillResponse);
+
+          // Store in session-scoped map for efficient session-level queries
+          const sessionResponses =
+            context.skillResponsesBySession.get(skillInvocationReturnTo) ?? [];
+          sessionResponses.push(skillResponse);
+          context.skillResponsesBySession.set(skillInvocationReturnTo, sessionResponses);
+
+          // Deliver to the returnTo session via gateway node messaging
+          context.nodeSendToSession(skillInvocationReturnTo, "skill_response", skillResponse);
+        }
+
         // Send a second res frame (same id) so TS clients with expectFinal can wait.
         // Swift clients will typically treat the first res as the result and ignore this.
         respond(true, payload, undefined, { runId });
@@ -677,16 +805,37 @@ export const agentHandlers: GatewayRequestHandlers = {
           status: "error" as const,
           summary: String(err),
         };
-        setGatewayDedupeEntry({
-          dedupe: context.dedupe,
-          key: `agent:${idem}`,
-          entry: {
-            ts: Date.now(),
-            ok: false,
-            payload,
-            error,
-          },
+        context.dedupe.set(`agent:${idem}`, {
+          ts: Date.now(),
+          ok: false,
+          payload,
+          error,
         });
+
+        // RFC-A2A-RESPONSE-ROUTING: Route error to returnTo session if this was a skill_invocation.
+        if (skillInvocationReturnTo && skillInvocationCorrelationId) {
+          const skillResponse = {
+            kind: "skill_response",
+            correlationId: skillInvocationCorrelationId,
+            returnToSessionKey: skillInvocationReturnTo,
+            output: undefined,
+            error: String(err),
+            status: "error" as const,
+            timestamp: Date.now(),
+          };
+
+          // Store in the global responses map keyed by correlationId for later retrieval
+          context.skillResponses.set(skillInvocationCorrelationId, skillResponse);
+
+          // Store in session-scoped map for efficient session-level queries
+          const sessionResponses =
+            context.skillResponsesBySession.get(skillInvocationReturnTo) ?? [];
+          sessionResponses.push(skillResponse);
+          context.skillResponsesBySession.set(skillInvocationReturnTo, sessionResponses);
+
+          context.nodeSendToSession(skillInvocationReturnTo, "skill_response", skillResponse);
+        }
+
         respond(false, payload, error, {
           runId,
           error: formatForLog(err),
@@ -710,19 +859,19 @@ export const agentHandlers: GatewayRequestHandlers = {
     const p = params;
     const agentIdRaw = typeof p.agentId === "string" ? p.agentId.trim() : "";
     const sessionKeyRaw = typeof p.sessionKey === "string" ? p.sessionKey.trim() : "";
+    if (sessionKeyRaw && classifySessionKeyShape(sessionKeyRaw) === "malformed_agent") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent.identity.get params: malformed session key "${sessionKeyRaw}"`,
+        ),
+      );
+      return;
+    }
     let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
     if (sessionKeyRaw) {
-      if (classifySessionKeyShape(sessionKeyRaw) === "malformed_agent") {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid agent.identity.get params: malformed session key "${sessionKeyRaw}"`,
-          ),
-        );
-        return;
-      }
       const resolved = resolveAgentIdFromSessionKey(sessionKeyRaw);
       if (agentId && resolved !== agentId) {
         respond(
@@ -747,7 +896,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }) ?? identity.avatar;
     respond(true, { ...identity, avatar: avatarValue }, undefined);
   },
-  "agent.wait": async ({ params, respond, context }) => {
+  "agent.wait": async ({ params, respond }) => {
     if (!validateAgentWaitParams(params)) {
       respond(
         false,
@@ -760,66 +909,16 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const runId = (p.runId ?? "").trim();
+    const runId = p.runId.trim();
     const timeoutMs =
       typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs)
         ? Math.max(0, Math.floor(p.timeoutMs))
         : 30_000;
-    const hasActiveChatRun = context.chatAbortControllers.has(runId);
 
-    const cachedGatewaySnapshot = readTerminalSnapshotFromGatewayDedupe({
-      dedupe: context.dedupe,
-      runId,
-      ignoreAgentTerminalSnapshot: hasActiveChatRun,
-    });
-    if (cachedGatewaySnapshot) {
-      respond(true, {
-        runId,
-        status: cachedGatewaySnapshot.status,
-        startedAt: cachedGatewaySnapshot.startedAt,
-        endedAt: cachedGatewaySnapshot.endedAt,
-        error: cachedGatewaySnapshot.error,
-      });
-      return;
-    }
-
-    const lifecycleAbortController = new AbortController();
-    const dedupeAbortController = new AbortController();
-    const lifecyclePromise = waitForAgentJob({
+    const snapshot = await waitForAgentJob({
       runId,
       timeoutMs,
-      signal: lifecycleAbortController.signal,
-      // When chat.send is active with the same runId, ignore cached lifecycle
-      // snapshots so stale agent results do not preempt the active chat run.
-      ignoreCachedSnapshot: hasActiveChatRun,
     });
-    const dedupePromise = waitForTerminalGatewayDedupe({
-      dedupe: context.dedupe,
-      runId,
-      timeoutMs,
-      signal: dedupeAbortController.signal,
-      ignoreAgentTerminalSnapshot: hasActiveChatRun,
-    });
-
-    const first = await Promise.race([
-      lifecyclePromise.then((snapshot) => ({ source: "lifecycle" as const, snapshot })),
-      dedupePromise.then((snapshot) => ({ source: "dedupe" as const, snapshot })),
-    ]);
-
-    let snapshot: AgentWaitTerminalSnapshot | Awaited<ReturnType<typeof waitForAgentJob>> =
-      first.snapshot;
-    if (snapshot) {
-      if (first.source === "lifecycle") {
-        dedupeAbortController.abort();
-      } else {
-        lifecycleAbortController.abort();
-      }
-    } else {
-      snapshot = first.source === "lifecycle" ? await dedupePromise : await lifecyclePromise;
-      lifecycleAbortController.abort();
-      dedupeAbortController.abort();
-    }
-
     if (!snapshot) {
       respond(true, {
         runId,
