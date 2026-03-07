@@ -1401,6 +1401,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow Signal to write config in response to channel events/commands (default: true).",
   "channels.signal.account":
     "Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.",
+  "channels.signal.actions.editMessage":
+    "Enable/disable editing previously sent messages via the message tool (default: true).",
+  "channels.signal.actions.deleteMessage":
+    "Enable/disable deleting previously sent messages via the message tool (default: true).",
   "channels.imessage.configWrites":
     "Allow iMessage to write config in response to channel events/commands (default: true).",
   "channels.imessage.cliPath":

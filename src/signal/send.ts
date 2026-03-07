@@ -192,6 +192,113 @@ export async function sendMessageSignal(
   };
 }
 
+export async function editMessageSignal(
+  to: string,
+  text: string,
+  editTimestamp: number,
+  opts: SignalSendOpts = {},
+): Promise<SignalSendResult> {
+  if (!Number.isFinite(editTimestamp) || editTimestamp <= 0) {
+    throw new Error("Signal edit requires a valid editTimestamp");
+  }
+  const cfg = loadConfig();
+  const accountInfo = resolveSignalAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
+  const target = parseTarget(to);
+  const targetParams = buildTargetParams(target, {
+    recipient: true,
+    group: true,
+    username: true,
+  });
+  if (!targetParams) {
+    throw new Error("Signal recipient is required");
+  }
+
+  let message = text ?? "";
+  let textStyles: SignalTextStyleRange[] = [];
+  const textMode = opts.textMode ?? "markdown";
+
+  if (message.trim()) {
+    if (textMode === "plain") {
+      textStyles = opts.textStyles ?? [];
+    } else {
+      const tableMode = resolveMarkdownTableMode({
+        cfg,
+        channel: "signal",
+        accountId: accountInfo.accountId,
+      });
+      const formatted = markdownToSignalText(message, { tableMode });
+      message = formatted.text;
+      textStyles = formatted.styles;
+    }
+  }
+
+  if (!message.trim()) {
+    throw new Error("Signal edit requires text");
+  }
+
+  const params: Record<string, unknown> = {
+    message,
+    editTimestamp,
+    ...targetParams,
+  };
+  if (textStyles.length > 0) {
+    params["text-style"] = textStyles.map(
+      (style) => `${style.start}:${style.length}:${style.style}`,
+    );
+  }
+  if (account) {
+    params.account = account;
+  }
+
+  const result = await signalRpcRequest<{ timestamp?: number }>("send", params, {
+    baseUrl,
+    timeoutMs: opts.timeoutMs,
+  });
+  const timestamp = result?.timestamp;
+  return {
+    messageId: timestamp ? String(timestamp) : String(editTimestamp),
+    timestamp,
+  };
+}
+
+export async function deleteMessageSignal(
+  to: string,
+  targetTimestamp: number,
+  opts: SignalRpcOpts = {},
+): Promise<void> {
+  if (!Number.isFinite(targetTimestamp) || targetTimestamp <= 0) {
+    throw new Error("Signal delete requires a valid targetTimestamp");
+  }
+  const accountInfo = resolveSignalAccount({
+    cfg: loadConfig(),
+    accountId: opts.accountId,
+  });
+  const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
+  const targetParams = buildTargetParams(parseTarget(to), {
+    recipient: true,
+    group: true,
+    username: true,
+  });
+  if (!targetParams) {
+    throw new Error("Signal recipient is required");
+  }
+  const params: Record<string, unknown> = {
+    targetTimestamp,
+    ...targetParams,
+  };
+  if (account) {
+    params.account = account;
+  }
+  await signalRpcRequest("remoteDelete", params, {
+    baseUrl,
+    timeoutMs: opts.timeoutMs,
+  });
+}
+
 export async function sendTypingSignal(
   to: string,
   opts: SignalRpcOpts & { stop?: boolean } = {},

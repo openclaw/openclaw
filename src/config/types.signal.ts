@@ -34,6 +34,10 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   actions?: {
     /** Enable/disable sending reactions via message tool (default: true). */
     reactions?: boolean;
+    /** Enable/disable editing previously sent messages via message tool (default: true). */
+    editMessage?: boolean;
+    /** Enable/disable deleting previously sent messages via message tool (default: true). */
+    deleteMessage?: boolean;
   };
   /**
    * Controls agent reaction behavior:

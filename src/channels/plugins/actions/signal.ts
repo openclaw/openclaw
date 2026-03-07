@@ -2,6 +2,7 @@ import { createActionGate, jsonResult, readStringParam } from "../../../agents/t
 import { listEnabledSignalAccounts, resolveSignalAccount } from "../../../signal/accounts.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { sendReactionSignal, removeReactionSignal } from "../../../signal/send-reactions.js";
+import { deleteMessageSignal, editMessageSignal } from "../../../signal/send.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { resolveReactionMessageId } from "./reaction-message-id.js";
 
@@ -21,6 +22,24 @@ function normalizeSignalReactionRecipient(raw: string): string {
     return withoutSignal.slice("uuid:".length).trim();
   }
   return withoutSignal;
+}
+
+function readSignalRecipientParam(params: Record<string, unknown>): string {
+  return (
+    readStringParam(params, "recipient") ??
+    readStringParam(params, "to", {
+      required: true,
+      label: "recipient (phone number, UUID, or group)",
+    })
+  );
+}
+
+function parseSignalMessageTimestamp(raw: string): number {
+  const timestamp = Number.parseInt(raw, 10);
+  if (!Number.isFinite(timestamp)) {
+    throw new Error(`Invalid messageId: ${raw}. Expected numeric timestamp.`);
+  }
+  return timestamp;
 }
 
 function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId?: string } {
@@ -88,10 +107,23 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
     if (reactionsEnabled) {
       actions.add("react");
     }
+    const editEnabled = configuredAccounts.some((account) =>
+      createActionGate(account.config.actions)("editMessage"),
+    );
+    if (editEnabled) {
+      actions.add("edit");
+    }
+    const deleteEnabled = configuredAccounts.some((account) =>
+      createActionGate(account.config.actions)("deleteMessage"),
+    );
+    if (deleteEnabled) {
+      actions.add("delete");
+    }
 
     return Array.from(actions);
   },
-  supportsAction: ({ action }) => action !== "send",
+  supportsAction: ({ action }) =>
+    action === "react" || action === "edit" || action === "delete" || action === "unsend",
 
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     if (action === "send") {
@@ -179,6 +211,44 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         targetAuthor,
         targetAuthorUuid,
       });
+    }
+
+    if (action === "edit") {
+      const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
+      if (!createActionGate(actionConfig)("editMessage")) {
+        throw new Error("Signal edit is disabled via actions.editMessage.");
+      }
+      const recipient = readSignalRecipientParam(params);
+      const messageId = readStringParam(params, "messageId", {
+        required: true,
+        label: "messageId (timestamp)",
+      });
+      const content = readStringParam(params, "message", {
+        required: true,
+        allowEmpty: false,
+      });
+      const timestamp = parseSignalMessageTimestamp(messageId);
+      await editMessageSignal(recipient, content, timestamp, {
+        accountId: accountId ?? undefined,
+      });
+      return jsonResult({ ok: true, edited: true, messageId });
+    }
+
+    if (action === "delete" || action === "unsend") {
+      const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
+      if (!createActionGate(actionConfig)("deleteMessage")) {
+        throw new Error("Signal delete is disabled via actions.deleteMessage.");
+      }
+      const recipient = readSignalRecipientParam(params);
+      const messageId = readStringParam(params, "messageId", {
+        required: true,
+        label: "messageId (timestamp)",
+      });
+      const timestamp = parseSignalMessageTimestamp(messageId);
+      await deleteMessageSignal(recipient, timestamp, {
+        accountId: accountId ?? undefined,
+      });
+      return jsonResult({ ok: true, deleted: true, messageId });
     }
 
     throw new Error(`Action ${action} not supported for ${providerId}.`);

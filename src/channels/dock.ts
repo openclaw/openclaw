@@ -506,6 +506,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     capabilities: {
       chatTypes: ["direct", "group"],
       reactions: true,
+      edit: true,
       media: true,
     },
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,

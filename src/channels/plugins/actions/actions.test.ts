@@ -989,12 +989,12 @@ describe("signalMessageActions", () => {
         cfg: {
           channels: { signal: { account: "+15550001111", actions: { reactions: false } } },
         } as OpenClawConfig,
-        expected: ["send"],
+        expected: ["send", "edit", "delete"],
       },
       {
         name: "account-level reactions enabled",
         cfg: createSignalAccountOverrideCfg(),
-        expected: ["send", "react"],
+        expected: ["send", "react", "edit", "delete"],
       },
     ] as const;
 
