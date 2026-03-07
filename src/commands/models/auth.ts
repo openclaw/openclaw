@@ -206,7 +206,7 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
     return;
   }
 
-  let providerId = provider;
+  let providerId: string = provider;
   if (provider === "custom") {
     const providerInput = await text({
       message: "Provider id",
@@ -218,20 +218,23 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
     providerId = normalizeProviderId(String(providerInput));
   }
 
+  const methodOptions: Array<{
+    value: "setup-token" | "paste";
+    label: string;
+    hint?: string;
+  }> = [];
+  if (providerId === "anthropic") {
+    methodOptions.push({
+      value: "setup-token",
+      label: "setup-token (claude)",
+      hint: "Paste a setup-token from `claude setup-token`",
+    });
+  }
+  methodOptions.push({ value: "paste", label: "paste token" });
+
   const method = await select<"setup-token" | "paste">({
     message: "Token method",
-    options: [
-      ...(providerId === "anthropic"
-        ? [
-            {
-              value: "setup-token",
-              label: "setup-token (claude)",
-              hint: "Paste a setup-token from `claude setup-token`",
-            },
-          ]
-        : []),
-      { value: "paste", label: "paste token" },
-    ],
+    options: methodOptions,
   });
   if (!method) {
     return;

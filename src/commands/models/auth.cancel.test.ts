@@ -65,7 +65,7 @@ describe("models auth cancel handling", () => {
       if (previous) {
         Object.defineProperty(stdin, "isTTY", previous);
       } else {
-        delete stdin.isTTY;
+        delete (stdin as { isTTY?: boolean }).isTTY;
       }
     };
   });
