@@ -18,6 +18,7 @@ import {
   queueSessionSanitizationWrite,
 } from "../../memory/session-sanitization/service.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -43,7 +44,7 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
     if (!Array.isArray(list)) {
       return undefined;
     }
-    return list.map((entry) => String(entry).trim()).filter(Boolean);
+    return normalizeStringEntries(list);
   };
   const channel = normalize(channelFilter);
   const agent = normalize(agentFilter);
