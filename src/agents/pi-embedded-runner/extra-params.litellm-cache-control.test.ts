@@ -104,6 +104,17 @@ describe("extra-params: LiteLLM Anthropic cache_control (refs #37966)", () => {
     expect(payload.messages[0].content).toBe("You are a helpful assistant.");
   });
 
+  it("does NOT inject cache_control when cacheRetention is explicitly 'none'", () => {
+    const payload = {
+      messages: [{ role: "system", content: "You are a helpful assistant." }],
+    };
+
+    // cacheRetention: "none" means the user opted out — must not inject cache_control
+    runLiteLLMPayload(payload, "claude-opus-4-6", "none");
+
+    expect(payload.messages[0].content).toBe("You are a helpful assistant.");
+  });
+
   it("does NOT inject cache_control for non-Anthropic LiteLLM models", () => {
     const payload = {
       messages: [{ role: "system", content: "You are a helpful assistant." }],

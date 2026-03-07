@@ -1190,7 +1190,8 @@ export function applyExtraParamsToAgent(
   // param — payload injection is the correct mechanism here.  Fixes #37966.
   if (provider === "litellm" && isLiteLLMAnthropicModel(modelId)) {
     const hasExplicitCacheRetention =
-      extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
+      (extraParams?.cacheRetention !== undefined && extraParams.cacheRetention !== "none") ||
+      extraParams?.cacheControlTtl !== undefined;
     if (hasExplicitCacheRetention) {
       log.debug(
         `applying system-prompt cache_control for LiteLLM Anthropic model ${provider}/${modelId} (refs #37966)`,
