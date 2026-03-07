@@ -10,6 +10,23 @@ type GatewayProgramArgs = {
 type GatewayRuntimePreference = "auto" | "node" | "bun";
 
 async function resolveCliEntrypointPathForService(): Promise<string> {
+  const argvEntrypoint = await resolveCliEntrypointFromArgvPath();
+
+  const globalEntrypoint = await resolveCliEntrypointFromGlobalBinary();
+  if (globalEntrypoint) {
+    const isSameInstall = await areEntrypointsFromSameInstall(argvEntrypoint, globalEntrypoint);
+    if (isSameInstall) {
+      // Use PATH-discovered symlink when it points at the same install as the
+      // invoking CLI, so service configs stay stable across version updates.
+      return globalEntrypoint;
+    }
+  }
+
+  // Keep the service pinned to the binary that actually ran this command.
+  return argvEntrypoint;
+}
+
+async function resolveCliEntrypointFromArgvPath(): Promise<string> {
   const argv1 = process.argv[1];
   if (!argv1) {
     throw new Error("Unable to resolve CLI entrypoint path");
@@ -51,6 +68,49 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
   throw new Error(
     `Cannot find built CLI at ${distCandidates.join(" or ")}. Run "pnpm build" first, or use dev mode.`,
   );
+}
+
+async function resolveCliEntrypointFromGlobalBinary(): Promise<string | null> {
+  let globalBinaryPath: string;
+  try {
+    globalBinaryPath = await resolveBinaryPath("openclaw");
+  } catch {
+    return null;
+  }
+
+  const normalizedBinaryPath = path.resolve(globalBinaryPath);
+  const resolvedBinaryPath = await resolveRealpathSafe(normalizedBinaryPath);
+  const distCandidates = buildDistCandidates(normalizedBinaryPath, resolvedBinaryPath);
+  for (const candidate of distCandidates) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // keep going
+    }
+  }
+
+  return null;
+}
+
+async function areEntrypointsFromSameInstall(
+  lhsEntrypoint: string,
+  rhsEntrypoint: string,
+): Promise<boolean> {
+  const lhsResolved = await resolveRealpathSafe(lhsEntrypoint);
+  const rhsResolved = await resolveRealpathSafe(rhsEntrypoint);
+  if (lhsResolved === rhsResolved) {
+    return true;
+  }
+
+  const lhsRoot = extractDistRoot(lhsResolved) ?? extractDistRoot(lhsEntrypoint);
+  const rhsRoot = extractDistRoot(rhsResolved) ?? extractDistRoot(rhsEntrypoint);
+  return Boolean(lhsRoot && rhsRoot && lhsRoot === rhsRoot);
+}
+
+function extractDistRoot(inputPath: string): string | null {
+  const match = inputPath.match(/^(.*)[/\\]dist[/\\][^/\\]+$/);
+  return match?.[1] ?? null;
 }
 
 async function resolveRealpathSafe(inputPath: string): Promise<string> {

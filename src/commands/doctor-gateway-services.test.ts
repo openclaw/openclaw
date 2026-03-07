@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
+const fsMocks = vi.hoisted(() => ({
+  realpath: vi.fn(),
+}));
+
 const mocks = vi.hoisted(() => ({
   readCommand: vi.fn(),
   install: vi.fn(),
@@ -15,6 +19,23 @@ const mocks = vi.hoisted(() => ({
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
   note: vi.fn(),
 }));
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual("node:fs/promises");
+  const actualModule = actual as Record<string, unknown>;
+  const actualDefault =
+    typeof actualModule.default === "object" && actualModule.default !== null
+      ? (actualModule.default as Record<string, unknown>)
+      : {};
+  return {
+    ...actualModule,
+    default: {
+      ...actualDefault,
+      realpath: fsMocks.realpath,
+    },
+    realpath: fsMocks.realpath,
+  };
+});
 
 vi.mock("../config/paths.js", () => ({
   resolveGatewayPort: mocks.resolveGatewayPort,
@@ -130,6 +151,7 @@ function setupGatewayTokenRepairScenario(expectedToken: string) {
 describe("maybeRepairGatewayServiceConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fsMocks.realpath.mockImplementation(async (value: string) => value);
   });
 
   it("treats gateway.auth.token as source of truth for service token repairs", async () => {
@@ -159,6 +181,50 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
+  it("does not flag entrypoint mismatch when symlink and realpath match", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/entry.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/openclaw@2026.2.25/node_modules/openclaw/dist/entry.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    fsMocks.realpath.mockImplementation(async (value: string) => {
+      if (value.includes("/global/5/node_modules/openclaw/")) {
+        return value.replace(
+          "/global/5/node_modules/openclaw/",
+          "/global/5/node_modules/.pnpm/openclaw@2026.2.25/node_modules/openclaw/",
+        );
+      }
+      return value;
+    });
+
+    const cfg: OpenClawConfig = { gateway: {} };
+    await runRepair(cfg);
+
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("entrypoint does not match"),
+      "Gateway service config",
+    );
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
   it("uses OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
     await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
       setupGatewayTokenRepairScenario("env-token");
