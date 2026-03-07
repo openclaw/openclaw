@@ -833,6 +833,118 @@ describe("sessions tools", () => {
     expect(sendParams.agentId).toBeUndefined();
   });
 
+  it("sessions_send announce forwards parsed agentId for agent requester keys", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    const requesterKey = "agent:work:discord:group:req";
+    const targetKey = "agent:work:discord:group:target";
+    let sendParams: {
+      to?: string;
+      channel?: string;
+      message?: string;
+      sessionKey?: string;
+      agentId?: string;
+    } = {};
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | {
+              sessionKey?: string;
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+        let reply = "initial";
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+          reply = params.sessionKey === requesterKey ? "pong-1" : "pong-2";
+        }
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          reply = "announce now";
+        }
+        replyByRunId.set(runId, reply);
+        return {
+          runId,
+          status: "accepted",
+          acceptedAt: 3000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        const params = request.params as
+          | {
+              to?: string;
+              channel?: string;
+              message?: string;
+              sessionKey?: string;
+              agentId?: string;
+            }
+          | undefined;
+        sendParams = {
+          to: params?.to,
+          channel: params?.channel,
+          message: params?.message,
+          sessionKey: params?.sessionKey,
+          agentId: params?.agentId,
+        };
+        return { messageId: "m-agent-key" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call8", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect(waited.details).toMatchObject({
+      status: "ok",
+      reply: "initial",
+    });
+    await vi.waitFor(
+      () => {
+        expect(calls.filter((call) => call.method === "send")).toHaveLength(1);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+    expect(sendParams).toMatchObject({
+      to: "channel:target",
+      channel: "discord",
+      message: "announce now",
+      sessionKey: requesterKey,
+      agentId: "work",
+    });
+  });
+
   it("subagents lists active and recent runs", async () => {
     resetSubagentRegistryForTests();
     const now = Date.now();
