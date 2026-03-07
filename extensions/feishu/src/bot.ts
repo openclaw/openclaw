@@ -29,6 +29,7 @@ import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+import { normalizeFeishuTarget } from "./targets.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
@@ -216,6 +217,35 @@ export type FeishuBotAddedEvent = {
   external: boolean;
   operator_tenant_key?: string;
 };
+
+function resolvePinnedFeishuMainDmOwner(params: {
+  dmScope?: string | null;
+  allowFrom?: Array<string | number> | null;
+}): string | null {
+  if ((params.dmScope ?? "main") !== "main") {
+    return null;
+  }
+  const rawAllowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : [];
+  if (rawAllowFrom.some((entry) => String(entry).trim() === "*")) {
+    return null;
+  }
+  const normalizedOwners = Array.from(
+    new Set(
+      rawAllowFrom
+        .map((entry) => {
+          const trimmed = String(entry).trim();
+          if (!trimmed) {
+            return "";
+          }
+          const withoutProviderPrefix = trimmed.replace(/^feishu:/i, "");
+          const normalized = normalizeFeishuTarget(withoutProviderPrefix) ?? withoutProviderPrefix;
+          return normalized.trim().toLowerCase();
+        })
+        .filter(Boolean),
+    ),
+  );
+  return normalizedOwners.length === 1 ? normalizedOwners[0] : null;
+}
 
 type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
 
@@ -1516,21 +1546,47 @@ export async function handleFeishuMessage(params: {
       // Keep DM sessions pinned to Feishu so later replies do not reuse a stale
       // route from another channel that last touched the shared session.
       if (!isGroup && route.sessionKey === route.mainSessionKey) {
+        const pinnedMainDmOwner = resolvePinnedFeishuMainDmOwner({
+          dmScope: cfg.session?.dmScope,
+          allowFrom: configAllowFrom,
+        });
+        const normalizedSenderRecipient = (
+          normalizeFeishuTarget(ctx.senderOpenId) ?? ctx.senderOpenId
+        )
+          .trim()
+          .toLowerCase();
         const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
           agentId: route.agentId,
         });
         core.channel.session
-          .updateLastRoute({
+          .recordInboundSession({
             storePath,
-            sessionKey: route.mainSessionKey,
-            deliveryContext: {
+            sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+            ctx: ctxPayload,
+            updateLastRoute: {
+              sessionKey: route.mainSessionKey,
               channel: "feishu",
               to: feishuTo,
               accountId: route.accountId,
+              mainDmOwnerPin:
+                pinnedMainDmOwner && normalizedSenderRecipient
+                  ? {
+                      ownerRecipient: pinnedMainDmOwner,
+                      senderRecipient: normalizedSenderRecipient,
+                      onSkip: ({ ownerRecipient, senderRecipient }) => {
+                        log(
+                          `feishu[${account.accountId}]: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                        );
+                      },
+                    }
+                  : undefined,
+            },
+            onRecordError: (err: unknown) => {
+              log(`feishu[${account.accountId}]: recordInboundSession failed: ${String(err)}`);
             },
           })
           .catch((err: unknown) => {
-            log(`feishu[${account.accountId}]: updateLastRoute failed: ${String(err)}`);
+            log(`feishu[${account.accountId}]: recordInboundSession failed: ${String(err)}`);
           });
       }
 

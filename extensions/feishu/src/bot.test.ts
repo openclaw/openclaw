@@ -19,7 +19,7 @@ const {
   mockCreateFeishuClient,
   mockResolveAgentRoute,
   mockResolveStorePath,
-  mockUpdateLastRoute,
+  mockRecordInboundSession,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: vi.fn(),
@@ -43,7 +43,7 @@ const {
     matchedBy: "default",
   })),
   mockResolveStorePath: vi.fn(() => "/tmp/openclaw-feishu-session-store.json"),
-  mockUpdateLastRoute: vi.fn().mockResolvedValue(undefined),
+  mockRecordInboundSession: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -144,7 +144,7 @@ describe("handleFeishuMessage command authorization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolveStorePath.mockReturnValue("/tmp/openclaw-feishu-session-store.json");
-    mockUpdateLastRoute.mockResolvedValue(undefined);
+    mockRecordInboundSession.mockResolvedValue(undefined);
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
@@ -198,7 +198,7 @@ describe("handleFeishuMessage command authorization", () => {
           },
           session: {
             resolveStorePath: mockResolveStorePath,
-            updateLastRoute: mockUpdateLastRoute,
+            recordInboundSession: mockRecordInboundSession,
           },
         },
         media: {
@@ -1723,7 +1723,11 @@ describe("handleFeishuMessage command authorization", () => {
       channels: {
         feishu: {
           dmPolicy: "open",
+          allowFrom: ["ou-dm-last-route"],
         },
+      },
+      session: {
+        dmScope: "main",
       },
     } as ClawdbotConfig;
 
@@ -1752,14 +1756,91 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockResolveStorePath).toHaveBeenCalledWith(cfg.session?.store, {
       agentId: "main",
     });
-    expect(mockUpdateLastRoute).toHaveBeenCalledWith({
+    expect(mockRecordInboundSession).toHaveBeenCalledWith({
       storePath: "/tmp/openclaw-feishu-session-store.json",
       sessionKey: "agent:main:main",
-      deliveryContext: {
+      ctx: expect.objectContaining({
+        SessionKey: "agent:main:main",
+        AccountId: "default",
+        OriginatingChannel: "feishu",
+        OriginatingTo: "user:ou-dm-last-route",
+      }),
+      updateLastRoute: {
+        sessionKey: "agent:main:main",
         channel: "feishu",
         to: "user:ou-dm-last-route",
         accountId: "default",
+        mainDmOwnerPin: {
+          ownerRecipient: "ou-dm-last-route",
+          senderRecipient: "ou-dm-last-route",
+          onSkip: expect.any(Function),
+        },
       },
+      onRecordError: expect.any(Function),
+    });
+  });
+
+  it("does not let paired Feishu users overwrite a pinned main-session owner route", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["ou-main-owner"],
+        },
+      },
+      session: {
+        dmScope: "main",
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-paired-user" } },
+      message: {
+        message_id: "msg-dm-paired-user",
+        chat_id: "oc-dm-paired-user",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello from paired user" }),
+      },
+    };
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveStorePath).toHaveBeenCalledWith(cfg.session?.store, {
+      agentId: "main",
+    });
+    expect(mockRecordInboundSession).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-feishu-session-store.json",
+      sessionKey: "agent:main:main",
+      ctx: expect.objectContaining({
+        SessionKey: "agent:main:main",
+        AccountId: "default",
+        OriginatingChannel: "feishu",
+        OriginatingTo: "user:ou-paired-user",
+      }),
+      updateLastRoute: {
+        sessionKey: "agent:main:main",
+        channel: "feishu",
+        to: "user:ou-paired-user",
+        accountId: "default",
+        mainDmOwnerPin: {
+          ownerRecipient: "ou-main-owner",
+          senderRecipient: "ou-paired-user",
+          onSkip: expect.any(Function),
+        },
+      },
+      onRecordError: expect.any(Function),
     });
   });
 
