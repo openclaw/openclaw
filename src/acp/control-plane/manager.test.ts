@@ -959,6 +959,82 @@ describe("AcpSessionManager", () => {
     );
   });
 
+  it("preserves legacy store keys when updating runtime options", async () => {
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string; rawSessionKey?: string };
+      if (
+        params.sessionKey !== "agent:helper:desk" ||
+        params.rawSessionKey !== "agent:helper:main"
+      ) {
+        return null;
+      }
+      return {
+        sessionKey: "agent:helper:desk",
+        storeSessionKey: "agent:helper:main",
+        acp: {
+          ...readySessionMeta(),
+          agent: "helper",
+          runtimeSessionName: "legacy-helper-main",
+        },
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        sessionKey?: string;
+        rawSessionKey?: string;
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      if (
+        params.sessionKey !== "agent:helper:desk" ||
+        params.rawSessionKey !== "agent:helper:main"
+      ) {
+        throw new Error("expected runtime option writes to preserve the legacy helper alias");
+      }
+      return {
+        sessionId: "session-helper-main",
+        updatedAt: Date.now(),
+        acp:
+          params.mutate(
+            {
+              ...readySessionMeta(),
+              agent: "helper",
+              runtimeSessionName: "legacy-helper-main",
+            },
+            {
+              acp: {
+                ...readySessionMeta(),
+                agent: "helper",
+                runtimeSessionName: "legacy-helper-main",
+              },
+            },
+          ) ?? undefined,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    const cfg = {
+      ...baseCfg,
+      session: { mainKey: "desk" },
+      agents: { list: [{ id: "main", default: true }, { id: "helper" }] },
+    } as OpenClawConfig;
+
+    await manager.updateSessionRuntimeOptions({
+      cfg,
+      sessionKey: "agent:helper:main",
+      patch: { cwd: "/tmp/helper" },
+    });
+
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rawSessionKey: "agent:helper:main",
+        sessionKey: "agent:helper:desk",
+      }),
+    );
+  });
+
   it("reapplies persisted controls on next turn after runtime option updates", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({

@@ -603,6 +603,7 @@ export class AcpSessionManager {
       await this.persistRuntimeOptions({
         cfg: params.cfg,
         sessionKey,
+        storeSessionKey: resolution.storeSessionKey,
         options: nextOptions,
       });
       return nextOptions;
