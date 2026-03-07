@@ -21,6 +21,11 @@ import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { auditGatewayServiceConfig } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import {
+  readGatewayPasswordEnv,
+  readGatewayTokenEnv,
+  trimToUndefined,
+} from "../../gateway/credentials.js";
 import { resolveGatewayBindHost } from "../../gateway/net.js";
 import {
   formatPortDiagnostics,
@@ -106,24 +111,6 @@ function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: bool
   return true;
 }
 
-function trimToUndefined(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function readGatewayTokenEnv(env: Record<string, string | undefined>): string | undefined {
-  return trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN) ?? trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
-}
-
-function readGatewayPasswordEnv(env: Record<string, string | undefined>): string | undefined {
-  return (
-    trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD) ?? trimToUndefined(env.CLAWDBOT_GATEWAY_PASSWORD)
-  );
-}
-
 async function resolveDaemonProbeToken(params: {
   daemonCfg: OpenClawConfig;
   mergedDaemonEnv: Record<string, string | undefined>;
@@ -134,7 +121,7 @@ async function resolveDaemonProbeToken(params: {
   if (explicitToken) {
     return explicitToken;
   }
-  const envToken = readGatewayTokenEnv(params.mergedDaemonEnv);
+  const envToken = readGatewayTokenEnv(params.mergedDaemonEnv as NodeJS.ProcessEnv);
   if (envToken) {
     return envToken;
   }
@@ -154,7 +141,7 @@ async function resolveDaemonProbeToken(params: {
   if (authMode !== "token") {
     const passwordCandidate =
       trimToUndefined(params.explicitPassword) ||
-      readGatewayPasswordEnv(params.mergedDaemonEnv) ||
+      readGatewayPasswordEnv(params.mergedDaemonEnv as NodeJS.ProcessEnv) ||
       (hasConfiguredSecretInput(params.daemonCfg.gateway?.auth?.password, defaults)
         ? "__configured__"
         : undefined);
@@ -183,7 +170,7 @@ async function resolveDaemonProbePassword(params: {
   if (explicitPassword) {
     return explicitPassword;
   }
-  const envPassword = readGatewayPasswordEnv(params.mergedDaemonEnv);
+  const envPassword = readGatewayPasswordEnv(params.mergedDaemonEnv as NodeJS.ProcessEnv);
   if (envPassword) {
     return envPassword;
   }
@@ -203,7 +190,7 @@ async function resolveDaemonProbePassword(params: {
   if (authMode !== "password") {
     const tokenCandidate =
       trimToUndefined(params.explicitToken) ||
-      readGatewayTokenEnv(params.mergedDaemonEnv) ||
+      readGatewayTokenEnv(params.mergedDaemonEnv as NodeJS.ProcessEnv) ||
       (hasConfiguredSecretInput(params.daemonCfg.gateway?.auth?.token, defaults)
         ? "__configured__"
         : undefined);

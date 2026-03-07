@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import qrcode from "qrcode-terminal";
 import { loadConfig } from "../config/config.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
+import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../gateway/credentials.js";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
@@ -38,32 +39,6 @@ function readDevicePairPublicUrlFromConfig(cfg: ReturnType<typeof loadConfig>): 
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function readGatewayTokenEnv(env: NodeJS.ProcessEnv): string | undefined {
-  const primary = typeof env.OPENCLAW_GATEWAY_TOKEN === "string" ? env.OPENCLAW_GATEWAY_TOKEN : "";
-  if (primary.trim().length > 0) {
-    return primary.trim();
-  }
-  const legacy = typeof env.CLAWDBOT_GATEWAY_TOKEN === "string" ? env.CLAWDBOT_GATEWAY_TOKEN : "";
-  if (legacy.trim().length > 0) {
-    return legacy.trim();
-  }
-  return undefined;
-}
-
-function readGatewayPasswordEnv(env: NodeJS.ProcessEnv): string | undefined {
-  const primary =
-    typeof env.OPENCLAW_GATEWAY_PASSWORD === "string" ? env.OPENCLAW_GATEWAY_PASSWORD : "";
-  if (primary.trim().length > 0) {
-    return primary.trim();
-  }
-  const legacy =
-    typeof env.CLAWDBOT_GATEWAY_PASSWORD === "string" ? env.CLAWDBOT_GATEWAY_PASSWORD : "";
-  if (legacy.trim().length > 0) {
-    return legacy.trim();
-  }
-  return undefined;
 }
 
 function shouldResolveLocalGatewayPasswordSecret(

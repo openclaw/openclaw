@@ -10,6 +10,11 @@ import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveSecretRefValues } from "../secrets/resolve.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "./auth-mode-policy.js";
 import { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  hasGatewayPasswordEnvCandidate,
+  hasGatewayTokenEnvCandidate,
+  readGatewayTokenEnv,
+} from "./credentials.js";
 
 export function mergeGatewayAuthConfig(
   base?: GatewayAuthConfig,
@@ -97,8 +102,7 @@ function hasGatewayTokenCandidate(params: {
   env: NodeJS.ProcessEnv;
   authOverride?: GatewayAuthConfig;
 }): boolean {
-  const envToken =
-    params.env.OPENCLAW_GATEWAY_TOKEN?.trim() || params.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+  const envToken = readGatewayTokenEnv(params.env);
   if (envToken) {
     return true;
   }
@@ -115,14 +119,6 @@ function hasGatewayTokenOverrideCandidate(params: { authOverride?: GatewayAuthCo
   return Boolean(
     typeof params.authOverride?.token === "string" && params.authOverride.token.trim().length > 0,
   );
-}
-
-function hasGatewayTokenEnvCandidate(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim());
-}
-
-function hasGatewayPasswordEnvCandidate(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim());
 }
 
 function hasGatewayPasswordOverrideCandidate(params: {
