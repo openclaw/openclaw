@@ -4,6 +4,7 @@ import { execSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "../ui/src/i18n/lib/registry.ts";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
 type PackFile = { path: string };
@@ -12,6 +13,7 @@ type PackResult = { files?: PackFile[] };
 const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
+  "dist/control-ui/index.html",
   "dist/plugin-sdk/index.js",
   "dist/plugin-sdk/index.d.ts",
   "dist/plugin-sdk/core.js",
@@ -317,6 +319,22 @@ function checkPluginSdkExports() {
   }
 }
 
+export function collectMissingControlUiLocaleChunkErrors(
+  paths: Iterable<string>,
+  supportedLocales: readonly string[] = SUPPORTED_LOCALES,
+): string[] {
+  const packPaths = Array.from(paths);
+  return supportedLocales
+    .filter((locale) => locale !== DEFAULT_LOCALE)
+    .flatMap((locale) => {
+      const prefix = `dist/control-ui/assets/${locale}-`;
+      const hasChunk = packPaths.some((path) => path.startsWith(prefix) && path.endsWith(".js"));
+      return hasChunk
+        ? []
+        : [`control-ui locale '${locale}' is missing its lazy chunk in npm pack.`];
+    });
+}
+
 function main() {
   checkPluginVersions();
   checkAppcastSparkleVersions();
@@ -337,8 +355,9 @@ function main() {
   const forbidden = [...paths].filter((path) =>
     forbiddenPrefixes.some((prefix) => path.startsWith(prefix)),
   );
+  const missingControlUiLocaleChunks = collectMissingControlUiLocaleChunkErrors(paths);
 
-  if (missing.length > 0 || forbidden.length > 0) {
+  if (missing.length > 0 || forbidden.length > 0 || missingControlUiLocaleChunks.length > 0) {
     if (missing.length > 0) {
       console.error("release-check: missing files in npm pack:");
       for (const path of missing) {
@@ -349,6 +368,12 @@ function main() {
       console.error("release-check: forbidden files in npm pack:");
       for (const path of forbidden) {
         console.error(`  - ${path}`);
+      }
+    }
+    if (missingControlUiLocaleChunks.length > 0) {
+      console.error("release-check: missing control-ui locale chunks in npm pack:");
+      for (const error of missingControlUiLocaleChunks) {
+        console.error(`  - ${error}`);
       }
     }
     process.exit(1);
