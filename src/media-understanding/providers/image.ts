@@ -2,6 +2,7 @@ import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { complete } from "@mariozechner/pi-ai";
 import { minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
 import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
@@ -22,7 +23,17 @@ export async function describeImageWithModel(
   const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
-  const model = modelRegistry.find(params.provider, params.model) as Model<Api> | null;
+  // modelRegistry.find() uses strict equality on provider name, but callers
+  // may pass a normalized (lowercased) provider ID (e.g. "claudeproxy") while
+  // the registry stores the original casing from models.json (e.g. "claudeProxy").
+  // Fall back to case-insensitive matching via getAll() when strict find fails.
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const model = (modelRegistry.find(params.provider, params.model) ??
+    modelRegistry
+      .getAll()
+      .find(
+        (m) => normalizeProviderId(m.provider) === normalizedProvider && m.id === params.model,
+      )) as Model<Api> | null;
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.model}`);
   }
