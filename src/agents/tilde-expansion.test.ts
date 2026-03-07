@@ -1,6 +1,6 @@
 import os from "node:os";
 import { describe, it, expect } from "vitest";
-import { normalizeToolParams } from "./pi-tools.read.js";
+import { normalizeToolParams } from "./pi-tools.params.js";
 
 describe("normalizeToolParams tilde expansion", () => {
   it("expands ~ in path parameter", () => {
