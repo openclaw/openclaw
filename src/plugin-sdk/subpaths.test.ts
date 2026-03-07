@@ -14,8 +14,22 @@ import { describe, expect, it } from "vitest";
 const require = createRequire(import.meta.url);
 
 async function loadBundledSubpath(specifier: string) {
-  const resolved = require.resolve(specifier);
-  return import(pathToFileURL(resolved).href);
+  try {
+    const resolved = require.resolve(specifier);
+    return import(pathToFileURL(resolved).href);
+  } catch (error) {
+    // Unit tests run from source without a built dist tree.
+    // Fall back to Vite-resolved source modules in that environment.
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      typeof error.code === "string" &&
+      error.code === "MODULE_NOT_FOUND"
+    ) {
+      return import(specifier);
+    }
+    throw error;
+  }
 }
 
 const bundledExtensionSubpathLoaders = [
