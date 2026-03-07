@@ -12,6 +12,7 @@ export {
 } from "../channels/plugins/channel-config.js";
 export {
   deleteAccountFromConfigSection,
+  clearAccountEntryFields,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
@@ -89,4 +90,9 @@ export {
   formatTextWithAttachmentLinks,
   resolveOutboundMediaUrls,
 } from "./reply-payload.js";
+export { dispatchInboundReplyWithBase } from "./inbound-reply-dispatch.js";
 export { createLoggerBackedRuntime } from "./runtime.js";
+export {
+  buildBaseChannelStatusSummary,
+  buildRuntimeAccountStatusSnapshot,
+} from "./status-helpers.js";

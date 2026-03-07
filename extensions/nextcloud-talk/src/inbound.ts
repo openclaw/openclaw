@@ -1,8 +1,7 @@
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createScopedPairingAccess,
-  createNormalizedOutboundDeliverer,
-  createReplyPrefixOptions,
+  dispatchInboundReplyWithBase,
   formatTextWithAttachmentLinks,
   logInboundDrop,
   readStoreAllowFromForDmPolicy,
@@ -291,43 +290,30 @@ export async function handleNextcloudTalkInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  await core.channel.session.recordInboundSession({
+  await dispatchInboundReplyWithBase({
+    cfg: config as OpenClawConfig,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+    route,
     storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-    ctx: ctxPayload,
+    ctxPayload,
+    core,
+    deliver: async (payload) => {
+      await deliverNextcloudTalkReply({
+        payload,
+        roomToken,
+        accountId: account.accountId,
+        statusSink,
+      });
+    },
     onRecordError: (err) => {
       runtime.error?.(`nextcloud-talk: failed updating session meta: ${String(err)}`);
     },
-  });
-
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-    cfg: config as OpenClawConfig,
-    agentId: route.agentId,
-    channel: CHANNEL_ID,
-    accountId: account.accountId,
-  });
-  const deliverReply = createNormalizedOutboundDeliverer(async (payload) => {
-    await deliverNextcloudTalkReply({
-      payload,
-      roomToken,
-      accountId: account.accountId,
-      statusSink,
-    });
-  });
-
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
-    cfg: config as OpenClawConfig,
-    dispatcherOptions: {
-      ...prefixOptions,
-      deliver: deliverReply,
-      onError: (err, info) => {
-        runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
-      },
+    onDispatchError: (err, info) => {
+      runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
     },
     replyOptions: {
       skillFilter: roomConfig?.skills,
-      onModelSelected,
       disableBlockStreaming:
         typeof account.config.blockStreaming === "boolean"
           ? !account.config.blockStreaming
