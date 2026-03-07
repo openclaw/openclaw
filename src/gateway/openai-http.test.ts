@@ -591,6 +591,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(usage?.prompt_tokens).toBe(42);
         expect(usage?.completion_tokens).toBe(17);
         expect(usage?.total_tokens).toBe(59);
+        expect((usage as Record<string, unknown>)?.prompt_tokens_details).toBeUndefined();
       }
 
       // usage includes cache tokens in total
@@ -607,6 +608,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(usage?.prompt_tokens).toBe(10);
         expect(usage?.completion_tokens).toBe(5);
         expect(usage?.total_tokens).toBe(38);
+        expect((usage as Record<string, unknown>)?.prompt_tokens_details).toEqual({
+          cached_tokens: 20,
+        });
       }
 
       // usage respects precomputed total from agentMeta
