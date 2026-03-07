@@ -485,6 +485,8 @@ function broadcastChatFinal(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
   runId: string;
   sessionKey: string;
+  /** Raw key for node fanout — node subscriptions use exact key matching. */
+  rawSessionKey?: string;
   message?: Record<string, unknown>;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
@@ -499,7 +501,9 @@ function broadcastChatFinal(params: {
     message: stripInlineDirectiveTagsFromMessageForDisplay(strippedEnvelopeMessage),
   };
   params.context.broadcast("chat", payload);
-  params.context.nodeSendToSession(params.sessionKey, "chat", payload);
+  // Use raw key for node routing — nodes subscribe with exact key text,
+  // not the canonical form.
+  params.context.nodeSendToSession(params.rawSessionKey ?? params.sessionKey, "chat", payload);
   params.context.agentRunSeq.delete(params.runId);
 }
 
@@ -507,6 +511,8 @@ function broadcastChatError(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
   runId: string;
   sessionKey: string;
+  /** Raw key for node fanout — node subscriptions use exact key matching. */
+  rawSessionKey?: string;
   errorMessage?: string;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
@@ -518,7 +524,7 @@ function broadcastChatError(params: {
     errorMessage: params.errorMessage,
   };
   params.context.broadcast("chat", payload);
-  params.context.nodeSendToSession(params.sessionKey, "chat", payload);
+  params.context.nodeSendToSession(params.rawSessionKey ?? params.sessionKey, "chat", payload);
   params.context.agentRunSeq.delete(params.runId);
 }
 
@@ -962,6 +968,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               context,
               runId: clientRunId,
               sessionKey,
+              rawSessionKey,
               message,
             });
           }
@@ -987,6 +994,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             context,
             runId: clientRunId,
             sessionKey,
+            rawSessionKey,
             errorMessage: String(err),
           });
         })
