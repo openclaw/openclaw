@@ -3,6 +3,10 @@ export type ChannelHealthSnapshot = {
   connected?: boolean;
   enabled?: boolean;
   configured?: boolean;
+  restartPending?: boolean;
+  busy?: boolean;
+  activeRuns?: number;
+  lastRunActivityAt?: number | null;
   lastEventAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;
@@ -12,6 +16,8 @@ export type ChannelHealthEvaluationReason =
   | "healthy"
   | "unmanaged"
   | "not-running"
+  | "busy"
+  | "stuck"
   | "startup-connect-grace"
   | "disconnected"
   | "stale-socket";
@@ -33,6 +39,12 @@ function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
   return snapshot.enabled !== false && snapshot.configured !== false;
 }
 
+const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
+// Keep these shared between the background health monitor and on-demand readiness
+// probes so both surfaces evaluate channel lifecycle windows consistently.
+export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
+export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
+
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
   policy: ChannelHealthPolicy,
@@ -42,6 +54,39 @@ export function evaluateChannelHealth(
   }
   if (!snapshot.running) {
     return { healthy: false, reason: "not-running" };
+  }
+  const activeRuns =
+    typeof snapshot.activeRuns === "number" && Number.isFinite(snapshot.activeRuns)
+      ? Math.max(0, Math.trunc(snapshot.activeRuns))
+      : 0;
+  const isBusy = snapshot.busy === true || activeRuns > 0;
+  const lastStartAt =
+    typeof snapshot.lastStartAt === "number" && Number.isFinite(snapshot.lastStartAt)
+      ? snapshot.lastStartAt
+      : null;
+  const lastRunActivityAt =
+    typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
+      ? snapshot.lastRunActivityAt
+      : null;
+  const busyStateInitializedForLifecycle =
+    lastStartAt == null || (lastRunActivityAt != null && lastRunActivityAt >= lastStartAt);
+
+  // Runtime snapshots are patch-merged, so a restarted lifecycle can temporarily
+  // inherit stale busy fields from the previous instance. Ignore busy short-circuit
+  // until run activity is known to belong to the current lifecycle.
+  if (isBusy) {
+    if (!busyStateInitializedForLifecycle) {
+      // Fall through to normal startup/disconnect checks below.
+    } else {
+      const runActivityAge =
+        lastRunActivityAt == null
+          ? Number.POSITIVE_INFINITY
+          : Math.max(0, policy.now - lastRunActivityAt);
+      if (runActivityAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
+        return { healthy: true, reason: "busy" };
+      }
+      return { healthy: false, reason: "stuck" };
+    }
   }
   if (snapshot.lastStartAt != null) {
     const upDuration = policy.now - snapshot.lastStartAt;

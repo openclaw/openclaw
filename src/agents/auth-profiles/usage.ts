@@ -9,6 +9,7 @@ const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "billing",
   "format",
   "model_not_found",
+  "overloaded",
   "timeout",
   "rate_limit",
   "unknown",
@@ -35,9 +36,13 @@ export function resolveProfileUnusableUntil(
 }
 
 /**
- * Check if a profile is currently in cooldown (due to rate limiting or errors).
+ * Check if a profile is currently in cooldown (due to rate limits, overload, or other transient failures).
  */
-export function isProfileInCooldown(store: AuthProfileStore, profileId: string): boolean {
+export function isProfileInCooldown(
+  store: AuthProfileStore,
+  profileId: string,
+  now?: number,
+): boolean {
   if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
     return false;
   }
@@ -46,7 +51,8 @@ export function isProfileInCooldown(store: AuthProfileStore, profileId: string):
     return false;
   }
   const unusableUntil = resolveProfileUnusableUntil(stats);
-  return unusableUntil ? Date.now() < unusableUntil : false;
+  const ts = now ?? Date.now();
+  return unusableUntil ? ts < unusableUntil : false;
 }
 
 function isActiveUnusableWindow(until: number | undefined, now: number): boolean {
@@ -503,7 +509,7 @@ export async function markAuthProfileFailure(params: {
 }
 
 /**
- * Mark a profile as failed/rate-limited. Applies exponential backoff cooldown.
+ * Mark a profile as transiently failed. Applies exponential backoff cooldown.
  * Cooldown times: 1min, 5min, 25min, max 1 hour.
  * Uses store lock to avoid overwriting concurrent usage updates.
  */

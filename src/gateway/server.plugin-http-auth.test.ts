@@ -17,6 +17,7 @@ import {
   withGatewayServer,
   withGatewayTempConfig,
 } from "./server-http.test-harness.js";
+import { withTempConfig } from "./test-temp-config.js";
 
 type PluginRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
@@ -216,6 +217,93 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("allows unauthenticated Mattermost slash callback routes while keeping other channel routes protected", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (pathname === "/api/channels/mattermost/command") {
+        res.statusCode = 200;
+        res.end("ok:mm-callback");
+        return true;
+      }
+      if (pathname === "/api/channels/nostr/default/profile") {
+        res.statusCode = 200;
+        res.end("ok:nostr");
+        return true;
+      }
+      return false;
+    });
+
+    await withTempConfig({
+      cfg: {
+        gateway: { trustedProxies: [] },
+        channels: {
+          mattermost: {
+            commands: { callbackPath: "/api/channels/mattermost/command" },
+          },
+        },
+      },
+      prefix: "openclaw-plugin-http-auth-mm-callback-",
+      run: async () => {
+        const server = createTestGatewayServer({
+          resolvedAuth: AUTH_TOKEN,
+          overrides: { handlePluginRequest },
+        });
+
+        const slashCallback = await sendRequest(server, {
+          path: "/api/channels/mattermost/command",
+          method: "POST",
+        });
+        expect(slashCallback.res.statusCode).toBe(200);
+        expect(slashCallback.getBody()).toBe("ok:mm-callback");
+
+        const otherChannelUnauthed = await sendRequest(server, {
+          path: "/api/channels/nostr/default/profile",
+        });
+        expect(otherChannelUnauthed.res.statusCode).toBe(401);
+        expect(otherChannelUnauthed.getBody()).toContain("Unauthorized");
+      },
+    });
+  });
+
+  test("does not bypass auth when mattermost callbackPath points to non-mattermost channel routes", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (pathname === "/api/channels/nostr/default/profile") {
+        res.statusCode = 200;
+        res.end("ok:nostr");
+        return true;
+      }
+      return false;
+    });
+
+    await withTempConfig({
+      cfg: {
+        gateway: { trustedProxies: [] },
+        channels: {
+          mattermost: {
+            commands: { callbackPath: "/api/channels/nostr/default/profile" },
+          },
+        },
+      },
+      prefix: "openclaw-plugin-http-auth-mm-misconfig-",
+      run: async () => {
+        const server = createTestGatewayServer({
+          resolvedAuth: AUTH_TOKEN,
+          overrides: { handlePluginRequest },
+        });
+
+        const unauthenticated = await sendRequest(server, {
+          path: "/api/channels/nostr/default/profile",
+          method: "POST",
+        });
+
+        expect(unauthenticated.res.statusCode).toBe(401);
+        expect(unauthenticated.getBody()).toContain("Unauthorized");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
   test("keeps wildcard plugin handlers ungated when auth enforcement predicate excludes their paths", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
@@ -402,6 +490,58 @@ describe("gateway plugin HTTP auth boundary", () => {
         expect(handlePluginRequest).toHaveBeenCalledTimes(1);
         expect(response.res.statusCode).toBe(503);
         expect(response.getBody()).toContain("Control UI assets not found");
+      },
+    });
+  });
+
+  test("root-mounted control ui does not swallow gateway probe routes", async () => {
+    const handlePluginRequest = vi.fn(async () => false);
+
+    await withRootMountedControlUiServer({
+      prefix: "openclaw-plugin-http-control-ui-probes-test-",
+      handlePluginRequest,
+      run: async (server) => {
+        const probeCases = [
+          { path: "/health", status: "live" },
+          { path: "/healthz", status: "live" },
+          { path: "/ready", status: "ready" },
+          { path: "/readyz", status: "ready" },
+        ] as const;
+
+        for (const probeCase of probeCases) {
+          const response = await sendRequest(server, { path: probeCase.path });
+          expect(response.res.statusCode, probeCase.path).toBe(200);
+          expect(response.getBody(), probeCase.path).toBe(
+            JSON.stringify({ ok: true, status: probeCase.status }),
+          );
+        }
+
+        expect(handlePluginRequest).toHaveBeenCalledTimes(probeCases.length);
+      },
+    });
+  });
+
+  test("root-mounted control ui still lets plugins claim probe paths first", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (pathname !== "/healthz") {
+        return false;
+      }
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ ok: true, route: "plugin-health" }));
+      return true;
+    });
+
+    await withRootMountedControlUiServer({
+      prefix: "openclaw-plugin-http-control-ui-probe-shadow-test-",
+      handlePluginRequest,
+      run: async (server) => {
+        const response = await sendRequest(server, { path: "/healthz" });
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe(JSON.stringify({ ok: true, route: "plugin-health" }));
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
       },
     });
   });
