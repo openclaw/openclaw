@@ -300,6 +300,7 @@ Docs: https://docs.openclaw.ai
 - Agents/model fallback visibility: warn when configured model IDs cannot be resolved and fallback is applied, with log-safe sanitization of model text to prevent control-sequence injection in warning output. (#39215) Thanks @ademczuk.
 - Outbound delivery replay safety: use two-phase delivery ACK markers (`.json` -> `.delivered` -> unlink) and startup marker cleanup so crash windows between send and cleanup do not replay already-delivered messages. (#38668) Thanks @Gundam98.
 - Nodes/system.run approval binding: carry prepared approval plans through gateway forwarding and bind interpreter-style script operands across approval to execution, so post-approval script rewrites are denied while unchanged approved script runs keep working. Thanks @tdjackey for reporting.
+- Nodes/system.run PowerShell wrapper parsing: treat `pwsh`/`powershell` `-EncodedCommand` forms as shell-wrapper payloads so allowlist mode still requires approval instead of falling back to plain argv analysis. Thanks @tdjackey for reporting.
 
 ## 2026.3.2
 
