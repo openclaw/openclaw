@@ -8,7 +8,9 @@ export type SentMessageCache = {
   has: (scope: string, lookup: SentMessageLookup) => boolean;
 };
 
-const SENT_MESSAGE_TEXT_TTL_MS = 5000;
+// Keep the text fallback short so repeated user replies like "ok" are not
+// suppressed for long; delayed reflections should match the stronger message-id key.
+const SENT_MESSAGE_TEXT_TTL_MS = 5_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
 function normalizeEchoTextKey(text: string | undefined): string | null {

@@ -16,7 +16,7 @@ export type GatewayCredentialPrecedence = "env-first" | "config-first";
 export type GatewayRemoteCredentialPrecedence = "remote-first" | "env-first";
 export type GatewayRemoteCredentialFallback = "remote-env-local" | "remote-only";
 
-const GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE = "GATEWAY_SECRET_REF_UNAVAILABLE";
+const GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE = "GATEWAY_SECRET_REF_UNAVAILABLE"; // pragma: allowlist secret
 
 export class GatewaySecretRefUnavailableError extends Error {
   readonly code = GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE;
@@ -119,7 +119,7 @@ export function resolveGatewayCredentialsFromValues(params: {
       ? firstDefined([configToken, envToken])
       : firstDefined([envToken, configToken]);
   const password =
-    passwordPrecedence === "config-first"
+    passwordPrecedence === "config-first" // pragma: allowlist secret
       ? firstDefined([configPassword, envPassword])
       : firstDefined([envPassword, configPassword]);
 
@@ -158,7 +158,7 @@ export function resolveGatewayCredentialsFromConfig(params: {
       env,
       includeLegacyEnv,
       tokenPrecedence: "env-first",
-      passwordPrecedence: "env-first",
+      passwordPrecedence: "env-first", // pragma: allowlist secret
     });
   }
 
@@ -243,9 +243,9 @@ export function resolveGatewayCredentialsFromConfig(params: {
         ? firstDefined([envToken, remoteToken, localToken])
         : firstDefined([remoteToken, envToken, localToken]);
   const password =
-    remotePasswordFallback === "remote-only"
+    remotePasswordFallback === "remote-only" // pragma: allowlist secret
       ? remotePassword
-      : remotePasswordPrecedence === "env-first"
+      : remotePasswordPrecedence === "env-first" // pragma: allowlist secret
         ? firstDefined([envPassword, remotePassword, localPassword])
         : firstDefined([remotePassword, envPassword, localPassword]);
 
@@ -255,7 +255,7 @@ export function resolveGatewayCredentialsFromConfig(params: {
   const localTokenFallbackEnabled = remoteTokenFallback !== "remote-only";
   const localTokenFallback = remoteTokenFallback === "remote-only" ? undefined : localToken;
   const localPasswordFallback =
-    remotePasswordFallback === "remote-only" ? undefined : localPassword;
+    remotePasswordFallback === "remote-only" ? undefined : localPassword; // pragma: allowlist secret
   if (remoteTokenRef && !token && !envToken && !localTokenFallback && !password) {
     throwUnresolvedGatewaySecretInput("gateway.remote.token");
   }
