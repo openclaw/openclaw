@@ -3,13 +3,25 @@ import {
   ensureControlUiAllowedOriginsForNonLoopbackBind,
   type GatewayNonLoopbackBindMode,
 } from "../config/gateway-control-ui-origins.js";
+import type { GatewayBindMode } from "../config/types.gateway.js";
 
 export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
   config: OpenClawConfig;
   writeConfig: (config: OpenClawConfig) => Promise<void>;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
+  /** CLI --bind override; merged into config before checking origins. */
+  bind?: string;
 }): Promise<OpenClawConfig> {
-  const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(params.config);
+  // Merge CLI bind override so --bind lan (without config-file entry) is
+  // recognised before the first resolveGatewayRuntimeConfig call.
+  const configForSeed =
+    params.bind && !params.config.gateway?.bind
+      ? {
+          ...params.config,
+          gateway: { ...params.config.gateway, bind: params.bind as GatewayBindMode },
+        }
+      : params.config;
+  const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(configForSeed);
   if (!seeded.seededOrigins || !seeded.bind) {
     return params.config;
   }
