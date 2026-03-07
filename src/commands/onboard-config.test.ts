@@ -7,6 +7,10 @@ import {
 } from "./onboard-config.js";
 
 describe("applyOnboardingLocalWorkspaceConfig", () => {
+  it("defaults local onboarding tool profile to coding", () => {
+    expect(ONBOARDING_DEFAULT_TOOLS_PROFILE).toBe("coding");
+  });
+
   it("sets secure dmScope default when unset", () => {
     const baseConfig: OpenClawConfig = {};
     const result = applyOnboardingLocalWorkspaceConfig(baseConfig, "/tmp/workspace");
