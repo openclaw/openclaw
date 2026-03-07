@@ -25,12 +25,13 @@ export type DiscordMessagePreflightContext = {
   token: string;
   runtime: RuntimeEnv;
   botUserId?: string;
+  abortSignal?: AbortSignal;
   guildHistories: Map<string, HistoryEntry[]>;
   historyLimit: number;
   mediaMaxBytes: number;
   textLimit: number;
   replyToMode: ReplyToMode;
-  ackReactionScope: "all" | "direct" | "group-all" | "group-mentions";
+  ackReactionScope: "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
   groupPolicy: "open" | "disabled" | "allowlist";
 
   data: DiscordMessageEvent;
@@ -95,6 +96,7 @@ export type DiscordMessagePreflightParams = {
   token: string;
   runtime: RuntimeEnv;
   botUserId?: string;
+  abortSignal?: AbortSignal;
   guildHistories: Map<string, HistoryEntry[]>;
   historyLimit: number;
   mediaMaxBytes: number;

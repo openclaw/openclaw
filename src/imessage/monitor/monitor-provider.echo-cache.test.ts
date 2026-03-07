@@ -35,7 +35,8 @@ describe("iMessage sent-message echo cache", () => {
     const cache = createSentMessageCache();
 
     cache.remember("acct:imessage:+1555", { text: "hello", messageId: "m-1" });
-    vi.advanceTimersByTime(6000);
+    // Text fallback stays short to avoid suppressing legitimate repeated user text.
+    vi.advanceTimersByTime(6_000);
 
     expect(cache.has("acct:imessage:+1555", { text: "hello" })).toBe(false);
     expect(cache.has("acct:imessage:+1555", { messageId: "m-1" })).toBe(true);

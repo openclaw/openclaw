@@ -1,6 +1,6 @@
-import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/bluebubbles";
 
-export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/bluebubbles";
 
 export type BlueBubblesGroupConfig = {
   /** If true, only respond in this group when mentioned. */
@@ -75,6 +75,8 @@ export type BlueBubblesActionConfig = {
 export type BlueBubblesConfig = {
   /** Optional per-account BlueBubbles configuration (multi-account). */
   accounts?: Record<string, BlueBubblesAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: BlueBubblesActionConfig;
 } & BlueBubblesAccountConfig;

@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SecretInput } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
@@ -8,6 +9,7 @@ import {
   createMistralEmbeddingProvider,
   type MistralEmbeddingClient,
 } from "./embeddings-mistral.js";
+import { createOllamaEmbeddingProvider, type OllamaEmbeddingClient } from "./embeddings-ollama.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
@@ -25,6 +27,7 @@ export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
+export type { OllamaEmbeddingClient } from "./embeddings-ollama.js";
 
 export type EmbeddingProvider = {
   id: string;
@@ -34,10 +37,13 @@ export type EmbeddingProvider = {
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral";
+export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
+// Remote providers considered for auto-selection when provider === "auto".
+// Ollama is intentionally excluded here so that "auto" mode does not
+// implicitly assume a local Ollama instance is available.
 const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
 
 export type EmbeddingProviderResult = {
@@ -50,6 +56,7 @@ export type EmbeddingProviderResult = {
   gemini?: GeminiEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
   mistral?: MistralEmbeddingClient;
+  ollama?: OllamaEmbeddingClient;
 };
 
 export type EmbeddingProviderOptions = {
@@ -58,7 +65,7 @@ export type EmbeddingProviderOptions = {
   provider: EmbeddingProviderRequest;
   remote?: {
     baseUrl?: string;
-    apiKey?: string;
+    apiKey?: SecretInput;
     headers?: Record<string, string>;
   };
   model: string;
@@ -105,19 +112,34 @@ async function createLocalEmbeddingProvider(
   let llama: Llama | null = null;
   let embeddingModel: LlamaModel | null = null;
   let embeddingContext: LlamaEmbeddingContext | null = null;
+  let initPromise: Promise<LlamaEmbeddingContext> | null = null;
 
-  const ensureContext = async () => {
-    if (!llama) {
-      llama = await getLlama({ logLevel: LlamaLogLevel.error });
+  const ensureContext = async (): Promise<LlamaEmbeddingContext> => {
+    if (embeddingContext) {
+      return embeddingContext;
     }
-    if (!embeddingModel) {
-      const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
-      embeddingModel = await llama.loadModel({ modelPath: resolved });
+    if (initPromise) {
+      return initPromise;
     }
-    if (!embeddingContext) {
-      embeddingContext = await embeddingModel.createEmbeddingContext();
-    }
-    return embeddingContext;
+    initPromise = (async () => {
+      try {
+        if (!llama) {
+          llama = await getLlama({ logLevel: LlamaLogLevel.error });
+        }
+        if (!embeddingModel) {
+          const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
+          embeddingModel = await llama.loadModel({ modelPath: resolved });
+        }
+        if (!embeddingContext) {
+          embeddingContext = await embeddingModel.createEmbeddingContext();
+        }
+        return embeddingContext;
+      } catch (err) {
+        initPromise = null;
+        throw err;
+      }
+    })();
+    return initPromise;
   };
 
   return {
@@ -151,6 +173,10 @@ export async function createEmbeddingProvider(
     if (id === "local") {
       const provider = await createLocalEmbeddingProvider(options);
       return { provider };
+    }
+    if (id === "ollama") {
+      const { provider, client } = await createOllamaEmbeddingProvider(options);
+      return { provider, ollama: client };
     }
     if (id === "gemini") {
       const { provider, client } = await createGeminiEmbeddingProvider(options);

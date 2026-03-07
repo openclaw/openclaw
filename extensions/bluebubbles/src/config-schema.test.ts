@@ -5,7 +5,19 @@ describe("BlueBubblesConfigSchema", () => {
   it("accepts account config when serverUrl and password are both set", () => {
     const parsed = BlueBubblesConfigSchema.safeParse({
       serverUrl: "http://localhost:1234",
-      password: "secret",
+      password: "secret", // pragma: allowlist secret
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts SecretRef password when serverUrl is set", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      serverUrl: "http://localhost:1234",
+      password: {
+        source: "env",
+        provider: "default",
+        id: "BLUEBUBBLES_PASSWORD",
+      },
     });
     expect(parsed.success).toBe(true);
   });

@@ -1,6 +1,15 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import path from "node:path";
+import type {
+  WindowsSpawnProgram,
+  WindowsSpawnProgramCandidate,
+  WindowsSpawnResolution,
+} from "openclaw/plugin-sdk/acpx";
+import {
+  applyWindowsSpawnProgramPolicy,
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgramCandidate,
+} from "openclaw/plugin-sdk/acpx";
 
 export type SpawnExit = {
   code: number | null;
@@ -12,54 +21,140 @@ type ResolvedSpawnCommand = {
   command: string;
   args: string[];
   shell?: boolean;
+  windowsHide?: boolean;
 };
 
-function resolveSpawnCommand(params: { command: string; args: string[] }): ResolvedSpawnCommand {
-  if (process.platform !== "win32") {
-    return { command: params.command, args: params.args };
-  }
+type SpawnRuntime = {
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+};
 
-  const extension = path.extname(params.command).toLowerCase();
-  if (extension === ".js" || extension === ".cjs" || extension === ".mjs") {
-    return {
-      command: process.execPath,
-      args: [params.command, ...params.args],
-    };
-  }
+export type SpawnCommandCache = {
+  key?: string;
+  candidate?: WindowsSpawnProgramCandidate;
+};
 
-  if (extension === ".cmd" || extension === ".bat") {
-    return {
+export type SpawnResolution = WindowsSpawnResolution | "unresolved-wrapper";
+export type SpawnResolutionEvent = {
+  command: string;
+  cacheHit: boolean;
+  strictWindowsCmdWrapper: boolean;
+  resolution: SpawnResolution;
+};
+
+export type SpawnCommandOptions = {
+  strictWindowsCmdWrapper?: boolean;
+  cache?: SpawnCommandCache;
+  onResolved?: (event: SpawnResolutionEvent) => void;
+};
+
+const DEFAULT_RUNTIME: SpawnRuntime = {
+  platform: process.platform,
+  env: process.env,
+  execPath: process.execPath,
+};
+
+export function resolveSpawnCommand(
+  params: { command: string; args: string[] },
+  options?: SpawnCommandOptions,
+  runtime: SpawnRuntime = DEFAULT_RUNTIME,
+): ResolvedSpawnCommand {
+  const strictWindowsCmdWrapper = options?.strictWindowsCmdWrapper === true;
+  const cacheKey = params.command;
+  const cachedProgram = options?.cache;
+
+  const cacheHit = cachedProgram?.key === cacheKey && cachedProgram.candidate != null;
+  let candidate =
+    cachedProgram?.key === cacheKey && cachedProgram.candidate
+      ? cachedProgram.candidate
+      : undefined;
+  if (!candidate) {
+    candidate = resolveWindowsSpawnProgramCandidate({
       command: params.command,
-      args: params.args,
-      shell: true,
-    };
+      platform: runtime.platform,
+      env: runtime.env,
+      execPath: runtime.execPath,
+      packageName: "acpx",
+    });
+    if (cachedProgram) {
+      cachedProgram.key = cacheKey;
+      cachedProgram.candidate = candidate;
+    }
   }
 
-  return {
+  let program: WindowsSpawnProgram;
+  try {
+    program = applyWindowsSpawnProgramPolicy({
+      candidate,
+      allowShellFallback: !strictWindowsCmdWrapper,
+    });
+  } catch (error) {
+    options?.onResolved?.({
+      command: params.command,
+      cacheHit,
+      strictWindowsCmdWrapper,
+      resolution: candidate.resolution,
+    });
+    throw error;
+  }
+
+  const resolved = materializeWindowsSpawnProgram(program, params.args);
+  options?.onResolved?.({
     command: params.command,
-    args: params.args,
+    cacheHit,
+    strictWindowsCmdWrapper,
+    resolution: resolved.resolution,
+  });
+  return {
+    command: resolved.command,
+    args: resolved.argv,
+    shell: resolved.shell,
+    windowsHide: resolved.windowsHide,
   };
 }
 
-export function spawnWithResolvedCommand(params: {
-  command: string;
-  args: string[];
-  cwd: string;
-}): ChildProcessWithoutNullStreams {
-  const resolved = resolveSpawnCommand({
-    command: params.command,
-    args: params.args,
-  });
+function createAbortError(): Error {
+  const error = new Error("Operation aborted.");
+  error.name = "AbortError";
+  return error;
+}
+
+export function spawnWithResolvedCommand(
+  params: {
+    command: string;
+    args: string[];
+    cwd: string;
+  },
+  options?: SpawnCommandOptions,
+): ChildProcessWithoutNullStreams {
+  const resolved = resolveSpawnCommand(
+    {
+      command: params.command,
+      args: params.args,
+    },
+    options,
+  );
 
   return spawn(resolved.command, resolved.args, {
     cwd: params.cwd,
-    env: process.env,
+    env: { ...process.env, OPENCLAW_SHELL: "acp" },
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
+    windowsHide: resolved.windowsHide,
   });
 }
 
 export async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<SpawnExit> {
+  // Handle callers that start waiting after the child has already exited.
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return {
+      code: child.exitCode,
+      signal: child.signalCode,
+      error: null,
+    };
+  }
+
   return await new Promise<SpawnExit>((resolve) => {
     let settled = false;
     const finish = (result: SpawnExit) => {
@@ -80,17 +175,31 @@ export async function waitForExit(child: ChildProcessWithoutNullStreams): Promis
   });
 }
 
-export async function spawnAndCollect(params: {
-  command: string;
-  args: string[];
-  cwd: string;
-}): Promise<{
+export async function spawnAndCollect(
+  params: {
+    command: string;
+    args: string[];
+    cwd: string;
+  },
+  options?: SpawnCommandOptions,
+  runtime?: {
+    signal?: AbortSignal;
+  },
+): Promise<{
   stdout: string;
   stderr: string;
   code: number | null;
   error: Error | null;
 }> {
-  const child = spawnWithResolvedCommand(params);
+  if (runtime?.signal?.aborted) {
+    return {
+      stdout: "",
+      stderr: "",
+      code: null,
+      error: createAbortError(),
+    };
+  }
+  const child = spawnWithResolvedCommand(params, options);
   child.stdin.end();
 
   let stdout = "";
@@ -102,13 +211,43 @@ export async function spawnAndCollect(params: {
     stderr += String(chunk);
   });
 
-  const exit = await waitForExit(child);
-  return {
-    stdout,
-    stderr,
-    code: exit.code,
-    error: exit.error,
+  let abortKillTimer: NodeJS.Timeout | undefined;
+  let aborted = false;
+  const onAbort = () => {
+    aborted = true;
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Ignore kill races when child already exited.
+    }
+    abortKillTimer = setTimeout(() => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return;
+      }
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // Ignore kill races when child already exited.
+      }
+    }, 250);
+    abortKillTimer.unref?.();
   };
+  runtime?.signal?.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    const exit = await waitForExit(child);
+    return {
+      stdout,
+      stderr,
+      code: exit.code,
+      error: aborted ? createAbortError() : exit.error,
+    };
+  } finally {
+    runtime?.signal?.removeEventListener("abort", onAbort);
+    if (abortKillTimer) {
+      clearTimeout(abortKillTimer);
+    }
+  }
 }
 
 export function resolveSpawnFailure(

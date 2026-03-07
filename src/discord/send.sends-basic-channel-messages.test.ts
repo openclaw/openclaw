@@ -1,5 +1,10 @@
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadWebMedia } from "../web/media.js";
+import {
+  __resetDiscordDirectoryCacheForTest,
+  rememberDiscordDirectoryUser,
+} from "./directory-cache.js";
 import {
   deleteMessageDiscord,
   editMessageDiscord,
@@ -62,6 +67,7 @@ describe("sendMessageDiscord", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetDiscordDirectoryCacheForTest();
   });
 
   it("sends basic channel messages", async () => {
@@ -80,6 +86,29 @@ describe("sendMessageDiscord", () => {
     expect(postMock).toHaveBeenCalledWith(
       Routes.channelMessages("789"),
       expect.objectContaining({ body: { content: "hello world" } }),
+    );
+  });
+
+  it("rewrites cached @username mentions to id-based mentions", async () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789012345678",
+      handles: ["Alice"],
+    });
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({
+      id: "msg1",
+      channel_id: "789",
+    });
+    await sendMessageDiscord("channel:789", "ping @Alice", {
+      rest,
+      token: "t",
+      accountId: "default",
+    });
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.channelMessages("789"),
+      expect.objectContaining({ body: { content: "ping <@123456789012345678>" } }),
     );
   });
 
@@ -236,6 +265,33 @@ describe("sendMessageDiscord", () => {
           files: [expect.objectContaining({ name: "photo.jpg" })],
         }),
       }),
+    );
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "file:///tmp/photo.jpg",
+      expect.objectContaining({ maxBytes: 8 * 1024 * 1024 }),
+    );
+  });
+
+  it("uses configured discord mediaMaxMb for uploads", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
+
+    await sendMessageDiscord("channel:789", "photo", {
+      rest,
+      token: "t",
+      mediaUrl: "file:///tmp/photo.jpg",
+      cfg: {
+        channels: {
+          discord: {
+            mediaMaxMb: 32,
+          },
+        },
+      },
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "file:///tmp/photo.jpg",
+      expect.objectContaining({ maxBytes: 32 * 1024 * 1024 }),
     );
   });
 
