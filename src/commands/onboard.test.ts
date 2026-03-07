@@ -47,7 +47,7 @@ describe("onboardCommand", () => {
 
     await onboardCommand(
       {
-        secretInputMode: "invalid" as never,
+        secretInputMode: "invalid" as never, // pragma: allowlist secret
       },
       runtime,
     );
