@@ -352,6 +352,14 @@ export function applyTheme(name: string, tui?: TUI): boolean {
   selectListTheme.scrollInfo = (text) => fg(palette.dim)(text);
   selectListTheme.noMatch = (text) => fg(palette.dim)(text);
 
+  // Rebuild filterableSelectListTheme
+  filterableSelectListTheme.selectedPrefix = (text) => fg(palette.accent)(text);
+  filterableSelectListTheme.selectedText = (text) => chalk.bold(fg(palette.accent)(text));
+  filterableSelectListTheme.description = (text) => fg(palette.dim)(text);
+  filterableSelectListTheme.scrollInfo = (text) => fg(palette.dim)(text);
+  filterableSelectListTheme.noMatch = (text) => fg(palette.dim)(text);
+  filterableSelectListTheme.filterLabel = (text) => fg(palette.dim)(text);
+
   // Rebuild searchableSelectListTheme
   searchableSelectListTheme.searchPrompt = (text) => fg(palette.accentSoft)(text);
   searchableSelectListTheme.searchInput = (text) => fg(palette.text)(text);
@@ -373,14 +381,18 @@ export function applyTheme(name: string, tui?: TUI): boolean {
   const isLight = LIGHT_THEMES.has(name);
   applySyntaxThemeVariant(syntaxTheme, isLight, fg(palette.code));
 
-  // Terminal foreground via OSC 10
-  process.stdout.write(`\x1b]10;${palette.text}\x07`);
+  // Terminal foreground via OSC 10/110
+  if (t.terminalBg) {
+    process.stdout.write(`\x1b]10;${palette.text}\x07`);
+  } else {
+    process.stdout.write("\x1b]110\x07");
+  }
 
-  // Terminal background via OSC 11
+  // Terminal background via OSC 11/111
   if (t.terminalBg) {
     process.stdout.write(`\x1b]11;${t.terminalBg}\x07`);
   } else {
-    process.stdout.write("\x1b]110\x07");
+    process.stdout.write("\x1b]111\x07");
   }
 
   if (tui) {

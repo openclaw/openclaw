@@ -7,8 +7,14 @@ const cliHighlightMocks = vi.hoisted(() => ({
 
 vi.mock("cli-highlight", () => cliHighlightMocks);
 
-const { markdownTheme, searchableSelectListTheme, selectListTheme, theme } =
-  await import("./theme.js");
+const {
+  applyTheme,
+  filterableSelectListTheme,
+  markdownTheme,
+  searchableSelectListTheme,
+  selectListTheme,
+  theme,
+} = await import("./theme.js");
 
 const stripAnsi = (str: string) =>
   str.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
@@ -58,6 +64,15 @@ describe("theme", () => {
   it("applies palette text color to assistant text", () => {
     expect(stripAnsi(theme.assistantText("hello"))).toBe("hello");
   });
+
+  it("resets terminal fg/bg when applying a theme without terminal background", () => {
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    applyTheme("default");
+    const writes = writeSpy.mock.calls.map((c) => String(c[0]));
+    expect(writes.some((w) => w.includes("\x1b]110\x07"))).toBe(true);
+    expect(writes.some((w) => w.includes("\x1b]111\x07"))).toBe(true);
+    writeSpy.mockRestore();
+  });
 });
 
 describe("list themes", () => {
@@ -71,6 +86,17 @@ describe("list themes", () => {
       selectListTheme.scrollInfo("scroll"),
     );
     expect(searchableSelectListTheme.noMatch("none")).toBe(selectListTheme.noMatch("none"));
+  });
+
+  it("keeps filterable select-list renderers in sync after theme changes", () => {
+    applyTheme("default");
+    const beforeSelectedPrefix = filterableSelectListTheme.selectedPrefix;
+    const beforeFilterLabel = filterableSelectListTheme.filterLabel;
+
+    applyTheme("matrix");
+
+    expect(filterableSelectListTheme.selectedPrefix).not.toBe(beforeSelectedPrefix);
+    expect(filterableSelectListTheme.filterLabel).not.toBe(beforeFilterLabel);
   });
 
   it("keeps searchable list specific renderers readable", () => {

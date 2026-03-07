@@ -252,7 +252,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
     selector.onSelectionChange = (item) => {
       applyTheme(item.value, tui);
-      tui.requestRender();
     };
 
     selector.onSelect = (item) => {
