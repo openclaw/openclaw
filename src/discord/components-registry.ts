@@ -2,8 +2,29 @@ import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
 const DEFAULT_COMPONENT_TTL_MS = 30 * 60 * 1000;
 
-const componentEntries = new Map<string, DiscordComponentEntry>();
-const modalEntries = new Map<string, DiscordModalEntry>();
+const COMPONENT_KEY = "__openclaw_discord_component_entries";
+const MODAL_KEY = "__openclaw_discord_modal_entries";
+
+// Use globalThis singletons so every bundle chunk shares the same Map.
+// Without this, the build can produce multiple copies of this module in
+// different output chunks, each with its own module-scoped Map.  The send
+// path registers entries in one Map while the interaction handler looks
+// them up in another, causing buttons to appear "expired" immediately.
+function getComponentEntries(): Map<string, DiscordComponentEntry> {
+  const g = globalThis as unknown as Record<string, unknown>;
+  if (!g[COMPONENT_KEY]) {
+    g[COMPONENT_KEY] = new Map<string, DiscordComponentEntry>();
+  }
+  return g[COMPONENT_KEY] as Map<string, DiscordComponentEntry>;
+}
+
+function getModalEntries(): Map<string, DiscordModalEntry> {
+  const g = globalThis as unknown as Record<string, unknown>;
+  if (!g[MODAL_KEY]) {
+    g[MODAL_KEY] = new Map<string, DiscordModalEntry>();
+  }
+  return g[MODAL_KEY] as Map<string, DiscordModalEntry>;
+}
 
 function isExpired(entry: { expiresAt?: number }, now: number) {
   return typeof entry.expiresAt === "number" && entry.expiresAt <= now;
@@ -33,7 +54,7 @@ export function registerDiscordComponentEntries(params: {
       now,
       ttlMs,
     );
-    componentEntries.set(entry.id, normalized);
+    getComponentEntries().set(entry.id, normalized);
   }
   for (const modal of params.modals) {
     const normalized = normalizeEntryTimestamps(
@@ -41,7 +62,7 @@ export function registerDiscordComponentEntries(params: {
       now,
       ttlMs,
     );
-    modalEntries.set(modal.id, normalized);
+    getModalEntries().set(modal.id, normalized);
   }
 }
 
@@ -49,17 +70,18 @@ export function resolveDiscordComponentEntry(params: {
   id: string;
   consume?: boolean;
 }): DiscordComponentEntry | null {
-  const entry = componentEntries.get(params.id);
+  const entries = getComponentEntries();
+  const entry = entries.get(params.id);
   if (!entry) {
     return null;
   }
   const now = Date.now();
   if (isExpired(entry, now)) {
-    componentEntries.delete(params.id);
+    entries.delete(params.id);
     return null;
   }
   if (params.consume !== false) {
-    componentEntries.delete(params.id);
+    entries.delete(params.id);
   }
   return entry;
 }
@@ -68,22 +90,23 @@ export function resolveDiscordModalEntry(params: {
   id: string;
   consume?: boolean;
 }): DiscordModalEntry | null {
-  const entry = modalEntries.get(params.id);
+  const modals = getModalEntries();
+  const entry = modals.get(params.id);
   if (!entry) {
     return null;
   }
   const now = Date.now();
   if (isExpired(entry, now)) {
-    modalEntries.delete(params.id);
+    modals.delete(params.id);
     return null;
   }
   if (params.consume !== false) {
-    modalEntries.delete(params.id);
+    modals.delete(params.id);
   }
   return entry;
 }
 
 export function clearDiscordComponentEntries(): void {
-  componentEntries.clear();
-  modalEntries.clear();
+  getComponentEntries().clear();
+  getModalEntries().clear();
 }
