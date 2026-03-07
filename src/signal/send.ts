@@ -1,7 +1,6 @@
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { kindFromMime } from "../media/mime.js";
-import { extractOriginalFilename } from "../media/store.js";
 import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
@@ -131,13 +130,7 @@ export async function sendMessageSignal(
     const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
       localRoots: opts.mediaLocalRoots,
     });
-    // Use signal-cli data URI format to preserve original filename.
-    // Without this, signal-cli uses the basename of the temp path (a UUID).
-    const displayName = extractOriginalFilename(resolved.path);
-    const fileBuffer = await import("fs/promises").then((fs) => fs.readFile(resolved.path));
-    const b64 = fileBuffer.toString("base64");
-    const mime = resolved.contentType ?? "application/octet-stream";
-    attachments = [`data:${mime};filename=${displayName};base64,${b64}`];
+    attachments = [resolved.path];
     const kind = kindFromMime(resolved.contentType ?? undefined);
     if (!message && kind) {
       // Avoid sending an empty body when only attachments exist.
