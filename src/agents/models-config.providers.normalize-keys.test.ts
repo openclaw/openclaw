@@ -77,7 +77,7 @@ describe("normalizeProviders", () => {
   it("replaces resolved env var value with env var name to prevent plaintext persistence", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const original = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-test-secret-value-12345";
+    process.env.OPENAI_API_KEY = "sk-test-secret-value-12345"; // pragma: allowlist secret
     try {
       const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
         openai: {
