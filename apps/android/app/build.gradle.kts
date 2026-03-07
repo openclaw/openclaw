@@ -26,6 +26,9 @@ android {
     
     // SMS Gateway API Key - poate fi suprascrisă via environment variable
     buildConfigField("String", "SMS_GATEWAY_API_KEY", "\"${System.getenv("SMS_GATEWAY_API_KEY") ?: "dev-key-change-me"}\"")
+    
+    // ADB Bridge API Key - authentication for ADB control endpoints
+    buildConfigField("String", "ADB_BRIDGE_API_KEY", "\"${System.getenv("ADB_BRIDGE_API_KEY") ?: "adb-bridge-dev-key-change-me"}\"")
   }
 
   buildTypes {
