@@ -1,21 +1,25 @@
 // Webhook signature verification + event parsing
 
-import { createHmac } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { ViberWebhookEvent } from "./types.js";
 
 /**
  * Verify Viber webhook signature using HMAC-SHA256.
  * The signature is the HMAC-SHA256 of the raw request body using the bot token as key.
+ * Uses timing-safe comparison to prevent timing attacks.
  */
 export function verifySignature(
   body: string | Buffer,
   token: string,
   signature: string,
 ): boolean {
-  const expectedSignature = createHmac("sha256", token)
-    .update(body)
-    .digest("hex");
-  return expectedSignature === signature.toLowerCase();
+  const expected = Buffer.from(
+    createHmac("sha256", token).update(body).digest("hex"),
+    "utf8",
+  );
+  const actual = Buffer.from(signature.toLowerCase(), "utf8");
+  if (expected.length !== actual.length) return false;
+  return timingSafeEqual(expected, actual);
 }
 
 /**
@@ -88,11 +92,11 @@ export function markdownToViber(text: string): string {
   // Convert headers # to text with emphasis
   result = result.replace(/^#{1,6}\s+(.+)$/gm, "*$1*");
 
+  // Convert images ![alt](url) to "[Image: alt] url" (MUST run before link conversion)
+  result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "[Image: $1] $2");
+
   // Convert links [text](url) to "text (url)"
   result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)");
-
-  // Convert images ![alt](url) to "[Image: alt] url"
-  result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "[Image: $1] $2");
 
   // Convert horizontal rules
   result = result.replace(/^[-*_]{3,}$/gm, "————————");

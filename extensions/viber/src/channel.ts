@@ -22,6 +22,24 @@ const DEFAULT_ACCOUNT_ID = "default";
 const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"];
 const VIDEO_EXTENSIONS = [".mp4", ".mov", ".avi", ".mkv", ".webm"];
 
+/**
+ * Attempt to resolve the byte size of a remote media URL via HEAD request.
+ * Returns undefined if the size cannot be determined.
+ */
+async function resolveMediaSize(url: string): Promise<number | undefined> {
+  try {
+    const resp = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(3000) });
+    const cl = resp.headers.get("content-length");
+    if (cl) {
+      const size = parseInt(cl, 10);
+      if (size > 0) return size;
+    }
+  } catch {
+    // ignore — size is best-effort
+  }
+  return undefined;
+}
+
 function resolveMediaType(url: string): "picture" | "video" | "file" {
   const lower = url.toLowerCase().split("?")[0] ?? "";
   if (IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext))) return "picture";
@@ -29,13 +47,13 @@ function resolveMediaType(url: string): "picture" | "video" | "file" {
   return "file";
 }
 
-function buildMediaMessage(
+async function buildMediaMessage(
   receiver: string,
   mediaUrl: string,
   text?: string,
   senderName?: string,
   senderAvatar?: string,
-): ViberSendMessageParams {
+): Promise<ViberSendMessageParams> {
   const type = resolveMediaType(mediaUrl);
   const base: ViberSendMessageParams = {
     receiver,
@@ -46,8 +64,10 @@ function buildMediaMessage(
   switch (type) {
     case "picture":
       return { ...base, media: mediaUrl, text: text ?? "" };
-    case "video":
-      return { ...base, media: mediaUrl, size: 0, text: text ?? "" };
+    case "video": {
+      const size = await resolveMediaSize(mediaUrl);
+      return { ...base, media: mediaUrl, ...(size ? { size } : {}), text: text ?? "" };
+    }
     case "file": {
       let fileName = "file";
       try {
@@ -57,7 +77,8 @@ function buildMediaMessage(
       } catch {
         // ignore
       }
-      return { ...base, media: mediaUrl, size: 0, file_name: fileName, text: undefined };
+      const fileSize = await resolveMediaSize(mediaUrl);
+      return { ...base, media: mediaUrl, ...(fileSize ? { size: fileSize } : {}), file_name: fileName, text: undefined };
     }
   }
 }
