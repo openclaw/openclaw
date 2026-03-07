@@ -3,7 +3,9 @@ import { dispatchChannelMessageAction } from "../../channels/plugins/message-act
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";
@@ -46,6 +48,64 @@ type PluginHandledResult = {
   payload: unknown;
   toolResult: AgentToolResult<unknown>;
 };
+
+function extractMessageId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const value = (payload as { messageId?: unknown }).messageId;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return undefined;
+  }
+  return value;
+}
+
+function emitOutboundMessageSentHooks(params: {
+  channel: ChannelId;
+  accountId?: string;
+  to: string;
+  content: string;
+  success: boolean;
+  error?: string;
+  messageId?: string;
+  sessionKey?: string;
+}) {
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("message_sent")) {
+    void hookRunner
+      .runMessageSent(
+        {
+          to: params.to,
+          content: params.content,
+          success: params.success,
+          ...(params.error ? { error: params.error } : {}),
+        },
+        {
+          channelId: params.channel,
+          accountId: params.accountId,
+          conversationId: params.to,
+        },
+      )
+      .catch(() => {});
+  }
+
+  if (!params.sessionKey) {
+    return;
+  }
+
+  void triggerInternalHook(
+    createInternalHookEvent("message", "sent", params.sessionKey, {
+      to: params.to,
+      content: params.content,
+      success: params.success,
+      ...(params.error ? { error: params.error } : {}),
+      channelId: params.channel,
+      accountId: params.accountId,
+      conversationId: params.to,
+      messageId: params.messageId,
+    }),
+  ).catch(() => {});
+}
 
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
@@ -119,6 +179,15 @@ export async function executeSendAction(params: {
     },
   });
   if (pluginHandled) {
+    emitOutboundMessageSentHooks({
+      channel: params.ctx.channel,
+      accountId: params.ctx.accountId ?? undefined,
+      to: params.to,
+      content: params.message,
+      success: true,
+      messageId: extractMessageId(pluginHandled.payload),
+      sessionKey: params.ctx.mirror?.sessionKey,
+    });
     return pluginHandled;
   }
 
