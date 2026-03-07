@@ -666,7 +666,37 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - OpenClaw applies exponential retry backoff for recurring jobs after consecutive errors:
   30s, 1m, 5m, 15m, then 60m between retries.
 - Backoff resets automatically after the next successful run.
+- The counter is persisted as `state.consecutiveErrors` in
+  `~/.openclaw/cron/jobs.json` (or your configured `cron.store` path).
+- You can inspect and verify recovery with:
+
+```bash
+openclaw cron list --json | jq '.[] | {id, name, consecutiveErrors: .state.consecutiveErrors}'
+```
+
+- Manual recovery (last resort): stop Gateway, set the affected
+  `state.consecutiveErrors` to `0` in `jobs.json`, then restart Gateway.
 - One-shot (`at`) jobs retry transient errors (rate limit, overloaded, network, server_error) up to 3 times with backoff; permanent errors disable immediately. See [Retry policy](/automation/cron-jobs#retry-policy).
+
+### `announce` delivery errors: missing target / channel confusion
+
+`delivery.mode = "announce"` supports `delivery.channel` and `delivery.to`.
+They are not ignored; they are the primary way to override "last route"
+delivery.
+
+When targeting a channel that requires an explicit recipient and no target is
+resolvable, you'll see errors like:
+
+- `Delivering to Telegram requires target`
+- `Channel is required when delivery.channel=last has no previous channel.`
+
+Common fixes:
+
+- Set `delivery.channel` to a concrete channel (`telegram`, `slack`, etc.)
+  instead of `last`.
+- Set `delivery.to` to an explicit target for that channel.
+- Ensure the agent session has an existing last-route if you intentionally use
+  `delivery.channel: "last"` with no `delivery.to`.
 
 ### Telegram delivers to the wrong place
 
