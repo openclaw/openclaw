@@ -16,16 +16,6 @@ import {
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
-import { generateSecureUuid } from "../../infra/secure-random.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { defaultRuntime } from "../../runtime.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
-import {
-  buildFallbackClearedNotice,
-  buildFallbackNotice,
-  resolveFallbackTransition,
-} from "../fallback-state.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -47,6 +37,7 @@ import {
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
+import { cancelIdleCompaction, scheduleIdleCompaction } from "./idle-compaction.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
@@ -224,6 +215,11 @@ export async function runReplyAgent(params: {
 
   await typingSignals.signalRunStart();
 
+  // A new inbound turn has started — cancel any pending idle compaction timer.
+  if (sessionKey) {
+    cancelIdleCompaction(sessionKey);
+  }
+
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,
     followupRun,
@@ -340,6 +336,16 @@ export async function runReplyAgent(params: {
     });
   try {
     const runStartedAt = Date.now();
+    const compactionCfg = cfg?.agents?.defaults?.compaction;
+    const onCompactionStart =
+      compactionCfg?.notifyOnStart === true
+        ? async () => {
+            const text =
+              compactionCfg.notifyOnStartText ?? "🧹 Context compacting, back in a moment…";
+            await opts?.onBlockReply?.({ text });
+          }
+        : undefined;
+
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
@@ -356,6 +362,7 @@ export async function runReplyAgent(params: {
       pendingToolTasks,
       resetSessionAfterCompactionFailure,
       resetSessionAfterRoleOrderingConflict,
+      onCompactionStart,
       isHeartbeat,
       sessionKey,
       getActiveSessionEntry: () => activeSessionEntry,
@@ -473,6 +480,29 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
     });
+
+    // Schedule proactive idle compaction if the context is above threshold and
+    // the user goes quiet for `idleTriggerMinutes`.
+    if (sessionKey && followupRun.run.sessionFile && followupRun.run.workspaceDir) {
+      const actualTokensUsed =
+        promptTokens ??
+        (usage ? (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0) : 0);
+      scheduleIdleCompaction({
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        contextTokensUsed: actualTokensUsed,
+        contextTokensMax: contextTokensUsed,
+        cfg,
+        sessionFile: followupRun.run.sessionFile,
+        workspaceDir: followupRun.run.workspaceDir,
+        provider: followupRun.run.provider,
+        model: modelUsed,
+        thinkLevel: followupRun.run.thinkLevel,
+        bashElevated: followupRun.run.bashElevated,
+        skillsSnapshot: followupRun.run.skillsSnapshot,
+        ownerNumbers: followupRun.run.ownerNumbers,
+      });
+    }
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and

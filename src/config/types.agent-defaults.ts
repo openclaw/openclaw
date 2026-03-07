@@ -320,6 +320,20 @@ export type AgentCompactionConfig = {
    * Set to [] to disable post-compaction context injection entirely.
    */
   postCompactionSections?: string[];
+  /** Send a notification message to the user when compaction starts. Default: false. */
+  notifyOnStart?: boolean;
+  /** Notification text sent when compaction starts. Default: "🧹 Context compacting, back in a moment…" */
+  notifyOnStartText?: string;
+  /**
+   * Proactive idle compaction: trigger compaction after this many minutes of user
+   * inactivity when context usage exceeds `idleTriggerPercent`. Default: disabled.
+   */
+  idleTriggerMinutes?: number;
+  /**
+   * Context usage threshold (0.0–1.0) above which idle compaction may trigger.
+   * Only applies when `idleTriggerMinutes` is set. Default: 0.7 (70%).
+   */
+  idleTriggerPercent?: number;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
