@@ -379,7 +379,10 @@ export async function runPreparedReply(
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
   const prefixedBody = [threadContextNote, prefixedBodyBase].filter(Boolean).join("\n\n");
-  const mediaNote = buildInboundMediaNote(ctx);
+  // Skip media note computation entirely when no media is present.
+  const hasMedia =
+    Boolean(ctx.MediaPath) || (Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0);
+  const mediaNote = hasMedia ? buildInboundMediaNote(ctx) : undefined;
   const mediaReplyHint = mediaNote
     ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
     : undefined;

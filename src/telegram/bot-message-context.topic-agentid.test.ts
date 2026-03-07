@@ -99,15 +99,37 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
   });
 
   it("falls back to default agent when topic agentId does not exist", async () => {
-    vi.mocked(loadConfig).mockReturnValue({
+    const cfg = {
       agents: {
         list: [{ id: "main", default: true }, { id: "zu" }],
+        defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" },
       },
       channels: { telegram: {} },
       messages: { groupChat: { mentionPatterns: [] } },
-    } as never);
+    };
 
-    const ctx = await buildForumContext({ topicConfig: { agentId: "ghost" } });
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg,
+      message: {
+        message_id: 1,
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum",
+          is_forum: true,
+        },
+        date: 1700000000,
+        text: "@bot hello",
+        message_thread_id: 3,
+        from: { id: 42, first_name: "Alice" },
+      },
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: { agentId: "ghost" },
+      }),
+    });
 
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:main:");

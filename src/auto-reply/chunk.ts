@@ -318,106 +318,128 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     return early;
   }
 
+  // Fast path: if no fence markers exist, use simple chunking without span parsing.
+  if (!text.includes("```") && !text.includes("~~~")) {
+    return chunkText(text, limit);
+  }
+
   const chunks: string[] = [];
-  const spans = parseFenceSpans(text);
-  let start = 0;
-  let reopenFence: ReturnType<typeof findFenceSpanAt> | undefined;
+  let remaining = text;
+  const spans = parseFenceSpans(remaining);
+  let spanOffset = 0;
+  let continuedFenceOpenLine: string | undefined;
 
-  while (start < text.length) {
-    const reopenPrefix = reopenFence ? `${reopenFence.openLine}\n` : "";
-    const contentLimit = Math.max(1, limit - reopenPrefix.length);
-    if (text.length - start <= contentLimit) {
-      const finalChunk = `${reopenPrefix}${text.slice(start)}`;
-      if (finalChunk.length > 0) {
-        chunks.push(finalChunk);
-      }
-      break;
-    }
+  while (
+    remaining.length + (continuedFenceOpenLine ? continuedFenceOpenLine.length + 1 : 0) >
+    limit
+  ) {
+    const chunkPrefix = continuedFenceOpenLine ? `${continuedFenceOpenLine}\n` : "";
+    const effectiveLimit = Math.max(1, limit - chunkPrefix.length);
+    // Apply offset to pre-computed spans (valid when remaining is a strict suffix of the parsed text).
+    const adjustedSpans =
+      spanOffset > 0
+        ? spans.map((span) => ({
+            ...span,
+            start: span.start - spanOffset,
+            end: span.end - spanOffset,
+          }))
+        : spans;
 
-    const windowEnd = Math.min(text.length, start + contentLimit);
-    const softBreak = pickSafeBreakIndex(text, start, windowEnd, spans);
-    let breakIdx = softBreak > start ? softBreak : windowEnd;
+    const window = remaining.slice(0, effectiveLimit);
 
-    const initialFence = isSafeFenceBreak(spans, breakIdx)
+    const softBreak = pickSafeBreakIndex(window, 0, window.length, adjustedSpans);
+    let breakIdx = softBreak > 0 ? softBreak : effectiveLimit;
+
+    const initialFence = isSafeFenceBreak(adjustedSpans, breakIdx)
       ? undefined
-      : findFenceSpanAt(spans, breakIdx);
+      : findFenceSpanAt(adjustedSpans, breakIdx);
 
     let fenceToSplit = initialFence;
+
     if (initialFence) {
       const closeLine = `${initialFence.indent}${initialFence.marker}`;
-      const maxIdxIfNeedNewline = start + (contentLimit - (closeLine.length + 1));
+      const maxIdxIfNeedNewline = effectiveLimit - (closeLine.length + 1);
 
-      if (maxIdxIfNeedNewline <= start) {
+      if (maxIdxIfNeedNewline <= 0) {
         fenceToSplit = undefined;
-        breakIdx = windowEnd;
+        breakIdx = effectiveLimit;
       } else {
         const minProgressIdx = Math.min(
-          text.length,
-          Math.max(start + 1, initialFence.start + initialFence.openLine.length + 2),
+          remaining.length,
+          initialFence.start < 0
+            ? 1
+            : Math.max(1, initialFence.start + initialFence.openLine.length + 2),
         );
-        const maxIdxIfAlreadyNewline = start + (contentLimit - closeLine.length);
+        const maxIdxIfAlreadyNewline = effectiveLimit - closeLine.length;
 
         let pickedNewline = false;
-        let lastNewline = text.lastIndexOf("\n", Math.max(start, maxIdxIfAlreadyNewline - 1));
-        while (lastNewline >= start) {
+        let lastNewline = window.lastIndexOf("\n", Math.max(0, maxIdxIfAlreadyNewline - 1));
+        while (lastNewline >= 0) {
           const candidateBreak = lastNewline + 1;
           if (candidateBreak < minProgressIdx) {
             break;
           }
-          const candidateFence = findFenceSpanAt(spans, candidateBreak);
+          const candidateFence = findFenceSpanAt(adjustedSpans, candidateBreak);
           if (candidateFence && candidateFence.start === initialFence.start) {
             breakIdx = candidateBreak;
             pickedNewline = true;
             break;
           }
-          lastNewline = text.lastIndexOf("\n", lastNewline - 1);
+          lastNewline = window.lastIndexOf("\n", lastNewline - 1);
         }
 
         if (!pickedNewline) {
           if (minProgressIdx > maxIdxIfAlreadyNewline) {
             fenceToSplit = undefined;
-            breakIdx = windowEnd;
+            breakIdx = effectiveLimit;
           } else {
             breakIdx = Math.max(minProgressIdx, maxIdxIfNeedNewline);
           }
         }
       }
 
-      const fenceAtBreak = findFenceSpanAt(spans, breakIdx);
+      const fenceAtBreak = findFenceSpanAt(adjustedSpans, breakIdx);
       fenceToSplit =
         fenceAtBreak && fenceAtBreak.start === initialFence.start ? fenceAtBreak : undefined;
     }
 
-    const rawContent = text.slice(start, breakIdx);
+    const rawContent = remaining.slice(0, breakIdx);
     if (!rawContent) {
       break;
     }
 
-    let rawChunk = `${reopenPrefix}${rawContent}`;
-    const brokeOnSeparator = breakIdx < text.length && /\s/.test(text[breakIdx]);
-    let nextStart = Math.min(text.length, breakIdx + (brokeOnSeparator ? 1 : 0));
+    let rawChunk = `${chunkPrefix}${rawContent}`;
+    let next = remaining.slice(breakIdx);
 
     if (fenceToSplit) {
       const closeLine = `${fenceToSplit.indent}${fenceToSplit.marker}`;
       rawChunk = rawChunk.endsWith("\n") ? `${rawChunk}${closeLine}` : `${rawChunk}\n${closeLine}`;
-      reopenFence = fenceToSplit;
+      continuedFenceOpenLine = fenceToSplit.openLine;
+      spanOffset += breakIdx;
+      remaining = next;
     } else {
-      nextStart = skipLeadingNewlines(text, nextStart);
-      reopenFence = undefined;
+      continuedFenceOpenLine = undefined;
+      next = stripLeadingNewlines(next);
+      spanOffset += remaining.length - next.length;
+      remaining = next;
     }
 
     chunks.push(rawChunk);
-    start = nextStart;
+  }
+
+  if (remaining.length) {
+    const chunkPrefix = continuedFenceOpenLine ? `${continuedFenceOpenLine}\n` : "";
+    chunks.push(`${chunkPrefix}${remaining}`);
   }
   return chunks;
 }
 
-function skipLeadingNewlines(value: string, start = 0): number {
-  let i = start;
+function stripLeadingNewlines(value: string): string {
+  let i = 0;
   while (i < value.length && value[i] === "\n") {
     i++;
   }
-  return i;
+  return value.slice(i);
 }
 
 function pickSafeBreakIndex(

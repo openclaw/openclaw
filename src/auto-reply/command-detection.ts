@@ -23,6 +23,12 @@ export function hasControlCommand(
   if (!normalizedBody) {
     return false;
   }
+  // Fast-path: skip alias iteration for non-command text (99%+ of messages).
+  const firstChar = normalizedBody.charAt(0);
+  if (firstChar !== "/" && firstChar !== "!") {
+    return false;
+  }
+
   const lowered = normalizedBody.toLowerCase();
   const commands = cfg ? listChatCommandsForConfig(cfg) : listChatCommands();
   for (const command of commands) {
