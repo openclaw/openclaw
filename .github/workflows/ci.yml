@@ -320,25 +320,21 @@ jobs:
           python -m pip install pre-commit
 
       - name: Detect secrets
-        env:
-          OPENCLAW_GITHUB_REF: ${{ github.ref }}
-          OPENCLAW_GITHUB_EVENT_NAME: ${{ github.event_name }}
-          OPENCLAW_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
         run: |
           set -euo pipefail
 
-          if [ "$OPENCLAW_GITHUB_REF" = "refs/heads/main" ]; then
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
             echo "Skipping detect-secrets on main until the allowlist cleanup lands."
             exit 0
           fi
 
-          if [ "$OPENCLAW_GITHUB_EVENT_NAME" = "push" ]; then
+          if [ "${{ github.event_name }}" = "push" ]; then
             echo "Running full detect-secrets scan on push."
             pre-commit run --all-files detect-secrets
             exit 0
           fi
 
-          BASE="$OPENCLAW_PR_BASE_SHA"
+          BASE="${{ github.event.pull_request.base.sha }}"
           changed_files=()
           if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
             while IFS= read -r path; do
@@ -360,17 +356,13 @@ jobs:
         run: pre-commit run --all-files detect-private-key
 
       - name: Audit changed GitHub workflows with zizmor
-        env:
-          OPENCLAW_GITHUB_EVENT_NAME: ${{ github.event_name }}
-          OPENCLAW_GITHUB_BEFORE: ${{ github.event.before || '' }}
-          OPENCLAW_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
         run: |
           set -euo pipefail
 
-          if [ "$OPENCLAW_GITHUB_EVENT_NAME" = "push" ]; then
-            BASE="$OPENCLAW_GITHUB_BEFORE"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
           else
-            BASE="$OPENCLAW_PR_BASE_SHA"
+            BASE="${{ github.event.pull_request.base.sha }}"
           fi
 
           mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
