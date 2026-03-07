@@ -25,6 +25,7 @@ import type {
   PluginPhaseHookContext,
   PluginPhaseHookHandlerMap,
   PluginPhaseHookOptions,
+  PluginPhasePayloadMap,
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
   OpenClawPluginCliRegistrar,
@@ -585,21 +586,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     policy?: PluginTypedHookPolicy,
   ) => {
     const hookName = PLUGIN_PHASE_TO_HOOK[phase];
-    registerTypedHook(
-      record,
-      hookName,
-      ((
-        event: Parameters<PluginHookHandlerMap[typeof hookName]>[0],
-        ctx: Parameters<PluginHookHandlerMap[typeof hookName]>[1],
-      ) =>
-        handler(event, {
-          ...ctx,
+    const wrappedHandler = ((event: unknown, ctx: unknown) =>
+      (
+        handler as (
+          payload: PluginPhasePayloadMap[P],
+          context: PluginPhaseHookContext<P>,
+        ) => ReturnType<PluginPhaseHookHandlerMap[P]>
+      )(
+        event as PluginPhasePayloadMap[P],
+        {
+          ...(ctx as Record<string, unknown>),
           phase,
           hookName,
-        } as PluginPhaseHookContext<P>)) as PluginHookHandlerMap[typeof hookName],
-      opts,
-      policy,
-    );
+        } as PluginPhaseHookContext<P>,
+      )) as PluginHookHandlerMap[typeof hookName];
+    registerTypedHook(record, hookName, wrappedHandler, opts, policy);
   };
 
   const createApi = (
