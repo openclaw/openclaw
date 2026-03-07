@@ -116,17 +116,34 @@ function makeUnavailableSlackPlugin(): ChannelPlugin {
   };
 }
 
-function makeSourceAwareUnavailablePlugin(): ChannelPlugin {
+function makeDirectPlugin(params: {
+  id: string;
+  label: string;
+  docsPath: string;
+  config: ChannelPlugin["config"];
+}): ChannelPlugin {
   return {
-    id: "slack",
+    id: params.id,
     meta: {
-      id: "slack",
-      label: "Slack",
-      selectionLabel: "Slack",
-      docsPath: "/channels/slack",
+      id: params.id,
+      label: params.label,
+      selectionLabel: params.label,
+      docsPath: params.docsPath,
       blurb: "test",
     },
     capabilities: { chatTypes: ["direct"] },
+    config: params.config,
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
+function makeSourceAwareUnavailablePlugin(): ChannelPlugin {
+  return makeDirectPlugin({
+    id: "slack",
+    label: "Slack",
+    docsPath: "/channels/slack",
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
@@ -161,10 +178,7 @@ function makeSourceAwareUnavailablePlugin(): ChannelPlugin {
       isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
       isEnabled: () => true,
     },
-    actions: {
-      listActions: () => ["send"],
-    },
-  };
+  });
 }
 
 function makeSourceUnavailableResolvedAvailablePlugin(): ChannelPlugin {
@@ -214,16 +228,10 @@ function makeSourceUnavailableResolvedAvailablePlugin(): ChannelPlugin {
 }
 
 function makeHttpSlackUnavailablePlugin(): ChannelPlugin {
-  return {
+  return makeDirectPlugin({
     id: "slack",
-    meta: {
-      id: "slack",
-      label: "Slack",
-      selectionLabel: "Slack",
-      docsPath: "/channels/slack",
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
+    label: "Slack",
+    docsPath: "/channels/slack",
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
@@ -255,23 +263,14 @@ function makeHttpSlackUnavailablePlugin(): ChannelPlugin {
       isConfigured: () => true,
       isEnabled: () => true,
     },
-    actions: {
-      listActions: () => ["send"],
-    },
-  };
+  });
 }
 
 function makeTokenPlugin(): ChannelPlugin {
-  return {
+  return makeDirectPlugin({
     id: "token-only",
-    meta: {
-      id: "token-only",
-      label: "TokenOnly",
-      selectionLabel: "TokenOnly",
-      docsPath: "/channels/token-only",
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
+    label: "TokenOnly",
+    docsPath: "/channels/token-only",
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
@@ -283,10 +282,7 @@ function makeTokenPlugin(): ChannelPlugin {
       isConfigured: () => true,
       isEnabled: () => true,
     },
-    actions: {
-      listActions: () => ["send"],
-    },
-  };
+  });
 }
 
 describe("buildChannelsTable - mattermost token summary", () => {
