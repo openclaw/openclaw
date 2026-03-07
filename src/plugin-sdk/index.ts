@@ -277,6 +277,7 @@ export {
 } from "./allow-from.js";
 export {
   evaluateSenderGroupAccess,
+  evaluateSenderGroupAccessForPolicy,
   type SenderGroupAccessDecision,
   type SenderGroupAccessReason,
 } from "./group-access.js";
