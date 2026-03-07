@@ -662,7 +662,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           replyOptions: {
             ...replyOptions,
             disableBlockStreaming:
-              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : false,
             onModelSelected,
           },
         });
@@ -1634,6 +1634,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     // Block streaming state: track the message id for edit-in-place
     let blockStreamMessageId: string | null = null;
     let blockStreamAccumulatedText = "";
+    // When true, patch failed permanently (e.g. missing permissions) — avoid retry loops
+    let patchingDisabled = false;
 
     const resolvedBaseUrl = normalizeMattermostBaseUrl(account.baseUrl);
     const resolvedBotToken = account.botToken?.trim();
@@ -1682,18 +1684,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 // and send it as a new message so we don't lose content.
                 const fallbackText = blockStreamAccumulatedText;
 
-                // Reset state before sending to avoid confusing subsequent blocks.
-                blockStreamMessageId = null;
-                blockStreamAccumulatedText = "";
-
-                const result = await sendMessageMattermost(to, fallbackText, {
+                // Send first; only clear state on success to avoid losing content on send failure.
+                // Disable patching for remaining blocks: persistent patch failure likely means
+                // missing edit_post permission — avoid flooding the thread with retries.
+                await sendMessageMattermost(to, fallbackText, {
                   accountId: account.accountId,
                   replyToId: threadRootId,
                 });
 
-                blockStreamMessageId = result.messageId;
-                blockStreamAccumulatedText = fallbackText;
-                runtime.log?.(`block-stream fallback sent ${blockStreamMessageId}`);
+                blockStreamMessageId = null;
+                blockStreamAccumulatedText = "";
+                patchingDisabled = true;
+                runtime.log?.(`block-stream fallback sent, patching disabled for this session`);
                 return;
               }
               runtime.log?.(`block-stream edited ${blockStreamMessageId}`);
@@ -1713,10 +1715,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 logVerboseMessage(
                   `mattermost block-stream final edit failed: ${String(err)}, sending new message`,
                 );
+                // Best-effort: delete the orphaned partial message before sending the complete one.
+                // Without this, users would see both the stale partial and the new complete message.
+                const orphanId = blockStreamMessageId;
+                blockStreamMessageId = null;
+                blockStreamAccumulatedText = "";
+                try {
+                  await deleteMattermostPost(blockStreamingClient!, orphanId!);
+                } catch {
+                  // Ignore delete failure — delivering the complete message takes priority
+                }
                 await sendMessageMattermost(to, finalText, {
                   accountId: account.accountId,
                   replyToId: threadRootId,
                 });
+                return;
               }
               // Reset block streaming state
               blockStreamMessageId = null;
@@ -1724,7 +1737,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               return;
             }
 
-            if (isBlock && !blockStreamMessageId) {
+            if (isBlock && !blockStreamMessageId && !patchingDisabled) {
               // First block: send a new message and track its id
               const result = await sendMessageMattermost(to, text, {
                 accountId: account.accountId,
@@ -1741,6 +1754,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           if (isFinal) {
             blockStreamMessageId = null;
             blockStreamAccumulatedText = "";
+            patchingDisabled = false;
           }
 
           if (mediaUrls.length === 0) {
@@ -1791,7 +1805,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           replyOptions: {
             ...replyOptions,
             disableBlockStreaming:
-              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : false,
             onModelSelected,
           },
         }),
