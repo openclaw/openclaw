@@ -18,7 +18,7 @@ import {
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { uninstallLegacySystemdUnits } from "../daemon/systemd.js";
+import { isSystemdUnitActive, uninstallLegacySystemdUnits } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
@@ -241,6 +241,37 @@ export async function maybeRepairGatewayServiceConfig(
       level: "recommended",
     });
   }
+
+  // If the gateway service is currently running, skip any issues that would rewrite the
+  // ExecStart or launcher command. The current ExecStart is clearly working — overwriting
+  // it (e.g. replacing a custom wrapper script with the default node invocation) would
+  // silently break custom launchers without providing any real benefit.
+  if (
+    audit.issues.some(
+      (issue) =>
+        issue.code === SERVICE_AUDIT_CODES.gatewayCommandMissing ||
+        issue.code === SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
+    )
+  ) {
+    const gatewayServiceName = command.sourcePath
+      ? path.basename(command.sourcePath)
+      : "openclaw-gateway.service";
+    const isRunning = await isSystemdUnitActive(
+      process.env as Record<string, string | undefined>,
+      gatewayServiceName,
+    );
+    if (isRunning) {
+      note(
+        "Gateway is currently running; skipping ExecStart audit to preserve the active launcher.",
+        "Gateway service config",
+      );
+      audit.issues = audit.issues.filter(
+        (issue) =>
+          issue.code !== SERVICE_AUDIT_CODES.gatewayCommandMissing &&
+          issue.code !== SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
+      );
+    }
+  }
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
@@ -345,14 +376,43 @@ export async function maybeRepairGatewayServiceConfig(
   }
 }
 
+async function filterToActiveServices(
+  services: ExtraGatewayService[],
+  env: NodeJS.ProcessEnv,
+): Promise<ExtraGatewayService[]> {
+  // On non-Linux platforms systemctl is not available; return all services unfiltered.
+  if (process.platform !== "linux") {
+    return services;
+  }
+  const checks = await Promise.all(
+    services.map(async (svc) => ({
+      svc,
+      // Always include legacy services (clawdbot/moltbot) — they should be offered
+      // for cleanup whether running or not. Only filter non-legacy services by active state.
+      active:
+        svc.legacy === true ||
+        (await isSystemdUnitActive(env as Record<string, string | undefined>, svc.label)),
+    })),
+  );
+  return checks.filter((c) => c.active).map((c) => c.svc);
+}
+
 export async function maybeScanExtraGatewayServices(
   options: DoctorOptions,
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
-  const extraServices = await findExtraGatewayServices(process.env, {
+  const allExtraServices = await findExtraGatewayServices(process.env, {
     deep: options.deep,
   });
+  if (allExtraServices.length === 0) {
+    return;
+  }
+
+  // Only warn about services that are actually running. An inactive companion service
+  // (e.g. openclaw-voice, openclaw-update) that merely references the gateway in its
+  // unit dependencies should not generate a conflict warning.
+  const extraServices = await filterToActiveServices(allExtraServices, process.env);
   if (extraServices.length === 0) {
     return;
   }

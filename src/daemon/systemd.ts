@@ -445,6 +445,22 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
 }
 
+/**
+ * Returns true if the given systemd user-scope unit is currently active (running).
+ * Returns false for any error, missing unit, or inactive state.
+ */
+export async function isSystemdUnitActive(
+  env: GatewayServiceEnv,
+  unitName: string,
+): Promise<boolean> {
+  try {
+    const res = await execSystemctlUser(env, ["is-active", "--quiet", unitName]);
+    return res.code === 0;
+  } catch {
+    return false;
+  }
+}
+
 export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime> {

@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
   renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
+  // Default: gateway service not running, companion services not active
+  isSystemdUnitActive: vi.fn().mockResolvedValue(false),
   note: vi.fn(),
 }));
 
@@ -35,6 +37,7 @@ vi.mock("../daemon/service-audit.js", () => ({
   auditGatewayServiceConfig: mocks.auditGatewayServiceConfig,
   needsNodeRuntimeMigration: vi.fn(() => false),
   SERVICE_AUDIT_CODES: {
+    gatewayCommandMissing: "gateway-command-missing",
     gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
   },
 }));
@@ -48,6 +51,7 @@ vi.mock("../daemon/service.js", () => ({
 
 vi.mock("../daemon/systemd.js", () => ({
   uninstallLegacySystemdUnits: mocks.uninstallLegacySystemdUnits,
+  isSystemdUnitActive: (...args: unknown[]) => mocks.isSystemdUnitActive(...args),
 }));
 
 vi.mock("../terminal/note.js", () => ({
@@ -286,6 +290,154 @@ describe("maybeScanExtraGatewayServices", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Legacy gateway services removed. Installing OpenClaw gateway next.",
+    );
+  });
+});
+
+describe("maybeRepairGatewayServiceConfig — running gateway protection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("skips ExecStart-level issues when the gateway service is currently running", async () => {
+    // Simulate a custom wrapper script as ExecStart: doctor flags gateway-command-missing
+    // because the shell script doesn't pass "gateway" as a subcommand argument.
+    mocks.readCommand.mockResolvedValue({
+      programArguments: ["/home/user/.local/bin/openclaw-gateway-start"],
+      sourcePath: "/home/user/.config/systemd/user/openclaw-gateway.service",
+      environment: { OPENCLAW_GATEWAY_TOKEN: "token" },
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-command-missing",
+          message: "Service command does not include the gateway subcommand",
+          level: "aggressive",
+        },
+      ],
+    });
+    mocks.resolveGatewayInstallToken.mockResolvedValue({
+      token: "token",
+      tokenRefConfigured: false,
+      warnings: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: ["/usr/bin/node", "/path/to/openclaw", "gateway"],
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+
+    // Gateway is running — ExecStart repair must be skipped
+    mocks.isSystemdUnitActive.mockResolvedValue(true);
+
+    await runRepair({});
+
+    // install should NOT have been called — no remaining issues after filtering
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
+  it("proceeds with ExecStart repair when the gateway service is not running", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: ["/home/user/.local/bin/openclaw-gateway-start"],
+      sourcePath: "/home/user/.config/systemd/user/openclaw-gateway.service",
+      environment: { OPENCLAW_GATEWAY_TOKEN: "token" },
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-command-missing",
+          message: "Service command does not include the gateway subcommand",
+          level: "aggressive",
+        },
+      ],
+    });
+    mocks.resolveGatewayInstallToken.mockResolvedValue({
+      token: "token",
+      tokenRefConfigured: false,
+      warnings: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: ["/usr/bin/node", "/path/to/openclaw", "gateway"],
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.install.mockResolvedValue(undefined);
+
+    // Gateway is NOT running — repair is allowed to proceed
+    mocks.isSystemdUnitActive.mockResolvedValue(false);
+
+    await runRepair({});
+
+    expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("maybeScanExtraGatewayServices — active-only filtering", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.findExtraGatewayServices.mockResolvedValue([]);
+    mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
+    mocks.uninstallLegacySystemdUnits.mockResolvedValue([]);
+    mocks.isSystemdUnitActive.mockResolvedValue(false);
+  });
+
+  function makePrompts() {
+    return {
+      confirm: vi.fn(),
+      confirmRepair: vi.fn(),
+      confirmAggressive: vi.fn(),
+      confirmSkipInNonInteractive: vi.fn().mockResolvedValue(false),
+      select: vi.fn(),
+      shouldRepair: false,
+      shouldForce: false,
+    };
+  }
+
+  it("does not warn about inactive extra services (e.g. a stopped companion)", async () => {
+    mocks.findExtraGatewayServices.mockResolvedValue([
+      {
+        platform: "linux",
+        label: "openclaw-voice.service",
+        detail: "unit: /home/user/.config/systemd/user/openclaw-voice.service",
+        scope: "user",
+        marker: "openclaw",
+        legacy: false,
+      },
+    ]);
+    // Service is not active
+    mocks.isSystemdUnitActive.mockResolvedValue(false);
+
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await maybeScanExtraGatewayServices({ deep: false }, runtime, makePrompts());
+
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.any(String),
+      "Other gateway-like services detected",
+    );
+  });
+
+  it("warns about an extra service that is actively running", async () => {
+    mocks.findExtraGatewayServices.mockResolvedValue([
+      {
+        platform: "linux",
+        label: "openclaw-gateway-second.service",
+        detail: "unit: /home/user/.config/systemd/user/openclaw-gateway-second.service",
+        scope: "user",
+        marker: "openclaw",
+        legacy: false,
+      },
+    ]);
+    // Service IS active
+    mocks.isSystemdUnitActive.mockResolvedValue(true);
+
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await maybeScanExtraGatewayServices({ deep: false }, runtime, makePrompts());
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw-gateway-second.service"),
+      "Other gateway-like services detected",
     );
   });
 });
