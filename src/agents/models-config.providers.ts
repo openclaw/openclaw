@@ -384,6 +384,8 @@ async function discoverVllmModels(
   }
 }
 
+const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+
 function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
   const match = /^\$\{([A-Z0-9_]+)\}$/.exec(trimmed);
@@ -516,6 +518,23 @@ export function normalizeProviders(params: {
         ...normalizedProvider,
         apiKey: normalizeApiKeyConfig(configuredApiKey),
       };
+    }
+
+    // Reverse-lookup: if apiKey looks like a resolved secret value (not an env
+    // var name), check whether it matches the canonical env var for this provider.
+    // This prevents resolveConfigEnvVars()-resolved secrets from being persisted
+    // to models.json as plaintext. (Fixes #38757)
+    const currentApiKey = normalizedProvider.apiKey;
+    if (
+      typeof currentApiKey === "string" &&
+      currentApiKey.trim() &&
+      !ENV_VAR_NAME_RE.test(currentApiKey.trim())
+    ) {
+      const envVarName = resolveEnvApiKeyVarName(normalizedKey);
+      if (envVarName && process.env[envVarName] === currentApiKey) {
+        mutated = true;
+        normalizedProvider = { ...normalizedProvider, apiKey: envVarName };
+      }
     }
 
     // If a provider defines models, pi's ModelRegistry requires apiKey to be set.

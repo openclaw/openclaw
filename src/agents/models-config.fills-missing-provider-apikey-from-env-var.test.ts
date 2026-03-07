@@ -267,6 +267,39 @@ describe("models-config", () => {
     });
   });
 
+  it("does not persist resolved env var value as plaintext in models.json", async () => {
+    await withEnvVar("OPENAI_API_KEY", "sk-plaintext-should-not-appear", async () => {
+      await withTempHome(async () => {
+        const cfg: OpenClawConfig = {
+          models: {
+            providers: {
+              openai: {
+                apiKey: "sk-plaintext-should-not-appear", // already resolved by loadConfig
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "gpt-4.1",
+                    name: "GPT-4.1",
+                    input: ["text"],
+                    reasoning: false,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128000,
+                    maxTokens: 16384,
+                  },
+                ],
+              },
+            },
+          },
+        };
+        await ensureOpenClawModelsJson(cfg);
+        const result = await readGeneratedModelsJson<{
+          providers: Record<string, { apiKey?: string }>;
+        }>();
+        expect(result.providers.openai?.apiKey).toBe("OPENAI_API_KEY");
+      });
+    });
+  });
+
   it("preserves explicit larger token limits when they exceed implicit catalog defaults", async () => {
     await withTempHome(async () => {
       await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
