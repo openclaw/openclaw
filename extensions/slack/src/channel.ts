@@ -1,9 +1,8 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyConfiguredRouteWarnings,
+  createScopedAccountConfigAccessors,
   formatAllowFromLowercase,
-  mapAllowFromEntries,
-  resolveOptionalConfigString,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -91,6 +90,13 @@ function resolveSlackSendContext(params: {
   return { send, threadTsValue, tokenOverride };
 }
 
+const slackConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) => resolveSlackAccount({ cfg, accountId }),
+  resolveAllowFrom: (account: ResolvedSlackAccount) => account.dm?.allowFrom,
+  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+  resolveDefaultTo: (account: ResolvedSlackAccount) => account.config.defaultTo,
+});
+
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: "slack",
   meta: {
@@ -167,11 +173,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       botTokenSource: account.botTokenSource,
       appTokenSource: account.appTokenSource,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(resolveSlackAccount({ cfg, accountId }).dm?.allowFrom),
-    formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }),
-    resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveOptionalConfigString(resolveSlackAccount({ cfg, accountId }).config.defaultTo),
+    ...slackConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
