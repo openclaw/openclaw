@@ -6,6 +6,7 @@ import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { withEnv } from "../test-utils/env.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import * as tts from "./tts.js";
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
@@ -61,6 +62,12 @@ vi.mock("../media/ffmpeg-exec.js", async () => {
   };
 });
 
+vi.mock("../utils/fetch-timeout.js", () => ({
+  fetchWithTimeout: vi.fn((input: string | URL | Request, init?: RequestInit) =>
+    fetch(input as RequestInfo | URL, init),
+  ),
+}));
+
 const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
 
 const {
@@ -108,6 +115,10 @@ describe("tts", () => {
       mockAssistantMessage([{ type: "text", text: "Summary" }]),
     );
     vi.mocked(runFfmpeg).mockResolvedValue("");
+    vi.mocked(fetchWithTimeout).mockImplementation(
+      (input: string | URL | Request, init?: RequestInit) =>
+        fetch(input as RequestInfo | URL, init),
+    );
   });
 
   describe("isValidVoiceId", () => {
@@ -886,6 +897,46 @@ describe("tts", () => {
         expect(result.mediaUrl).toMatch(/\.wav$/);
       } finally {
         globalThis.fetch = originalFetch;
+      }
+    });
+
+    it("shares the timeout budget across bailian generation and audio download", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-07T00:00:00.000Z"));
+
+      vi.mocked(fetchWithTimeout)
+        .mockImplementationOnce(async (_input, _init, timeoutMs) => {
+          expect(timeoutMs).toBe(30_000);
+          vi.setSystemTime(new Date("2026-03-07T00:00:05.000Z"));
+          return new Response(
+            JSON.stringify({
+              output: { audio: { url: "https://example.com/generated.wav" } },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        })
+        .mockImplementationOnce(async (_input, _init, timeoutMs) => {
+          expect(timeoutMs).toBe(25_000);
+          return new Response(new Uint8Array([1, 2, 3]), {
+            status: 200,
+            headers: { "content-type": "audio/wav" },
+          });
+        });
+
+      try {
+        const result = await tts.textToSpeech({
+          text: "This is a timeout budget test for Bailian TTS.",
+          cfg: bailianCfg,
+          channel: "discord",
+        });
+
+        expect(result.success).toBe(true);
+        expect(fetchWithTimeout).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
       }
     });
   });

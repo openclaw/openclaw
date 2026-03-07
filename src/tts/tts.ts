@@ -285,6 +285,11 @@ function resolveDownloadedAudioExtension(audioUrl: string, contentType?: string 
   return ".wav";
 }
 
+function resolveRemainingTimeoutMs(startedAtMs: number, totalTimeoutMs: number): number {
+  const elapsedMs = Date.now() - startedAtMs;
+  return Math.max(1, totalTimeoutMs - elapsedMs);
+}
+
 async function bailianTTS(params: {
   text: string;
   apiKey: string;
@@ -294,6 +299,7 @@ async function bailianTTS(params: {
   languageType?: string;
   timeoutMs: number;
 }): Promise<{ audioBuffer: Buffer; outputFormat: string; extension: string }> {
+  const startedAtMs = Date.now();
   const url = `${normalizeBailianBaseUrl(params.baseUrl)}/services/aigc/multimodal-generation/generation`;
   const body = {
     model: params.model,
@@ -328,7 +334,11 @@ async function bailianTTS(params: {
     throw new Error("response missing output.audio.url");
   }
 
-  const audioRes = await fetchWithTimeout(audioUrl, {}, params.timeoutMs);
+  const audioRes = await fetchWithTimeout(
+    audioUrl,
+    {},
+    resolveRemainingTimeoutMs(startedAtMs, params.timeoutMs),
+  );
   if (!audioRes.ok) {
     const detail = await readTtsErrorResponse(audioRes);
     throw new Error(
