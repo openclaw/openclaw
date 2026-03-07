@@ -219,6 +219,17 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("sets disableBlockStreaming in replyOptions to prevent silent reply drops", async () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
+  });
+
   it("uses streaming session for auto mode markdown payloads", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,
