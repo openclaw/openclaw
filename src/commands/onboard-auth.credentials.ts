@@ -503,3 +503,15 @@ export async function setKilocodeApiKey(
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
+
+export async function setSarvamApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "sarvam:default",
+    credential: buildApiKeyCredential("sarvam", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}

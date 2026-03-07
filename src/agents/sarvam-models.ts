@@ -1,7 +1,4 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-
-const log = createSubsystemLogger("sarvam-models");
 
 export const SARVAM_BASE_URL = "https://api.sarvam.ai/v1";
 export const SARVAM_DEFAULT_MODEL_ID = "sarvam-30b";
@@ -55,18 +52,3 @@ export const SARVAM_MODEL_CATALOG: ModelDefinitionConfig[] = [
     },
   },
 ];
-
-/**
- * Discover Sarvam models from the API.
- * Currently returns static catalog as Sarvam API does not have a public model discovery endpoint.
- */
-export async function discoverSarvamModels(): Promise<ModelDefinitionConfig[]> {
-  // Skip discovery in test environments
-  if (process.env.VITEST || process.env.NODE_ENV === "test") {
-    return SARVAM_MODEL_CATALOG;
-  }
-
-  // Return static catalog as Sarvam does not expose a /models endpoint
-  log.debug("Using static Sarvam model catalog");
-  return SARVAM_MODEL_CATALOG;
-}

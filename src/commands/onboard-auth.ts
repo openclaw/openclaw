@@ -3,6 +3,7 @@ export {
   SYNTHETIC_DEFAULT_MODEL_REF,
 } from "../agents/synthetic-models.js";
 export { VENICE_DEFAULT_MODEL_ID, VENICE_DEFAULT_MODEL_REF } from "../agents/venice-models.js";
+export { SARVAM_DEFAULT_MODEL_ID, SARVAM_DEFAULT_MODEL_REF } from "../agents/sarvam-models.js";
 export {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
@@ -31,6 +32,8 @@ export {
   applyTogetherProviderConfig,
   applyVeniceConfig,
   applyVeniceProviderConfig,
+  applySarvamConfig,
+  applySarvamProviderConfig,
   applyVercelAiGatewayConfig,
   applyVercelAiGatewayProviderConfig,
   applyXaiConfig,
@@ -79,6 +82,7 @@ export {
   setTogetherApiKey,
   setHuggingfaceApiKey,
   setVeniceApiKey,
+  setSarvamApiKey,
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
   setVolcengineApiKey,
