@@ -873,8 +873,9 @@ export async function compactEmbeddedPiSessionDirect(
     // do not count it toward the circuit breaker threshold.
     const isAbortError =
       (err instanceof DOMException && err.name === "AbortError") ||
-      (err instanceof Error && err.name === "AbortError") ||
-      err === params.abortSignal?.reason;
+      (err instanceof Error && (err.name === "AbortError" || err.message === "aborted")) ||
+      err === params.abortSignal?.reason ||
+      params.abortSignal?.aborted;
     if (!isAbortError) {
       // Only record as circuit breaker failure for actual execution errors
       // (timeouts, provider errors), not for benign skip conditions.
