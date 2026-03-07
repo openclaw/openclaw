@@ -24,8 +24,8 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 import { danger, logVerbose } from "../globals.js";
+import { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
-import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
@@ -237,15 +237,6 @@ async function sendLinePairingReply(params: {
   context: LineHandlerContext;
 }): Promise<void> {
   const { senderId, replyToken, context } = params;
-  const { code, created } = await upsertChannelPairingRequest({
-    channel: "line",
-    id: senderId,
-    accountId: context.account.accountId,
-  });
-  if (!created) {
-    return;
-  }
-  logVerbose(`line pairing request sender=${senderId}`);
   const idLabel = (() => {
     try {
       return resolvePairingIdLabel("line");
@@ -253,30 +244,42 @@ async function sendLinePairingReply(params: {
       return "lineUserId";
     }
   })();
-  const text = buildPairingReply({
+  await issuePairingChallenge({
     channel: "line",
-    idLine: `Your ${idLabel}: ${senderId}`,
-    code,
-  });
-  try {
-    if (replyToken) {
-      await replyMessageLine(replyToken, [{ type: "text", text }], {
+    senderId,
+    senderIdLine: `Your ${idLabel}: ${senderId}`,
+    upsertPairingRequest: async ({ id, meta }) =>
+      await upsertChannelPairingRequest({
+        channel: "line",
+        id,
         accountId: context.account.accountId,
-        channelAccessToken: context.account.channelAccessToken,
-      });
-      return;
-    }
-  } catch (err) {
-    logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
-  }
-  try {
-    await pushMessageLine(`line:${senderId}`, text, {
-      accountId: context.account.accountId,
-      channelAccessToken: context.account.channelAccessToken,
-    });
-  } catch (err) {
-    logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
-  }
+        meta,
+      }),
+    onCreated: () => {
+      logVerbose(`line pairing request sender=${senderId}`);
+    },
+    sendPairingReply: async (text) => {
+      if (replyToken) {
+        try {
+          await replyMessageLine(replyToken, [{ type: "text", text }], {
+            accountId: context.account.accountId,
+            channelAccessToken: context.account.channelAccessToken,
+          });
+          return;
+        } catch (err) {
+          logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
+        }
+      }
+      try {
+        await pushMessageLine(`line:${senderId}`, text, {
+          accountId: context.account.accountId,
+          channelAccessToken: context.account.channelAccessToken,
+        });
+      } catch (err) {
+        logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
+      }
+    },
+  });
 }
 
 async function shouldProcessLineEvent(
