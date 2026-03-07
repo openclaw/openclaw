@@ -558,6 +558,35 @@ describe("model-selection", () => {
       });
       expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
     });
+
+    it("should warn when specified model cannot be resolved and falls back to default", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg: Partial<OpenClawConfig> = {
+          agents: {
+            defaults: {
+              model: { primary: "openai/" },
+            },
+          },
+        };
+
+        const result = resolveConfiguredModelRef({
+          cfg: cfg as OpenClawConfig,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-opus-4-6",
+        });
+
+        expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Falling back to default "anthropic/claude-opus-4-6"'),
+        );
+      } finally {
+        warnSpy.mockRestore();
+        setLoggerOverride(null);
+        resetLogger();
+      }
+    });
   });
 
   describe("resolveThinkingDefault", () => {
