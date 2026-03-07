@@ -507,31 +507,26 @@ describe("image dimension errors", () => {
 });
 
 describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => {
-  it("reclassifies 402 with periodic usage limit as rate_limit", () => {
-    expect(classifyFailoverReasonFromHttpStatus(402, "Monthly spend limit reached.")).toBe(
-      "rate_limit",
-    );
-    expect(classifyFailoverReasonFromHttpStatus(402, "Weekly usage limit exhausted.")).toBe(
-      "rate_limit",
-    );
-    expect(classifyFailoverReasonFromHttpStatus(402, "Daily limit reached, resets tomorrow.")).toBe(
-      "rate_limit",
-    );
+  it("reclassifies periodic usage limits as rate_limit", () => {
+    const samples = [
+      "Monthly spend limit reached.",
+      "Weekly usage limit exhausted.",
+      "Daily limit reached, resets tomorrow.",
+    ];
+    for (const sample of samples) {
+      expect(classifyFailoverReasonFromHttpStatus(402, sample)).toBe("rate_limit");
+    }
   });
 
-  it("reclassifies 402 with organization/workspace limit as rate_limit", () => {
-    expect(classifyFailoverReasonFromHttpStatus(402, "Organization spending limit exceeded.")).toBe(
-      "rate_limit",
-    );
-    expect(classifyFailoverReasonFromHttpStatus(402, "Workspace spend limit reached.")).toBe(
-      "rate_limit",
-    );
-    expect(
-      classifyFailoverReasonFromHttpStatus(
-        402,
-        "Organization limit exceeded for this billing period.",
-      ),
-    ).toBe("rate_limit");
+  it("reclassifies org/workspace spend limits as rate_limit", () => {
+    const samples = [
+      "Organization spending limit exceeded.",
+      "Workspace spend limit reached.",
+      "Organization limit exceeded for this billing period.",
+    ];
+    for (const sample of samples) {
+      expect(classifyFailoverReasonFromHttpStatus(402, sample)).toBe("rate_limit");
+    }
   });
 
   it("keeps 402 as billing when explicit billing signals are present", () => {
@@ -547,6 +542,11 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
         "Insufficient credits. Organization limit reached.",
       ),
     ).toBe("billing");
+  });
+
+  it("keeps long 402 payloads with explicit billing text as billing", () => {
+    const longBillingPayload = `${"x".repeat(520)} insufficient credits. Monthly spend limit reached.`;
+    expect(classifyFailoverReasonFromHttpStatus(402, longBillingPayload)).toBe("billing");
   });
 
   it("keeps 402 as billing without message or with generic message", () => {

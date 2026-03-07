@@ -208,6 +208,51 @@ const HTTP_ERROR_HINTS = [
   "permission",
 ];
 
+function hasExplicitBillingSignalIn402Message(raw: string): boolean {
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("payment required") ||
+    lower.includes("insufficient credits") ||
+    lower.includes("insufficient quota") ||
+    lower.includes("credit balance") ||
+    lower.includes("insufficient balance") ||
+    lower.includes("plans & billing") ||
+    lower.includes("add more credits") ||
+    lower.includes("top up")
+  );
+}
+
+function isTemporary402LimitMessage(raw: string): boolean {
+  if (hasExplicitBillingSignalIn402Message(raw)) {
+    return false;
+  }
+
+  const lower = raw.toLowerCase();
+  const hasTemporaryRetrySignal =
+    (lower.includes("try again") ||
+      lower.includes("retry") ||
+      lower.includes("temporary") ||
+      lower.includes("cooldown")) &&
+    (lower.includes("usage limit") ||
+      lower.includes("rate limit") ||
+      lower.includes("organization usage"));
+  if (hasTemporaryRetrySignal) {
+    return true;
+  }
+
+  if (isPeriodicUsageLimitErrorMessage(raw)) {
+    return true;
+  }
+
+  return (
+    lower.includes("spend limit") ||
+    lower.includes("spending limit") ||
+    lower.includes("organization usage") ||
+    ((lower.includes("organization") || lower.includes("workspace")) &&
+      (lower.includes("limit") || lower.includes("exceeded")))
+  );
+}
+
 function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
   const match = raw.match(HTTP_STATUS_CODE_PREFIX_RE);
   if (!match) {
@@ -261,39 +306,10 @@ export function classifyFailoverReasonFromHttpStatus(
   }
 
   if (status === 402) {
-    // Some providers (e.g. Anthropic Claude Max plan) surface temporary
-    // usage/rate-limit failures as HTTP 402. Detect temporary limits to
-    // avoid misclassifying them as persistent billing failures (#30484).
-    if (message) {
-      const lower = message.toLowerCase();
-      // Explicit retry language + usage/limit terminology
-      const hasTemporaryRetrySignal =
-        (lower.includes("try again") ||
-          lower.includes("retry") ||
-          lower.includes("temporary") ||
-          lower.includes("cooldown")) &&
-        (lower.includes("usage limit") ||
-          lower.includes("rate limit") ||
-          lower.includes("organization usage"));
-      if (hasTemporaryRetrySignal) {
-        return "rate_limit";
-      }
-      // Periodic usage limits (daily/weekly/monthly) are inherently temporary
-      // and should not trigger persistent billing cooldown, unless the message
-      // also contains explicit billing signals (e.g. "insufficient credits").
-      if (isPeriodicUsageLimitErrorMessage(message) && !isBillingErrorMessage(message)) {
-        return "rate_limit";
-      }
-      // Spending/organization/workspace limits are typically resettable caps
-      // set by the organization admin, not permanent credit-balance failures.
-      const hasSpendOrOrgLimitSignal =
-        lower.includes("spend limit") ||
-        lower.includes("spending limit") ||
-        ((lower.includes("organization") || lower.includes("workspace")) &&
-          (lower.includes("limit") || lower.includes("exceeded")));
-      if (hasSpendOrOrgLimitSignal && !isBillingErrorMessage(message)) {
-        return "rate_limit";
-      }
+    // Some providers surface temporary usage caps as HTTP 402. Keep those
+    // retryable, but let explicit insufficient-credit signals stay billing.
+    if (message && isTemporary402LimitMessage(message)) {
+      return "rate_limit";
     }
     return "billing";
   }
