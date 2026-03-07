@@ -3,8 +3,8 @@
  * Stage 1B (schema validation).
  *
  * Both stages are pure functions: no I/O, no model calls, no external
- * dependencies. They execute concurrently via Promise.all and their results
- * are merged by runPreFilter() before the two-pass gating decision.
+ * dependencies. runPreFilter() evaluates both stages and merges their
+ * results before the two-pass gating decision.
  *
  * Design principle: err toward false negatives, not false positives.
  * These filters catch low-effort / automated attacks cheaply. Sophisticated
@@ -604,8 +604,6 @@ function matchesTypeString(value: unknown, typeStr: string): boolean {
       return true;
     if (part === "array" && Array.isArray(value)) return true;
     if (part.startsWith("const:") && String(value) === part.slice(6)) return true;
-    // Handle { const: "value" } shorthand used in discriminated union specs
-    if (part === "array" && Array.isArray(value)) return true;
   }
   return false;
 }
@@ -654,10 +652,10 @@ export type PreFilterParams = {
 };
 
 /**
- * Run Stage 1A and Stage 1B concurrently and merge their results.
+ * Run Stage 1A and Stage 1B and merge their results.
  *
- * Neither stage depends on the other's output, so they execute in parallel.
  * The merged result's `pass` field is true only when both stages pass.
+ * We dispatch both stage evaluations first and then await them together.
  */
 export async function runPreFilter(params: PreFilterParams): Promise<PreFilterResult> {
   const ss = params.schemaStrictness;
@@ -667,18 +665,19 @@ export async function runPreFilter(params: PreFilterParams): Promise<PreFilterRe
     ss === "lenient" || (typeof ss === "object" && ss !== null && ss.mcp === "lenient");
   const lenientExtraFields = params.source === "transcript" ? lenientTranscript : lenientMcp;
 
-  const [syntactic, schema] = await Promise.all([
-    Promise.resolve(syntacticPreFilter(params.input, params.syntacticConfig)),
-    Promise.resolve(
-      schemaValidation(
-        params.input,
-        params.source,
-        params.toolSchema,
-        lenientExtraFields,
-        params.rejectUndeclaredToolSchemas ?? false,
-      ),
+  const syntacticPromise = Promise.resolve().then(() =>
+    syntacticPreFilter(params.input, params.syntacticConfig),
+  );
+  const schemaPromise = Promise.resolve().then(() =>
+    schemaValidation(
+      params.input,
+      params.source,
+      params.toolSchema,
+      lenientExtraFields,
+      params.rejectUndeclaredToolSchemas ?? false,
     ),
-  ]);
+  );
+  const [syntactic, schema] = await Promise.all([syntacticPromise, schemaPromise]);
 
   const allRuleIds = [...new Set([...syntactic.ruleIds, ...schema.ruleIds])];
   const allFlags = [...syntactic.flags, ...schema.violations];

@@ -32,8 +32,9 @@ export type RuleEvaluator = (params: {
 // ---------------------------------------------------------------------------
 // Rule: syntacticFailBurst
 //
-// Fires when N syntactic_fail events occur within a sliding window for the
-// same session — indicates a sustained injection pattern or fuzzing attempt.
+// Fires when N syntactic_fail events occur within a sliding window across
+// sessions for the same agent — indicates a sustained injection pattern or
+// fuzzing attempt.
 // ---------------------------------------------------------------------------
 
 export const evaluateSyntacticFailBurst: RuleEvaluator = ({ entry, cfg, recentContext, now }) => {

@@ -641,7 +641,7 @@ describe("schemaValidation", () => {
 });
 
 // ---------------------------------------------------------------------------
-// runPreFilter — parallel execution wrapper
+// runPreFilter — execution wrapper
 // ---------------------------------------------------------------------------
 
 describe("runPreFilter", () => {
@@ -774,23 +774,15 @@ describe("runPreFilter", () => {
     expect(r.allRuleIds).toContain("schema.type-mismatch");
   });
 
-  it("runs both stages concurrently (Promise.all semantics)", async () => {
-    // Both stages are synchronous but wrapped in Promise.resolve().
-    // Verify results reflect independent parallel execution, not serial dependency.
-    let syntacticDone = false;
-    let schemaDone = false;
-
-    // Use the real runPreFilter — we just verify results are populated
+  it("runs both stages and returns both sub-results", async () => {
+    // Use the real runPreFilter — verify both stage outputs are present.
     const r = await runPreFilter({
       input: cleanTranscriptEntry,
       source: "transcript",
       syntacticConfig: DEFAULT_SYNTACTIC,
     });
 
-    // Both results must be available simultaneously after await
-    syntacticDone = r.syntactic !== undefined;
-    schemaDone = r.schema !== undefined;
-    expect(syntacticDone).toBe(true);
-    expect(schemaDone).toBe(true);
+    expect(r.syntactic).toBeDefined();
+    expect(r.schema).toBeDefined();
   });
 });
