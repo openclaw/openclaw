@@ -29,7 +29,11 @@ describe("resolveGatewayAuthTokenForService", () => {
       {
         gateway: {
           auth: {
-            token: { source: "env", provider: "default", id: "CUSTOM_GATEWAY_TOKEN" },
+            token: {
+              source: "env",
+              provider: "default",
+              id: "CUSTOM_GATEWAY_TOKEN",
+            },
           },
         },
         secrets: {
@@ -73,7 +77,11 @@ describe("resolveGatewayAuthTokenForService", () => {
       {
         gateway: {
           auth: {
-            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+            token: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_GATEWAY_TOKEN",
+            },
           },
         },
         secrets: {
@@ -95,7 +103,11 @@ describe("resolveGatewayAuthTokenForService", () => {
       {
         gateway: {
           auth: {
-            token: { source: "env", provider: "default", id: "CUSTOM_GATEWAY_TOKEN" },
+            token: {
+              source: "env",
+              provider: "default",
+              id: "CUSTOM_GATEWAY_TOKEN",
+            },
           },
         },
         secrets: {
@@ -118,7 +130,11 @@ describe("resolveGatewayAuthTokenForService", () => {
       {
         gateway: {
           auth: {
-            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+            token: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_GATEWAY_TOKEN",
+            },
           },
         },
         secrets: {
@@ -184,7 +200,11 @@ describe("shouldRequireGatewayTokenForInstall", () => {
       {
         gateway: {
           auth: {
-            password: { source: "env", provider: "default", id: "CUSTOM_GATEWAY_PASSWORD" },
+            password: {
+              source: "env",
+              provider: "default",
+              id: "CUSTOM_GATEWAY_PASSWORD",
+            },
           },
         },
         secrets: {
