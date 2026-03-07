@@ -233,7 +233,7 @@ describe("embedding provider remote overrides", () => {
       config: {} as never,
       provider: "gemini",
       remote: {
-        apiKey: "GEMINI_API_KEY",
+        apiKey: "GEMINI_API_KEY", // pragma: allowlist secret
       },
       model: "text-embedding-004",
       fallback: "openai",
@@ -266,7 +266,7 @@ describe("embedding provider remote overrides", () => {
       config: cfg as never,
       provider: "mistral",
       remote: {
-        apiKey: "mistral-key",
+        apiKey: "mistral-key", // pragma: allowlist secret
       },
       model: "mistral/mistral-embed",
       fallback: "none",
@@ -356,7 +356,7 @@ describe("embedding provider auto selection", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "mistral") {
-        return { apiKey: "mistral-key", source: "env: MISTRAL_API_KEY", mode: "api-key" };
+        return { apiKey: "mistral-key", source: "env: MISTRAL_API_KEY", mode: "api-key" }; // pragma: allowlist secret
       }
       throw new Error(`No API key found for provider "${provider}".`);
     });

@@ -22,6 +22,10 @@ const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
 // https://github.com/openclaw/openclaw/issues/23440
 const INSUFFICIENT_QUOTA_PAYLOAD =
   '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
+// Issue-backed ZhipuAI/GLM quota-exhausted log from #33785:
+// https://github.com/openclaw/openclaw/issues/33785
+const ZHIPUAI_WEEKLY_MONTHLY_LIMIT_EXHAUSTED_MESSAGE =
+  "LLM error 1310: Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-03-06 22:19:54 (request_id: 20260303141547610b7f574d1b44cb)";
 // AWS Bedrock 429 ThrottlingException / 503 ServiceUnavailable:
 // https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
 const BEDROCK_THROTTLING_EXCEPTION_MESSAGE =
@@ -37,6 +41,27 @@ const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
 describe("failover-error", () => {
   it("infers failover reason from HTTP status", () => {
     expect(resolveFailoverReasonFromError({ status: 402 })).toBe("billing");
+    // Anthropic Claude Max plan surfaces rate limits as HTTP 402 (#30484)
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "HTTP 402: request reached organization usage limit, try again later",
+      }),
+    ).toBe("rate_limit");
+    // Explicit billing messages on 402 stay classified as billing
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "insufficient credits — please top up your account",
+      }),
+    ).toBe("billing");
+    // Ambiguous "quota exceeded" + billing signal → billing wins
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "HTTP 402: You have exceeded your current quota. Please add more credits.",
+      }),
+    ).toBe("billing");
     expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe("rate_limit");
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
@@ -50,7 +75,7 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 522 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
-    expect(resolveFailoverReasonFromError({ status: 529 })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
   });
 
   it("classifies documented provider error shapes at the error boundary", () => {
@@ -65,7 +90,7 @@ describe("failover-error", () => {
         status: 529,
         message: ANTHROPIC_OVERLOADED_PAYLOAD,
       }),
-    ).toBe("rate_limit");
+    ).toBe("overloaded");
     expect(
       resolveFailoverReasonFromError({
         status: 429,
@@ -101,7 +126,22 @@ describe("failover-error", () => {
         status: 503,
         message: GROQ_SERVICE_UNAVAILABLE_MESSAGE,
       }),
+    ).toBe("overloaded");
+  });
+
+  it("keeps status-only 503s conservative unless the payload is clearly overloaded", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 503,
+        message: "Internal database error",
+      }),
     ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 503,
+        message: '{"error":{"message":"The model is overloaded. Please try later"}}',
+      }),
+    ).toBe("overloaded");
   });
 
   it("treats 400 insufficient_quota payloads as billing instead of format", () => {
@@ -109,6 +149,35 @@ describe("failover-error", () => {
       resolveFailoverReasonFromError({
         status: 400,
         message: INSUFFICIENT_QUOTA_PAYLOAD,
+      }),
+    ).toBe("billing");
+  });
+
+  it("treats zhipuai weekly/monthly limit exhausted as rate_limit", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: ZHIPUAI_WEEKLY_MONTHLY_LIMIT_EXHAUSTED_MESSAGE,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "LLM error: monthly limit reached",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("treats overloaded provider payloads as overloaded", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: ANTHROPIC_OVERLOADED_PAYLOAD,
+      }),
+    ).toBe("overloaded");
+  });
+
+  it("keeps raw-text 402 weekly/monthly limit errors in billing", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "402 Payment Required: Weekly/Monthly Limit Exhausted",
       }),
     ).toBe("billing");
   });
@@ -173,6 +242,10 @@ describe("failover-error", () => {
     expect(err?.status).toBe(402);
     expect(err?.provider).toBe("anthropic");
     expect(err?.model).toBe("claude-opus-4-5");
+  });
+
+  it("maps overloaded to a 503 fallback status", () => {
+    expect(resolveFailoverStatus("overloaded")).toBe(503);
   });
 
   it("coerces format errors with a 400 status", () => {

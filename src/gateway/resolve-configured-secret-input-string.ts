@@ -3,7 +3,7 @@ import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveSecretRefValues } from "../secrets/resolve.js";
 
-export type SecretInputUnresolvedReasonStyle = "generic" | "detailed";
+export type SecretInputUnresolvedReasonStyle = "generic" | "detailed"; // pragma: allowlist secret
 
 function trimToUndefined(value: unknown): string | undefined {
   if (typeof value !== "string") {

@@ -25,14 +25,14 @@ openclaw onboard --kilocode-api-key <key>
 Or set the environment variable:
 
 ```bash
-export KILOCODE_API_KEY="your-api-key"
+export KILOCODE_API_KEY="<your-kilocode-api-key>" # pragma: allowlist secret
 ```
 
 ## Config snippet
 
 ```json5
 {
-  env: { KILOCODE_API_KEY: "sk-..." },
+  env: { KILOCODE_API_KEY: "<your-kilocode-api-key>" }, // pragma: allowlist secret
   agents: {
     defaults: {
       model: { primary: "kilocode/kilo/auto" },

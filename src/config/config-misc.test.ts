@@ -31,6 +31,19 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
+describe("plugins.slots.contextEngine", () => {
+  it("accepts a contextEngine slot id", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        slots: {
+          contextEngine: "my-context-engine",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });
@@ -245,7 +258,7 @@ describe("cron webhook schema", () => {
         retry: {
           maxAttempts: 5,
           backoffMs: [60000, 120000, 300000],
-          retryOn: ["rate_limit", "network"],
+          retryOn: ["rate_limit", "overloaded", "network"],
         },
       },
     });

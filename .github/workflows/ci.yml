@@ -21,30 +21,46 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
           submodules: false
+
+      - name: Ensure docs-scope base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
         id: check
         uses: ./.github/actions/detect-docs-changes
 
   # Detect which heavy areas are touched so PRs can skip unrelated expensive jobs.
-  # Push to main keeps broad coverage.
+  # Push to main keeps broad coverage, but this job still needs to run so
+  # downstream jobs that list it in `needs` are not skipped.
   changed-scope:
     needs: [docs-scope]
-    if: github.event_name == 'pull_request' && needs.docs-scope.outputs.docs_only != 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       run_node: ${{ steps.scope.outputs.run_node }}
       run_macos: ${{ steps.scope.outputs.run_macos }}
       run_android: ${{ steps.scope.outputs.run_android }}
+      run_skills_python: ${{ steps.scope.outputs.run_skills_python }}
       run_windows: ${{ steps.scope.outputs.run_windows }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
           submodules: false
+
+      - name: Ensure changed-scope base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect changed scopes
         id: scope
@@ -70,6 +86,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+
+      - name: Ensure secrets base commit (PR fast path)
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -124,6 +147,9 @@ jobs:
           - runtime: node
             task: test
             command: pnpm canvas:a2ui:bundle && pnpm test
+          - runtime: node
+            task: extensions
+            command: pnpm test:extensions
           - runtime: node
             task: protocol
             command: pnpm protocol:check
@@ -187,25 +213,13 @@ jobs:
       - name: Enforce safe external URL opening policy
         run: pnpm lint:ui:no-raw-window-open
 
-  # Report-only dead-code scans. Runs after scope detection and stores machine-readable
-  # results as artifacts for later triage before we enable hard gates.
-  # Temporarily disabled in CI while we process initial findings.
+  # Report-only dead-code scan. Runs after scope detection and stores the Knip
+  # report as an artifact so we can triage findings before enabling hard gates.
   deadcode:
     name: dead-code report
     needs: [docs-scope, changed-scope]
-    # if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    if: false
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - tool: knip
-            command: pnpm deadcode:report:ci:knip
-          - tool: ts-prune
-            command: pnpm deadcode:report:ci:ts-prune
-          - tool: ts-unused-exports
-            command: pnpm deadcode:report:ci:ts-unused
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -218,13 +232,13 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "true"
 
-      - name: Run ${{ matrix.tool }} dead-code scan
-        run: ${{ matrix.command }}
+      - name: Run Knip dead-code scan
+        run: pnpm deadcode:report:ci:knip
 
       - name: Upload dead-code results
         uses: actions/upload-artifact@v4
         with:
-          name: dead-code-${{ matrix.tool }}-${{ github.run_id }}
+          name: dead-code-knip-${{ github.run_id }}
           path: .artifacts/deadcode
 
   # Validate docs (format, lint, broken links) only when docs files changed.
@@ -249,7 +263,7 @@ jobs:
 
   skills-python:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true' || needs.changed-scope.outputs.run_skills_python == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -296,13 +310,34 @@ jobs:
       - name: Install pre-commit
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pre-commit detect-secrets==1.5.0
+          python -m pip install pre-commit
 
       - name: Detect secrets
         run: |
-          if ! detect-secrets scan --baseline .secrets.baseline; then
-            echo "::error::Secret scanning failed. See docs/gateway/security.md#secret-scanning-detect-secrets"
-            exit 1
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "Running full detect-secrets scan on push."
+            pre-commit run --all-files detect-secrets
+            exit 0
+          fi
+
+          BASE="${{ github.event.pull_request.base.sha }}"
+          changed_files=()
+          if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
+            while IFS= read -r path; do
+              [ -n "$path" ] || continue
+              [ -f "$path" ] || continue
+              changed_files+=("$path")
+            done < <(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
+          fi
+
+          if [ "${#changed_files[@]}" -gt 0 ]; then
+            echo "Running detect-secrets on ${#changed_files[@]} changed file(s)."
+            pre-commit run detect-secrets --files "${changed_files[@]}"
+          else
+            echo "Falling back to full detect-secrets scan."
+            pre-commit run --all-files detect-secrets
           fi
 
       - name: Detect committed private keys

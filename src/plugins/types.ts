@@ -35,7 +35,7 @@ export type PluginConfigUiHint = {
   placeholder?: string;
 };
 
-export type PluginKind = "memory";
+export type PluginKind = "memory" | "context-engine";
 
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
@@ -285,6 +285,11 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
+  /** Register a context engine implementation (exclusive slot — only one active at a time). */
+  registerContextEngine: (
+    id: string,
+    factory: import("../context-engine/registry.js").ContextEngineFactory,
+  ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
