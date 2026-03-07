@@ -82,6 +82,27 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
   return { mimeType: match[1], content: match[2] };
 }
 
+function isImageMimeType(mimeType: string): boolean {
+  return mimeType.toLowerCase().startsWith("image/");
+}
+
+function summarizeNonImageAttachments(attachments: ChatAttachment[]): string {
+  const lines = attachments
+    .filter((att) => !isImageMimeType(att.mimeType))
+    .map((att) => {
+      const name = att.fileName?.trim() || "file";
+      const size = typeof att.sizeBytes === "number" && Number.isFinite(att.sizeBytes)
+        ? `, ${Math.max(1, Math.round(att.sizeBytes / 1024))} KB`
+        : "";
+      return `- ${name} (${att.mimeType}${size})`;
+    });
+
+  if (lines.length === 0) {
+    return "";
+  }
+  return `Attached files:\n${lines.join("\n")}`;
+}
+
 type AssistantMessageNormalizationOptions = {
   roleRequirement: "required" | "optional";
   roleCaseSensitive?: boolean;
@@ -144,6 +165,8 @@ export async function sendChatMessage(
   if (!msg && !hasAttachments) {
     return null;
   }
+  const nonImageAttachmentSummary = hasAttachments ? summarizeNonImageAttachments(attachments) : "";
+  const outboundMessage = [msg, nonImageAttachmentSummary].filter(Boolean).join("\n\n");
 
   const now = Date.now();
 
@@ -152,12 +175,23 @@ export async function sendChatMessage(
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
-  // Add image previews to the message for display
+  if (nonImageAttachmentSummary) {
+    contentBlocks.push({ type: "text", text: nonImageAttachmentSummary });
+  }
+  // Add attachment previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
+      if (isImageMimeType(att.mimeType)) {
+        contentBlocks.push({
+          type: "image",
+          source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        });
+        continue;
+      }
+      const label = att.fileName?.trim() || "file";
       contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        type: "text",
+        text: `Attached file: ${label} (${att.mimeType})`,
       });
     }
   }
@@ -186,9 +220,14 @@ export async function sendChatMessage(
           if (!parsed) {
             return null;
           }
+          const looksLikeImage = isImageMimeType(parsed.mimeType) || isImageMimeType(att.mimeType);
+          if (!looksLikeImage) {
+            return null;
+          }
           return {
             type: "image",
-            mimeType: parsed.mimeType,
+            mimeType: isImageMimeType(parsed.mimeType) ? parsed.mimeType : att.mimeType,
+            fileName: att.fileName,
             content: parsed.content,
           };
         })
@@ -198,7 +237,7 @@ export async function sendChatMessage(
   try {
     await state.client.request("chat.send", {
       sessionKey: state.sessionKey,
-      message: msg,
+      message: outboundMessage,
       deliver: false,
       idempotencyKey: runId,
       attachments: apiAttachments,

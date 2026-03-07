@@ -62,9 +62,11 @@ export type ChatProps = {
   splitRatio?: number;
   assistantName: string;
   assistantAvatar: string | null;
-  // Image attachments
+  // File attachments
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  onAttachmentsAppend?: (attachments: ChatAttachment[]) => void;
+  onAttachmentError?: (message: string) => void;
   // Scroll control
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
@@ -162,45 +164,77 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function isImageAttachment(att: ChatAttachment): boolean {
+  return att.mimeType.toLowerCase().startsWith("image/");
+}
+
+const MAX_ATTACHMENT_SIZE_BYTES = 50 * 1024 * 1024;
+
+function readFileAsAttachment(file: File): Promise<ChatAttachment> {
+  return new Promise((resolve, reject) => {
+    if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
+      reject(new Error(`File "${file.name || "unnamed"}" exceeds 50 MB.`));
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("Failed to read file")));
+    reader.addEventListener("load", () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : "";
+      const dataUrlMime = /^data:([^;]+);base64,/i.exec(dataUrl)?.[1] ?? "";
+      const mimeType = file.type || dataUrlMime || "application/octet-stream";
+      resolve({
+        id: generateAttachmentId(),
+        dataUrl,
+        mimeType,
+        fileName: file.name,
+        sizeBytes: file.size,
+      });
+    });
+    reader.readAsDataURL(file);
+  });
+}
+
+async function appendFiles(props: ChatProps, files: File[]) {
+  if (!props.onAttachmentsAppend || files.length === 0) {
+    return;
+  }
+  const settled = await Promise.allSettled(files.map((file) => readFileAsAttachment(file)));
+  const next = settled
+    .filter((result): result is PromiseFulfilledResult<ChatAttachment> => result.status === "fulfilled")
+    .map((result) => result.value);
+  const errors = settled
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) => String(result.reason));
+
+  if (next.length > 0) {
+    props.onAttachmentsAppend(next);
+  }
+  if (errors.length > 0) {
+    props.onAttachmentError?.(errors[0] ?? "Some files could not be attached.");
+  }
+}
+
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
-  if (!items || !props.onAttachmentsChange) {
+  if (!items || !props.onAttachmentsAppend) {
     return;
   }
 
-  const imageItems: DataTransferItem[] = [];
+  const files: File[] = [];
   for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (item.type.startsWith("image/")) {
-      imageItems.push(item);
+    const file = items[i]?.getAsFile();
+    if (file) {
+      files.push(file);
     }
   }
 
-  if (imageItems.length === 0) {
+  if (files.length === 0) {
     return;
   }
 
   e.preventDefault();
-
-  for (const item of imageItems) {
-    const file = item.getAsFile();
-    if (!file) {
-      continue;
-    }
-
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
-        id: generateAttachmentId(),
-        dataUrl,
-        mimeType: file.type,
-      };
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
-    });
-    reader.readAsDataURL(file);
-  }
+  void appendFiles(props, files);
 }
 
 function renderAttachmentPreview(props: ChatProps) {
@@ -211,14 +245,28 @@ function renderAttachmentPreview(props: ChatProps) {
 
   return html`
     <div class="chat-attachments">
-      ${attachments.map(
-        (att) => html`
-          <div class="chat-attachment">
-            <img
-              src=${att.dataUrl}
-              alt="Attachment preview"
-              class="chat-attachment__img"
-            />
+      ${attachments.map((att) => {
+        const fileLabel = att.fileName?.trim() || "file";
+        const sizeKb = typeof att.sizeBytes === "number" ? Math.max(1, Math.round(att.sizeBytes / 1024)) : null;
+        return html`
+          <div class="chat-attachment ${isImageAttachment(att) ? "chat-attachment--image" : "chat-attachment--file"}">
+            ${
+              isImageAttachment(att)
+                ? html`
+                    <img
+                      src=${att.dataUrl}
+                      alt="Attachment preview"
+                      class="chat-attachment__img"
+                    />
+                  `
+                : html`
+                    <div class="chat-attachment__file-meta" title=${fileLabel}>
+                      <span class="chat-attachment__file-icon">${icons.fileText}</span>
+                      <span class="chat-attachment__file-name">${fileLabel}</span>
+                      <span class="chat-attachment__file-size">${sizeKb ? `${sizeKb} KB` : ""}</span>
+                    </div>
+                  `
+            }
             <button
               class="chat-attachment__remove"
               type="button"
@@ -231,8 +279,8 @@ function renderAttachmentPreview(props: ChatProps) {
               ${icons.x}
             </button>
           </div>
-        `,
-      )}
+        `;
+      })}
     </div>
   `;
 }
@@ -252,8 +300,8 @@ export function renderChat(props: ChatProps) {
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const composePlaceholder = props.connected
     ? hasAttachments
-      ? "Add a message or paste more images..."
-      : "Message (↩ to send, Shift+↩ for line breaks, paste images)"
+      ? "Add a message or attach more files..."
+      : "Message (↩ to send, Shift+↩ for line breaks, paste or upload files)"
     : "Connect to the gateway to start chatting…";
 
   const splitRatio = props.splitRatio ?? 0.6;
@@ -383,7 +431,7 @@ export function renderChat(props: ChatProps) {
                       <div class="chat-queue__text">
                         ${
                           item.text ||
-                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")
+                          (item.attachments?.length ? `Attachment (${item.attachments.length})` : "")
                         }
                       </div>
                       <button
@@ -423,6 +471,23 @@ export function renderChat(props: ChatProps) {
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
+          <div class="chat-compose__attach">
+            <input
+              id="chat-file-input"
+              class="chat-compose__file-input"
+              type="file"
+              multiple
+              @change=${async (e: Event) => {
+                const input = e.target as HTMLInputElement;
+                const files = Array.from(input.files ?? []);
+                await appendFiles(props, files);
+                input.value = "";
+              }}
+            />
+            <label class="btn chat-compose__attach-btn" for="chat-file-input" title="Attach files">
+              ${icons.paperclip}
+            </label>
+          </div>
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
@@ -454,6 +519,20 @@ export function renderChat(props: ChatProps) {
                 props.onDraftChange(target.value);
               }}
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+              @dragover=${(e: DragEvent) => {
+                const files = Array.from(e.dataTransfer?.files ?? []);
+                if (files.length > 0) {
+                  e.preventDefault();
+                }
+              }}
+              @drop=${(e: DragEvent) => {
+                const files = Array.from(e.dataTransfer?.files ?? []);
+                if (files.length === 0) {
+                  return;
+                }
+                e.preventDefault();
+                void appendFiles(props, files);
+              }}
               placeholder=${composePlaceholder}
             ></textarea>
           </label>

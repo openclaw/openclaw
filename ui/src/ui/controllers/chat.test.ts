@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleChatEvent, loadChatHistory, type ChatEventPayload, type ChatState } from "./chat.ts";
+import {
+  handleChatEvent,
+  loadChatHistory,
+  sendChatMessage,
+  type ChatEventPayload,
+  type ChatState,
+} from "./chat.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -564,5 +570,65 @@ describe("loadChatHistory", () => {
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
+  });
+});
+
+describe("sendChatMessage", () => {
+  it("includes non-image file metadata in message text and skips dropped attachment payload", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const runId = await sendChatMessage(state, "please review", [
+      {
+        id: "att-1",
+        mimeType: "application/pdf",
+        fileName: "offer-audit.pdf",
+        dataUrl: "data:application/pdf;base64,QUJD",
+      },
+    ]);
+
+    expect(typeof runId).toBe("string");
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: expect.stringContaining("Attached files:\n- offer-audit.pdf (application/pdf"),
+        attachments: [],
+      }),
+    );
+  });
+
+  it("keeps image attachments as type=image", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await sendChatMessage(state, "", [
+      {
+        id: "att-2",
+        mimeType: "image/png",
+        fileName: "shot.png",
+        dataUrl: "data:image/png;base64,SEVMTE8=",
+      },
+    ]);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: "",
+        attachments: [
+          expect.objectContaining({
+            type: "image",
+            mimeType: "image/png",
+            fileName: "shot.png",
+            content: "SEVMTE8=",
+          }),
+        ],
+      }),
+    );
   });
 });

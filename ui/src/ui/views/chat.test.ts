@@ -224,4 +224,68 @@ describe("chat view", () => {
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
   });
+
+  it("renders a file upload input with multi-select enabled", () => {
+    const container = document.createElement("div");
+    render(renderChat(createProps()), container);
+
+    const input = container.querySelector("#chat-file-input") as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    expect(input?.type).toBe("file");
+    expect(input?.multiple).toBe(true);
+  });
+
+  it("supports multiple file uploads via picker change", async () => {
+    const container = document.createElement("div");
+    const onAttachmentsAppend = vi.fn();
+
+    class MockFileReader {
+      public result: string | ArrayBuffer | null = null;
+      public error: DOMException | null = null;
+      private listeners = new Map<string, Array<() => void>>();
+
+      addEventListener(type: string, cb: () => void) {
+        const current = this.listeners.get(type) ?? [];
+        current.push(cb);
+        this.listeners.set(type, current);
+      }
+
+      readAsDataURL(file: File) {
+        this.result = `data:${file.type || "application/octet-stream"};base64,QUJD`;
+        const handlers = this.listeners.get("load") ?? [];
+        for (const handler of handlers) {
+          handler();
+        }
+      }
+    }
+
+    vi.stubGlobal("FileReader", MockFileReader as unknown as typeof FileReader);
+
+    render(
+      renderChat(
+        createProps({
+          onAttachmentsAppend,
+        }),
+      ),
+      container,
+    );
+
+    const input = container.querySelector("#chat-file-input") as HTMLInputElement;
+    const fileA = new File(["a"], "brief.txt", { type: "text/plain" });
+    const fileB = new File(["b"], "proof.pdf", { type: "application/pdf" });
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [fileA, fileB],
+    });
+
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await Promise.resolve();
+
+    expect(onAttachmentsAppend).toHaveBeenCalledTimes(1);
+    const attachments = onAttachmentsAppend.mock.calls[0]?.[0] as Array<{ fileName?: string }>;
+    expect(attachments).toHaveLength(2);
+    expect(attachments.map((a) => a.fileName)).toEqual(["brief.txt", "proof.pdf"]);
+
+    vi.unstubAllGlobals();
+  });
 });
