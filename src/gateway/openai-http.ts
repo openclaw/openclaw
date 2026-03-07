@@ -300,22 +300,16 @@ async function resolveImagesForRequest(
   for (const url of urls) {
     const source = parseImageUrlToSource(url);
     if (source.type === "base64") {
-      const sourceData = source.data;
-      if (typeof sourceData !== "string" || sourceData.length === 0) {
-        throw new Error("image_url data URI is missing payload data");
-      }
-      totalBytes += estimateBase64DecodedBytes(sourceData);
-      if (totalBytes > limits.maxTotalImageBytes) {
+      const sourceBytes = estimateBase64DecodedBytes(source.data);
+      if (totalBytes + sourceBytes > limits.maxTotalImageBytes) {
         throw new Error(
-          `Total image payload too large (${totalBytes}; limit ${limits.maxTotalImageBytes})`,
+          `Total image payload too large (${totalBytes + sourceBytes}; limit ${limits.maxTotalImageBytes})`,
         );
       }
     }
 
     const image = await extractImageContentFromSource(source, limits.images);
-    if (source.type !== "base64") {
-      totalBytes += estimateBase64DecodedBytes(image.data);
-    }
+    totalBytes += estimateBase64DecodedBytes(image.data);
     if (totalBytes > limits.maxTotalImageBytes) {
       throw new Error(
         `Total image payload too large (${totalBytes}; limit ${limits.maxTotalImageBytes})`,
@@ -325,6 +319,11 @@ async function resolveImagesForRequest(
   }
   return images;
 }
+
+export const __testOnlyOpenAiHttp = {
+  resolveImagesForRequest,
+  resolveOpenAiChatCompletionsLimits,
+};
 
 function buildAgentPrompt(
   messagesUnknown: unknown,
