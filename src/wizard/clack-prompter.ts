@@ -20,7 +20,9 @@ import type { WizardProgress, WizardPrompter } from "./prompts.js";
 import { WizardCancelledError } from "./prompts.js";
 
 function guardCancel<T>(value: T | symbol): T {
-  if (isCancel(value)) {
+  // Check typeof first: catches cancel symbols from any @clack/prompts version
+  // (Symbol identity via isCancel fails when multiple versions are installed).
+  if (typeof value === "symbol" || isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     throw new WizardCancelledError();
   }
