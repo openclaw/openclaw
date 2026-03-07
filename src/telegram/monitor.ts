@@ -269,7 +269,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         return;
       }
       try {
-        await bot.api.getUpdates({ offset: lastUpdateId + 1, limit: 0, timeout: 0 });
+        await bot.api.getUpdates({ offset: lastUpdateId + 1, limit: 1, timeout: 0 });
       } catch {
         // Non-fatal: runner middleware still skips duplicates via shouldSkipUpdate.
       }

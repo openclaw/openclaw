@@ -548,7 +548,7 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
-    expect(api.getUpdates).toHaveBeenCalledWith({ offset: 549076204, limit: 0, timeout: 0 });
+    expect(api.getUpdates).toHaveBeenCalledWith({ offset: 549076204, limit: 1, timeout: 0 });
     expect(order).toEqual(["deleteWebhook", "getUpdates", "run"]);
   });
 
