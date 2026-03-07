@@ -413,6 +413,13 @@
   "packageManager": "pnpm@10.23.0",
   "pnpm": {
     "minimumReleaseAge": 2880,
+    "packageExtensions": {
+      "@whiskeysockets/baileys@7.0.0-rc.9": {
+        "dependencies": {
+          "long": "^5"
+        }
+      }
+    },
     "overrides": {
       "hono": "4.12.5",
       "@hono/node-server": "1.19.10",
