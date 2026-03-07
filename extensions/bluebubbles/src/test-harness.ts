@@ -47,14 +47,21 @@ export function createBlueBubblesAccountsMockModule() {
 
 type BlueBubblesProbeMockModule = {
   getCachedBlueBubblesPrivateApiStatus: Mock<() => boolean | null>;
+  resolveBlueBubblesPrivateApiStatus: Mock<
+    (params?: { accountId?: string }) => Promise<boolean | null>
+  >;
   isBlueBubblesPrivateApiStatusEnabled: Mock<(status: boolean | null) => boolean>;
 };
 
 export function createBlueBubblesProbeMockModule(): BlueBubblesProbeMockModule {
+  const getCachedBlueBubblesPrivateApiStatus = vi
+    .fn()
+    .mockReturnValue(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown);
   return {
-    getCachedBlueBubblesPrivateApiStatus: vi
-      .fn()
-      .mockReturnValue(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown),
+    getCachedBlueBubblesPrivateApiStatus,
+    resolveBlueBubblesPrivateApiStatus: vi.fn(async (params?: { accountId?: string }) =>
+      getCachedBlueBubblesPrivateApiStatus(params?.accountId),
+    ),
     isBlueBubblesPrivateApiStatusEnabled: vi.fn((status: boolean | null) => status === true),
   };
 }

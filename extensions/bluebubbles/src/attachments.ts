@@ -4,8 +4,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { postMultipartFormData } from "./multipart.js";
 import {
-  getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
+  resolveBlueBubblesPrivateApiStatus,
 } from "./probe.js";
 import { resolveRequestUrl } from "./request-url.js";
 import { getBlueBubblesRuntime, warnBlueBubbles } from "./runtime.js";
@@ -156,7 +156,12 @@ export async function sendBlueBubblesAttachment(params: {
   filename = sanitizeFilename(filename, fallbackName);
   contentType = contentType?.trim() || undefined;
   const { baseUrl, password, accountId } = resolveAccount(opts);
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+  const privateApiStatus = await resolveBlueBubblesPrivateApiStatus({
+    baseUrl,
+    password,
+    accountId,
+    timeoutMs: opts.timeoutMs,
+  });
   const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
 
   // Validate voice memo format when requested (BlueBubbles converts MP3 -> CAF when isAudioMessage).

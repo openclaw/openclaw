@@ -97,6 +97,20 @@ export function getCachedBlueBubblesPrivateApiStatus(accountId?: string): boolea
   return info.private_api;
 }
 
+export async function resolveBlueBubblesPrivateApiStatus(params: {
+  baseUrl?: string | null;
+  password?: string | null;
+  accountId?: string;
+  timeoutMs?: number;
+}): Promise<boolean | null> {
+  const cached = getCachedBlueBubblesPrivateApiStatus(params.accountId);
+  if (cached !== null) {
+    return cached;
+  }
+  const info = await fetchBlueBubblesServerInfo(params);
+  return typeof info?.private_api === "boolean" ? info.private_api : null;
+}
+
 export function isBlueBubblesPrivateApiStatusEnabled(status: boolean | null): boolean {
   return status === true;
 }
