@@ -1,5 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+import {
+  extractToolCallsFromAssistant,
+  extractToolResultId,
+  normalizeMangledToolCallId,
+} from "./tool-call-id.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_-]+$/;
@@ -63,13 +67,17 @@ function hasToolCallName(block: RawToolCallBlock, allowedToolNames: Set<string> 
   if (!trimmed) {
     return false;
   }
-  if (trimmed.length > TOOL_CALL_NAME_MAX_CHARS || !TOOL_CALL_NAME_RE.test(trimmed)) {
+  const normalized = normalizePrefixedToolName(trimmed);
+  if (
+    normalized.length > TOOL_CALL_NAME_MAX_CHARS ||
+    !TOOL_CALL_NAME_RE.test(normalized)
+  ) {
     return false;
   }
   if (!allowedToolNames) {
     return true;
   }
-  return allowedToolNames.has(trimmed.toLowerCase());
+  return allowedToolNames.has(normalized.toLowerCase());
 }
 
 function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
@@ -159,12 +167,31 @@ function trimNonEmptyString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+/**
+ * Strip OpenAI-compatible "functions." or "functions " prefix from tool names.
+ * Some providers (e.g. Kimi) send names like "functions exec" instead of "exec".
+ */
+function normalizePrefixedToolName(name: string): string {
+  if (typeof name !== "string" || !name) {
+    return name;
+  }
+  const trimmed = name.trim();
+  if (trimmed.startsWith("functions.")) {
+    return trimmed.slice("functions.".length).trim() || trimmed;
+  }
+  if (trimmed.startsWith("functions ")) {
+    return trimmed.slice("functions ".length).trim() || trimmed;
+  }
+  return trimmed;
+}
+
 function normalizeToolResultName(
   message: Extract<AgentMessage, { role: "toolResult" }>,
   fallbackName?: string,
 ): Extract<AgentMessage, { role: "toolResult" }> {
   const rawToolName = (message as { toolName?: unknown }).toolName;
-  const normalizedToolName = trimNonEmptyString(rawToolName);
+  const trimmed = trimNonEmptyString(rawToolName);
+  const normalizedToolName = trimmed ? normalizePrefixedToolName(trimmed) : undefined;
   if (normalizedToolName) {
     if (rawToolName === normalizedToolName) {
       return message;
@@ -174,7 +201,7 @@ function normalizeToolResultName(
 
   const normalizedFallback = trimNonEmptyString(fallbackName);
   if (normalizedFallback) {
-    return { ...message, toolName: normalizedFallback };
+    return { ...message, toolName: normalizePrefixedToolName(normalizedFallback) };
   }
 
   if (typeof rawToolName === "string") {
@@ -276,7 +303,15 @@ export function repairToolCallInputs(
             if (typeof (block as { name?: unknown }).name === "string") {
               const rawName = (block as { name: string }).name;
               const trimmedName = rawName.trim();
-              if (rawName !== trimmedName && trimmedName) {
+              const normalizedName = trimmedName
+                ? normalizePrefixedToolName(trimmedName)
+                : trimmedName;
+              if (rawName !== normalizedName && normalizedName) {
+                const renamed = { ...(block as object), name: normalizedName } as typeof block;
+                nextContent.push(renamed);
+                changed = true;
+                messageChanged = true;
+              } else if (rawName !== trimmedName && trimmedName) {
                 const renamed = { ...(block as object), name: trimmedName } as typeof block;
                 nextContent.push(renamed);
                 changed = true;
@@ -408,8 +443,10 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
       continue;
     }
 
-    const toolCallIds = new Set(toolCalls.map((t) => t.id));
-    const toolCallNamesById = new Map(toolCalls.map((t) => [t.id, t.name] as const));
+    const toolCallIds = new Set(toolCalls.map((t) => normalizeMangledToolCallId(t.id)));
+    const toolCallNamesById = new Map(
+      toolCalls.map((t) => [normalizeMangledToolCallId(t.id), t.name] as const),
+    );
 
     const spanResultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
     const remainder: AgentMessage[] = [];
@@ -467,7 +504,8 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     }
 
     for (const call of toolCalls) {
-      const existing = spanResultsById.get(call.id);
+      const normalizedCallId = normalizeMangledToolCallId(call.id);
+      const existing = spanResultsById.get(normalizedCallId);
       if (existing) {
         pushToolResult(existing);
       } else {

@@ -99,6 +99,30 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(toolResult?.toolName).toBe("read");
   });
 
+  it("pairs tool results when assistant ID is canonical and result ID is mangled (functions exec)", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "functions.exec:0", name: "exec", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "functions exec:0",
+        toolName: "functions exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ]);
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out[0]?.role).toBe("assistant");
+    expect(out[1]?.role).toBe("toolResult");
+    expect((out[1] as { toolCallId?: string }).toolCallId).toBe("functions exec:0");
+    expect((out[1] as { toolName?: string }).toolName).toBe("exec");
+  });
+
   it("drops duplicate tool results for the same id within a span", () => {
     const input = castAgentMessages([
       ...buildDuplicateToolResultInput(),
