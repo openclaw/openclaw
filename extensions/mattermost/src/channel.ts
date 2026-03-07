@@ -1,6 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRestrictSendersWarnings,
+  formatNormalizedAllowFromEntries,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -279,7 +280,10 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
-      allowFrom.map((entry) => formatAllowEntry(String(entry))).filter(Boolean),
+      formatNormalizedAllowFromEntries({
+        allowFrom,
+        normalizeEntry: formatAllowEntry,
+      }),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
