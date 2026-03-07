@@ -3,7 +3,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMedia } from "../../web/media.js";
-import { isMinimaxVlmProvider, minimaxUnderstandImage } from "../minimax-vlm.js";
+import { isMinimaxVlmModel, isMinimaxVlmProvider, minimaxUnderstandImage } from "../minimax-vlm.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -229,7 +229,7 @@ async function runImagePrompt(params: {
       });
 
       // MiniMax VLM only supports a single image; use the first one.
-      if (isMinimaxVlmProvider(model.provider)) {
+      if (isMinimaxVlmModel(model.provider, model.id)) {
         const first = params.images[0];
         const imageDataUrl = `data:${first.mimeType};base64,${first.base64}`;
         const text = await minimaxUnderstandImage({

@@ -36,3 +36,14 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(fetchSpy).toHaveBeenCalled();
   });
 });
+
+describe("isMinimaxVlmModel", () => {
+  it("only matches the canonical MiniMax VLM model id", async () => {
+    const { isMinimaxVlmModel } = await import("./minimax-vlm.js");
+
+    expect(isMinimaxVlmModel("minimax", "MiniMax-VL-01")).toBe(true);
+    expect(isMinimaxVlmModel("minimax-portal", "MiniMax-VL-01")).toBe(true);
+    expect(isMinimaxVlmModel("minimax-portal", "custom-vision")).toBe(false);
+    expect(isMinimaxVlmModel("openai", "MiniMax-VL-01")).toBe(false);
+  });
+});

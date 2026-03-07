@@ -23,6 +23,8 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
 vi.mock("../../agents/minimax-vlm.js", () => ({
   isMinimaxVlmProvider: (provider: string) =>
     provider === "minimax" || provider === "minimax-portal",
+  isMinimaxVlmModel: (provider: string, modelId: string) =>
+    (provider === "minimax" || provider === "minimax-portal") && modelId === "MiniMax-VL-01",
   minimaxUnderstandImage: minimaxUnderstandImageMock,
 }));
 
@@ -86,5 +88,46 @@ describe("describeImageWithModel", () => {
       modelBaseUrl: "https://api.minimax.io/anthropic",
     });
     expect(completeMock).not.toHaveBeenCalled();
+  });
+
+  it("uses generic completion for non-canonical minimax-portal image models", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "minimax-portal",
+        id: "custom-vision",
+        input: ["text", "image"],
+        baseUrl: "https://api.minimax.io/anthropic",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "minimax-portal",
+      model: "custom-vision",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "generic ok" }],
+    });
+
+    const { describeImageWithModel } = await import("./image.js");
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "minimax-portal",
+      model: "custom-vision",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "generic ok",
+      model: "custom-vision",
+    });
+    expect(completeMock).toHaveBeenCalledOnce();
+    expect(minimaxUnderstandImageMock).not.toHaveBeenCalled();
   });
 });
