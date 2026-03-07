@@ -251,6 +251,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/loopback announce URLs: treat `http://` and `https://` aliases with the same loopback/private-network policy as websocket URLs so loopback cron announce delivery no longer fails secure URL validation. (#39064) Thanks @Narcooo.
 - Models/default provider fallback: when the hardcoded default provider is removed from `models.providers`, resolve defaults from configured providers instead of reporting stale removed-provider defaults in status output. (#38947) Thanks @davidemanuelDEV.
 - Agents/cache-trace stability: guard stable stringify against circular references in trace payloads so near-limit payloads no longer crash with `Maximum call stack size exceeded`; adds regression coverage. (#38935) Thanks @MumuTW.
+- Extensions/diffs CI stability: add `headers` to the `localReq` test helper in `extensions/diffs/index.test.ts` so forwarding-hint checks no longer crash with `req.headers` undefined. (supersedes #39063) Thanks @Shennng.
 
 ## 2026.3.2
 
