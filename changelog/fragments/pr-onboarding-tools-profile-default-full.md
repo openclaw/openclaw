@@ -1,0 +1,1 @@
+- fix(onboarding): default local onboarding tool profile to `full` (instead of `messaging`) so new installs can execute runtime/filesystem/web tools without manual config edits.
