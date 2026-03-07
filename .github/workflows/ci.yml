@@ -320,16 +320,19 @@ jobs:
           python -m pip install pre-commit
 
       - name: Detect secrets
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "$EVENT_NAME" = "push" ]; then
             echo "Running full detect-secrets scan on push."
             pre-commit run --all-files detect-secrets
             exit 0
           fi
 
-          BASE="${{ github.event.pull_request.base.sha }}"
+          BASE="$PR_BASE_SHA"
           changed_files=()
           if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
             while IFS= read -r path; do
@@ -351,13 +354,17 @@ jobs:
         run: pre-commit run --all-files detect-private-key
 
       - name: Audit changed GitHub workflows with zizmor
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
+          if [ "$EVENT_NAME" = "push" ]; then
+            BASE="$PUSH_BEFORE_SHA"
           else
-            BASE="${{ github.event.pull_request.base.sha }}"
+            BASE="$PR_BASE_SHA"
           fi
 
           mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
