@@ -53,8 +53,14 @@ export function applyInputProvenanceToUserMessage(
     return message;
   }
 
-  // Inter-session messages should be attributed to the assistant role.
+  // Inter-session user messages are rewritten to role:"assistant" so the model
+  // does not treat forwarded cross-session content as its own prior output.
+  // Only rewrite user messages; toolResult and other role types must be preserved
+  // so downstream repair/sanitization logic is not skipped.
   if (isInterSessionInputProvenance(inputProvenance)) {
+    if ((message as { role?: unknown }).role !== "user") {
+      return message;
+    }
     return {
       ...(message as unknown as Record<string, unknown>),
       role: "assistant",
@@ -82,7 +88,14 @@ export function isInterSessionInputProvenance(value: unknown): boolean {
 export function hasInterSessionUserProvenance(
   message: { role?: unknown; provenance?: unknown } | undefined,
 ): boolean {
-  if (!message || message.role !== "user") {
+  if (!message) {
+    return false;
+  }
+  // Inter-session user messages are rewritten to role:"assistant" by
+  // applyInputProvenanceToUserMessage, so accept both roles here so that
+  // provenance-based filters (e.g. session-memory hook) still work correctly.
+  const role = message.role;
+  if (role !== "user" && role !== "assistant") {
     return false;
   }
   return isInterSessionInputProvenance(message.provenance);

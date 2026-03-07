@@ -1,3 +1,5 @@
+import os from "node:os";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 export type RequiredParamGroup = {
@@ -95,6 +97,13 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   if ("file_path" in normalized && !("path" in normalized)) {
     normalized.path = normalized.file_path;
     delete normalized.file_path;
+  }
+  // Expand ~ to the OS account home dir. Must use OS home (HOME/USERPROFILE/os.homedir)
+  // rather than resolveEffectiveHomeDir, which prefers OPENCLAW_HOME and would send
+  // tool file paths into the app-state directory instead of the user's home.
+  if (typeof normalized.path === "string" && normalized.path.startsWith("~")) {
+    const osHome = process.env.HOME || process.env.USERPROFILE || os.homedir();
+    normalized.path = expandHomePrefix(normalized.path, { home: osHome });
   }
   // old_string → oldText (edit)
   if ("old_string" in normalized && !("oldText" in normalized)) {

@@ -1375,7 +1375,7 @@ async function runWebSearch(params: {
     throw new Error("Unsupported web search provider.");
   }
 
-  const baseUrl = (params.braveBaseUrl || BRAVE_SEARCH_ENDPOINT).trim().replace(/\/$/, "");
+  const baseUrl = (params.braveBaseUrl?.trim() || BRAVE_SEARCH_ENDPOINT).replace(/\/$/, "");
   const url = new URL(baseUrl);
   url.searchParams.set("q", params.query);
   url.searchParams.set("count", String(params.count));
