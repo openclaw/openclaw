@@ -136,7 +136,7 @@ describe("bot-native-command-menu", () => {
     const setMyCommands = vi.fn(async () => undefined);
     const runtimeLog = vi.fn();
 
-    syncMenuCommandsWithMocks({
+  syncMenuCommandsWithMocks({
       deleteMyCommands,
       setMyCommands,
       runtimeLog,
@@ -147,9 +147,8 @@ describe("bot-native-command-menu", () => {
 
     await vi.waitFor(() => {
       expect(setMyCommands).toHaveBeenCalledTimes(1);
+      expect(runtimeLog).toHaveBeenCalledWith("telegram: synced 1 native command");
     });
-
-    expect(runtimeLog).toHaveBeenCalledWith("telegram: synced 1 native command");
   });
 
   it("logs when the Telegram native command menu is cleared", async () => {
@@ -168,10 +167,10 @@ describe("bot-native-command-menu", () => {
 
     await vi.waitFor(() => {
       expect(deleteMyCommands).toHaveBeenCalledTimes(1);
+      expect(runtimeLog).toHaveBeenCalledWith("telegram: cleared native command menu");
     });
 
     expect(setMyCommands).not.toHaveBeenCalled();
-    expect(runtimeLog).toHaveBeenCalledWith("telegram: cleared native command menu");
   });
 
   it("produces a stable hash regardless of command order (#32017)", () => {
