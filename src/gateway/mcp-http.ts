@@ -170,7 +170,7 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
       }
     }
     if (Array.isArray(variant.required)) {
-      requiredSets.push(new Set(variant.required as string[]));
+      requiredSets.push(new Set((variant.required as string[] | undefined) ?? []));
     }
   }
   // Only mark a field as required if ALL variants require it.
