@@ -332,6 +332,14 @@ function normalizeToolCallNameForDispatch(
   if (direct) {
     return direct;
   }
+  // Some providers put malformed toolCallId-like strings into `name`
+  // itself (for example `functionsread3`). Recover conservatively from the
+  // name token before consulting the separate id so explicit names like
+  // `someOtherTool` are preserved.
+  const inferredFromName = inferToolNameFromToolCallId(trimmed, allowedToolNames);
+  if (inferredFromName) {
+    return inferredFromName;
+  }
   return trimmed;
 }
 

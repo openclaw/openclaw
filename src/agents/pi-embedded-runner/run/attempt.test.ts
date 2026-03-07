@@ -279,6 +279,31 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBeUndefined();
   });
 
+  it("infers malformed non-blank tool names before dispatch", async () => {
+    const partialToolCall = { type: "toolCall", id: "functionsread3", name: "functionsread3" };
+    const finalToolCall = { type: "toolCall", id: "functionsread3", name: "functionsread3" };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(finalToolCall.name).toBe("read");
+  });
+
   it("does not override explicit non-blank tool names with inferred ids", async () => {
     const finalToolCall = { type: "toolCall", id: "functionswrite4", name: "someOtherTool" };
     const finalMessage = { role: "assistant", content: [finalToolCall] };
