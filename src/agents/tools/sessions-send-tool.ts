@@ -8,6 +8,7 @@ import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
+import { resolveIdentityName } from "../identity.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
@@ -196,6 +197,11 @@ export function createSessionsSendTool(opts?: {
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
+      const requesterSessionKey = opts?.agentSessionKey;
+      const requesterChannel = opts?.agentChannel;
+      const requesterName = requesterSessionKey
+        ? resolveIdentityName(cfg, resolveAgentIdFromSessionKey(requesterSessionKey))
+        : undefined;
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "send",
         requesterSessionKey: effectiveRequesterKey,
@@ -213,8 +219,9 @@ export function createSessionsSendTool(opts?: {
       }
 
       const agentMessageContext = buildAgentToAgentMessageContext({
-        requesterSessionKey: opts?.agentSessionKey,
-        requesterChannel: opts?.agentChannel,
+        requesterName,
+        requesterSessionKey,
+        requesterChannel,
         targetSessionKey: displayKey,
       });
       const sendParams = {
@@ -232,8 +239,6 @@ export function createSessionsSendTool(opts?: {
           sourceTool: "sessions_send",
         },
       };
-      const requesterSessionKey = opts?.agentSessionKey;
-      const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
       const delivery = { status: "pending", mode: "announce" as const };
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
@@ -243,6 +248,7 @@ export function createSessionsSendTool(opts?: {
           message,
           announceTimeoutMs,
           maxPingPongTurns,
+          requesterName,
           requesterSessionKey,
           requesterChannel,
           roundOneReply,

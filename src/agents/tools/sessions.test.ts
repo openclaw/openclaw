@@ -3,6 +3,10 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
+import {
+  buildAgentToAgentAnnounceContext,
+  buildAgentToAgentReplyContext,
+} from "./sessions-send-helpers.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
@@ -14,6 +18,10 @@ type SessionsToolTestConfig = {
   tools: {
     agentToAgent: { enabled: boolean };
     sessions?: { visibility: "all" | "own" };
+  };
+  agents?: {
+    defaults?: Record<string, unknown>;
+    list?: Array<{ id: string; default?: boolean; identity?: { name?: string } }>;
   };
 };
 
@@ -198,6 +206,36 @@ describe("extractAssistantText", () => {
     expect(extractAssistantText(message)).toBe(
       "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
     );
+  });
+});
+
+describe("agent-to-agent context helpers", () => {
+  it("includes requester identity name in reply and announce prompts", () => {
+    const requesterName = "Stevo";
+
+    const replyPrompt = buildAgentToAgentReplyContext({
+      requesterName,
+      requesterSessionKey: "agent:habit:telegram:direct:6344794319",
+      requesterChannel: "telegram",
+      targetSessionKey: "agent:story:main",
+      targetChannel: "telegram",
+      currentRole: "requester",
+      turn: 1,
+      maxTurns: 2,
+    });
+    expect(replyPrompt).toContain("Agent 1 (requester) name: Stevo.");
+
+    const announcePrompt = buildAgentToAgentAnnounceContext({
+      requesterName,
+      requesterSessionKey: "agent:habit:telegram:direct:6344794319",
+      requesterChannel: "telegram",
+      targetSessionKey: "agent:story:main",
+      targetChannel: "telegram",
+      originalMessage: "hi",
+      roundOneReply: "hello",
+      latestReply: "still hello",
+    });
+    expect(announcePrompt).toContain("Agent 1 (requester) name: Stevo.");
   });
 });
 
@@ -438,5 +476,44 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
     expect(result.details).toMatchObject({ status: "forbidden" });
+  });
+
+  it("includes requester identity name in the initial agent-to-agent prompt", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+      agents: {
+        defaults: {},
+        list: [{ id: "habit", identity: { name: "Stevo" } }, { id: "other" }],
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
+      if (opts.method === "agent") {
+        return { runId: "run-1" };
+      }
+      if (opts.method === "agent.wait") {
+        return { status: "error", error: "stop after prompt capture" };
+      }
+      throw new Error(`Unexpected method: ${String(opts.method)}`);
+    });
+
+    const tool = createSessionsSendTool({
+      agentSessionKey: "agent:habit:telegram:direct:6344794319",
+      agentChannel: "telegram",
+    });
+    const result = await tool.execute("call-a2a", {
+      sessionKey: "agent:other:main",
+      message: "hi",
+      timeoutSeconds: 1,
+    });
+
+    const agentCall = callGatewayMock.mock.calls.find(
+      ([arg]) => (arg as { method?: string }).method === "agent",
+    )?.[0] as { params?: { extraSystemPrompt?: string } } | undefined;
+    expect(agentCall?.params?.extraSystemPrompt).toContain("Agent 1 (requester) name: Stevo.");
+    expect(result.details).toMatchObject({ status: "error", error: "stop after prompt capture" });
   });
 });

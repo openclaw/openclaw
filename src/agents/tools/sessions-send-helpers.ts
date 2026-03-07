@@ -17,6 +17,11 @@ export type AnnounceTarget = {
   threadId?: string; // Forum topic/thread ID
 };
 
+function formatRequesterNameLine(requesterName?: string) {
+  const trimmed = requesterName?.trim();
+  return trimmed ? `Agent 1 (requester) name: ${trimmed}.` : undefined;
+}
+
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
   const rawParts = sessionKey.split(":").filter(Boolean);
   const parts = rawParts.length >= 3 && rawParts[0] === "agent" ? rawParts.slice(2) : rawParts;
@@ -71,12 +76,14 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
 }
 
 export function buildAgentToAgentMessageContext(params: {
+  requesterName?: string;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
 }) {
   const lines = [
     "Agent-to-agent message context:",
+    formatRequesterNameLine(params.requesterName),
     params.requesterSessionKey
       ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
@@ -89,6 +96,7 @@ export function buildAgentToAgentMessageContext(params: {
 }
 
 export function buildAgentToAgentReplyContext(params: {
+  requesterName?: string;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
@@ -103,6 +111,7 @@ export function buildAgentToAgentReplyContext(params: {
     "Agent-to-agent reply step:",
     `Current agent: ${currentLabel}.`,
     `Turn ${params.turn} of ${params.maxTurns}.`,
+    formatRequesterNameLine(params.requesterName),
     params.requesterSessionKey
       ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
@@ -117,6 +126,7 @@ export function buildAgentToAgentReplyContext(params: {
 }
 
 export function buildAgentToAgentAnnounceContext(params: {
+  requesterName?: string;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
@@ -127,6 +137,7 @@ export function buildAgentToAgentAnnounceContext(params: {
 }) {
   const lines = [
     "Agent-to-agent announce step:",
+    formatRequesterNameLine(params.requesterName),
     params.requesterSessionKey
       ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
