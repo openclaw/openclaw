@@ -10,7 +10,13 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "message"
+  | "pairing";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -154,6 +160,29 @@ export type MessagePreprocessedHookEvent = InternalHookEvent & {
   type: "message";
   action: "preprocessed";
   context: MessagePreprocessedHookContext;
+};
+
+// ============================================================================
+// Pairing Hook Events
+// ============================================================================
+
+export type PairingRequestHookContext = {
+  /** Channel the pairing request came from (e.g., "telegram", "whatsapp") */
+  channelId: string;
+  /** Requester identifier (phone number, user ID, etc.) */
+  requesterId: string;
+  /** Auto-generated pairing code */
+  code: string;
+  /** Account ID for multi-account setups */
+  accountId?: string;
+  /** Additional metadata from the pairing request (name, phone, etc.) */
+  meta?: Record<string, string>;
+};
+
+export type PairingRequestHookEvent = InternalHookEvent & {
+  type: "pairing";
+  action: "request";
+  context: PairingRequestHookContext;
 };
 
 export interface InternalHookEvent {
@@ -404,6 +433,21 @@ export function isMessageTranscribedEvent(
   }
   return (
     hasStringContextField(context, "transcript") && hasStringContextField(context, "channelId")
+  );
+}
+
+export function isPairingRequestEvent(event: InternalHookEvent): event is PairingRequestHookEvent {
+  if (!isHookEventTypeAndAction(event, "pairing", "request")) {
+    return false;
+  }
+  const context = getHookContext<PairingRequestHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    hasStringContextField(context, "channelId") &&
+    hasStringContextField(context, "requesterId") &&
+    hasStringContextField(context, "code")
   );
 }
 
