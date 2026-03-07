@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/langsmith-tracer",
+  "version": "2026.3.2",
+  "private": true,
+  "description": "LangSmith tracing extension for the OpenClaw agent loop (fork-specific observability)",
+  "type": "module",
+  "dependencies": {
+    "langsmith": "^0.5.7"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+# Do not commit real config with tokens or phone numbers
+config/openclaw.yml
+config/*.yml
+!config/openclaw.example.yml
+deployment.env
+.env
+.env.*
+!.env.example
+!deployment.example.env
+*.pem
+*.key
+secrets/
+
+# OS and editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~

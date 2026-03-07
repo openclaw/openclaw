@@ -588,7 +588,7 @@ function mapThinkingLevelToOpenRouterReasoningEffort(
   if (thinkingLevel === "off") {
     return "none";
   }
-  if (thinkingLevel === "adaptive") {
+  if (thinkingLevel === "adaptive" || thinkingLevel === "auto") {
     return "medium";
   }
   return thinkingLevel;
@@ -869,12 +869,12 @@ function createOpenRouterWrapper(
           // only the nested one is sent.
           delete payloadObj.reasoning_effort;
 
-          // When thinking is "off", do not inject reasoning at all.
-          // Some models (e.g. deepseek/deepseek-r1) require reasoning and reject
-          // { effort: "none" } with "Reasoning is mandatory for this endpoint and
-          // cannot be disabled." Omitting the field lets each model use its own
-          // default reasoning behavior.
-          if (thinkingLevel !== "off") {
+          // When thinking is "off" or "auto", do not inject reasoning at all.
+          // "off": some models (e.g. deepseek/deepseek-r1) require reasoning and
+          //   reject { effort: "none" } — omitting the field respects each model's
+          //   default reasoning behavior.
+          // "auto": let the provider decide; never force an effort level.
+          if (thinkingLevel !== "off" && thinkingLevel !== "auto") {
             const existingReasoning = payloadObj.reasoning;
 
             // OpenRouter treats reasoning.effort and reasoning.max_tokens as

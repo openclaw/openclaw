@@ -1,0 +1,42 @@
+# OpenClaw config for customer deployments (multi-user context + Telegram + WhatsApp).
+# Copy to openclaw.yml in your OpenClaw config dir; do not commit real tokens or numbers.
+#
+# Session: one key per person across Telegram and WhatsApp (identityLinks).
+# Add users under session.identityLinks; see docs/MULTI-USER-CONTEXT.md and docs/ADDING-USERS.md.
+
+session:
+  dmScope: per-peer
+  identityLinks: {}
+  # Example after adding users:
+  # identityLinks:
+  #   alice: ["telegram:123456789", "whatsapp:+15551234567"]
+  #   bob:   ["telegram:987654321"]
+
+channels:
+  telegram:
+    enabled: true
+    botToken: "" # or set TELEGRAM_BOT_TOKEN in env
+    dmPolicy: pairing # or allowlist + allowFrom: ["123456789", ...]
+
+  whatsapp:
+    enabled: true
+    dmPolicy: allowlist
+    allowFrom: [] # E.164 numbers, e.g. ["+15551234567"]
+    # Or dmPolicy: pairing for code-based approval
+
+# Optional: gateway token for Control UI and CLI
+# gateway:
+#   auth:
+#     token: ""
+
+# Optional: agent defaults (model, workspace)
+# agents:
+#   defaults:
+#     model:
+#       primary: openrouter/auto
+#     workspace: "."
+
+# Optional: multi-user inject plugin (Step 10). Allow the plugin; it is loaded from
+# workspace/.openclaw/extensions/user-context-inject/ (copy from this repo's plugin/user-context-inject).
+# plugins:
+#   allow: [telegram, whatsapp, user-context-inject]

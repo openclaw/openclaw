@@ -13,6 +13,11 @@ export function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
   if (level === "adaptive") {
     return "medium";
   }
+  // "auto" means let the provider decide — don't force reasoning_effort.
+  // pi-agent-core converts "off" → undefined, which omits reasoning_effort from the API request.
+  if (level === "auto") {
+    return "off";
+  }
   return level;
 }
 
