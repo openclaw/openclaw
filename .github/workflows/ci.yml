@@ -313,6 +313,13 @@ jobs:
           fi
 
           BASE="${{ github.event.pull_request.base.sha }}"
+          BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
+          if git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
+            MERGE_BASE="$(git merge-base "$BASE_REF" HEAD || true)"
+            if [ -n "$MERGE_BASE" ]; then
+              BASE="$MERGE_BASE"
+            fi
+          fi
           changed_files=()
           if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
             while IFS= read -r path; do
