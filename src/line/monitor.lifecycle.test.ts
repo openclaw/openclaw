@@ -88,7 +88,7 @@ describe("monitorLineProvider lifecycle", () => {
 
     const task = monitorLineProvider({
       channelAccessToken: "token",
-      channelSecret: "secret",
+      channelSecret: "secret", // pragma: allowlist secret
       config: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
       abortSignal: abort.signal,
