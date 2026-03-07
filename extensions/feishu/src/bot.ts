@@ -1351,7 +1351,7 @@ export async function handleFeishuMessage(params: {
             ? {
                 mediaPath: mediaList[0].path,
                 mediaType: mediaList[0].contentType,
-                mediaPaths: mediaList.map((m) => m.path),
+                mediaPaths: mediaList.filter((m) => m.contentType).map((m) => m.path),
                 mediaTypes: mediaList.filter((m) => m.contentType).map((m) => m.contentType!),
               }
             : {}),
