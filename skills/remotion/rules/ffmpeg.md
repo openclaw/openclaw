@@ -28,8 +28,8 @@ bunx remotion ffmpeg -ss 00:00:05 -i public/input.mp4 -to 00:00:10 -c:v libx264 
 2. Use the `trimBefore` and `trimAfter` props of the `<Video>` component. The benefit is that this is non-destructive and you can change the trim at any time.
 
 ```tsx
-import { Video } from "@remotion/media";
 import { staticFile, useVideoConfig } from "remotion";
+import { Video } from "@remotion/media";
 
 const { fps } = useVideoConfig();
 
