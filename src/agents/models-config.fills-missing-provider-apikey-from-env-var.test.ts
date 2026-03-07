@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { validateConfigObject } from "../config/validation.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -296,6 +297,38 @@ describe("models-config", () => {
         providers: Record<string, { apiKey?: string }>;
       }>();
       expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
+    });
+  });
+
+  it("replaces stale non-env marker when provider transitions back to plaintext config", async () => {
+    await withTempHome(async () => {
+      await writeAgentModelsJson({
+        providers: {
+          custom: {
+            baseUrl: "https://agent.example/v1",
+            apiKey: NON_ENV_SECRETREF_MARKER,
+            api: "openai-responses",
+            models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
+          },
+        },
+      });
+
+      await ensureOpenClawModelsJson({
+        models: {
+          mode: "merge",
+          providers: {
+            custom: {
+              ...createMergeConfigProvider(),
+              apiKey: "AKIAIOSFODNN7EXAMPLE",
+            },
+          },
+        },
+      });
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string }>;
+      }>();
+      expect(parsed.providers.custom?.apiKey).toBe("AKIAIOSFODNN7EXAMPLE");
     });
   });
 

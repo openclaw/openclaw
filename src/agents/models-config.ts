@@ -9,6 +9,7 @@ import {
 import { applyConfigEnvVars } from "../config/env-vars.js";
 import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import {
   normalizeProviders,
   type ProviderConfig,
@@ -169,7 +170,8 @@ function mergeWithExistingProviderSecrets(params: {
     if (
       !secretRefManagedProviders.has(key) &&
       typeof existing.apiKey === "string" &&
-      existing.apiKey
+      existing.apiKey &&
+      !isNonSecretApiKeyMarker(existing.apiKey, { includeEnvVarName: false })
     ) {
       preserved.apiKey = existing.apiKey;
     }
