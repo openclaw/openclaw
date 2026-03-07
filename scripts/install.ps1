@@ -337,7 +337,7 @@ function Main {
     } else {
         # npm method
         if (!(Ensure-Git)) {
-            Write-Host "Git is required for npm installs. Please install Git and try again." -Level warn
+            Write-Host "Git not found. OpenClaw will install via npm, but Git is recommended for updates." -Level warn
         }
         
         if ($DryRun) {
