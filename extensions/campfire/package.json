@@ -1,0 +1,32 @@
+{
+  "name": "@openclaw/campfire",
+  "version": "2026.3.3",
+  "description": "OpenClaw Campfire channel plugin",
+  "type": "module",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "campfire",
+      "label": "Campfire",
+      "selectionLabel": "Campfire (37signals)",
+      "detailLabel": "Campfire",
+      "docsPath": "/channels/campfire",
+      "docsLabel": "campfire",
+      "blurb": "37signals self-hosted chat via bot webhooks.",
+      "aliases": [
+        "once-campfire"
+      ],
+      "order": 60
+    },
+    "install": {
+      "npmSpec": "@openclaw/campfire",
+      "localPath": "extensions/campfire",
+      "defaultChoice": "npm"
+    }
+  }
+}

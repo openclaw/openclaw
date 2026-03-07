@@ -26,6 +26,7 @@
     "src/plugin-sdk/keyed-async-queue.ts",
     "src/plugin-sdk/acpx.ts",
     "src/plugin-sdk/bluebubbles.ts",
+    "src/plugin-sdk/campfire.ts",
     "src/plugin-sdk/copilot-proxy.ts",
     "src/plugin-sdk/device-pair.ts",
     "src/plugin-sdk/diagnostics-otel.ts",
