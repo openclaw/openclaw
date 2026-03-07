@@ -1,4 +1,8 @@
-import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  resolveAuthStorePathForDisplay,
+} from "../../agents/auth-profiles.js";
+import { resolveModelAuthCompatibilityError } from "../../agents/model-auth.js";
 import {
   type ModelAliasIndex,
   modelKey,
@@ -438,6 +442,21 @@ export function resolveModelSelectionFromDirective(params: {
       return { errorText: profileResolved.error };
     }
     profileOverride = profileResolved.profileId;
+  }
+
+  if (modelSelection) {
+    const compatibilityError = resolveModelAuthCompatibilityError({
+      provider: modelSelection.provider,
+      model: modelSelection.model,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      store: ensureAuthProfileStore(params.agentDir, {
+        allowKeychainPrompt: false,
+      }),
+    });
+    if (compatibilityError) {
+      return { errorText: compatibilityError };
+    }
   }
 
   return { modelSelection, profileOverride };

@@ -1,5 +1,6 @@
 import { listAgentIds } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveModelAuthCompatibilityError } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   modelKey,
@@ -185,6 +186,16 @@ export function applyDefaultModelPrimaryUpdate(params: {
 }): OpenClawConfig {
   const resolved = resolveModelTarget({ raw: params.modelRaw, cfg: params.cfg });
   const key = `${resolved.provider}/${resolved.model}`;
+  if (params.field === "model") {
+    const compatibilityError = resolveModelAuthCompatibilityError({
+      provider: resolved.provider,
+      model: resolved.model,
+      cfg: params.cfg,
+    });
+    if (compatibilityError) {
+      throw new Error(compatibilityError);
+    }
+  }
 
   const nextModels = { ...params.cfg.agents?.defaults?.models };
   if (!nextModels[key]) {
