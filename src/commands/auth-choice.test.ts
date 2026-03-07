@@ -11,6 +11,7 @@ import {
   ZAI_CODING_GLOBAL_BASE_URL,
 } from "./onboard-auth.js";
 import type { AuthChoice } from "./onboard-types.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
 import {
   authProfilePathForAgent,
   createAuthTestLifecycle,
@@ -187,6 +188,41 @@ describe("applyAuthChoice", () => {
       access: "access-token",
       email: "user@example.com",
     });
+  });
+
+  it("sets openai-codex as primary model when onboarding chooses openai-codex", async () => {
+    await setupTempState();
+
+    loginOpenAICodexOAuth.mockResolvedValueOnce({
+      email: "user@example.com",
+      refresh: "refresh-token",
+      access: "access-token",
+      expires: Date.now() + 60_000,
+    });
+
+    const prompter = createPrompter({});
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoice({
+      authChoice: "openai-codex",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+            },
+          },
+        },
+      },
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+      OPENAI_CODEX_DEFAULT_MODEL,
+    );
+    expect(result.config.agents?.defaults?.models?.[OPENAI_CODEX_DEFAULT_MODEL]).toBeUndefined();
   });
 
   it("prompts and writes provider API key for common providers", async () => {

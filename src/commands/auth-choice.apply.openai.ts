@@ -1,3 +1,4 @@
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   createAuthChoiceAgentModelNoter,
@@ -9,10 +10,7 @@ import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
 import { applyAuthProfileConfig, setOpenaiApiKey, writeOAuthCredentials } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
-import {
-  applyOpenAICodexModelDefault,
-  OPENAI_CODEX_DEFAULT_MODEL,
-} from "./openai-codex-model-default.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
 import { loginOpenAICodexOAuth } from "./openai-codex-oauth.js";
 import {
   applyOpenAIConfig,
@@ -103,9 +101,26 @@ export async function applyAuthChoiceOpenAI(
         mode: "oauth",
       });
       if (params.setDefaultModel) {
-        const applied = applyOpenAICodexModelDefault(nextConfig);
-        nextConfig = applied.next;
-        if (applied.changed) {
+        const previousPrimary = resolveAgentModelPrimaryValue(nextConfig.agents?.defaults?.model);
+        nextConfig = {
+          ...nextConfig,
+          agents: {
+            ...nextConfig.agents,
+            defaults: {
+              ...nextConfig.agents?.defaults,
+              model:
+                nextConfig.agents?.defaults?.model &&
+                typeof nextConfig.agents.defaults.model === "object"
+                  ? {
+                      ...nextConfig.agents.defaults.model,
+                      primary: OPENAI_CODEX_DEFAULT_MODEL,
+                    }
+                  : { primary: OPENAI_CODEX_DEFAULT_MODEL },
+            },
+          },
+        };
+        const nextPrimary = resolveAgentModelPrimaryValue(nextConfig.agents?.defaults?.model);
+        if (nextPrimary !== previousPrimary) {
           await params.prompter.note(
             `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
             "Model configured",
