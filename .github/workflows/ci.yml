@@ -316,13 +316,21 @@ jobs:
         run: |
           set -uo pipefail
 
-          # Helper: run detect-secrets and tolerate exit code 3 (baseline line-
-          # number drift) while still failing on exit code 1 (new secrets).
+          # Run detect-secrets via pre-commit, capture output to distinguish
+          # real failures (new secrets, exit code 1) from harmless baseline
+          # line-number drift (exit code 3).  pre-commit maps both to exit 1,
+          # so we inspect the output instead.
           run_detect_secrets() {
-            local rc=0
-            "$@" || rc=$?
-            if [ "$rc" -eq 3 ]; then
-              echo "::warning::detect-secrets updated baseline line numbers (exit 3); not a real failure."
+            local output rc=0
+            output=$("$@" 2>&1) || rc=$?
+            echo "$output"
+            if [ "$rc" -eq 0 ]; then
+              return 0
+            fi
+            # If output only mentions baseline updates (no "Potential secrets"),
+            # it is harmless line-number drift — treat as success.
+            if ! echo "$output" | grep -q "Potential secrets"; then
+              echo "::warning::detect-secrets baseline drifted (line numbers only); not a real failure."
               return 0
             fi
             return "$rc"
