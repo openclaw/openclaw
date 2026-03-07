@@ -229,7 +229,9 @@ export function renderApp(state: AppViewState) {
             @click=${() =>
               state.applySettings({
                 ...state.settings,
-                navCollapsed: !state.settings.navCollapsed,
+                // If focus mode is active, exit it and reveal the nav instead of toggling collapse
+                chatFocusMode: chatFocus ? false : state.settings.chatFocusMode,
+                navCollapsed: chatFocus ? false : !state.settings.navCollapsed,
               })}
             title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
             aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
