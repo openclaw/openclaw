@@ -30,7 +30,7 @@ import Testing
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
             token: "launchd-token",
-            password: nil)
+            password: nil) // pragma: allowlist secret
 
         let envToken = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: false,
@@ -51,7 +51,7 @@ import Testing
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
             token: "launchd-token",
-            password: nil)
+            password: nil) // pragma: allowlist secret
 
         let token = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: true,
@@ -181,7 +181,7 @@ import Testing
         let config: GatewayConnection.Config = try (
             url: #require(URL(string: "ws://127.0.0.1:18789")),
             token: nil,
-            password: nil)
+            password: nil) // pragma: allowlist secret
 
         let url = try GatewayEndpointStore.dashboardURL(
             for: config,
