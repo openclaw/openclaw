@@ -12,14 +12,8 @@ import type { DataGatheringDeps } from "./data-gathering.js";
 import {
   gatherFinanceConfigData,
   gatherTradingData,
-<<<<<<< HEAD:extensions/findoo-trader-plugin/src/core/sse-handlers.ts
   gatherStrategyData,
 } from "./data-gathering.js";
-=======
-  gatherStrategyArenaData,
-} from "./data-gathering.js";
-import type { HttpRes } from "./types-http.js";
->>>>>>> main:extensions/fin-core/src/sse-handlers.ts
 
 export function registerSseRoutes(
   api: OpenClawPluginApi,
@@ -30,7 +24,6 @@ export function registerSseRoutes(
 ): void {
   // ── Finance config SSE (30s interval) ──
   api.registerHttpRoute({
-    auth: "gateway",
     path: "/api/v1/finance/config/stream",
     handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
       res.writeHead(200, {
@@ -48,7 +41,6 @@ export function registerSseRoutes(
 
   // ── Trading data SSE (10s interval) ──
   api.registerHttpRoute({
-    auth: "gateway",
     path: "/api/v1/finance/trading/stream",
     handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
       res.writeHead(200, {
@@ -64,30 +56,8 @@ export function registerSseRoutes(
     },
   });
 
-<<<<<<< HEAD:extensions/findoo-trader-plugin/src/core/sse-handlers.ts
-=======
-  // ── Strategy Arena SSE (15s interval) ──
-  api.registerHttpRoute({
-    auth: "gateway",
-    path: "/api/v1/finance/arena/stream",
-    handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
-      res.write(`data: ${JSON.stringify(gatherStrategyArenaData(deps))}\n\n`);
-      const interval = setInterval(() => {
-        res.write(`data: ${JSON.stringify(gatherStrategyArenaData(deps))}\n\n`);
-      }, 15000);
-      req.on("close", () => clearInterval(interval));
-    },
-  });
-
->>>>>>> main:extensions/fin-core/src/sse-handlers.ts
   // ── Agent events SSE (subscription-based) ──
   api.registerHttpRoute({
-    auth: "gateway",
     path: "/api/v1/finance/events/stream",
     handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
       res.writeHead(200, {
