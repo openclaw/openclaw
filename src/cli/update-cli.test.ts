@@ -274,7 +274,7 @@ describe("update-cli", () => {
       packageManager: "pnpm",
       git: {
         root: "/test/path",
-        sha: "abcdef1234567890",
+        sha: "abcdef1234567890", // pragma: allowlist secret
         tag: "v1.2.3",
         branch: "main",
         upstream: "origin/main",
@@ -399,7 +399,7 @@ describe("update-cli", () => {
           packageManager: "pnpm",
           git: {
             root: "/test/path",
-            sha: "abcdef1234567890",
+            sha: "abcdef1234567890", // pragma: allowlist secret
             tag: null,
             branch: "main",
             upstream: "origin/main",
@@ -433,7 +433,7 @@ describe("update-cli", () => {
           packageManager: "pnpm",
           git: {
             root: "/test/path",
-            sha: "abcdef1234567890",
+            sha: "abcdef1234567890", // pragma: allowlist secret
             tag: "v1.2.3-beta.1",
             branch: "main",
             upstream: "origin/main",
