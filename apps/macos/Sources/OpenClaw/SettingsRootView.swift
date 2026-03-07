@@ -158,20 +158,11 @@ struct SettingsRootView: View {
 
     private func updatePermissionMonitoring(for tab: SettingsTab) {
         guard !self.isPreview else { return }
-        let shouldMonitor = tab == .permissions
-        if shouldMonitor, !self.monitoringPermissions {
-            self.monitoringPermissions = true
-            PermissionMonitor.shared.register()
-        } else if !shouldMonitor, self.monitoringPermissions {
-            self.monitoringPermissions = false
-            PermissionMonitor.shared.unregister()
-        }
+        PermissionMonitoringSupport.setMonitoring(tab == .permissions, monitoring: &self.monitoringPermissions)
     }
 
     private func stopPermissionMonitoring() {
-        guard self.monitoringPermissions else { return }
-        self.monitoringPermissions = false
-        PermissionMonitor.shared.unregister()
+        PermissionMonitoringSupport.stopMonitoring(&self.monitoringPermissions)
     }
 }
 

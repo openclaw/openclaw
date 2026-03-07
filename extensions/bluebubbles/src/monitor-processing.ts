@@ -1,6 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import {
   DM_GROUP_ACCESS_REASON,
+  createScopedPairingAccess,
   createReplyPrefixOptions,
   evictOldHistoryKeys,
   logAckFailure,
@@ -13,7 +14,7 @@ import {
   resolveControlCommandGate,
   stripMarkdown,
   type HistoryEntry,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/bluebubbles";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { fetchBlueBubblesHistory } from "./history.js";
@@ -42,6 +43,7 @@ import type {
 } from "./monitor-shared.js";
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender } from "./targets.js";
 
@@ -421,6 +423,11 @@ export async function processMessage(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "bluebubbles",
+    accountId: account.accountId,
+  });
   const privateApiEnabled = isBlueBubblesPrivateApiEnabled(account.accountId);
 
   const groupFlag = resolveGroupFlagFromChatGuid(message.chatGuid);
@@ -502,16 +509,18 @@ export async function processMessage(
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const groupPolicy = account.config.groupPolicy ?? "allowlist";
+  const configuredAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "bluebubbles",
+    accountId: account.accountId,
     dmPolicy,
-    readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+    readStore: pairing.readStoreForDmPolicy,
   });
   const accessDecision = resolveDmGroupAccessWithLists({
     isGroup,
     dmPolicy,
     groupPolicy,
-    allowFrom: account.config.allowFrom,
+    allowFrom: configuredAllowFrom,
     groupAllowFrom: account.config.groupAllowFrom,
     storeAllowFrom,
     isSenderAllowed: (allowFrom) =>
@@ -586,8 +595,7 @@ export async function processMessage(
     }
 
     if (accessDecision.decision === "pairing") {
-      const { code, created } = await core.channel.pairing.upsertPairingRequest({
-        channel: "bluebubbles",
+      const { code, created } = await pairing.upsertPairingRequest({
         id: message.senderId,
         meta: { name: message.senderName },
       });
@@ -666,10 +674,11 @@ export async function processMessage(
   // Command gating (parity with iMessage/WhatsApp)
   const useAccessGroups = config.commands?.useAccessGroups !== false;
   const hasControlCmd = core.channel.text.hasControlCommand(messageText, config);
+  const commandDmAllowFrom = isGroup ? configuredAllowFrom : effectiveAllowFrom;
   const ownerAllowedForCommands =
-    effectiveAllowFrom.length > 0
+    commandDmAllowFrom.length > 0
       ? isAllowedBlueBubblesSender({
-          allowFrom: effectiveAllowFrom,
+          allowFrom: commandDmAllowFrom,
           sender: message.senderId,
           chatId: message.chatId ?? undefined,
           chatGuid: message.chatGuid ?? undefined,
@@ -686,17 +695,16 @@ export async function processMessage(
           chatIdentifier: message.chatIdentifier ?? undefined,
         })
       : false;
-  const dmAuthorized = dmPolicy === "open" || ownerAllowedForCommands;
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
-      { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+      { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
       { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
     ],
     allowTextCommands: true,
     hasControlCommand: hasControlCmd,
   });
-  const commandAuthorized = isGroup ? commandGate.commandAuthorized : dmAuthorized;
+  const commandAuthorized = commandGate.commandAuthorized;
 
   // Block control commands from unauthorized senders in groups
   if (isGroup && commandGate.shouldBlock) {
@@ -724,8 +732,8 @@ export async function processMessage(
   // surfacing dropped content (allowlist/mention/command gating).
   cacheInboundMessage();
 
-  const baseUrl = account.config.serverUrl?.trim();
-  const password = account.config.password?.trim();
+  const baseUrl = normalizeSecretInputString(account.config.serverUrl);
+  const password = normalizeSecretInputString(account.config.password);
   const maxBytes =
     account.config.mediaMaxMb && account.config.mediaMaxMb > 0
       ? account.config.mediaMaxMb * 1024 * 1024
@@ -1091,14 +1099,15 @@ export async function processMessage(
       });
     }
   }
+  const commandBody = messageText.trim();
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
     BodyForAgent: rawBody,
     InboundHistory: inboundHistory,
     RawBody: rawBody,
-    CommandBody: rawBody,
-    BodyForCommands: rawBody,
+    CommandBody: commandBody,
+    BodyForCommands: commandBody,
     MediaUrl: mediaUrls[0],
     MediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
     MediaPath: mediaPaths[0],
@@ -1380,6 +1389,11 @@ export async function processReaction(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core } = target;
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "bluebubbles",
+    accountId: account.accountId,
+  });
   if (reaction.fromMe) {
     return;
   }
@@ -1388,8 +1402,9 @@ export async function processReaction(
   const groupPolicy = account.config.groupPolicy ?? "allowlist";
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "bluebubbles",
+    accountId: account.accountId,
     dmPolicy,
-    readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+    readStore: pairing.readStoreForDmPolicy,
   });
   const accessDecision = resolveDmGroupAccessWithLists({
     isGroup: reaction.isGroup,

@@ -1,6 +1,7 @@
 import { EnvHttpProxyAgent, type Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { bindAbortRelay } from "../../utils/fetch-timeout.js";
+import { hasProxyEnvConfigured } from "./proxy-env.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
@@ -12,6 +13,13 @@ import {
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+export const GUARDED_FETCH_MODE = {
+  STRICT: "strict",
+  TRUSTED_ENV_PROXY: "trusted_env_proxy",
+} as const;
+
+export type GuardedFetchMode = (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
+
 export type GuardedFetchOptions = {
   url: string;
   fetchImpl?: FetchLike;
@@ -21,8 +29,14 @@ export type GuardedFetchOptions = {
   signal?: AbortSignal;
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
+  mode?: GuardedFetchMode;
   pinDns?: boolean;
+  /** @deprecated use `mode: "trusted_env_proxy"` for trusted/operator-controlled URLs. */
   proxy?: "env";
+  /**
+   * @deprecated use `mode: "trusted_env_proxy"` instead.
+   */
+  dangerouslyAllowEnvProxyWithoutPinnedDns?: boolean;
   auditContext?: string;
 };
 
@@ -32,30 +46,46 @@ export type GuardedFetchResult = {
   release: () => Promise<void>;
 };
 
-const DEFAULT_MAX_REDIRECTS = 3;
-const ENV_PROXY_KEYS = [
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-] as const;
-const CROSS_ORIGIN_REDIRECT_SENSITIVE_HEADERS = [
-  "authorization",
-  "proxy-authorization",
-  "cookie",
-  "cookie2",
-];
+type GuardedFetchPresetOptions = Omit<
+  GuardedFetchOptions,
+  "mode" | "proxy" | "dangerouslyAllowEnvProxyWithoutPinnedDns"
+>;
 
-function hasEnvProxyConfigured(): boolean {
-  for (const key of ENV_PROXY_KEYS) {
-    const value = process.env[key];
-    if (typeof value === "string" && value.trim()) {
-      return true;
-    }
+const DEFAULT_MAX_REDIRECTS = 3;
+const CROSS_ORIGIN_REDIRECT_SAFE_HEADERS = new Set([
+  "accept",
+  "accept-encoding",
+  "accept-language",
+  "cache-control",
+  "content-language",
+  "content-type",
+  "if-match",
+  "if-modified-since",
+  "if-none-match",
+  "if-unmodified-since",
+  "pragma",
+  "range",
+  "user-agent",
+]);
+
+export function withStrictGuardedFetchMode(params: GuardedFetchPresetOptions): GuardedFetchOptions {
+  return { ...params, mode: GUARDED_FETCH_MODE.STRICT };
+}
+
+export function withTrustedEnvProxyGuardedFetchMode(
+  params: GuardedFetchPresetOptions,
+): GuardedFetchOptions {
+  return { ...params, mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY };
+}
+
+function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode {
+  if (params.mode) {
+    return params.mode;
   }
-  return false;
+  if (params.proxy === "env" && params.dangerouslyAllowEnvProxyWithoutPinnedDns === true) {
+    return GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY;
+  }
+  return GUARDED_FETCH_MODE.STRICT;
 }
 
 function isRedirectStatus(status: number): boolean {
@@ -66,9 +96,12 @@ function stripSensitiveHeadersForCrossOriginRedirect(init?: RequestInit): Reques
   if (!init?.headers) {
     return init;
   }
-  const headers = new Headers(init.headers);
-  for (const header of CROSS_ORIGIN_REDIRECT_SENSITIVE_HEADERS) {
-    headers.delete(header);
+  const incoming = new Headers(init.headers);
+  const headers = new Headers();
+  for (const [key, value] of incoming.entries()) {
+    if (CROSS_ORIGIN_REDIRECT_SAFE_HEADERS.has(key.toLowerCase())) {
+      headers.set(key, value);
+    }
   }
   return { ...init, headers };
 }
@@ -117,6 +150,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     typeof params.maxRedirects === "number" && Number.isFinite(params.maxRedirects)
       ? Math.max(0, Math.floor(params.maxRedirects))
       : DEFAULT_MAX_REDIRECTS;
+  const mode = resolveGuardedFetchMode(params);
 
   const { signal, cleanup } = buildAbortSignal({
     timeoutMs: params.timeoutMs,
@@ -157,7 +191,9 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         lookupFn: params.lookupFn,
         policy: params.policy,
       });
-      if (params.proxy === "env" && hasEnvProxyConfigured()) {
+      const canUseTrustedEnvProxy =
+        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
+      if (canUseTrustedEnvProxy) {
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns !== false) {
         dispatcher = createPinnedDispatcher(pinned);

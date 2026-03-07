@@ -9,11 +9,35 @@ title: "secrets"
 
 # `openclaw secrets`
 
-Secrets runtime controls.
+Use `openclaw secrets` to manage SecretRefs and keep the active runtime snapshot healthy.
+
+Command roles:
+
+- `reload`: gateway RPC (`secrets.reload`) that re-resolves refs and swaps runtime snapshot only on full success (no config writes).
+- `audit`: read-only scan of configuration/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift.
+- `configure`: interactive planner for provider setup, target mapping, and preflight (TTY required).
+- `apply`: execute a saved plan (`--dry-run` for validation only), then scrub targeted plaintext residues.
+
+Recommended operator loop:
+
+```bash
+openclaw secrets audit --check
+openclaw secrets configure
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
+openclaw secrets audit --check
+openclaw secrets reload
+```
+
+Exit code note for CI/gates:
+
+- `audit --check` returns `1` on findings.
+- unresolved refs return `2`.
 
 Related:
 
 - Secrets guide: [Secrets Management](/gateway/secrets)
+- Credential surface: [SecretRef Credential Surface](/reference/secretref-credential-surface)
 - Security guide: [Security](/gateway/security)
 
 ## Reload runtime snapshot
@@ -28,7 +52,7 @@ openclaw secrets reload --json
 Notes:
 
 - Uses gateway RPC method `secrets.reload`.
-- If resolution fails, gateway keeps last-known-good snapshot.
+- If resolution fails, gateway keeps last-known-good snapshot and returns an error (no partial activation).
 - JSON response includes `warningCount`.
 
 ## Audit
@@ -37,8 +61,13 @@ Scan OpenClaw state for:
 
 - plaintext secret storage
 - unresolved refs
-- precedence drift (`auth-profiles` shadowing config refs)
-- legacy residues (`auth.json`, OAuth out-of-scope notes)
+- precedence drift (`auth-profiles.json` credentials shadowing `openclaw.json` refs)
+- generated `agents/*/agent/models.json` residues (provider `apiKey` values and sensitive provider headers)
+- legacy residues (legacy auth store entries, OAuth reminders)
+
+Header residue note:
+
+- Sensitive provider header detection is name-heuristic based (common auth/credential header names and fragments such as `authorization`, `x-api-key`, `token`, `secret`, `password`, and `credential`).
 
 ```bash
 openclaw secrets audit
@@ -49,11 +78,21 @@ openclaw secrets audit --json
 Exit behavior:
 
 - `--check` exits non-zero on findings.
-- unresolved refs exit with a higher-priority non-zero code.
+- unresolved refs exit with higher-priority non-zero code.
+
+Report shape highlights:
+
+- `status`: `clean | findings | unresolved`
+- `summary`: `plaintextCount`, `unresolvedRefCount`, `shadowedRefCount`, `legacyResidueCount`
+- finding codes:
+  - `PLAINTEXT_FOUND`
+  - `REF_UNRESOLVED`
+  - `REF_SHADOWED`
+  - `LEGACY_RESIDUE`
 
 ## Configure (interactive helper)
 
-Build provider + SecretRef changes interactively, run preflight, and optionally apply:
+Build provider and SecretRef changes interactively, run preflight, and optionally apply:
 
 ```bash
 openclaw secrets configure
@@ -61,6 +100,7 @@ openclaw secrets configure --plan-out /tmp/openclaw-secrets-plan.json
 openclaw secrets configure --apply --yes
 openclaw secrets configure --providers-only
 openclaw secrets configure --skip-provider-setup
+openclaw secrets configure --agent ops
 openclaw secrets configure --json
 ```
 
@@ -74,18 +114,26 @@ Flags:
 
 - `--providers-only`: configure `secrets.providers` only, skip credential mapping.
 - `--skip-provider-setup`: skip provider setup and map credentials to existing providers.
+- `--agent <id>`: scope `auth-profiles.json` target discovery and writes to one agent store.
 
 Notes:
 
-- `configure` targets secret-bearing fields in `openclaw.json`.
-- Include all secret-bearing fields you intend to migrate (for example both `models.providers.*.apiKey` and `skills.entries.*.apiKey`) so audit can reach a clean state.
+- Requires an interactive TTY.
+- You cannot combine `--providers-only` with `--skip-provider-setup`.
+- `configure` targets secret-bearing fields in `openclaw.json` plus `auth-profiles.json` for the selected agent scope.
+- `configure` supports creating new `auth-profiles.json` mappings directly in the picker flow.
+- Canonical supported surface: [SecretRef Credential Surface](/reference/secretref-credential-surface).
 - It performs preflight resolution before apply.
-- Apply path is one-way for migrated plaintext values.
+- Generated plans default to scrub options (`scrubEnv`, `scrubAuthProfilesForProviderTargets`, `scrubLegacyAuthJson` all enabled).
+- Apply path is one-way for scrubbed plaintext values.
+- Without `--apply`, CLI still prompts `Apply this plan now?` after preflight.
+- With `--apply` (and no `--yes`), CLI prompts an extra irreversible confirmation.
 
 Exec provider safety note:
 
 - Homebrew installs often expose symlinked binaries under `/opt/homebrew/bin/*`.
 - Set `allowSymlinkCommand: true` only when needed for trusted package-manager paths, and pair it with `trustedDirs` (for example `["/opt/homebrew"]`).
+- On Windows, if ACL verification is unavailable for a provider path, OpenClaw fails closed. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
 
 ## Apply a saved plan
 
@@ -101,6 +149,13 @@ Plan contract details (allowed target paths, validation rules, and failure seman
 
 - [Secrets Apply Plan Contract](/gateway/secrets-plan-contract)
 
+What `apply` may update:
+
+- `openclaw.json` (SecretRef targets + provider upserts/deletes)
+- `auth-profiles.json` (provider-target scrubbing)
+- legacy `auth.json` residues
+- `~/.openclaw/.env` known secret keys whose values were migrated
+
 ## Why no rollback backups
 
 `secrets apply` intentionally does not write rollback backups containing old plaintext values.
@@ -110,10 +165,9 @@ Safety comes from strict preflight + atomic-ish apply with best-effort in-memory
 ## Example
 
 ```bash
-# Audit first, then configure, then confirm clean:
 openclaw secrets audit --check
 openclaw secrets configure
 openclaw secrets audit --check
 ```
 
-If `audit --check` still reports plaintext findings after a partial migration, verify you also migrated skill keys (`skills.entries.*.apiKey`) and any other reported target paths.
+If `audit --check` still reports plaintext findings, update the remaining reported target paths and rerun audit.

@@ -1,5 +1,6 @@
 import { messagingApi } from "@line/bot-sdk";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveLineAccount } from "./accounts.js";
@@ -25,6 +26,7 @@ const userProfileCache = new Map<
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 interface LineSendOpts {
+  cfg?: OpenClawConfig;
   channelAccessToken?: string;
   accountId?: string;
   verbose?: boolean;
@@ -32,8 +34,8 @@ interface LineSendOpts {
   replyToken?: string;
 }
 
-type LineClientOpts = Pick<LineSendOpts, "channelAccessToken" | "accountId">;
-type LinePushOpts = Pick<LineSendOpts, "channelAccessToken" | "accountId" | "verbose">;
+type LineClientOpts = Pick<LineSendOpts, "cfg" | "channelAccessToken" | "accountId">;
+type LinePushOpts = Pick<LineSendOpts, "cfg" | "channelAccessToken" | "accountId" | "verbose">;
 
 interface LinePushBehavior {
   errorContext?: string;
@@ -68,7 +70,7 @@ function createLineMessagingClient(opts: LineClientOpts): {
   account: ReturnType<typeof resolveLineAccount>;
   client: messagingApi.MessagingApiClient;
 } {
-  const cfg = loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   const account = resolveLineAccount({
     cfg,
     accountId: opts.accountId,

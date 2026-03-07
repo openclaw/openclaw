@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -46,7 +47,7 @@ describe("onboardCommand", () => {
 
     await onboardCommand(
       {
-        secretInputMode: "invalid" as never,
+        secretInputMode: "invalid" as never, // pragma: allowlist secret
       },
       runtime,
     );
@@ -99,7 +100,7 @@ describe("onboardCommand", () => {
 
     expect(mocks.handleReset).toHaveBeenCalledWith(
       "config+creds+sessions",
-      "/tmp/openclaw-custom-workspace",
+      path.resolve("/tmp/openclaw-custom-workspace"),
       runtime,
     );
   });

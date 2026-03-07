@@ -10,14 +10,10 @@ import type {
   AcpRuntimeStatus,
   AcpRuntimeTurnInput,
   PluginLogger,
-} from "openclaw/plugin-sdk";
-import { AcpRuntimeError } from "openclaw/plugin-sdk";
-import {
-  ACPX_LOCAL_INSTALL_COMMAND,
-  ACPX_PINNED_VERSION,
-  type ResolvedAcpxPluginConfig,
-} from "./config.js";
-import { checkPinnedAcpxVersion } from "./ensure.js";
+} from "openclaw/plugin-sdk/acpx";
+import { AcpRuntimeError } from "openclaw/plugin-sdk/acpx";
+import { type ResolvedAcpxPluginConfig } from "./config.js";
+import { checkAcpxVersion } from "./ensure.js";
 import {
   parseJsonLines,
   parsePromptEventLine,
@@ -25,6 +21,9 @@ import {
 } from "./runtime-internals/events.js";
 import {
   resolveSpawnFailure,
+  type SpawnCommandCache,
+  type SpawnCommandOptions,
+  type SpawnResolutionEvent,
   spawnAndCollect,
   spawnWithResolvedCommand,
   waitForExit,
@@ -43,9 +42,29 @@ export const ACPX_BACKEND_ID = "acpx";
 
 const ACPX_RUNTIME_HANDLE_PREFIX = "acpx:v1:";
 const DEFAULT_AGENT_FALLBACK = "codex";
+const ACPX_EXIT_CODE_PERMISSION_DENIED = 5;
 const ACPX_CAPABILITIES: AcpRuntimeCapabilities = {
   controls: ["session/set_mode", "session/set_config_option", "session/status"],
 };
+
+function formatPermissionModeGuidance(): string {
+  return "Configure plugins.entries.acpx.config.permissionMode to one of: approve-reads, approve-all, deny-all.";
+}
+
+function formatAcpxExitMessage(params: {
+  stderr: string;
+  exitCode: number | null | undefined;
+}): string {
+  const stderr = params.stderr.trim();
+  if (params.exitCode === ACPX_EXIT_CODE_PERMISSION_DENIED) {
+    return [
+      stderr || "Permission denied by ACP runtime (acpx).",
+      "ACPX blocked a write/exec permission request in a non-interactive session.",
+      formatPermissionModeGuidance(),
+    ].join(" ");
+  }
+  return stderr || `acpx exited with code ${params.exitCode ?? "unknown"}`;
+}
 
 export function encodeAcpxRuntimeHandleState(state: AcpxHandleState): string {
   const payload = Buffer.from(JSON.stringify(state), "utf8").toString("base64url");
@@ -98,6 +117,9 @@ export class AcpxRuntime implements AcpRuntime {
   private healthy = false;
   private readonly logger?: PluginLogger;
   private readonly queueOwnerTtlSeconds: number;
+  private readonly spawnCommandCache: SpawnCommandCache = {};
+  private readonly spawnCommandOptions: SpawnCommandOptions;
+  private readonly loggedSpawnResolutions = new Set<string>();
 
   constructor(
     private readonly config: ResolvedAcpxPluginConfig,
@@ -114,17 +136,36 @@ export class AcpxRuntime implements AcpRuntime {
       requestedQueueOwnerTtlSeconds >= 0
         ? requestedQueueOwnerTtlSeconds
         : this.config.queueOwnerTtlSeconds;
+    this.spawnCommandOptions = {
+      strictWindowsCmdWrapper: this.config.strictWindowsCmdWrapper,
+      cache: this.spawnCommandCache,
+      onResolved: (event) => {
+        this.logSpawnResolution(event);
+      },
+    };
   }
 
   isHealthy(): boolean {
     return this.healthy;
   }
 
+  private logSpawnResolution(event: SpawnResolutionEvent): void {
+    const key = `${event.command}::${event.strictWindowsCmdWrapper ? "strict" : "compat"}::${event.resolution}`;
+    if (event.cacheHit || this.loggedSpawnResolutions.has(key)) {
+      return;
+    }
+    this.loggedSpawnResolutions.add(key);
+    this.logger?.debug?.(
+      `acpx spawn resolver: command=${event.command} mode=${event.strictWindowsCmdWrapper ? "strict" : "compat"} resolution=${event.resolution}`,
+    );
+  }
+
   async probeAvailability(): Promise<void> {
-    const versionCheck = await checkPinnedAcpxVersion({
+    const versionCheck = await checkAcpxVersion({
       command: this.config.command,
       cwd: this.config.cwd,
-      expectedVersion: ACPX_PINNED_VERSION,
+      expectedVersion: this.config.expectedVersion,
+      spawnOptions: this.spawnCommandOptions,
     });
     if (!versionCheck.ok) {
       this.healthy = false;
@@ -132,11 +173,14 @@ export class AcpxRuntime implements AcpRuntime {
     }
 
     try {
-      const result = await spawnAndCollect({
-        command: this.config.command,
-        args: ["--help"],
-        cwd: this.config.cwd,
-      });
+      const result = await spawnAndCollect(
+        {
+          command: this.config.command,
+          args: ["--help"],
+          cwd: this.config.cwd,
+        },
+        this.spawnCommandOptions,
+      );
       this.healthy = result.error == null && (result.code ?? 0) === 0;
     } catch {
       this.healthy = false;
@@ -155,7 +199,7 @@ export class AcpxRuntime implements AcpRuntime {
     const cwd = asTrimmedString(input.cwd) || this.config.cwd;
     const mode = input.mode;
 
-    const events = await this.runControlCommand({
+    let events = await this.runControlCommand({
       args: this.buildControlArgs({
         cwd,
         command: [agent, "sessions", "ensure", "--name", sessionName],
@@ -163,12 +207,36 @@ export class AcpxRuntime implements AcpRuntime {
       cwd,
       fallbackCode: "ACP_SESSION_INIT_FAILED",
     });
-    const ensuredEvent = events.find(
+    let ensuredEvent = events.find(
       (event) =>
         asOptionalString(event.agentSessionId) ||
         asOptionalString(event.acpxSessionId) ||
         asOptionalString(event.acpxRecordId),
     );
+
+    if (!ensuredEvent) {
+      events = await this.runControlCommand({
+        args: this.buildControlArgs({
+          cwd,
+          command: [agent, "sessions", "new", "--name", sessionName],
+        }),
+        cwd,
+        fallbackCode: "ACP_SESSION_INIT_FAILED",
+      });
+      ensuredEvent = events.find(
+        (event) =>
+          asOptionalString(event.agentSessionId) ||
+          asOptionalString(event.acpxSessionId) ||
+          asOptionalString(event.acpxRecordId),
+      );
+      if (!ensuredEvent) {
+        throw new AcpRuntimeError(
+          "ACP_SESSION_INIT_FAILED",
+          `ACP session init failed: neither 'sessions ensure' nor 'sessions new' returned valid session identifiers for ${sessionName}.`,
+        );
+      }
+    }
+
     const acpxRecordId = ensuredEvent ? asOptionalString(ensuredEvent.acpxRecordId) : undefined;
     const agentSessionId = ensuredEvent ? asOptionalString(ensuredEvent.agentSessionId) : undefined;
     const backendSessionId = ensuredEvent
@@ -221,11 +289,14 @@ export class AcpxRuntime implements AcpRuntime {
     if (input.signal) {
       input.signal.addEventListener("abort", onAbort, { once: true });
     }
-    const child = spawnWithResolvedCommand({
-      command: this.config.command,
-      args,
-      cwd: state.cwd,
-    });
+    const child = spawnWithResolvedCommand(
+      {
+        command: this.config.command,
+        args,
+        cwd: state.cwd,
+      },
+      this.spawnCommandOptions,
+    );
     child.stdin.on("error", () => {
       // Ignore EPIPE when the child exits before stdin flush completes.
     });
@@ -247,6 +318,9 @@ export class AcpxRuntime implements AcpRuntime {
           continue;
         }
         if (parsed.type === "done") {
+          if (sawDone) {
+            continue;
+          }
           sawDone = true;
         }
         if (parsed.type === "error") {
@@ -279,7 +353,10 @@ export class AcpxRuntime implements AcpRuntime {
       if ((exit.code ?? 0) !== 0 && !sawError) {
         yield {
           type: "error",
-          message: stderr.trim() || `acpx exited with code ${exit.code ?? "unknown"}`,
+          message: formatAcpxExitMessage({
+            stderr,
+            exitCode: exit.code,
+          }),
         };
         return;
       }
@@ -299,7 +376,10 @@ export class AcpxRuntime implements AcpRuntime {
     return ACPX_CAPABILITIES;
   }
 
-  async getStatus(input: { handle: AcpRuntimeHandle }): Promise<AcpRuntimeStatus> {
+  async getStatus(input: {
+    handle: AcpRuntimeHandle;
+    signal?: AbortSignal;
+  }): Promise<AcpRuntimeStatus> {
     const state = this.resolveHandleState(input.handle);
     const events = await this.runControlCommand({
       args: this.buildControlArgs({
@@ -309,6 +389,7 @@ export class AcpxRuntime implements AcpRuntime {
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
+      signal: input.signal,
     });
     const detail = events.find((event) => !toAcpxErrorEvent(event)) ?? events[0];
     if (!detail) {
@@ -376,15 +457,16 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async doctor(): Promise<AcpRuntimeDoctorReport> {
-    const versionCheck = await checkPinnedAcpxVersion({
+    const versionCheck = await checkAcpxVersion({
       command: this.config.command,
       cwd: this.config.cwd,
-      expectedVersion: ACPX_PINNED_VERSION,
+      expectedVersion: this.config.expectedVersion,
+      spawnOptions: this.spawnCommandOptions,
     });
     if (!versionCheck.ok) {
       this.healthy = false;
       const details = [
-        `expected=${versionCheck.expectedVersion}`,
+        versionCheck.expectedVersion ? `expected=${versionCheck.expectedVersion}` : null,
         versionCheck.installedVersion ? `installed=${versionCheck.installedVersion}` : null,
       ].filter((detail): detail is string => Boolean(detail));
       return {
@@ -397,11 +479,14 @@ export class AcpxRuntime implements AcpRuntime {
     }
 
     try {
-      const result = await spawnAndCollect({
-        command: this.config.command,
-        args: ["--help"],
-        cwd: this.config.cwd,
-      });
+      const result = await spawnAndCollect(
+        {
+          command: this.config.command,
+          args: ["--help"],
+          cwd: this.config.cwd,
+        },
+        this.spawnCommandOptions,
+      );
       if (result.error) {
         const spawnFailure = resolveSpawnFailure(result.error, this.config.cwd);
         if (spawnFailure === "missing-command") {
@@ -410,7 +495,7 @@ export class AcpxRuntime implements AcpRuntime {
             ok: false,
             code: "ACP_BACKEND_UNAVAILABLE",
             message: `acpx command not found: ${this.config.command}`,
-            installCommand: ACPX_LOCAL_INSTALL_COMMAND,
+            installCommand: this.config.installCommand,
           };
         }
         if (spawnFailure === "missing-cwd") {
@@ -440,7 +525,7 @@ export class AcpxRuntime implements AcpRuntime {
       this.healthy = true;
       return {
         ok: true,
-        message: `acpx command available (${this.config.command}, version ${versionCheck.version})`,
+        message: `acpx command available (${this.config.command}, version ${versionCheck.version}${this.config.expectedVersion ? `, expected ${this.config.expectedVersion}` : ""})`,
       };
     } catch (error) {
       this.healthy = false;
@@ -528,12 +613,19 @@ export class AcpxRuntime implements AcpRuntime {
     cwd: string;
     fallbackCode: AcpRuntimeErrorCode;
     ignoreNoSession?: boolean;
+    signal?: AbortSignal;
   }): Promise<AcpxJsonObject[]> {
-    const result = await spawnAndCollect({
-      command: this.config.command,
-      args: params.args,
-      cwd: params.cwd,
-    });
+    const result = await spawnAndCollect(
+      {
+        command: this.config.command,
+        args: params.args,
+        cwd: params.cwd,
+      },
+      this.spawnCommandOptions,
+      {
+        signal: params.signal,
+      },
+    );
 
     if (result.error) {
       const spawnFailure = resolveSpawnFailure(result.error, params.cwd);
@@ -570,7 +662,10 @@ export class AcpxRuntime implements AcpRuntime {
     if ((result.code ?? 0) !== 0) {
       throw new AcpRuntimeError(
         params.fallbackCode,
-        result.stderr.trim() || `acpx exited with code ${result.code ?? "unknown"}`,
+        formatAcpxExitMessage({
+          stderr: result.stderr,
+          exitCode: result.code,
+        }),
       );
     }
     return events;

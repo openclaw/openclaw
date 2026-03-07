@@ -9,10 +9,11 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  createFixedWindowRateLimiter,
   isBlockedHostnameOrIp,
   readJsonBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/nostr";
 import { z } from "zod";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
 import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
@@ -41,30 +42,29 @@ export interface NostrProfileHttpContext {
 // Rate Limiting
 // ============================================================================
 
-interface RateLimitEntry {
-  count: number;
-  windowStart: number;
-}
-
-const rateLimitMap = new Map<string, RateLimitEntry>();
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 5; // 5 requests per minute
+const RATE_LIMIT_MAX_TRACKED_KEYS = 2_048;
+const profileRateLimiter = createFixedWindowRateLimiter({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  maxRequests: RATE_LIMIT_MAX_REQUESTS,
+  maxTrackedKeys: RATE_LIMIT_MAX_TRACKED_KEYS,
+});
+
+export function clearNostrProfileRateLimitStateForTest(): void {
+  profileRateLimiter.clear();
+}
+
+export function getNostrProfileRateLimitStateSizeForTest(): number {
+  return profileRateLimiter.size();
+}
+
+export function isNostrProfileRateLimitedForTest(accountId: string, nowMs: number): boolean {
+  return profileRateLimiter.isRateLimited(accountId, nowMs);
+}
 
 function checkRateLimit(accountId: string): boolean {
-  const now = Date.now();
-  const entry = rateLimitMap.get(accountId);
-
-  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
-    rateLimitMap.set(accountId, { count: 1, windowStart: now });
-    return true;
-  }
-
-  if (entry.count >= RATE_LIMIT_MAX_REQUESTS) {
-    return false;
-  }
-
-  entry.count++;
-  return true;
+  return !profileRateLimiter.isRateLimited(accountId);
 }
 
 // ============================================================================
@@ -224,6 +224,51 @@ function isLoopbackOriginLike(value: string): boolean {
   }
 }
 
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return typeof value === "string" ? value : undefined;
+}
+
+function normalizeIpCandidate(raw: string): string {
+  const unquoted = raw.trim().replace(/^"|"$/g, "");
+  const bracketedWithOptionalPort = unquoted.match(/^\[([^[\]]+)\](?::\d+)?$/);
+  if (bracketedWithOptionalPort) {
+    return bracketedWithOptionalPort[1] ?? "";
+  }
+  const ipv4WithPort = unquoted.match(/^(\d+\.\d+\.\d+\.\d+):\d+$/);
+  if (ipv4WithPort) {
+    return ipv4WithPort[1] ?? "";
+  }
+  return unquoted;
+}
+
+function hasNonLoopbackForwardedClient(req: IncomingMessage): boolean {
+  const forwardedFor = firstHeaderValue(req.headers["x-forwarded-for"]);
+  if (forwardedFor) {
+    for (const hop of forwardedFor.split(",")) {
+      const candidate = normalizeIpCandidate(hop);
+      if (!candidate) {
+        continue;
+      }
+      if (!isLoopbackRemoteAddress(candidate)) {
+        return true;
+      }
+    }
+  }
+
+  const realIp = firstHeaderValue(req.headers["x-real-ip"]);
+  if (realIp) {
+    const candidate = normalizeIpCandidate(realIp);
+    if (candidate && !isLoopbackRemoteAddress(candidate)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function enforceLoopbackMutationGuards(
   ctx: NostrProfileHttpContext,
   req: IncomingMessage,
@@ -237,15 +282,30 @@ function enforceLoopbackMutationGuards(
     return false;
   }
 
+  // If a proxy exposes client-origin headers showing a non-loopback client,
+  // treat this as a remote request and deny mutation.
+  if (hasNonLoopbackForwardedClient(req)) {
+    ctx.log?.warn?.("Rejected mutation with non-loopback forwarded client headers");
+    sendJson(res, 403, { ok: false, error: "Forbidden" });
+    return false;
+  }
+
+  const secFetchSite = firstHeaderValue(req.headers["sec-fetch-site"])?.trim().toLowerCase();
+  if (secFetchSite === "cross-site") {
+    ctx.log?.warn?.("Rejected mutation with cross-site sec-fetch-site header");
+    sendJson(res, 403, { ok: false, error: "Forbidden" });
+    return false;
+  }
+
   // CSRF guard: browsers send Origin/Referer on cross-site requests.
-  const origin = req.headers.origin;
+  const origin = firstHeaderValue(req.headers.origin);
   if (typeof origin === "string" && !isLoopbackOriginLike(origin)) {
     ctx.log?.warn?.(`Rejected mutation with non-loopback origin=${origin}`);
     sendJson(res, 403, { ok: false, error: "Forbidden" });
     return false;
   }
 
-  const referer = req.headers.referer ?? req.headers.referrer;
+  const referer = firstHeaderValue(req.headers.referer ?? req.headers.referrer);
   if (typeof referer === "string" && !isLoopbackOriginLike(referer)) {
     ctx.log?.warn?.(`Rejected mutation with non-loopback referer=${referer}`);
     sendJson(res, 403, { ok: false, error: "Forbidden" });

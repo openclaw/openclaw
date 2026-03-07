@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
 
+function validateOpenAiApiKeyRef(apiKey: unknown) {
+  return validateConfigObjectRaw({
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey,
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    },
+  });
+}
+
 describe("config secret refs schema", () => {
   it("accepts top-level secrets sources and model apiKey refs", () => {
     const result = validateConfigObjectRaw({
@@ -27,6 +41,22 @@ describe("config secret refs schema", () => {
             baseUrl: "https://api.openai.com/v1",
             apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts openai-codex-responses as a model api value", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [{ id: "gpt-5.3-codex", name: "gpt-5.3-codex" }],
           },
         },
       },
@@ -92,16 +122,10 @@ describe("config secret refs schema", () => {
   });
 
   it("rejects invalid secret ref id", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "bad id with spaces" },
-            models: [{ id: "gpt-5", name: "gpt-5" }],
-          },
-        },
-      },
+    const result = validateOpenAiApiKeyRef({
+      source: "env",
+      provider: "default",
+      id: "bad id with spaces",
     });
 
     expect(result.ok).toBe(false);
@@ -113,16 +137,10 @@ describe("config secret refs schema", () => {
   });
 
   it("rejects env refs that are not env var names", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "/providers/openai/apiKey" },
-            models: [{ id: "gpt-5", name: "gpt-5" }],
-          },
-        },
-      },
+    const result = validateOpenAiApiKeyRef({
+      source: "env",
+      provider: "default",
+      id: "/providers/openai/apiKey",
     });
 
     expect(result.ok).toBe(false);
@@ -138,16 +156,10 @@ describe("config secret refs schema", () => {
   });
 
   it("rejects file refs that are not absolute JSON pointers", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "file", provider: "default", id: "providers/openai/apiKey" },
-            models: [{ id: "gpt-5", name: "gpt-5" }],
-          },
-        },
-      },
+    const result = validateOpenAiApiKeyRef({
+      source: "file",
+      provider: "default",
+      id: "providers/openai/apiKey",
     });
 
     expect(result.ok).toBe(false);

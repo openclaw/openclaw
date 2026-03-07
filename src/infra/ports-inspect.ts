@@ -57,6 +57,30 @@ function parseLsofFieldOutput(output: string): PortListener[] {
   return listeners;
 }
 
+async function enrichUnixListenerProcessInfo(listeners: PortListener[]): Promise<void> {
+  await Promise.all(
+    listeners.map(async (listener) => {
+      if (!listener.pid) {
+        return;
+      }
+      const [commandLine, user, parentPid] = await Promise.all([
+        resolveUnixCommandLine(listener.pid),
+        resolveUnixUser(listener.pid),
+        resolveUnixParentPid(listener.pid),
+      ]);
+      if (commandLine) {
+        listener.commandLine = commandLine;
+      }
+      if (user) {
+        listener.user = user;
+      }
+      if (parentPid !== undefined) {
+        listener.ppid = parentPid;
+      }
+    }),
+  );
+}
+
 async function resolveUnixCommandLine(pid: number): Promise<string | undefined> {
   const res = await runCommandSafe(["ps", "-p", String(pid), "-o", "command="]);
   if (res.code !== 0) {
@@ -85,35 +109,45 @@ async function resolveUnixParentPid(pid: number): Promise<number | undefined> {
   return Number.isFinite(parentPid) && parentPid > 0 ? parentPid : undefined;
 }
 
-async function readUnixListeners(
+function parseSsListeners(output: string, port: number): PortListener[] {
+  const lines = output.split(/\r?\n/).map((line) => line.trim());
+  const listeners: PortListener[] = [];
+  for (const line of lines) {
+    if (!line || !line.includes("LISTEN")) {
+      continue;
+    }
+    const parts = line.split(/\s+/);
+    const localAddress = parts.find((part) => part.includes(`:${port}`));
+    if (!localAddress) {
+      continue;
+    }
+    const listener: PortListener = {
+      address: localAddress,
+    };
+    const pidMatch = line.match(/pid=(\d+)/);
+    if (pidMatch) {
+      const pid = Number.parseInt(pidMatch[1], 10);
+      if (Number.isFinite(pid)) {
+        listener.pid = pid;
+      }
+    }
+    const commandMatch = line.match(/users:\(\("([^"]+)"/);
+    if (commandMatch?.[1]) {
+      listener.command = commandMatch[1];
+    }
+    listeners.push(listener);
+  }
+  return listeners;
+}
+
+async function readUnixListenersFromSs(
   port: number,
 ): Promise<{ listeners: PortListener[]; detail?: string; errors: string[] }> {
   const errors: string[] = [];
-  const lsof = await resolveLsofCommand();
-  const res = await runCommandSafe([lsof, "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFcn"]);
+  const res = await runCommandSafe(["ss", "-H", "-ltnp", `sport = :${port}`]);
   if (res.code === 0) {
-    const listeners = parseLsofFieldOutput(res.stdout);
-    await Promise.all(
-      listeners.map(async (listener) => {
-        if (!listener.pid) {
-          return;
-        }
-        const [commandLine, user, parentPid] = await Promise.all([
-          resolveUnixCommandLine(listener.pid),
-          resolveUnixUser(listener.pid),
-          resolveUnixParentPid(listener.pid),
-        ]);
-        if (commandLine) {
-          listener.commandLine = commandLine;
-        }
-        if (user) {
-          listener.user = user;
-        }
-        if (parentPid !== undefined) {
-          listener.ppid = parentPid;
-        }
-      }),
-    );
+    const listeners = parseSsListeners(res.stdout, port);
+    await enrichUnixListenerProcessInfo(listeners);
     return { listeners, detail: res.stdout.trim() || undefined, errors };
   }
   const stderr = res.stderr.trim();
@@ -128,6 +162,41 @@ async function readUnixListeners(
     errors.push(detail);
   }
   return { listeners: [], detail: undefined, errors };
+}
+
+async function readUnixListeners(
+  port: number,
+): Promise<{ listeners: PortListener[]; detail?: string; errors: string[] }> {
+  const lsof = await resolveLsofCommand();
+  const res = await runCommandSafe([lsof, "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFcn"]);
+  if (res.code === 0) {
+    const listeners = parseLsofFieldOutput(res.stdout);
+    await enrichUnixListenerProcessInfo(listeners);
+    return { listeners, detail: res.stdout.trim() || undefined, errors: [] };
+  }
+  const lsofErrors: string[] = [];
+  const stderr = res.stderr.trim();
+  if (res.code === 1 && !res.error && !stderr) {
+    return { listeners: [], detail: undefined, errors: [] };
+  }
+  if (res.error) {
+    lsofErrors.push(res.error);
+  }
+  const detail = [stderr, res.stdout.trim()].filter(Boolean).join("\n");
+  if (detail) {
+    lsofErrors.push(detail);
+  }
+
+  const ssFallback = await readUnixListenersFromSs(port);
+  if (ssFallback.listeners.length > 0) {
+    return ssFallback;
+  }
+
+  return {
+    listeners: [],
+    detail: undefined,
+    errors: [...lsofErrors, ...ssFallback.errors],
+  };
 }
 
 function parseNetstatListeners(output: string, port: number): PortListener[] {

@@ -2,16 +2,23 @@ import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
 } from "../config/group-policy.js";
-import { resolveDiscordAccount } from "../discord/accounts.js";
-import { resolveIMessageAccount } from "../imessage/accounts.js";
+import { inspectDiscordAccount } from "../discord/account-inspect.js";
+import {
+  formatTrimmedAllowFromEntries,
+  formatWhatsAppConfigAllowFromEntries,
+  resolveIMessageConfigAllowFrom,
+  resolveIMessageConfigDefaultTo,
+  resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigDefaultTo,
+} from "../plugin-sdk/channel-config-helpers.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
-import { resolveSlackAccount, resolveSlackReplyToMode } from "../slack/accounts.js";
+import { inspectSlackAccount } from "../slack/account-inspect.js";
+import { resolveSlackReplyToMode } from "../slack/accounts.js";
 import { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
-import { resolveTelegramAccount } from "../telegram/accounts.js";
+import { inspectTelegramAccount } from "../telegram/account-inspect.js";
 import { normalizeE164 } from "../utils.js";
-import { resolveWhatsAppAccount } from "../web/accounts.js";
 import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
@@ -27,7 +34,6 @@ import {
   resolveWhatsAppGroupToolPolicy,
 } from "./plugins/group-mentions.js";
 import { normalizeSignalMessagingTarget } from "./plugins/normalize/signal.js";
-import { normalizeWhatsAppAllowFromEntries } from "./plugins/normalize/whatsapp.js";
 import type {
   ChannelCapabilities,
   ChannelCommandAdapter,
@@ -241,13 +247,13 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
-        stringifyAllowFrom(resolveTelegramAccount({ cfg, accountId }).config.allowFrom ?? []),
+        stringifyAllowFrom(inspectTelegramAccount({ cfg, accountId }).config.allowFrom ?? []),
       formatAllowFrom: ({ allowFrom }) =>
         trimAllowFromEntries(allowFrom)
           .map((entry) => entry.replace(/^(telegram|tg):/i, ""))
           .map((entry) => entry.toLowerCase()),
       resolveDefaultTo: ({ cfg, accountId }) => {
-        const val = resolveTelegramAccount({ cfg, accountId }).config.defaultTo;
+        const val = inspectTelegramAccount({ cfg, accountId }).config.defaultTo;
         return val != null ? String(val) : undefined;
       },
     },
@@ -289,15 +295,9 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
     config: {
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        resolveWhatsAppAccount({ cfg, accountId }).allowFrom ?? [],
-      formatAllowFrom: ({ allowFrom }) => normalizeWhatsAppAllowFromEntries(allowFrom),
-      resolveDefaultTo: ({ cfg, accountId }) => {
-        const root = cfg.channels?.whatsapp;
-        const normalized = normalizeAccountId(accountId);
-        const account = root?.accounts?.[normalized];
-        return (account?.defaultTo ?? root?.defaultTo)?.trim() || undefined;
-      },
+      resolveAllowFrom: ({ cfg, accountId }) => resolveWhatsAppConfigAllowFrom({ cfg, accountId }),
+      formatAllowFrom: ({ allowFrom }) => formatWhatsAppConfigAllowFromEntries(allowFrom),
+      resolveDefaultTo: ({ cfg, accountId }) => resolveWhatsAppConfigDefaultTo({ cfg, accountId }),
     },
     groups: {
       resolveRequireMention: resolveWhatsAppGroupRequireMention,
@@ -336,14 +336,14 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     config: {
       resolveAllowFrom: ({ cfg, accountId }) => {
-        const account = resolveDiscordAccount({ cfg, accountId });
+        const account = inspectDiscordAccount({ cfg, accountId });
         return (account.config.allowFrom ?? account.config.dm?.allowFrom ?? []).map((entry) =>
           String(entry),
         );
       },
       formatAllowFrom: ({ allowFrom }) => formatDiscordAllowFrom(allowFrom),
       resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveDiscordAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+        inspectDiscordAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
     },
     groups: {
       resolveRequireMention: resolveDiscordGroupRequireMention,
@@ -478,14 +478,14 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     streaming: DEFAULT_BLOCK_STREAMING_COALESCE,
     config: {
       resolveAllowFrom: ({ cfg, accountId }) => {
-        const account = resolveSlackAccount({ cfg, accountId });
+        const account = inspectSlackAccount({ cfg, accountId });
         return (account.config.allowFrom ?? account.dm?.allowFrom ?? []).map((entry) =>
           String(entry),
         );
       },
       formatAllowFrom: ({ allowFrom }) => formatLower(allowFrom),
       resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveSlackAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+        inspectSlackAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
     },
     groups: {
       resolveRequireMention: resolveSlackGroupRequireMention,
@@ -496,7 +496,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     threading: {
       resolveReplyToMode: ({ cfg, accountId, chatType }) =>
-        resolveSlackReplyToMode(resolveSlackAccount({ cfg, accountId }), chatType),
+        resolveSlackReplyToMode(inspectSlackAccount({ cfg, accountId }), chatType),
       allowExplicitReplyTagsWhenOff: false,
       buildToolContext: (params) => buildSlackThreadingToolContext(params),
     },
@@ -534,14 +534,9 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
     config: {
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        (resolveIMessageAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-          String(entry),
-        ),
-      formatAllowFrom: ({ allowFrom }) =>
-        allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-      resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveIMessageAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+      resolveAllowFrom: ({ cfg, accountId }) => resolveIMessageConfigAllowFrom({ cfg, accountId }),
+      formatAllowFrom: ({ allowFrom }) => formatTrimmedAllowFromEntries(allowFrom),
+      resolveDefaultTo: ({ cfg, accountId }) => resolveIMessageConfigDefaultTo({ cfg, accountId }),
     },
     groups: {
       resolveRequireMention: resolveIMessageGroupRequireMention,

@@ -1,19 +1,24 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type ModelApi =
-  | "openai-completions"
-  | "openai-responses"
-  | "anthropic-messages"
-  | "google-generative-ai"
-  | "github-copilot"
-  | "bedrock-converse-stream"
-  | "ollama";
+export const MODEL_APIS = [
+  "openai-completions",
+  "openai-responses",
+  "openai-codex-responses",
+  "anthropic-messages",
+  "google-generative-ai",
+  "github-copilot",
+  "bedrock-converse-stream",
+  "ollama",
+] as const;
+
+export type ModelApi = (typeof MODEL_APIS)[number];
 
 export type ModelCompatConfig = {
   supportsStore?: boolean;
   supportsDeveloperRole?: boolean;
   supportsReasoningEffort?: boolean;
   supportsUsageInStreaming?: boolean;
+  supportsTools?: boolean;
   supportsStrictMode?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
   thinkingFormat?: "openai" | "zai" | "qwen";
@@ -48,7 +53,8 @@ export type ModelProviderConfig = {
   apiKey?: SecretInput;
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
-  headers?: Record<string, string>;
+  injectNumCtxForOpenAICompat?: boolean;
+  headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];
 };

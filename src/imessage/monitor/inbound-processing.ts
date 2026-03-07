@@ -30,6 +30,7 @@ import {
   isAllowedIMessageSender,
   normalizeIMessageHandle,
 } from "../targets.js";
+import { detectReflectedContent } from "./reflection-guard.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 
 type IMessageReplyContext = {
@@ -161,7 +162,6 @@ export function resolveIMessageInboundDecision(params: {
   });
   const effectiveDmAllowFrom = accessDecision.effectiveAllowFrom;
   const effectiveGroupAllowFrom = accessDecision.effectiveGroupAllowFrom;
-  const dmAuthorized = !isGroup && accessDecision.decision === "allow";
 
   if (accessDecision.decision !== "allow") {
     if (isGroup) {
@@ -215,7 +215,7 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "empty body" };
   }
 
-  // Echo detection: check if the received message matches a recently sent message (within 5 seconds).
+  // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
   const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
   if (params.echoCache && (messageText || inboundMessageId)) {
@@ -238,6 +238,17 @@ export function resolveIMessageInboundDecision(params: {
     }
   }
 
+  // Reflection guard: drop inbound messages that contain assistant-internal
+  // metadata markers. These indicate outbound content was reflected back as
+  // inbound, which causes recursive echo amplification.
+  const reflection = detectReflectedContent(messageText);
+  if (reflection.isReflection) {
+    params.logVerbose?.(
+      `imessage: dropping reflected assistant content (markers: ${reflection.matchedLabels.join(", ")})`,
+    );
+    return { kind: "drop", reason: "reflected assistant content" };
+  }
+
   const replyContext = describeReplyContext(params.message);
   const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
   const historyKey = isGroup
@@ -256,10 +267,11 @@ export function resolveIMessageInboundDecision(params: {
   const canDetectMention = mentionRegexes.length > 0;
 
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+  const commandDmAllowFrom = isGroup ? params.allowFrom : effectiveDmAllowFrom;
   const ownerAllowedForCommands =
-    effectiveDmAllowFrom.length > 0
+    commandDmAllowFrom.length > 0
       ? isAllowedIMessageSender({
-          allowFrom: effectiveDmAllowFrom,
+          allowFrom: commandDmAllowFrom,
           sender,
           chatId,
           chatGuid,
@@ -280,13 +292,13 @@ export function resolveIMessageInboundDecision(params: {
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
-      { configured: effectiveDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+      { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
       { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
     ],
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,
   });
-  const commandAuthorized = isGroup ? commandGate.commandAuthorized : dmAuthorized;
+  const commandAuthorized = commandGate.commandAuthorized;
   if (isGroup && commandGate.shouldBlock) {
     if (params.logVerbose) {
       logInboundDrop({

@@ -1,10 +1,7 @@
 import { resolveIdentityNamePrefix } from "../../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
 import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-detection.js";
-import {
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "../../../auto-reply/envelope.js";
+import { formatInboundEnvelope } from "../../../auto-reply/envelope.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
 import {
   buildHistoryContextFromEntries,
@@ -15,19 +12,19 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/re
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { toLocationContext } from "../../../channels/location.js";
 import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
+import { resolveInboundSessionEnvelopeContext } from "../../../channels/session-envelope.js";
 import type { loadConfig } from "../../../config/config.js";
 import { resolveMarkdownTableMode } from "../../../config/markdown-tables.js";
-import {
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-} from "../../../config/sessions.js";
+import { recordSessionMetaFromInbound } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import type { getChildLogger } from "../../../logging.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
-import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
-import { readStoreAllowFromForDmPolicy } from "../../../security/dm-policy-shared.js";
+import {
+  readStoreAllowFromForDmPolicy,
+  resolvePinnedMainDmOwnerFromAllowlist,
+  resolveDmGroupAccessWithCommandGate,
+} from "../../../security/dm-policy-shared.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { newConnectionId } from "../../reconnect.js";
@@ -49,15 +46,6 @@ export type GroupHistoryEntry = {
   senderJid?: string;
 };
 
-function normalizeAllowFromE164(values: Array<string | number> | undefined): string[] {
-  const list = Array.isArray(values) ? values : [];
-  return list
-    .map((entry) => String(entry).trim())
-    .filter((entry) => entry && entry !== "*")
-    .map((entry) => normalizeE164(entry))
-    .filter((entry): entry is string => Boolean(entry));
-}
-
 async function resolveWhatsAppCommandAuthorized(params: {
   cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
@@ -77,38 +65,59 @@ async function resolveWhatsAppCommandAuthorized(params: {
 
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
   const dmPolicy = account.dmPolicy ?? "pairing";
+  const groupPolicy = account.groupPolicy ?? "allowlist";
   const configuredAllowFrom = account.allowFrom ?? [];
   const configuredGroupAllowFrom =
     account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
 
-  if (isGroup) {
-    if (!configuredGroupAllowFrom || configuredGroupAllowFrom.length === 0) {
-      return false;
-    }
-    if (configuredGroupAllowFrom.some((v) => String(v).trim() === "*")) {
-      return true;
-    }
-    return normalizeAllowFromE164(configuredGroupAllowFrom).includes(senderE164);
-  }
-
-  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
-    provider: "whatsapp",
-    dmPolicy,
-    readStore: (provider) => readChannelAllowFromStore(provider, process.env, params.msg.accountId),
-  });
-  const combinedAllowFrom = Array.from(
-    new Set([...(configuredAllowFrom ?? []), ...storeAllowFrom]),
-  );
-  const allowFrom =
-    combinedAllowFrom.length > 0
-      ? combinedAllowFrom
+  const storeAllowFrom = isGroup
+    ? []
+    : await readStoreAllowFromForDmPolicy({
+        provider: "whatsapp",
+        accountId: params.msg.accountId,
+        dmPolicy,
+      });
+  const dmAllowFrom =
+    configuredAllowFrom.length > 0
+      ? configuredAllowFrom
       : params.msg.selfE164
         ? [params.msg.selfE164]
         : [];
-  if (allowFrom.some((v) => String(v).trim() === "*")) {
-    return true;
-  }
-  return normalizeAllowFromE164(allowFrom).includes(senderE164);
+  const access = resolveDmGroupAccessWithCommandGate({
+    isGroup,
+    dmPolicy,
+    groupPolicy,
+    allowFrom: dmAllowFrom,
+    groupAllowFrom: configuredGroupAllowFrom,
+    storeAllowFrom,
+    isSenderAllowed: (allowEntries) => {
+      if (allowEntries.includes("*")) {
+        return true;
+      }
+      const normalizedEntries = allowEntries
+        .map((entry) => normalizeE164(String(entry)))
+        .filter((entry): entry is string => Boolean(entry));
+      return normalizedEntries.includes(senderE164);
+    },
+    command: {
+      useAccessGroups,
+      allowTextCommands: true,
+      hasControlCommand: true,
+    },
+  });
+  return access.commandAuthorized;
+}
+
+function resolvePinnedMainDmRecipient(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  msg: WebInboundMsg;
+}): string | null {
+  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
+  return resolvePinnedMainDmOwnerFromAllowlist({
+    dmScope: params.cfg.session?.dmScope,
+    allowFrom: account.allowFrom,
+    normalizeEntry: (entry) => normalizeE164(entry),
+  });
 }
 
 export async function processMessage(params: {
@@ -140,12 +149,9 @@ export async function processMessage(params: {
   suppressGroupHistoryClear?: boolean;
 }) {
   const conversationId = params.msg.conversationId ?? params.msg.from;
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
+    cfg: params.cfg,
     agentId: params.route.agentId,
-  });
-  const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
-  const previousTimestamp = readSessionUpdatedAt({
-    storePath,
     sessionKey: params.route.sessionKey,
   });
   let combinedBody = buildInboundLine({
@@ -273,7 +279,7 @@ export async function processMessage(params: {
   const responsePrefix =
     prefixOptions.responsePrefix ??
     (configuredResponsePrefix === undefined && isSelfChat
-      ? (resolveIdentityNamePrefix(params.cfg, params.route.agentId) ?? "[openclaw]")
+      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
       : undefined);
 
   const inboundHistory =
@@ -327,7 +333,17 @@ export async function processMessage(params: {
   // Only update main session's lastRoute when DM actually IS the main session.
   // When dmScope="per-channel-peer", the DM uses an isolated sessionKey,
   // and updating mainSessionKey would corrupt routing for the session owner.
-  if (dmRouteTarget && params.route.sessionKey === params.route.mainSessionKey) {
+  const pinnedMainDmRecipient = resolvePinnedMainDmRecipient({
+    cfg: params.cfg,
+    msg: params.msg,
+  });
+  const shouldUpdateMainLastRoute =
+    !pinnedMainDmRecipient || pinnedMainDmRecipient === dmRouteTarget;
+  if (
+    dmRouteTarget &&
+    params.route.sessionKey === params.route.mainSessionKey &&
+    shouldUpdateMainLastRoute
+  ) {
     updateLastRouteInBackground({
       cfg: params.cfg,
       backgroundTasks: params.backgroundTasks,
@@ -339,6 +355,14 @@ export async function processMessage(params: {
       ctx: ctxPayload,
       warn: params.replyLogger.warn.bind(params.replyLogger),
     });
+  } else if (
+    dmRouteTarget &&
+    params.route.sessionKey === params.route.mainSessionKey &&
+    pinnedMainDmRecipient
+  ) {
+    logVerbose(
+      `Skipping main-session last route update for ${dmRouteTarget} (pinned owner ${pinnedMainDmRecipient})`,
+    );
   }
 
   const metaTask = recordSessionMetaFromInbound({

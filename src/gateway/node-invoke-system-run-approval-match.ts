@@ -1,10 +1,10 @@
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import {
-  buildSystemRunApprovalBindingV1,
-  matchLegacySystemRunApprovalBinding,
-  matchSystemRunApprovalBindingV1,
+  buildSystemRunApprovalBinding,
+  missingSystemRunApprovalBinding,
+  matchSystemRunApprovalBinding,
   type SystemRunApprovalMatchResult,
-} from "./system-run-approval-binding.js";
+} from "../infra/system-run-approval-binding.js";
 
 export type SystemRunApprovalBinding = {
   cwd: string | null;
@@ -21,11 +21,10 @@ function requestMismatch(): SystemRunApprovalMatchResult {
   };
 }
 
-export { toSystemRunApprovalMismatchError } from "./system-run-approval-binding.js";
-export type { SystemRunApprovalMatchResult } from "./system-run-approval-binding.js";
+export { toSystemRunApprovalMismatchError } from "../infra/system-run-approval-binding.js";
+export type { SystemRunApprovalMatchResult } from "../infra/system-run-approval-binding.js";
 
 export function evaluateSystemRunApprovalMatch(params: {
-  cmdText: string;
   argv: string[];
   request: ExecApprovalRequestPayload;
   binding: SystemRunApprovalBinding;
@@ -34,7 +33,7 @@ export function evaluateSystemRunApprovalMatch(params: {
     return requestMismatch();
   }
 
-  const actualBinding = buildSystemRunApprovalBindingV1({
+  const actualBinding = buildSystemRunApprovalBinding({
     argv: params.argv,
     cwd: params.binding.cwd,
     agentId: params.binding.agentId,
@@ -42,19 +41,15 @@ export function evaluateSystemRunApprovalMatch(params: {
     env: params.binding.env,
   });
 
-  const expectedBinding = params.request.systemRunBindingV1;
-  if (expectedBinding) {
-    return matchSystemRunApprovalBindingV1({
-      expected: expectedBinding,
-      actual: actualBinding.binding,
+  const expectedBinding = params.request.systemRunBinding;
+  if (!expectedBinding) {
+    return missingSystemRunApprovalBinding({
       actualEnvKeys: actualBinding.envKeys,
     });
   }
-
-  return matchLegacySystemRunApprovalBinding({
-    request: params.request,
-    cmdText: params.cmdText,
-    argv: params.argv,
-    binding: params.binding,
+  return matchSystemRunApprovalBinding({
+    expected: expectedBinding,
+    actual: actualBinding.binding,
+    actualEnvKeys: actualBinding.envKeys,
   });
 }

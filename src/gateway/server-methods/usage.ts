@@ -4,17 +4,13 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
-import type { SessionEntry, SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
   CostUsageSummary,
-  SessionCostSummary,
-  SessionDailyLatency,
   SessionDailyModelUsage,
   SessionMessageCounts,
-  SessionLatencyStats,
   SessionModelUsage,
-  SessionToolUsage,
 } from "../../infra/session-cost-usage.js";
 import {
   loadCostUsageSummary,
@@ -24,7 +20,16 @@ import {
   type DiscoveredSession,
 } from "../../infra/session-cost-usage.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { buildUsageAggregateTail } from "../../shared/usage-aggregates.js";
+import {
+  buildUsageAggregateTail,
+  mergeUsageDailyLatency,
+  mergeUsageLatency,
+} from "../../shared/usage-aggregates.js";
+import type {
+  SessionUsageEntry,
+  SessionsUsageAggregates,
+  SessionsUsageResult,
+} from "../../shared/usage-types.js";
 import {
   ErrorCodes,
   errorShape,
@@ -340,60 +345,7 @@ export const __test = {
   costUsageCache,
 };
 
-export type SessionUsageEntry = {
-  key: string;
-  label?: string;
-  sessionId?: string;
-  updatedAt?: number;
-  agentId?: string;
-  channel?: string;
-  chatType?: string;
-  origin?: {
-    label?: string;
-    provider?: string;
-    surface?: string;
-    chatType?: string;
-    from?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  modelOverride?: string;
-  providerOverride?: string;
-  modelProvider?: string;
-  model?: string;
-  usage: SessionCostSummary | null;
-  contextWeight?: SessionSystemPromptReport | null;
-};
-
-export type SessionsUsageAggregates = {
-  messages: SessionMessageCounts;
-  tools: SessionToolUsage;
-  byModel: SessionModelUsage[];
-  byProvider: SessionModelUsage[];
-  byAgent: Array<{ agentId: string; totals: CostUsageSummary["totals"] }>;
-  byChannel: Array<{ channel: string; totals: CostUsageSummary["totals"] }>;
-  latency?: SessionLatencyStats;
-  dailyLatency?: SessionDailyLatency[];
-  modelDaily?: SessionDailyModelUsage[];
-  daily: Array<{
-    date: string;
-    tokens: number;
-    cost: number;
-    messages: number;
-    toolCalls: number;
-    errors: number;
-  }>;
-};
-
-export type SessionsUsageResult = {
-  updatedAt: number;
-  startDate: string;
-  endDate: string;
-  sessions: SessionUsageEntry[];
-  totals: CostUsageSummary["totals"];
-  aggregates: SessionsUsageAggregates;
-};
+export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
 export const usageHandlers: GatewayRequestHandlers = {
   "usage.status": async ({ respond }) => {
@@ -704,35 +656,8 @@ export const usageHandlers: GatewayRequestHandlers = {
           }
         }
 
-        if (usage.latency) {
-          const { count, avgMs, minMs, maxMs, p95Ms } = usage.latency;
-          if (count > 0) {
-            latencyTotals.count += count;
-            latencyTotals.sum += avgMs * count;
-            latencyTotals.min = Math.min(latencyTotals.min, minMs);
-            latencyTotals.max = Math.max(latencyTotals.max, maxMs);
-            latencyTotals.p95Max = Math.max(latencyTotals.p95Max, p95Ms);
-          }
-        }
-
-        if (usage.dailyLatency) {
-          for (const day of usage.dailyLatency) {
-            const existing = dailyLatencyMap.get(day.date) ?? {
-              date: day.date,
-              count: 0,
-              sum: 0,
-              min: Number.POSITIVE_INFINITY,
-              max: 0,
-              p95Max: 0,
-            };
-            existing.count += day.count;
-            existing.sum += day.avgMs * day.count;
-            existing.min = Math.min(existing.min, day.minMs);
-            existing.max = Math.max(existing.max, day.maxMs);
-            existing.p95Max = Math.max(existing.p95Max, day.p95Ms);
-            dailyLatencyMap.set(day.date, existing);
-          }
-        }
+        mergeUsageLatency(latencyTotals, usage.latency);
+        mergeUsageDailyLatency(dailyLatencyMap, usage.dailyLatency);
 
         if (usage.dailyModelUsage) {
           for (const entry of usage.dailyModelUsage) {
