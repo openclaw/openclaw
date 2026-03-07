@@ -2155,6 +2155,7 @@ export function createWebSearchTool(options?: {
       if (
         language &&
         provider !== "brave" &&
+        provider !== "searxng" &&
         !(provider === "perplexity" && supportsStructuredPerplexityFilters)
       ) {
         return jsonResult({
@@ -2162,7 +2163,7 @@ export function createWebSearchTool(options?: {
           message:
             provider === "perplexity"
               ? "language filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it."
-              : `language filtering is not supported by the ${provider} provider. Only Brave and Perplexity support language filtering.`,
+              : `language filtering is not supported by the ${provider} provider. Only Brave, Perplexity, and SearXNG support language filtering.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -2364,7 +2365,7 @@ export function createWebSearchTool(options?: {
         searxngUrl: resolveSearxngUrl(searxngConfig),
         searxngEngines: searxngConfig.engines,
         searxngCategories: searxngConfig.categories,
-        searxngLanguage: searxngConfig.language,
+        searxngLanguage: provider === "searxng" && language ? language : searxngConfig.language,
         searxngSafeSearch: searxngConfig.safeSearch,
       });
       return jsonResult(result);

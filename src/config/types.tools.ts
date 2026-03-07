@@ -512,8 +512,8 @@ export type ToolsConfig = {
         url?: string;
         /** Limit queries to specific engines (e.g. ["google", "duckduckgo"]). Omit to use instance defaults. */
         engines?: string[];
-        /** Result category: "general" | "images" | "news" | "videos" | "files" | "social media". Default: "general". */
-        categories?: string;
+        /** Result category. Default: "general". */
+        categories?: "general" | "images" | "news" | "videos" | "files" | "social media";
         /** Search language code (default: "en"). */
         language?: string;
         /** Safe search level: 0 = off, 1 = moderate, 2 = strict. Default: 0. */
