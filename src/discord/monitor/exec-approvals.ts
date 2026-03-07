@@ -401,14 +401,21 @@ export class DiscordExecApprovalHandler {
 
     logDebug("discord exec approvals: starting handler");
 
-    const { url: gatewayUrl } = buildGatewayConnectionDetails({
+    const { url: gatewayUrl, urlSource } = buildGatewayConnectionDetails({
       config: this.opts.cfg,
       url: this.opts.gatewayUrl,
     });
+    const gatewayUrlOverrideSource =
+      urlSource === "cli --url"
+        ? "cli"
+        : urlSource === "env OPENCLAW_GATEWAY_URL"
+          ? "env"
+          : undefined;
     const auth = await resolveGatewayConnectionAuth({
       config: this.opts.cfg,
       env: process.env,
-      urlOverride: gatewayUrl,
+      urlOverride: gatewayUrlOverrideSource ? gatewayUrl : undefined,
+      urlOverrideSource: gatewayUrlOverrideSource,
     });
 
     this.gatewayClient = new GatewayClient({

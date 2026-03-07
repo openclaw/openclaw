@@ -804,7 +804,7 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
 });
 
 describe("DiscordExecApprovalHandler gateway auth resolution", () => {
-  it("passes URL override to shared gateway auth resolver", async () => {
+  it("passes CLI URL overrides to shared gateway auth resolver", async () => {
     mockResolveGatewayConnectionAuth.mockResolvedValue({
       token: "resolved-token",
       password: "resolved-password", // pragma: allowlist secret
@@ -819,11 +819,13 @@ describe("DiscordExecApprovalHandler gateway auth resolution", () => {
 
     await handler.start();
 
-    expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith({
-      config: { session: { store: STORE_PATH } },
-      env: process.env,
-      urlOverride: "wss://override.example/ws",
-    });
+    expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: process.env,
+        urlOverride: "wss://override.example/ws",
+        urlOverrideSource: "cli",
+      }),
+    );
     expect(mockGatewayClientCtor).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "wss://override.example/ws",
@@ -833,5 +835,41 @@ describe("DiscordExecApprovalHandler gateway auth resolution", () => {
     );
 
     await handler.stop();
+  });
+
+  it("passes env URL overrides to shared gateway auth resolver", async () => {
+    const previousGatewayUrl = process.env.OPENCLAW_GATEWAY_URL;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-from-env.example/ws";
+      const handler = new DiscordExecApprovalHandler({
+        token: "test-token",
+        accountId: "default",
+        config: { enabled: true, approvers: ["123"] },
+        cfg: { session: { store: STORE_PATH } },
+      });
+
+      await handler.start();
+
+      expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: process.env,
+          urlOverride: "wss://gateway-from-env.example/ws",
+          urlOverrideSource: "env",
+        }),
+      );
+      expect(mockGatewayClientCtor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "wss://gateway-from-env.example/ws",
+        }),
+      );
+
+      await handler.stop();
+    } finally {
+      if (typeof previousGatewayUrl === "string") {
+        process.env.OPENCLAW_GATEWAY_URL = previousGatewayUrl;
+      } else {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      }
+    }
   });
 });

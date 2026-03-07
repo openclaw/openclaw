@@ -14,6 +14,7 @@ export type GatewayConnectionAuthOptions = {
   env?: NodeJS.ProcessEnv;
   explicitAuth?: ExplicitGatewayAuth;
   urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
   modeOverride?: GatewayCredentialMode;
   includeLegacyEnv?: boolean;
   localTokenPrecedence?: GatewayCredentialPrecedence;
@@ -32,6 +33,7 @@ export async function resolveGatewayConnectionAuth(
     env: params.env,
     explicitAuth: params.explicitAuth,
     urlOverride: params.urlOverride,
+    urlOverrideSource: params.urlOverrideSource,
     modeOverride: params.modeOverride,
     includeLegacyEnv: params.includeLegacyEnv,
     localTokenPrecedence: params.localTokenPrecedence,
@@ -51,6 +53,7 @@ export function resolveGatewayConnectionAuthFromConfig(
     env: params.env,
     explicitAuth: params.explicitAuth,
     urlOverride: params.urlOverride,
+    urlOverrideSource: params.urlOverrideSource,
     modeOverride: params.modeOverride,
     includeLegacyEnv: params.includeLegacyEnv,
     localTokenPrecedence: params.localTokenPrecedence,

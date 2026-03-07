@@ -647,6 +647,7 @@ export async function resolveGatewayCredentialsWithSecretInputs(params: {
   config: OpenClawConfig;
   explicitAuth?: ExplicitGatewayAuth;
   urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
   env?: NodeJS.ProcessEnv;
   modeOverride?: GatewayCredentialMode;
   includeLegacyEnv?: boolean;
@@ -675,6 +676,7 @@ export async function resolveGatewayCredentialsWithSecretInputs(params: {
     isRemoteMode,
     remote: remoteFromOverride ?? remoteFromConfig,
     urlOverride: trimToUndefined(params.urlOverride),
+    urlOverrideSource: params.urlOverrideSource,
     remoteUrl: isRemoteMode
       ? trimToUndefined((params.config.gateway?.remote as GatewayRemoteSettings | undefined)?.url)
       : undefined,
