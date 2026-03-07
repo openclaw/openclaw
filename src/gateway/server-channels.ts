@@ -116,6 +116,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const restartAttempts = new Map<string, number>();
   // Tracks accounts that were manually stopped so we don't auto-restart them.
   const manuallyStopped = new Set<string>();
+  // P2: Tracks pending Discord stagger delays so stopChannel can cancel them.
+  // Each entry holds the timer handle and a cancel() fn that settles the promise.
+  const pendingStaggerTimers = new Map<
+    string,
+    { handle: ReturnType<typeof setTimeout>; cancel: () => void }
+  >();
 
   const restartKey = (channelId: ChannelId, accountId: string) => `${channelId}:${accountId}`;
 
@@ -165,8 +171,31 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return;
     }
 
+    // Stagger Discord account startups to avoid Cloudflare IP bans.
+    // Discord rate-limits Gateway IDENTIFY to 1 per 5 seconds per IP.
+    // Multiple simultaneous IDENTIFY requests trigger Cloudflare-level
+    // IP bans lasting hours. See: https://github.com/openclaw/openclaw/issues/27781
+    const DISCORD_STARTUP_STAGGER_MS = 6_000;
+    const isDiscord = channelId === "discord";
+
     await Promise.all(
-      accountIds.map(async (id) => {
+      accountIds.map(async (id, index) => {
+        if (isDiscord && index > 0) {
+          // P2: Track the timer so stopChannel can cancel before it fires.
+          const staggerKey = restartKey(channelId, id);
+          const proceeded = await new Promise<boolean>((resolve) => {
+            const handle = setTimeout(() => {
+              pendingStaggerTimers.delete(staggerKey);
+              resolve(true);
+            }, index * DISCORD_STARTUP_STAGGER_MS);
+            pendingStaggerTimers.set(staggerKey, { handle, cancel: () => resolve(false) });
+          });
+          pendingStaggerTimers.delete(staggerKey);
+          if (!proceeded) {
+            // Cancelled by stopChannel — skip startup for this account.
+            return;
+          }
+        }
         if (store.tasks.has(id)) {
           return;
         }
@@ -330,10 +359,23 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       Array.from(knownIds.values()).map(async (id) => {
         const abort = store.aborts.get(id);
         const task = store.tasks.get(id);
-        if (!abort && !task && !plugin?.gateway?.stopAccount) {
+        if (
+          !abort &&
+          !task &&
+          !pendingStaggerTimers.has(restartKey(channelId, id)) &&
+          !plugin?.gateway?.stopAccount
+        ) {
           return;
         }
-        manuallyStopped.add(restartKey(channelId, id));
+        const rKeyStop = restartKey(channelId, id);
+        manuallyStopped.add(rKeyStop);
+        // P2: Cancel any pending stagger delay so it doesn't fire after stop.
+        const staggerEntry = pendingStaggerTimers.get(rKeyStop);
+        if (staggerEntry !== undefined) {
+          clearTimeout(staggerEntry.handle);
+          pendingStaggerTimers.delete(rKeyStop);
+          staggerEntry.cancel(); // settle the stagger promise → startup coroutine exits
+        }
         abort?.abort();
         if (plugin?.gateway?.stopAccount) {
           const account = plugin.config.resolveAccount(cfg, id);
@@ -366,9 +408,26 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
-    for (const plugin of listChannelPlugins()) {
+    // P1: Discord startup is staggered up to (N-1)*6 s. Run it fire-and-forget so
+    // other channels (Telegram, Slack, …) are not blocked while Discord staggered.
+    const allPlugins = listChannelPlugins();
+    const discordPlugins = allPlugins.filter((p) => p.id === "discord");
+    const otherPlugins = allPlugins.filter((p) => p.id !== "discord");
+
+    // Fire-and-forget Discord; errors are handled inside startChannelInternal.
+    const discordPromises = discordPlugins.map((p) =>
+      startChannel(p.id).catch(() => {
+        // Discord startup errors are surfaced via runtime state; ignore here.
+      }),
+    );
+
+    // Await all other channels normally.
+    for (const plugin of otherPlugins) {
       await startChannel(plugin.id);
     }
+
+    // Retain a reference so the GC doesn't drop the chain, but we don't await.
+    void discordPromises;
   };
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {
