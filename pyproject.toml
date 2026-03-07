@@ -1,10 +1,119 @@
-[tool.ruff]
-target-version = "py310"
-line-length = 100
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
-[tool.ruff.lint]
-select = ["E9", "F63", "F7", "F82", "I"]
+[project]
+name = "sotybot"
+version = "0.1.0"
+description = "An open-source operating system for autonomous AI agents"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "SotyBot Contributors", email = "hello@sotyhub.com"}
+]
+keywords = ["ai", "agents", "automation", "llm", "autonomous-agents", "agent-framework"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "httpx>=0.26.0",
+    "aiohttp>=3.9.0",
+    "redis>=5.0.0",
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.13.0",
+    "typer>=0.9.0",
+    "rich>=13.7.0",
+    "python-dotenv>=1.0.0",
+    "python-multipart>=0.0.6",
+    "pyyaml>=6.0",
+    "jsonschema>=4.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.12.0",
+    "ruff>=0.1.9",
+    "mypy>=1.8.0",
+    "types-pyyaml",
+    "types-redis",
+]
+
+[project.urls]
+Homepage = "https://github.com/sotyhub/sotybot"
+Documentation = "https://github.com/sotyhub/sotybot/docs"
+Repository = "https://github.com/sotyhub/sotybot"
+Issues = "https://github.com/sotyhub/sotybot/issues"
+
+[project.scripts]
+sotybot = "cli.main:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["engine*", "agents*", "sdk*", "cli*", "config*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312']
+include = '\.pyi?$'
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
-testpaths = ["skills"]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --strict-markers --tb=short"
+asyncio_mode = "auto"

@@ -1,0 +1,38 @@
+{
+    "name": "creative_writer",
+    "version": "0.1.0",
+    "author": "SotyBot Team",
+    "description": "Creative content generation agent for writing, brainstorming, and ideation",
+    "domain": "creative",
+    "capabilities": [
+        "Generate blog post ideas and outlines",
+        "Create social media content",
+        "Brainstorm creative concepts",
+        "Write short stories and scripts",
+        "Generate marketing copy",
+        "Provide writing prompts and inspiration"
+    ],
+    "required_actions": [],
+    "risk_level": "read_only",
+    "dependencies": [],
+    "config_schema": {
+        "type": "object",
+        "properties": {
+            "tone": {
+                "type": "string",
+                "enum": [
+                    "professional",
+                    "casual",
+                    "creative",
+                    "technical"
+                ],
+                "default": "creative"
+            },
+            "max_length": {
+                "type": "integer",
+                "default": 1000
+            }
+        }
+    },
+    "documentation_url": "https://github.com/sotyhub/sotybot/docs/agents/creative_writer"
+}

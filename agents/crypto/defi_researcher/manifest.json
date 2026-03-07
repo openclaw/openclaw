@@ -1,0 +1,35 @@
+{
+    "name": "defi_researcher",
+    "version": "0.1.0",
+    "author": "SotyBot Crypto Team",
+    "description": "DeFi and cryptocurrency research agent for market analysis, token research, and blockchain insights",
+    "domain": "crypto",
+    "capabilities": [
+        "Analyze cryptocurrency market trends",
+        "Research DeFi protocols and tokens",
+        "Provide price analysis and predictions",
+        "Identify trading opportunities",
+        "Explain blockchain concepts",
+        "Track NFT and Web3 trends"
+    ],
+    "required_actions": [
+        "http"
+    ],
+    "risk_level": "read_only",
+    "dependencies": [],
+    "config_schema": {
+        "type": "object",
+        "properties": {
+            "coingecko_api_key": {
+                "type": "string",
+                "description": "CoinGecko API key (optional for demo mode)"
+            },
+            "demo_mode": {
+                "type": "boolean",
+                "default": true,
+                "description": "Run in demo mode without external APIs"
+            }
+        }
+    },
+    "documentation_url": "https://github.com/sotyhub/sotybot/docs/agents/defi_researcher"
+}

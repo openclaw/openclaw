@@ -1,0 +1,35 @@
+{
+    "name": "threat_analyzer",
+    "version": "0.1.0",
+    "author": "SotyBot Security Team",
+    "description": "Security threat analysis agent for malware detection, threat intelligence, and security research",
+    "domain": "security",
+    "capabilities": [
+        "Analyze file hashes for malware indicators",
+        "Provide threat intelligence summaries",
+        "Identify security vulnerabilities",
+        "Generate security recommendations",
+        "Analyze suspicious URLs and domains",
+        "Assess threat severity levels"
+    ],
+    "required_actions": [
+        "http"
+    ],
+    "risk_level": "read_only",
+    "dependencies": [],
+    "config_schema": {
+        "type": "object",
+        "properties": {
+            "virustotal_api_key": {
+                "type": "string",
+                "description": "VirusTotal API key (optional for demo mode)"
+            },
+            "demo_mode": {
+                "type": "boolean",
+                "default": true,
+                "description": "Run in demo mode without external APIs"
+            }
+        }
+    },
+    "documentation_url": "https://github.com/sotyhub/sotybot/docs/agents/threat_analyzer"
+}

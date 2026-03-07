@@ -1,27 +1,54 @@
-# Contributing to OpenClaw
+# Contributing to SotyBot
 
-Welcome to the lobster tank! 🦞
+Thank you for your interest in contributing to SotyBot! 🤖
 
-## Quick Links
+## Ways to Contribute
+
+### 1. Build Agents 🤖
+The easiest way to contribute is to build agents for new domains:
+- Security agents (malware analysis, threat detection)
+- Crypto agents (trading, DeFi research)
+- Creative agents (content generation, design)
+- Sports agents (predictions, analysis)
+- Any domain you can imagine!
 
 - **GitHub:** https://github.com/openclaw/openclaw
 - **Vision:** [`VISION.md`](VISION.md)
 - **Discord:** https://discord.gg/qkhbAGHRBT
 - **X/Twitter:** [@steipete](https://x.com/steipete) / [@openclaw](https://x.com/openclaw)
 
-## Maintainers
+See [Agent Development Guide](docs/AGENT_DEV.md) for details.
 
-- **Peter Steinberger** - Benevolent Dictator
-  - GitHub: [@steipete](https://github.com/steipete) · X: [@steipete](https://x.com/steipete)
+### 2. Improve Core Engine 🔧
+- Add new action connectors
+- Enhance permission system
+- Improve performance
+- Add tests
 
+### 3. Documentation 📚
+- Improve README and guides
+- Add examples and tutorials
+- Translate documentation
+- Create video tutorials
+
+## Core Maintainers
 - **Shadow** - Discord subsystem, Discord admin, Clawhub, all community moderation
   - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shadowed](https://x.com/4shadowed)
 
 - **Vignesh** - Memory (QMD), formal modeling, TUI, IRC, and Lobster
   - GitHub: [@vignesh07](https://github.com/vignesh07) · X: [@\_vgnsh](https://x.com/_vgnsh)
 
-- **Jos** - Telegram, API, Nix mode
-  - GitHub: [@joshp123](https://github.com/joshp123) · X: [@jjpcodes](https://x.com/jjpcodes)
+### 4. Report Bugs 🐛
+- Open issues with detailed descriptions
+- Include reproduction steps
+- Provide system information
+
+## Development Setup
+
+```bash
+# Clone the repo
+git clone https://github.com/sotyhub/sotybot.git
+cd sotybot
 
 - **Ayaan Zaidi** - Telegram subsystem, iOS app
   - GitHub: [@obviyus](https://github.com/obviyus) · X: [@0bviyus](https://x.com/0bviyus)
@@ -67,46 +94,96 @@ Welcome to the lobster tank! 🦞
 2. **New features / architecture** → Start a [GitHub Discussion](https://github.com/openclaw/openclaw/discussions) or ask in Discord first
 3. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
 
-## Before You PR
+# Install with dev dependencies
+pip install -e ".[dev]"
 
-- Test locally with your OpenClaw instance
-- Run tests: `pnpm build && pnpm check && pnpm test`
-- Ensure CI checks pass
+# Run tests
+pytest tests/
+
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 
-## Control UI Decorators
-
-The Control UI uses Lit with **legacy** decorators (current Rollup parsing does not support
-`accessor` fields required for standard decorators). When adding reactive fields, keep the
-legacy style:
-
-```ts
-@state() foo = "bar";
-@property({ type: Number }) count = 0;
+# Run linters
+black .
+ruff check .
+mypy .
 ```
 
-The root `tsconfig.json` is configured for legacy decorators (`experimentalDecorators: true`)
-with `useDefineForClassFields: false`. Avoid flipping these unless you are also updating the UI
-build tooling to support standard decorators.
+## Pull Request Process
 
-## AI/Vibe-Coded PRs Welcome! 🤖
+1. **Fork** the repository
+2. **Create a branch**: `git checkout -b feature/your-feature`
+3. **Make changes** and commit: `git commit -m "Add amazing feature"`
+4. **Run tests**: `pytest tests/`
+5. **Push**: `git push origin feature/your-feature`
+6. **Open a Pull Request**
 
-Built with Codex, Claude, or other AI tools? **Awesome - just mark it!**
+## Code Style
 
-Please include in your PR:
+- Follow PEP 8
+- Use type hints
+- Write docstrings
+- Add tests for new features
+- Keep lines under 100 characters
 
-- [ ] Mark as AI-assisted in the PR title or description
-- [ ] Note the degree of testing (untested / lightly tested / fully tested)
-- [ ] Include prompts or session logs if possible (super helpful!)
-- [ ] Confirm you understand what the code does
+## Agent Contribution Guidelines
 
-AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
+When contributing an agent:
 
-## Current Focus & Roadmap 🗺
+1. **Create proper structure**:
+   ```
+   agents/[domain]/[agent_name]/
+   ├── manifest.json
+   ├── agent.py
+   └── README.md (optional)
+   ```
 
-We are currently prioritizing:
+2. **Include complete manifest**:
+   - Name, version, author
+   - Domain and capabilities
+   - Required actions
+   - Risk level
+   - Configuration schema
+
+3. **Implement BaseAgent**:
+   - All required methods
+   - Proper error handling
+   - Execution tracking
+
+4. **Add documentation**:
+   - What the agent does
+   - Example usage
+   - Configuration options
+
+5. **Test your agent**:
+   - Load and unload
+   - Execute various tasks
+   - Handle errors gracefully
+
+## Community Guidelines
+
+- Be respectful and inclusive
+- Help others learn
+- Share knowledge
+- Give credit where due
+- Focus on building together
+
+## Questions?
+
+- Open a GitHub issue
+- Join our [Discord](https://discord.gg/sotyhub)
+- Email: hello@sotyhub.com
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the Apache 2.0 License.
+
+---
+
+**Thank you for helping build the open agent ecosystem! 🚀**
+
+## Contributors to original OpenClaw framework
 
 - **Stability**: Fixing edge cases in channel connections (WhatsApp/Telegram).
 - **UX**: Improving the onboarding wizard and error messages.
@@ -118,7 +195,7 @@ Check the [GitHub Issues](https://github.com/openclaw/openclaw/issues) for "good
 ## Maintainers
 
 We're selectively expanding the maintainer team.
-If you're an experienced contributor who wants to help shape OpenClaw's direction — whether through code, docs, or community — we'd like to hear from you.
+If you're an experienced contributor who wants to help shape the platform's direction — whether through code, docs, or community — we'd like to hear from you.
 
 Being a maintainer is a responsibility, not an honorary title. We expect active, consistent involvement — triaging issues, reviewing PRs, and helping move the project forward.
 

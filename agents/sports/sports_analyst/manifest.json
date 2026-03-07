@@ -1,0 +1,47 @@
+{
+    "name": "sports_analyst",
+    "version": "0.1.0",
+    "author": "SotyBot Sports Team",
+    "description": "Sports betting and analytics agent for predictions, statistics, and game analysis",
+    "domain": "sports",
+    "capabilities": [
+        "Analyze upcoming games and matches",
+        "Provide betting predictions and odds analysis",
+        "Track player and team statistics",
+        "Identify value betting opportunities",
+        "Explain betting concepts and strategies",
+        "Monitor injury reports and lineup changes"
+    ],
+    "required_actions": [
+        "http"
+    ],
+    "risk_level": "read_only",
+    "dependencies": [],
+    "config_schema": {
+        "type": "object",
+        "properties": {
+            "sports_api_key": {
+                "type": "string",
+                "description": "Sports data API key (optional for demo mode)"
+            },
+            "demo_mode": {
+                "type": "boolean",
+                "default": true,
+                "description": "Run in demo mode without external APIs"
+            },
+            "focus_sports": {
+                "type": "array",
+                "items": {
+                    "type": "string"
+                },
+                "default": [
+                    "football",
+                    "basketball",
+                    "soccer"
+                ],
+                "description": "Sports to focus on"
+            }
+        }
+    },
+    "documentation_url": "https://github.com/sotyhub/sotybot/docs/agents/sports_analyst"
+}
