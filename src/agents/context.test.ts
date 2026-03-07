@@ -8,16 +8,19 @@ import {
 import { createSessionManagerRuntimeRegistry } from "./pi-extensions/session-manager-runtime-registry.js";
 
 describe("applyDiscoveredContextWindows", () => {
-  it("keeps the smallest context window when duplicate model ids are discovered", () => {
+  it("stores provider-qualified windows when duplicate ids exist across providers", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
       models: [
-        { id: "claude-sonnet-4-5", contextWindow: 1_000_000 },
-        { id: "claude-sonnet-4-5", contextWindow: 200_000 },
+        { provider: "anthropic", id: "claude-sonnet-4-5", contextWindow: 1_000_000 },
+        { provider: "openrouter", id: "claude-sonnet-4-5", contextWindow: 200_000 },
       ],
     });
 
+    expect(cache.get("anthropic/claude-sonnet-4-5")).toBe(1_000_000);
+    expect(cache.get("openrouter/claude-sonnet-4-5")).toBe(200_000);
+    // Bare-id fallback remains fail-safe for callers that only have model id.
     expect(cache.get("claude-sonnet-4-5")).toBe(200_000);
   });
 });
@@ -58,6 +61,23 @@ describe("applyConfiguredContextWindows", () => {
 
     expect(cache.get("custom/model")).toBe(150_000);
     expect(cache.has("bad/model")).toBe(false);
+  });
+
+  it("mirrors bare model ids to provider-qualified keys for provider-aware lookups", () => {
+    const cache = new Map<string, number>();
+    applyConfiguredContextWindows({
+      cache,
+      modelsConfig: {
+        providers: {
+          customprovider: {
+            models: [{ id: "llama-3.1-8b", contextWindow: 131_072 }],
+          },
+        },
+      },
+    });
+
+    expect(cache.get("llama-3.1-8b")).toBe(131_072);
+    expect(cache.get("customprovider/llama-3.1-8b")).toBe(131_072);
   });
 });
 
