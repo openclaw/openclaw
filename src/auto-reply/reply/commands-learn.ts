@@ -1,9 +1,6 @@
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions.js";
+import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 
 const LEARN_SYSTEM_PROMPT = [
@@ -125,7 +122,9 @@ export const handleLearnCommand = async (
   }
 
   const sessionId = params.sessionEntry.sessionId;
-  const customFocus = extractLearnFocus(params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body);
+  const customFocus = extractLearnFocus(
+    params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
+  );
 
   const result = await runLearnForSession({
     sessionId,

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { resetAcpSessionInPlace } from "../../acp/persistent-bindings.js";
+import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -13,7 +14,6 @@ import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
-import { handleLearnCommand, runLearnForSession } from "./commands-learn.js";
 import {
   handleCommandsListCommand,
   handleContextCommand,
@@ -22,6 +22,7 @@ import {
   handleStatusCommand,
   handleWhoamiCommand,
 } from "./commands-info.js";
+import { handleLearnCommand, runLearnForSession } from "./commands-learn.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import {
@@ -41,10 +42,6 @@ import type {
   HandleCommandsParams,
 } from "./commands-types.js";
 import { routeReply } from "./route-reply.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions.js";
 
 let HANDLERS: CommandHandler[] | null = null;
 
@@ -256,14 +253,17 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
         provider: params.provider,
         model: params.model,
         thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
-        customFocus: "What insights and lessons should be remembered before starting a new session?",
+        customFocus:
+          "What insights and lessons should be remembered before starting a new session?",
         senderIsOwner: params.command.senderIsOwner,
         ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
       });
       if (learnResult.ok) {
         logVerbose(`Pre-reset learning completed for session ${targetSessionKey}`);
       } else {
-        logVerbose(`Pre-reset learning failed for session ${targetSessionKey}: ${learnResult.message ?? "unknown error"}`);
+        logVerbose(
+          `Pre-reset learning failed for session ${targetSessionKey}: ${learnResult.message ?? "unknown error"}`,
+        );
       }
     }
     if (boundAcpKey) {

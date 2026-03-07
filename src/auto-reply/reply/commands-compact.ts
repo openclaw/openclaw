@@ -13,10 +13,10 @@ import {
 import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { formatContextUsageShort, formatTokenCount } from "../status.js";
+import { runLearnForSession } from "./commands-learn.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { incrementCompactionCount } from "./session-updates.js";
-import { runLearnForSession } from "./commands-learn.js";
 
 function extractCompactInstructions(params: {
   rawBody?: string;
@@ -102,7 +102,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (learnResult.ok) {
     logVerbose(`Pre-compaction learning completed for session ${params.sessionKey}`);
   } else {
-    logVerbose(`Pre-compaction learning failed for session ${params.sessionKey}: ${learnResult.message ?? "unknown error"}`);
+    logVerbose(
+      `Pre-compaction learning failed for session ${params.sessionKey}: ${learnResult.message ?? "unknown error"}`,
+    );
   }
 
   const customInstructions = extractCompactInstructions({
