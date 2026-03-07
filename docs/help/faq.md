@@ -2094,43 +2094,55 @@ Yes, OpenClaw supports self-hosted models through various providers. The most us
    ```
 
 3. **Configure OpenClaw for Ollama**:
-   - Set the `OLLAMA_API_KEY` environment variable (any value works):
+   - **Auto-discovery (recommended, simplest)**: Just set the `OLLAMA_API_KEY` environment variable (any value works) - OpenClaw will automatically detect and use local Ollama models:
 
-     ```bash
-     # Windows
-     set OLLAMA_API_KEY=ollama-local
-     
-     # macOS/Linux
-     export OLLAMA_API_KEY=ollama-local
-     ```
+   ```bash
+   # Windows 
+   set OLLAMA_API_KEY=ollama-local 
+   
+   # macOS/Linux 
+   export OLLAMA_API_KEY=ollama-local 
+   ```
 
    - Or add to your config file:
 
-     ```json5
-     {
-       env: { OLLAMA_API_KEY: "ollama-local" },
-       models: {
-         providers: {
-           ollama: {
-             baseUrl: "http://localhost:11434",
-             apiKey: "ollama-local",
-             api: "ollama"
-           }
-         }
-       },
-       agents: {
-         defaults: {
-           model: { primary: "ollama/llama3.3" }
-         }
-       }
-     }
-     ```
+   ```json5
+   { 
+     env: { OLLAMA_API_KEY: "ollama-local" } 
+   } 
+   ```
+
+   - **Advanced setups** (custom host/port or manual model definitions):
+
+   ```json5
+   { 
+     env: { OLLAMA_API_KEY: "ollama-local" }, 
+     models: { 
+       providers: { 
+         ollama: { 
+           baseUrl: "http://localhost:11434", // No /v1 suffix - use native Ollama API 
+           apiKey: "ollama-local", 
+           api: "ollama" // Use native Ollama API for reliable tool calling (OpenAI-compatible mode breaks tool calling) 
+         } 
+       } 
+     }, 
+     agents: { 
+       defaults: { 
+         model: { primary: "ollama/llama3.3" } 
+       } 
+     } 
+   } 
+   ```
+
+   **Why native Ollama API?** The native Ollama API (no `/v1` suffix, `api: "ollama"`) provides reliable tool calling. The OpenAI-compatible mode (`/v1` URL) breaks tool calling functionality, causing models to output raw tool JSON as plain text.
+
+   For more details, see the [official Ollama provider documentation](/providers/ollama).
 
 4. **Verify the setup**:
 
    ```bash
-   openclaw models list | grep ollama
-   openclaw chat --model ollama/llama3.3 "Hello, are you working?"
+   openclaw models list | grep ollama 
+   openclaw message --model ollama/llama3.3 "Hello, are you working?"
    ```
 
 #### Other self-hosted options
