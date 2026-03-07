@@ -216,7 +216,7 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
-  it("does not sanitize tool call ids for openai-responses", async () => {
+  it("sanitizes tool call ids for openai-responses", async () => {
     setNonGoogleModelApi();
 
     await sanitizeWithOpenAIResponses({
@@ -228,7 +228,34 @@ describe("sanitizeSessionHistory", () => {
     expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
       mockMessages,
       "session:history",
-      expect.objectContaining({ sanitizeMode: "images-only", sanitizeToolCallIds: false }),
+      expect.objectContaining({
+        sanitizeMode: "images-only",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+      }),
+    );
+  });
+
+  it("sanitizes tool call ids for openai-responses routed via openrouter", async () => {
+    setNonGoogleModelApi();
+
+    await sanitizeSessionHistory({
+      messages: mockMessages,
+      modelApi: "openai-responses",
+      provider: "openrouter",
+      modelId: "gpt-5.2",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
+      mockMessages,
+      "session:history",
+      expect.objectContaining({
+        sanitizeMode: "images-only",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+      }),
     );
   });
 
