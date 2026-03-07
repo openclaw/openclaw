@@ -8,6 +8,7 @@ import {
   createTypingCallbacks,
   createScopedPairingAccess,
   createReplyPrefixOptions,
+  evaluateGroupRouteAccessForPolicy,
   issuePairingChallenge,
   resolveOutboundMediaUrls,
   mergeAllowlist,
@@ -92,28 +93,6 @@ function isSenderAllowed(senderId: string | undefined, allowFrom: string[]): boo
     const normalized = entry.toLowerCase().replace(/^(zalouser|zlu):/i, "");
     return normalized === normalizedSenderId;
   });
-}
-
-function isGroupAllowed(params: {
-  groupId: string;
-  groupName?: string | null;
-  groups: Record<string, { allow?: boolean; enabled?: boolean; requireMention?: boolean }>;
-}): boolean {
-  const groups = params.groups ?? {};
-  const keys = Object.keys(groups);
-  if (keys.length === 0) {
-    return false;
-  }
-  const entry = findZalouserGroupEntry(
-    groups,
-    buildZalouserGroupCandidates({
-      groupId: params.groupId,
-      groupName: params.groupName,
-      includeGroupIdAlias: true,
-      includeWildcard: true,
-    }),
-  );
-  return isZalouserGroupEntryAllowed(entry);
 }
 
 function resolveGroupRequireMention(params: {
@@ -223,16 +202,36 @@ async function processMessage(
 
   const groups = account.config.groups ?? {};
   if (isGroup) {
-    if (groupPolicy === "disabled") {
-      logVerbose(core, runtime, `zalouser: drop group ${chatId} (groupPolicy=disabled)`);
-      return;
-    }
-    if (groupPolicy === "allowlist") {
-      const allowed = isGroupAllowed({ groupId: chatId, groupName, groups });
-      if (!allowed) {
+    const groupEntry = findZalouserGroupEntry(
+      groups,
+      buildZalouserGroupCandidates({
+        groupId: chatId,
+        groupName,
+        includeGroupIdAlias: true,
+        includeWildcard: true,
+      }),
+    );
+    const routeAccess = evaluateGroupRouteAccessForPolicy({
+      groupPolicy,
+      routeAllowlistConfigured: Object.keys(groups).length > 0,
+      routeMatched: Boolean(groupEntry),
+      routeEnabled: isZalouserGroupEntryAllowed(groupEntry),
+    });
+    if (!routeAccess.allowed) {
+      if (routeAccess.reason === "disabled") {
+        logVerbose(core, runtime, `zalouser: drop group ${chatId} (groupPolicy=disabled)`);
+      } else if (routeAccess.reason === "empty_allowlist") {
+        logVerbose(
+          core,
+          runtime,
+          `zalouser: drop group ${chatId} (groupPolicy=allowlist, no allowlist)`,
+        );
+      } else if (routeAccess.reason === "route_not_allowlisted") {
         logVerbose(core, runtime, `zalouser: drop group ${chatId} (not allowlisted)`);
-        return;
+      } else if (routeAccess.reason === "route_disabled") {
+        logVerbose(core, runtime, `zalouser: drop group ${chatId} (group disabled)`);
       }
+      return;
     }
   }
 
