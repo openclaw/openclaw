@@ -363,8 +363,23 @@ describe("resolveForwardCompatModel", () => {
     expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4" });
     expect(model?.api).toBe("openai-codex-responses");
     expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
-    expect(model?.contextWindow).toBe(272_000);
+    expect(model?.contextWindow).toBe(1_050_000);
     expect(model?.maxTokens).toBe(128_000);
+  });
+
+  it("resolves openai-codex gpt-5.4 without templates using gpt-5.4 defaults", () => {
+    const registry = createRegistry({});
+
+    const model = resolveForwardCompatModel("openai-codex", "gpt-5.4", registry);
+
+    expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4" });
+    expect(model?.api).toBe("openai-codex-responses");
+    expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
+    expect(model?.input).toEqual(["text", "image"]);
+    expect(model?.reasoning).toBe(true);
+    expect(model?.contextWindow).toBe(1_050_000);
+    expect(model?.maxTokens).toBe(128_000);
+    expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
 
   it("resolves anthropic opus 4.6 via 4.5 template", () => {

@@ -12,6 +12,8 @@ const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
+const OPENAI_CODEX_GPT_54_CONTEXT_TOKENS = 1_050_000;
+const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
@@ -146,9 +148,16 @@ function resolveOpenAICodexForwardCompatModel(
       ...template,
       id: trimmedModelId,
       name: trimmedModelId,
+      ...(lower === OPENAI_CODEX_GPT_54_MODEL_ID
+        ? {
+            contextWindow: OPENAI_CODEX_GPT_54_CONTEXT_TOKENS,
+            maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
+          }
+        : {}),
     } as Model<Api>);
   }
 
+  const usesGpt54Defaults = lower === OPENAI_CODEX_GPT_54_MODEL_ID;
   return normalizeModelCompat({
     id: trimmedModelId,
     name: trimmedModelId,
@@ -158,8 +167,8 @@ function resolveOpenAICodexForwardCompatModel(
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
+    contextWindow: usesGpt54Defaults ? OPENAI_CODEX_GPT_54_CONTEXT_TOKENS : DEFAULT_CONTEXT_TOKENS,
+    maxTokens: usesGpt54Defaults ? OPENAI_CODEX_GPT_54_MAX_TOKENS : DEFAULT_CONTEXT_TOKENS,
   } as Model<Api>);
 }
 
