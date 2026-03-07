@@ -9,6 +9,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
+import { enforceAamaOutboundGuard } from "../aama-spine-controls.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
@@ -27,6 +28,13 @@ export type MessageGatewayOptions = {
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   mode?: GatewayClientMode;
+};
+
+type MessageAamaPolicyContext = {
+  alreadyEnforced?: boolean;
+  actor?: string;
+  requesterSenderId?: string | null;
+  actionParams?: Record<string, unknown>;
 };
 
 type MessageSendParams = {
@@ -55,6 +63,7 @@ type MessageSendParams = {
   };
   abortSignal?: AbortSignal;
   silent?: boolean;
+  aamaPolicy?: MessageAamaPolicyContext;
 };
 
 export type MessageSendResult = {
@@ -83,6 +92,7 @@ type MessagePollParams = {
   cfg?: OpenClawConfig;
   gateway?: MessageGatewayOptions;
   idempotencyKey?: string;
+  aamaPolicy?: MessageAamaPolicyContext;
 };
 
 export type MessagePollResult = {
@@ -184,6 +194,24 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   );
   const primaryMediaUrl = mirrorMediaUrls[0] ?? params.mediaUrl ?? null;
 
+  await enforceAamaOutboundGuard({
+    alreadyEnforced: params.aamaPolicy?.alreadyEnforced,
+    action: "send",
+    channel,
+    actor: params.aamaPolicy?.actor ?? params.agentId ?? "system",
+    requesterSenderId: params.aamaPolicy?.requesterSenderId,
+    actionParams: params.aamaPolicy?.actionParams,
+    payload: {
+      channel,
+      to: params.to,
+      message: params.content,
+      mediaUrl: params.mediaUrl || undefined,
+      mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+      replyToId: params.replyToId ?? undefined,
+      threadId: params.threadId ?? undefined,
+    },
+  });
+
   if (params.dryRun) {
     return {
       channel,
@@ -227,6 +255,12 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
       silent: params.silent,
+      aamaPolicy: {
+        alreadyEnforced: true,
+        actor: params.aamaPolicy?.actor ?? params.agentId ?? "system",
+        requesterSenderId: params.aamaPolicy?.requesterSenderId,
+        actionParams: params.aamaPolicy?.actionParams,
+      },
       mirror: params.mirror
         ? {
             ...params.mirror,
@@ -292,6 +326,26 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
   const normalized = outbound.pollMaxOptions
     ? normalizePollInput(pollInput, { maxOptions: outbound.pollMaxOptions })
     : normalizePollInput(pollInput);
+
+  await enforceAamaOutboundGuard({
+    alreadyEnforced: params.aamaPolicy?.alreadyEnforced,
+    action: "poll",
+    channel,
+    actor: params.aamaPolicy?.actor ?? "system",
+    requesterSenderId: params.aamaPolicy?.requesterSenderId,
+    actionParams: params.aamaPolicy?.actionParams,
+    payload: {
+      channel,
+      to: params.to,
+      question: normalized.question,
+      options: normalized.options,
+      maxSelections: normalized.maxSelections,
+      durationSeconds: normalized.durationSeconds ?? undefined,
+      durationHours: normalized.durationHours ?? undefined,
+      threadId: params.threadId ?? undefined,
+      isAnonymous: params.isAnonymous ?? undefined,
+    },
+  });
 
   if (params.dryRun) {
     return {

@@ -19,6 +19,7 @@ import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
+import { enforceAamaOutboundGuard } from "../aama-spine-controls.js";
 import { throwIfAborted } from "./abort.js";
 import {
   listConfiguredMessageChannels,
@@ -286,6 +287,15 @@ type ResolvedActionContext = {
   resolvedTarget?: ResolvedMessagingTarget;
   abortSignal?: AbortSignal;
 };
+
+function resolvePolicyActor(params: {
+  agentId?: string;
+  requesterSenderId?: string | null;
+}): string {
+  const actor = params.agentId?.trim() || params.requesterSenderId?.trim() || "system";
+  return actor;
+}
+
 function resolveGateway(input: RunMessageActionParams): MessageActionRunnerGateway | undefined {
   if (!input.gateway) {
     return undefined;
@@ -488,6 +498,26 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     toolContext: input.toolContext,
     allowSlackAutoThread: channel === "slack" && !replyToId,
   });
+  const actor = resolvePolicyActor({
+    agentId,
+    requesterSenderId: input.requesterSenderId,
+  });
+  await enforceAamaOutboundGuard({
+    action,
+    channel,
+    actor,
+    requesterSenderId: input.requesterSenderId,
+    actionParams: params,
+    payload: {
+      channel,
+      to,
+      message,
+      mediaUrl: mediaUrl || undefined,
+      mediaUrls: mergedMediaUrls.length > 0 ? mergedMediaUrls : undefined,
+      replyToId: replyToId ?? undefined,
+      threadId: resolvedThreadId ?? undefined,
+    },
+  });
   const outboundRoute =
     agentId && !dryRun
       ? await resolveOutboundSessionRoute({
@@ -525,6 +555,12 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       channel,
       params,
       agentId,
+      aamaPolicy: {
+        alreadyEnforced: true,
+        actor,
+        requesterSenderId: input.requesterSenderId,
+        actionParams: params,
+      },
       accountId: accountId ?? undefined,
       gateway,
       toolContext: input.toolContext,
@@ -605,6 +641,28 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     toolContext: input.toolContext,
     allowSlackAutoThread: channel === "slack",
   });
+  const actor = resolvePolicyActor({
+    agentId: ctx.agentId,
+    requesterSenderId: input.requesterSenderId,
+  });
+  await enforceAamaOutboundGuard({
+    action,
+    channel,
+    actor,
+    requesterSenderId: input.requesterSenderId,
+    actionParams: params,
+    payload: {
+      channel,
+      to,
+      question,
+      options,
+      maxSelections,
+      durationSeconds: durationSeconds ?? undefined,
+      durationHours: durationHours ?? undefined,
+      threadId: resolvedThreadId ?? undefined,
+      isAnonymous: isAnonymous ?? undefined,
+    },
+  });
 
   const base = typeof params.message === "string" ? params.message : "";
   await maybeApplyCrossContextMarker({
@@ -624,6 +682,12 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       cfg,
       channel,
       params,
+      aamaPolicy: {
+        alreadyEnforced: true,
+        actor,
+        requesterSenderId: input.requesterSenderId,
+        actionParams: params,
+      },
       accountId: accountId ?? undefined,
       gateway,
       toolContext: input.toolContext,
@@ -657,6 +721,21 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
   const { cfg, params, channel, accountId, dryRun, gateway, input, abortSignal } = ctx;
   throwIfAborted(abortSignal);
   const action = input.action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
+  const actor = resolvePolicyActor({
+    agentId: ctx.agentId,
+    requesterSenderId: input.requesterSenderId,
+  });
+  await enforceAamaOutboundGuard({
+    action,
+    channel,
+    actor,
+    requesterSenderId: input.requesterSenderId,
+    actionParams: params,
+    payload: {
+      channel,
+      params,
+    },
+  });
   if (dryRun) {
     return {
       kind: "action",
@@ -797,6 +876,7 @@ export async function runMessageAction(
       dryRun,
       gateway,
       input,
+      agentId: resolvedAgentId,
       abortSignal: input.abortSignal,
     });
   }
@@ -809,6 +889,7 @@ export async function runMessageAction(
     dryRun,
     gateway,
     input,
+    agentId: resolvedAgentId,
     abortSignal: input.abortSignal,
   });
 }
