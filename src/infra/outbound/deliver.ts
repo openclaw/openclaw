@@ -373,12 +373,11 @@ function createMessageSentEmitter(params: {
     }
     fireAndForgetHook(
       triggerInternalHook(
-        createInternalHookEvent(
-          "message",
-          "sent",
-          params.sessionKeyForInternalHooks!,
-          toInternalMessageSentContext(canonical),
-        ),
+        createInternalHookEvent("message", "sent", params.sessionKeyForInternalHooks!, {
+          ...toInternalMessageSentContext(canonical),
+          cfg: params.cfg,
+        }),
+        { config: params.cfg },
       ),
       "deliverOutboundPayloads: message:sent internal hook failed",
       (message) => {

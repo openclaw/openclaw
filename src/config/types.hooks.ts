@@ -87,16 +87,25 @@ export type HookConfig = {
   [key: string]: unknown;
 };
 
+export type InternalHookEntryPolicyConfig = {
+  enabled?: boolean;
+};
+
+export type InternalHookPolicyConfig = {
+  enabled?: boolean;
+  /** Allowlist of registration event keys (for example "command:new" or "message"). */
+  events?: string[];
+  entries?: Record<string, InternalHookEntryPolicyConfig>;
+};
+
 export type HookInstallRecord = InstallRecordBase & {
   hooks?: string[];
 };
 
-export type InternalHooksConfig = {
-  /** Enable hooks system */
-  enabled?: boolean;
+export type InternalHooksConfig = InternalHookPolicyConfig & {
   /** Legacy: List of internal hook handlers to register (still supported) */
   handlers?: InternalHookHandlerConfig[];
-  /** Per-hook configuration overrides */
+  /** Per-hook configuration overrides (global baseline; supports additional hook-specific keys). */
   entries?: Record<string, HookConfig>;
   /** Load configuration */
   load?: {

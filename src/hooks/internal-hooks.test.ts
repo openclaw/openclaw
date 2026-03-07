@@ -8,6 +8,7 @@ import {
   isMessageReceivedEvent,
   isMessageSentEvent,
   registerInternalHook,
+  resolveEffectiveInternalHookPolicy,
   triggerInternalHook,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
@@ -145,7 +146,17 @@ describe("hooks", () => {
 
     it("stores handlers in the global singleton registry", async () => {
       const globalHooks = globalThis as typeof globalThis & {
-        __openclaw_internal_hook_handlers__?: Map<string, Array<(event: unknown) => unknown>>;
+        __openclaw_internal_hook_handlers__?: Map<
+          string,
+          Array<
+            | ((event: unknown) => unknown)
+            | {
+                handler: (event: unknown) => unknown;
+                eventKey: string;
+                hookName?: string;
+              }
+          >
+        >;
       };
       const handler = vi.fn();
       registerInternalHook("command:new", handler);
@@ -160,6 +171,138 @@ describe("hooks", () => {
       globalHooks.__openclaw_internal_hook_handlers__?.set("command:new", [injectedHandler]);
       await triggerInternalHook(event);
       expect(injectedHandler).toHaveBeenCalledWith(event);
+    });
+
+    it("skips all internal hooks when effective policy is disabled for the runtime agent", async () => {
+      const handler = vi.fn();
+      registerInternalHook("command:new", handler, { hookName: "command-logger" });
+
+      const cfg = {
+        hooks: { internal: { enabled: true } },
+        agents: {
+          list: [
+            {
+              id: "work",
+              hooks: {
+                enabled: false,
+              },
+            },
+          ],
+        },
+      };
+      const event = createInternalHookEvent("command", "new", "work:thread-1", { cfg });
+
+      await triggerInternalHook(event, { config: cfg, agentId: "work" });
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("filters handlers by effective events allowlist", async () => {
+      const generalHandler = vi.fn();
+      const specificHandler = vi.fn();
+      registerInternalHook("command", generalHandler, { hookName: "all-commands" });
+      registerInternalHook("command:new", specificHandler, { hookName: "new-command" });
+
+      const cfg = {
+        hooks: { internal: { enabled: true } },
+        agents: {
+          list: [
+            {
+              id: "work",
+              hooks: {
+                events: ["command:new"],
+              },
+            },
+          ],
+        },
+      };
+      const event = createInternalHookEvent("command", "new", "work:thread-1", { cfg });
+
+      await triggerInternalHook(event, { config: cfg, agentId: "work" });
+
+      expect(generalHandler).not.toHaveBeenCalled();
+      expect(specificHandler).toHaveBeenCalledWith(event);
+    });
+
+    it("filters handlers by effective per-hook entry policy", async () => {
+      const disabledHandler = vi.fn();
+      const enabledHandler = vi.fn();
+      registerInternalHook("command:new", disabledHandler, { hookName: "command-logger" });
+      registerInternalHook("command:new", enabledHandler, { hookName: "session-memory" });
+
+      const cfg = {
+        hooks: {
+          internal: {
+            enabled: true,
+            entries: {
+              "command-logger": { enabled: true },
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            hooks: {
+              entries: {
+                "command-logger": { enabled: false },
+              },
+            },
+          },
+        },
+      };
+      const event = createInternalHookEvent("command", "new", "main", { cfg });
+
+      await triggerInternalHook(event, { config: cfg, agentId: "main" });
+
+      expect(disabledHandler).not.toHaveBeenCalled();
+      expect(enabledHandler).toHaveBeenCalledWith(event);
+    });
+  });
+
+  describe("resolveEffectiveInternalHookPolicy", () => {
+    it("applies global baseline then defaults then agent overrides", () => {
+      const cfg = {
+        hooks: {
+          internal: {
+            enabled: true,
+            events: ["command:new"],
+            entries: {
+              "command-logger": { enabled: true },
+              "session-memory": { enabled: true },
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            hooks: {
+              events: ["message:received"],
+              entries: {
+                "command-logger": { enabled: false },
+              },
+            },
+          },
+          list: [
+            {
+              id: "work",
+              hooks: {
+                enabled: false,
+                events: ["session:compact:after"],
+                entries: {
+                  "session-memory": { enabled: false },
+                },
+              },
+            },
+          ],
+        },
+      };
+
+      expect(resolveEffectiveInternalHookPolicy({ config: cfg, agentId: "work" })).toEqual({
+        enabled: false,
+        events: ["session:compact:after"],
+        entries: {
+          "command-logger": { enabled: false },
+          "session-memory": { enabled: false },
+        },
+      });
     });
   });
 
