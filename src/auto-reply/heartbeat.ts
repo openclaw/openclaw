@@ -1,4 +1,3 @@
-import { escapeRegExp } from "../utils.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
@@ -66,19 +65,21 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   }
 
   const token = HEARTBEAT_TOKEN;
-  const tokenAtEndWithOptionalTrailingPunctuation = new RegExp(
-    `${escapeRegExp(token)}[^\\w]{0,4}$`,
-  );
   if (!text.includes(token)) {
     return { text, didStrip: false };
   }
 
+  const isWordLike = (char: string) => /[A-Za-z0-9_]/.test(char);
   let didStrip = false;
   let changed = true;
   while (changed) {
     changed = false;
     const next = text.trim();
     if (next.startsWith(token)) {
+      const following = next.charAt(token.length);
+      if (following && isWordLike(following)) {
+        break;
+      }
       const after = next.slice(token.length).trimStart();
       text = after;
       didStrip = true;
@@ -89,17 +90,38 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
     // Also strip up to 4 trailing non-word characters the model may have appended
     // (e.g. ".", "!!!", "---"). Keep trailing punctuation only when real
     // sentence text exists before the token.
-    if (tokenAtEndWithOptionalTrailingPunctuation.test(next)) {
-      const idx = next.lastIndexOf(token);
-      const before = next.slice(0, idx).trimEnd();
+    let didStripSuffix = false;
+    for (let trailing = 0; trailing <= 4; trailing += 1) {
+      const tokenStart = next.length - token.length - trailing;
+      if (tokenStart < 0) {
+        continue;
+      }
+      const candidate = next.slice(tokenStart, tokenStart + token.length);
+      if (candidate !== token) {
+        continue;
+      }
+      if (tokenStart > 0 && !/\s/.test(next.charAt(tokenStart - 1))) {
+        continue;
+      }
+      const trailingText = next.slice(tokenStart + token.length);
+      if (trailingText.length !== trailing || /[\w]/.test(trailingText)) {
+        continue;
+      }
+
+      const before = next.slice(0, tokenStart).trimEnd();
       if (!before) {
         text = "";
       } else {
-        const after = next.slice(idx + token.length).trimStart();
+        const after = trailing > 0 ? next.slice(tokenStart + token.length).trimStart() : "";
         text = `${before}${after}`.trimEnd();
       }
       didStrip = true;
       changed = true;
+      didStripSuffix = true;
+      break;
+    }
+    if (didStripSuffix) {
+      continue;
     }
   }
 

@@ -80,6 +80,24 @@ describe("stripHeartbeatToken", () => {
     });
   });
 
+  it("does not strip token embedded in larger words", () => {
+    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}_SUFFIX`, { mode: "message" })).toEqual({
+      shouldSkip: false,
+      text: `${HEARTBEAT_TOKEN}_SUFFIX`,
+      didStrip: false,
+    });
+    expect(stripHeartbeatToken(`prefix${HEARTBEAT_TOKEN}`, { mode: "message" })).toEqual({
+      shouldSkip: false,
+      text: `prefix${HEARTBEAT_TOKEN}`,
+      didStrip: false,
+    });
+    expect(stripHeartbeatToken(`prefix-${HEARTBEAT_TOKEN}`, { mode: "heartbeat" })).toEqual({
+      shouldSkip: false,
+      text: `prefix-${HEARTBEAT_TOKEN}`,
+      didStrip: false,
+    });
+  });
+
   it("strips HTML-wrapped heartbeat tokens", () => {
     expect(stripHeartbeatToken(`<b>${HEARTBEAT_TOKEN}</b>`, { mode: "heartbeat" })).toEqual({
       shouldSkip: true,
