@@ -56,6 +56,23 @@ const withRootMountedControlUiServer = (params: {
 const withPluginGatewayServer = (params: Parameters<typeof withGatewayServer>[0]) =>
   withGatewayServer(params);
 
+const PROBE_CASES = [
+  { path: "/health", status: "live" },
+  { path: "/healthz", status: "live" },
+  { path: "/ready", status: "ready" },
+  { path: "/readyz", status: "ready" },
+] as const;
+
+async function expectProbeRoutesHealthy(server: Parameters<typeof sendRequest>[0]) {
+  for (const probeCase of PROBE_CASES) {
+    const response = await sendRequest(server, { path: probeCase.path });
+    expect(response.res.statusCode, probeCase.path).toBe(200);
+    expect(response.getBody(), probeCase.path).toBe(
+      JSON.stringify({ ok: true, status: probeCase.status }),
+    );
+  }
+}
+
 function createProtectedPluginAuthOverrides(handlePluginRequest: PluginRequestHandler) {
   return {
     handlePluginRequest,
@@ -98,20 +115,7 @@ describe("gateway plugin HTTP auth boundary", () => {
       prefix: "openclaw-plugin-http-probes-test-",
       resolvedAuth: AUTH_TOKEN,
       run: async (server) => {
-        const probeCases = [
-          { path: "/health", status: "live" },
-          { path: "/healthz", status: "live" },
-          { path: "/ready", status: "ready" },
-          { path: "/readyz", status: "ready" },
-        ] as const;
-
-        for (const probeCase of probeCases) {
-          const response = await sendRequest(server, { path: probeCase.path });
-          expect(response.res.statusCode, probeCase.path).toBe(200);
-          expect(response.getBody(), probeCase.path).toBe(
-            JSON.stringify({ ok: true, status: probeCase.status }),
-          );
-        }
+        await expectProbeRoutesHealthy(server);
       },
     });
   });
@@ -501,22 +505,8 @@ describe("gateway plugin HTTP auth boundary", () => {
       prefix: "openclaw-plugin-http-control-ui-probes-test-",
       handlePluginRequest,
       run: async (server) => {
-        const probeCases = [
-          { path: "/health", status: "live" },
-          { path: "/healthz", status: "live" },
-          { path: "/ready", status: "ready" },
-          { path: "/readyz", status: "ready" },
-        ] as const;
-
-        for (const probeCase of probeCases) {
-          const response = await sendRequest(server, { path: probeCase.path });
-          expect(response.res.statusCode, probeCase.path).toBe(200);
-          expect(response.getBody(), probeCase.path).toBe(
-            JSON.stringify({ ok: true, status: probeCase.status }),
-          );
-        }
-
-        expect(handlePluginRequest).toHaveBeenCalledTimes(probeCases.length);
+        await expectProbeRoutesHealthy(server);
+        expect(handlePluginRequest).toHaveBeenCalledTimes(PROBE_CASES.length);
       },
     });
   });
