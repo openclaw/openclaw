@@ -1,5 +1,6 @@
 import { ChannelType } from "@buape/carbon";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 
@@ -81,6 +82,10 @@ describe("preflightDiscordMessage", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     transcribeFirstAudioMock.mockReset();
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it("drops bound-thread bot system messages to prevent ACP self-loop", async () => {
@@ -571,6 +576,179 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("does not reroute when a Discord user mention resolves to an agent-like display name", async () => {
+    const channelId = "channel-human-mention-route";
+    const guildId = "guild-human-mention-route";
+    const runtimeCfg = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          { id: "main", default: true },
+          { id: "steve", name: "Steve" },
+        ],
+      },
+    } satisfies import("../../config/config.js").OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeCfg);
+    const client = {
+      fetchChannel: async (id: string) => {
+        if (id === channelId) {
+          return {
+            id: channelId,
+            type: ChannelType.GuildText,
+            name: "general",
+          };
+        }
+        return null;
+      },
+    } as unknown as import("@buape/carbon").Client;
+    const message = {
+      id: "m-human-mention-route",
+      content: "hello <@999>",
+      timestamp: new Date().toISOString(),
+      channelId,
+      attachments: [],
+      mentionedUsers: [{ id: "999", username: "steve" }],
+      mentionedRoles: [],
+      mentionedEveryone: false,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    } as unknown as import("@buape/carbon").Message;
+
+    const result = await preflightDiscordMessage({
+      cfg: runtimeCfg,
+      discordConfig: {} as NonNullable<
+        import("../../config/config.js").OpenClawConfig["channels"]
+      >["discord"],
+      accountId: "default",
+      token: "token",
+      runtime: {} as import("../../runtime.js").RuntimeEnv,
+      botUserId: "openclaw-bot",
+      guildHistories: new Map(),
+      historyLimit: 0,
+      mediaMaxBytes: 1_000_000,
+      textLimit: 2_000,
+      replyToMode: "all",
+      dmEnabled: true,
+      groupDmEnabled: true,
+      ackReactionScope: "direct",
+      groupPolicy: "open",
+      threadBindings: createNoopThreadBindingManager("default"),
+      guildEntries: {
+        [guildId]: {
+          requireMention: false,
+        },
+      },
+      data: {
+        channel_id: channelId,
+        guild_id: guildId,
+        guild: {
+          id: guildId,
+          name: "Guild One",
+        },
+        author: message.author,
+        message,
+      } as unknown as import("./listeners.js").DiscordMessageEvent,
+      client,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.baseText).toBe("hello @steve");
+    expect(result?.route.agentId).toBe("main");
+    expect(result?.route.matchedBy).toBe("default");
+  });
+
+  it("still routes literal @agent text to the target agent", async () => {
+    const channelId = "channel-literal-agent-route";
+    const guildId = "guild-literal-agent-route";
+    const runtimeCfg = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          { id: "main", default: true },
+          { id: "steve", name: "Steve" },
+        ],
+      },
+    } satisfies import("../../config/config.js").OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeCfg);
+    const client = {
+      fetchChannel: async (id: string) => {
+        if (id === channelId) {
+          return {
+            id: channelId,
+            type: ChannelType.GuildText,
+            name: "general",
+          };
+        }
+        return null;
+      },
+    } as unknown as import("@buape/carbon").Client;
+    const message = {
+      id: "m-literal-agent-route",
+      content: "hello @steve",
+      timestamp: new Date().toISOString(),
+      channelId,
+      attachments: [],
+      mentionedUsers: [],
+      mentionedRoles: [],
+      mentionedEveryone: false,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    } as unknown as import("@buape/carbon").Message;
+
+    const result = await preflightDiscordMessage({
+      cfg: runtimeCfg,
+      discordConfig: {} as NonNullable<
+        import("../../config/config.js").OpenClawConfig["channels"]
+      >["discord"],
+      accountId: "default",
+      token: "token",
+      runtime: {} as import("../../runtime.js").RuntimeEnv,
+      botUserId: "openclaw-bot",
+      guildHistories: new Map(),
+      historyLimit: 0,
+      mediaMaxBytes: 1_000_000,
+      textLimit: 2_000,
+      replyToMode: "all",
+      dmEnabled: true,
+      groupDmEnabled: true,
+      ackReactionScope: "direct",
+      groupPolicy: "open",
+      threadBindings: createNoopThreadBindingManager("default"),
+      guildEntries: {
+        [guildId]: {
+          requireMention: false,
+        },
+      },
+      data: {
+        channel_id: channelId,
+        guild_id: guildId,
+        guild: {
+          id: guildId,
+          name: "Guild One",
+        },
+        author: message.author,
+        message,
+      } as unknown as import("./listeners.js").DiscordMessageEvent,
+      client,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.route.agentId).toBe("steve");
+    expect(result?.route.matchedBy).toBe("mention");
   });
 
   it("does not drop @everyone messages when ignoreOtherMentions=true", async () => {

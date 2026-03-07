@@ -1539,6 +1539,7 @@ async function dispatchDiscordCommandInteraction(params: {
     accountId,
     guildId: interaction.guild?.id ?? undefined,
     memberRoleIds,
+    text: prompt,
     peer: {
       kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
       id: isDirectMessage ? user.id : channelId,

@@ -71,9 +71,20 @@ export type {
 } from "./message-handler.preflight.types.js";
 
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
+const DISCORD_NATIVE_MENTION_ENTITY_REGEX = /<@[!&]?\d+>/g;
 
 function isPreflightAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
+}
+
+function resolveDiscordRouteText(message: import("@buape/carbon").Message): string {
+  const rawText = message.content?.trim() ?? "";
+  if (!rawText) {
+    return "";
+  }
+  // Keep literal `@agent` text routable, but ignore Discord-native mention entities such as
+  // `<@123>`, `<@!123>`, and `<@&123>` so human/role mentions never masquerade as agent aliases.
+  return rawText.replace(DISCORD_NATIVE_MENTION_ENTITY_REGEX, " ").trim();
 }
 
 function isBoundThreadBotSystemMessage(params: {
@@ -282,6 +293,7 @@ export async function preflightDiscordMessage(
   const baseText = resolveDiscordMessageText(message, {
     includeForwarded: false,
   });
+  const routeText = resolveDiscordRouteText(message);
   const messageText = resolveDiscordMessageText(message, {
     includeForwarded: true,
   });
@@ -339,6 +351,7 @@ export async function preflightDiscordMessage(
     accountId: params.accountId,
     guildId: params.data.guild_id ?? undefined,
     memberRoleIds,
+    text: routeText,
     peer: {
       kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
       id: isDirectMessage ? author.id : messageChannelId,
