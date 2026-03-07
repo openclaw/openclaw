@@ -68,6 +68,7 @@ import {
   normalizeAllowFrom,
   normalizeDmAllowFromWithStore,
 } from "./bot-access.js";
+import { latestGroupMessageIds } from "./bot.js";
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -90,6 +91,7 @@ import { enforceTelegramDmAccess } from "./dm-access.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
   buildTelegramStatusReactionVariants,
   resolveTelegramAllowedEmojiReactions,
@@ -654,35 +656,27 @@ export const buildTelegramMessageContext = async ({
   const groupKey = historyKey ?? "";
   let contextualActivationHint: string | undefined;
 
+  // Check whether a newer message is already queued for this chat/topic.
+  // If so, skip the expensive decision-model call and just record history —
+  // the newer message will carry the full context window anyway.
+  const seqKey = getTelegramSequentialKey(primaryCtx);
+  const latestMsgId = latestGroupMessageIds.get(seqKey);
+  const isStaleMessage =
+    typeof msg.message_id === "number" &&
+    typeof latestMsgId === "number" &&
+    msg.message_id < latestMsgId;
+
   // When engaged via contextual activation, skip mention gating entirely and ask
   // the model whether to continue or disengage.
   if (isGroup && contextualConfig?.model) {
     const engagement = engagementStates.get(groupKey);
     if (engagement?.mode === "engaged") {
-      const decision = await callTelegramContextualDecision({
-        cfg,
-        contextualConfig,
-        groupHistories,
-        groupKey,
-        msg,
-        rawBody,
-        senderId: senderId || chatId,
-        botName: primaryCtx.me?.first_name ?? primaryCtx.me?.username,
-        allMedia,
-      });
-      if (decision.shouldProcess) {
-        contextualActivationHint = decision.reason;
-        // Stay engaged, skip mention gate — fall through to process
+      if (isStaleMessage) {
+        logVerbose(
+          `[contextual-activation] Telegram group ${chatId}: skipping stale message #${msg.message_id} (latest: #${latestMsgId})`,
+        );
+        // Fall through to normal mention gating — will record history and skip
       } else {
-        // Model disengaged — fall through to normal mention gating below
-      }
-    }
-  }
-
-  if (isGroup && requireMention && canDetectMention) {
-    if (mentionGate.shouldSkip) {
-      // Contextual activation (peeking): ask the decision model before skipping
-      if (contextualConfig?.model) {
         const decision = await callTelegramContextualDecision({
           cfg,
           contextualConfig,
@@ -696,14 +690,49 @@ export const buildTelegramMessageContext = async ({
         });
         if (decision.shouldProcess) {
           contextualActivationHint = decision.reason;
-          logVerbose(`[contextual-activation] Telegram group ${chatId}: decided to participate`);
-          // Fall through — treat as if mentioned
+          // Stay engaged, skip mention gate — fall through to process
         } else {
-          if (decision.error) {
-            logVerbose(
-              `[contextual-activation] Telegram group ${chatId}: error: ${decision.error}`,
-            );
+          // Model disengaged — fall through to normal mention gating below
+        }
+      }
+    }
+  }
+
+  if (isGroup && requireMention && canDetectMention) {
+    if (mentionGate.shouldSkip) {
+      // Contextual activation (peeking): ask the decision model before skipping
+      if (contextualConfig?.model) {
+        if (isStaleMessage) {
+          logVerbose(
+            `[contextual-activation] Telegram group ${chatId}: skipping stale message #${msg.message_id} (latest: #${latestMsgId})`,
+          );
+          // Skip decision call — just record history and return
+        } else {
+          const decision = await callTelegramContextualDecision({
+            cfg,
+            contextualConfig,
+            groupHistories,
+            groupKey,
+            msg,
+            rawBody,
+            senderId: senderId || chatId,
+            botName: primaryCtx.me?.first_name ?? primaryCtx.me?.username,
+            allMedia,
+          });
+          if (decision.shouldProcess) {
+            contextualActivationHint = decision.reason;
+            logVerbose(`[contextual-activation] Telegram group ${chatId}: decided to participate`);
+            // Fall through — treat as if mentioned
+          } else {
+            if (decision.error) {
+              logVerbose(
+                `[contextual-activation] Telegram group ${chatId}: error: ${decision.error}`,
+              );
+            }
+            // Fall through to record history and skip below
           }
+        }
+        if (!contextualActivationHint) {
           logger.info({ chatId, reason: "no-mention-contextual-skip" }, "skipping group message");
           recordPendingHistoryEntryIfEnabled({
             historyMap: groupHistories,
