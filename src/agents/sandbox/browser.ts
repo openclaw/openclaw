@@ -37,6 +37,8 @@ import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
 
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
+const CDP_POLL_TIMEOUT_MS = 1000;
+const CDP_RETRY_DELAY_MS = 150;
 
 async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
@@ -44,7 +46,7 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
   while (Date.now() < deadline) {
     try {
       const ctrl = new AbortController();
-      const t = setTimeout(ctrl.abort.bind(ctrl), 1000);
+      const t = setTimeout(ctrl.abort.bind(ctrl), CDP_POLL_TIMEOUT_MS);
       try {
         const res = await fetch(url, { signal: ctrl.signal });
         if (res.ok) {
@@ -56,7 +58,7 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
     } catch {
       // ignore
     }
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, CDP_RETRY_DELAY_MS));
   }
   return false;
 }

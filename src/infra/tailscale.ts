@@ -7,6 +7,8 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
 
+const TAILSCALE_BINARY_CHECK_TIMEOUT_MS = 3000;
+
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
   const start = trimmed.indexOf("{");
@@ -35,8 +37,10 @@ export async function findTailscaleBinary(): Promise<string | null> {
     try {
       // Use Promise.race with runExec to implement timeout
       await Promise.race([
-        runExec(path, ["--version"], { timeoutMs: 3000 }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000)),
+        runExec(path, ["--version"], { timeoutMs: TAILSCALE_BINARY_CHECK_TIMEOUT_MS }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), TAILSCALE_BINARY_CHECK_TIMEOUT_MS),
+        ),
       ]);
       return true;
     } catch {
