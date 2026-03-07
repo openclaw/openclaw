@@ -224,7 +224,7 @@ Behavior details:
 Isolated jobs (`agentTurn`) can override the model and thinking level:
 
 - `model`: Provider/model string (e.g., `anthropic/claude-sonnet-4-20250514`) or alias (e.g., `opus`)
-- `thinking`: Thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`; GPT-5.2 + Codex models only)
+- `thinking`: Thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`; `xhigh` is available on supported OpenAI/Codex GPT-5.x models including `openai/gpt-5.4`, `openai/gpt-5.4-pro`, and `openai-codex/gpt-5.4`)
 
 Note: You can set `model` on main-session jobs too, but it changes the shared main
 session model. We recommend model overrides only for isolated jobs to avoid

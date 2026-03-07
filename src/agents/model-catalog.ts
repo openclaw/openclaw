@@ -12,6 +12,7 @@ export type ModelCatalogEntry = {
   name: string;
   provider: string;
   contextWindow?: number;
+  maxTokens?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
 };
@@ -21,6 +22,7 @@ type DiscoveredModel = {
   name?: string;
   provider: string;
   contextWindow?: number;
+  maxTokens?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
 };
@@ -36,6 +38,8 @@ const CODEX_PROVIDER = "openai-codex";
 const OPENAI_PROVIDER = "openai";
 const OPENAI_GPT54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT54_PRO_MODEL_ID = "gpt-5.4-pro";
+const OPENAI_GPT54_CONTEXT_TOKENS = 1_050_000;
+const OPENAI_GPT54_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT54_MODEL_ID = "gpt-5.4";
@@ -45,6 +49,7 @@ type SyntheticCatalogFallback = {
   provider: string;
   id: string;
   templateIds: readonly string[];
+  patch?: Partial<ModelCatalogEntry>;
 };
 
 const SYNTHETIC_CATALOG_FALLBACKS: readonly SyntheticCatalogFallback[] = [
@@ -52,16 +57,28 @@ const SYNTHETIC_CATALOG_FALLBACKS: readonly SyntheticCatalogFallback[] = [
     provider: OPENAI_PROVIDER,
     id: OPENAI_GPT54_MODEL_ID,
     templateIds: ["gpt-5.2"],
+    patch: {
+      contextWindow: OPENAI_GPT54_CONTEXT_TOKENS,
+      maxTokens: OPENAI_GPT54_MAX_TOKENS,
+    },
   },
   {
     provider: OPENAI_PROVIDER,
     id: OPENAI_GPT54_PRO_MODEL_ID,
     templateIds: ["gpt-5.2-pro", "gpt-5.2"],
+    patch: {
+      contextWindow: OPENAI_GPT54_CONTEXT_TOKENS,
+      maxTokens: OPENAI_GPT54_MAX_TOKENS,
+    },
   },
   {
     provider: CODEX_PROVIDER,
     id: OPENAI_CODEX_GPT54_MODEL_ID,
     templateIds: ["gpt-5.3-codex", "gpt-5.2-codex"],
+    patch: {
+      contextWindow: OPENAI_GPT54_CONTEXT_TOKENS,
+      maxTokens: OPENAI_GPT54_MAX_TOKENS,
+    },
   },
   {
     provider: CODEX_PROVIDER,
@@ -90,6 +107,7 @@ function applySyntheticCatalogFallbacks(models: ModelCatalogEntry[]): void {
     }
     models.push({
       ...template,
+      ...fallback.patch,
       id: fallback.id,
       name: fallback.id,
     });
@@ -144,10 +162,13 @@ function readConfiguredOptInProviderModels(config: OpenClawConfig): ModelCatalog
       const contextWindowRaw = (configuredModel as { contextWindow?: unknown }).contextWindow;
       const contextWindow =
         typeof contextWindowRaw === "number" && contextWindowRaw > 0 ? contextWindowRaw : undefined;
+      const maxTokensRaw = (configuredModel as { maxTokens?: unknown }).maxTokens;
+      const maxTokens =
+        typeof maxTokensRaw === "number" && maxTokensRaw > 0 ? maxTokensRaw : undefined;
       const reasoningRaw = (configuredModel as { reasoning?: unknown }).reasoning;
       const reasoning = typeof reasoningRaw === "boolean" ? reasoningRaw : undefined;
       const input = normalizeConfiguredModelInput((configuredModel as { input?: unknown }).input);
-      out.push({ id, name, provider, contextWindow, reasoning, input });
+      out.push({ id, name, provider, contextWindow, maxTokens, reasoning, input });
     }
   }
 
@@ -247,9 +268,11 @@ export async function loadModelCatalog(params?: {
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow
             : undefined;
+        const maxTokens =
+          typeof entry?.maxTokens === "number" && entry.maxTokens > 0 ? entry.maxTokens : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
-        models.push({ id, name, provider, contextWindow, reasoning, input });
+        models.push({ id, name, provider, contextWindow, maxTokens, reasoning, input });
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
       applySyntheticCatalogFallbacks(models);
