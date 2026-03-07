@@ -378,6 +378,8 @@ export { SILENT_REPLY_TOKEN, isSilentReplyText } from "../auto-reply/tokens.js";
 export { formatInboundFromLabel } from "../auto-reply/envelope.js";
 export {
   formatTrimmedAllowFromEntries,
+  mapAllowFromEntries,
+  resolveOptionalConfigString,
   formatWhatsAppConfigAllowFromEntries,
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,

@@ -1,6 +1,8 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRestrictSendersWarnings,
+  mapAllowFromEntries,
+  resolveOptionalConfigString,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -143,9 +145,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       baseUrl: account.baseUrl,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
-      ),
+      mapAllowFromEntries(resolveSignalAccount({ cfg, accountId }).config.allowFrom),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map((entry) => String(entry).trim())
@@ -153,7 +153,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
         .filter(Boolean),
     resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveSignalAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+      resolveOptionalConfigString(resolveSignalAccount({ cfg, accountId }).config.defaultTo),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
