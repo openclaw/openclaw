@@ -57,6 +57,7 @@ describe("doctor command", () => {
     expect(channels.whatsapp).toEqual(
       expect.objectContaining({
         allowFrom: ["+15555550123"],
+        enabled: true,
       }),
     );
     expect(written.routing).toBeUndefined();

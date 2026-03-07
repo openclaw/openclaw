@@ -223,6 +223,10 @@ export class GatewayClient {
 
   stop() {
     this.closed = true;
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
