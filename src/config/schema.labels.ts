@@ -90,6 +90,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.remote": "Remote Gateway",
   "gateway.remote.transport": "Remote Gateway Transport",
   "gateway.reload": "Config Reload",
+  "gateway.restartRecovery": "Gateway Restart Recovery",
+  "gateway.restartRecovery.resumeInflightAgentRuns": "Resume In-Flight Agent Runs After Restart",
   "gateway.tls": "Gateway TLS",
   "gateway.tls.enabled": "Gateway TLS Enabled",
   "gateway.tls.autoGenerate": "Gateway TLS Auto-Generate Cert",

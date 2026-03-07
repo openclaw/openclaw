@@ -79,7 +79,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expectLaunchdKickstartSupervised({ launchJobLabel: "ai.openclaw.gateway" });
   });
 
-  it("returns failed when launchd kickstart helper fails", () => {
+  it("still returns supervised when launchd kickstart helper fails", () => {
     setPlatform("darwin");
     process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
     process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
@@ -91,8 +91,9 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
     const result = restartGatewayProcessWithFreshPid();
 
-    expect(result.mode).toBe("failed");
+    expect(result.mode).toBe("supervised");
     expect(result.detail).toContain("spawn failed");
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("does not schedule kickstart on non-darwin platforms", () => {

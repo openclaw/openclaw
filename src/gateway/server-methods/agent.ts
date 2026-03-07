@@ -32,6 +32,11 @@ import {
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
+import {
+  addInflightAgentRun,
+  isInflightAgentRunRecoveryEnabled,
+  removeInflightAgentRun,
+} from "../inflight-agent-runs.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
@@ -612,44 +617,57 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
-    void agentCommandFromIngress(
-      {
-        message,
-        images,
-        to: resolvedTo,
-        sessionId: resolvedSessionId,
-        sessionKey: resolvedSessionKey,
-        thinking: request.thinking,
-        deliver,
-        deliveryTargetMode,
-        channel: resolvedChannel,
+    const shouldPersistInflight = isInflightAgentRunRecoveryEnabled(cfg);
+    const runOpts = {
+      message,
+      images,
+      to: resolvedTo,
+      sessionId: resolvedSessionId,
+      sessionKey: resolvedSessionKey,
+      thinking: request.thinking,
+      deliver,
+      deliveryTargetMode,
+      channel: resolvedChannel,
+      accountId: resolvedAccountId,
+      threadId: resolvedThreadId,
+      runContext: {
+        messageChannel: originMessageChannel,
         accountId: resolvedAccountId,
-        threadId: resolvedThreadId,
-        runContext: {
-          messageChannel: originMessageChannel,
-          accountId: resolvedAccountId,
-          groupId: resolvedGroupId,
-          groupChannel: resolvedGroupChannel,
-          groupSpace: resolvedGroupSpace,
-          currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
-        },
         groupId: resolvedGroupId,
         groupChannel: resolvedGroupChannel,
         groupSpace: resolvedGroupSpace,
-        spawnedBy: spawnedByValue,
-        timeout: request.timeout?.toString(),
-        bestEffortDeliver,
-        messageChannel: originMessageChannel,
-        runId,
-        lane: request.lane,
-        extraSystemPrompt: request.extraSystemPrompt,
-        internalEvents: request.internalEvents,
-        inputProvenance,
-        senderIsOwner,
+        currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
       },
-      defaultRuntime,
-      context.deps,
-    )
+      groupId: resolvedGroupId,
+      groupChannel: resolvedGroupChannel,
+      groupSpace: resolvedGroupSpace,
+      spawnedBy: spawnedByValue,
+      timeout: request.timeout?.toString(),
+      bestEffortDeliver,
+      messageChannel: originMessageChannel,
+      runId,
+      lane: request.lane,
+      extraSystemPrompt: request.extraSystemPrompt,
+      internalEvents: request.internalEvents,
+      inputProvenance,
+      senderIsOwner,
+    } as const;
+
+    if (shouldPersistInflight) {
+      const persistableRunOpts = {
+        ...runOpts,
+        // Avoid persisting large base64 image payloads; resumed runs use a fresh
+        // continuation prompt and existing session transcript as context.
+        images: undefined,
+      };
+      void addInflightAgentRun({
+        runId,
+        acceptedAt: accepted.acceptedAt,
+        opts: persistableRunOpts,
+      }).catch(() => {});
+    }
+
+    void agentCommandFromIngress(runOpts, defaultRuntime, context.deps)
       .then((result) => {
         const payload = {
           runId,
@@ -657,6 +675,9 @@ export const agentHandlers: GatewayRequestHandlers = {
           summary: "completed",
           result,
         };
+        if (shouldPersistInflight) {
+          void removeInflightAgentRun(runId).catch(() => {});
+        }
         setGatewayDedupeEntry({
           dedupe: context.dedupe,
           key: `agent:${idem}`,
@@ -677,6 +698,9 @@ export const agentHandlers: GatewayRequestHandlers = {
           status: "error" as const,
           summary: String(err),
         };
+        if (shouldPersistInflight) {
+          void removeInflightAgentRun(runId).catch(() => {});
+        }
         setGatewayDedupeEntry({
           dedupe: context.dedupe,
           key: `agent:${idem}`,

@@ -36,6 +36,8 @@ let lastRestartEmittedAt = 0;
 let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
+let pendingRestartDeferralPoll: ReturnType<typeof setInterval> | null = null;
+let restartDeferralActive = false;
 
 function hasUnconsumedRestartSignal(): boolean {
   return emittedRestartToken > consumedRestartToken;
@@ -48,6 +50,14 @@ function clearPendingScheduledRestart(): void {
   pendingRestartTimer = null;
   pendingRestartDueAt = 0;
   pendingRestartReason = undefined;
+}
+
+function clearRestartDeferralState(): void {
+  if (pendingRestartDeferralPoll) {
+    clearInterval(pendingRestartDeferralPoll);
+  }
+  pendingRestartDeferralPoll = null;
+  restartDeferralActive = false;
 }
 
 export type RestartAuditInfo = {
@@ -99,6 +109,12 @@ export function setPreRestartDeferralCheck(fn: () => number): void {
   preRestartCheck = fn;
 }
 
+export function shouldPreserveInflightAgentRunsForPendingRestart(): boolean {
+  const hasImminentScheduledRestart =
+    pendingRestartTimer !== null && pendingRestartDueAt > 0 && pendingRestartDueAt <= Date.now();
+  return hasImminentScheduledRestart || restartDeferralActive || hasUnconsumedRestartSignal();
+}
+
 /**
  * Emit an authorized SIGUSR1 gateway restart, guarded against duplicate emissions.
  * Returns true if SIGUSR1 was emitted, false if a restart was already emitted.
@@ -108,9 +124,11 @@ export function setPreRestartDeferralCheck(fn: () => number): void {
 export function emitGatewayRestart(): boolean {
   if (hasUnconsumedRestartSignal()) {
     clearPendingScheduledRestart();
+    clearRestartDeferralState();
     return false;
   }
   clearPendingScheduledRestart();
+  clearRestartDeferralState();
   const cycleToken = ++restartCycleToken;
   emittedRestartToken = cycleToken;
   authorizeGatewaySigusr1Restart();
@@ -211,32 +229,35 @@ export function deferGatewayRestartUntilIdle(opts: {
     return;
   }
   if (pending <= 0) {
+    clearRestartDeferralState();
     opts.hooks?.onReady?.();
     emitGatewayRestart();
     return;
   }
 
+  clearRestartDeferralState();
+  restartDeferralActive = true;
   opts.hooks?.onDeferring?.(pending);
   const startedAt = Date.now();
-  const poll = setInterval(() => {
+  pendingRestartDeferralPoll = setInterval(() => {
     let current: number;
     try {
       current = opts.getPendingCount();
     } catch (err) {
-      clearInterval(poll);
+      clearRestartDeferralState();
       opts.hooks?.onCheckError?.(err);
       emitGatewayRestart();
       return;
     }
     if (current <= 0) {
-      clearInterval(poll);
+      clearRestartDeferralState();
       opts.hooks?.onReady?.();
       emitGatewayRestart();
       return;
     }
     const elapsedMs = Date.now() - startedAt;
     if (elapsedMs >= maxWaitMs) {
-      clearInterval(poll);
+      clearRestartDeferralState();
       opts.hooks?.onTimeout?.(current, elapsedMs);
       emitGatewayRestart();
     }
@@ -495,5 +516,6 @@ export const __testing = {
     consumedRestartToken = 0;
     lastRestartEmittedAt = 0;
     clearPendingScheduledRestart();
+    clearRestartDeferralState();
   },
 };
