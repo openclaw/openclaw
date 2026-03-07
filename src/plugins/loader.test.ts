@@ -731,6 +731,59 @@ describe("loadOpenClawPlugins", () => {
     ).toBe(true);
   });
 
+  it("rejects mixed-auth overlapping http routes", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "http-route-overlap",
+      filename: "http-route-overlap.cjs",
+      body: `module.exports = { id: "http-route-overlap", register(api) {
+  api.registerHttpRoute({ path: "/plugin/secure", auth: "gateway", match: "prefix", handler: async () => true });
+  api.registerHttpRoute({ path: "/plugin/secure/report", auth: "plugin", match: "exact", handler: async () => true });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["http-route-overlap"],
+      },
+    });
+
+    const routes = registry.httpRoutes.filter((entry) => entry.pluginId === "http-route-overlap");
+    expect(routes).toHaveLength(1);
+    expect(routes[0]?.path).toBe("/plugin/secure");
+    expect(
+      registry.diagnostics.some((diag) =>
+        String(diag.message).includes("http route overlap rejected"),
+      ),
+    ).toBe(true);
+  });
+
+  it("allows same-auth overlapping http routes", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "http-route-overlap-same-auth",
+      filename: "http-route-overlap-same-auth.cjs",
+      body: `module.exports = { id: "http-route-overlap-same-auth", register(api) {
+  api.registerHttpRoute({ path: "/plugin/public", auth: "plugin", match: "prefix", handler: async () => true });
+  api.registerHttpRoute({ path: "/plugin/public/report", auth: "plugin", match: "exact", handler: async () => true });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["http-route-overlap-same-auth"],
+      },
+    });
+
+    const routes = registry.httpRoutes.filter(
+      (entry) => entry.pluginId === "http-route-overlap-same-auth",
+    );
+    expect(routes).toHaveLength(2);
+    expect(registry.diagnostics).toEqual([]);
+  });
+
   it("respects explicit disable in config", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
