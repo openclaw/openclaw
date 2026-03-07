@@ -122,7 +122,6 @@ describe("resolveProxyFetchFromEnv", () => {
     expect(resolveProxyFetchFromEnv("http://[::1]:9001/v1/models")).toBeUndefined();
     expect(envAgentSpy).not.toHaveBeenCalled();
   });
-
   it("keeps proxy fetch when no_proxy host:port only matches a different port", () => {
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
     vi.stubEnv("NO_PROXY", "internal.example:8443,.example.internal:8443");
@@ -163,7 +162,6 @@ describe("resolveProxyFetchFromEnv", () => {
     expect(resolveProxyFetchFromEnv("http://example.com:8080/health")).toBeUndefined();
     expect(envAgentSpy).not.toHaveBeenCalled();
   });
-
   it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {
     vi.stubEnv("HTTP_PROXY", "");
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
