@@ -169,26 +169,30 @@ export const pumblePlugin: ChannelPlugin<ResolvedPumbleAccount> = {
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async ({ to, text, accountId, replyToId }) => {
+    sendText: async ({ to, text, accountId, replyToId, threadId }) => {
+      const effectiveReplyToId =
+        replyToId ?? (threadId != null ? String(threadId) : undefined) ?? undefined;
       const suffix = resolveSubagentLabelSuffix({
-        threadRootId: replyToId ?? undefined,
+        threadRootId: effectiveReplyToId,
         accountId: accountId ?? undefined,
       });
       const result = await sendMessagePumble(to, text + suffix, {
         accountId: accountId ?? undefined,
-        replyToId: replyToId ?? undefined,
+        replyToId: effectiveReplyToId,
       });
       return { channel: "pumble", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, threadId }) => {
+      const effectiveReplyToId =
+        replyToId ?? (threadId != null ? String(threadId) : undefined) ?? undefined;
       const suffix = resolveSubagentLabelSuffix({
-        threadRootId: replyToId ?? undefined,
+        threadRootId: effectiveReplyToId,
         accountId: accountId ?? undefined,
       });
       const result = await sendMessagePumble(to, text + suffix, {
         accountId: accountId ?? undefined,
         mediaUrl,
-        replyToId: replyToId ?? undefined,
+        replyToId: effectiveReplyToId,
       });
       return { channel: "pumble", ...result };
     },
