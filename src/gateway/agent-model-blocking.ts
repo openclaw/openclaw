@@ -14,10 +14,11 @@ export async function resolveGatewayAgentModelState(params: {
   cfg: OpenClawConfig;
   agentId: string;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  catalog?: ModelCatalogEntry[];
 }): Promise<AgentModelResolutionState> {
   const strictModelResolution = isStrictModelResolutionEnabled(params.cfg);
-  let catalog: ModelCatalogEntry[] | undefined;
-  if (strictModelResolution && params.loadGatewayModelCatalog) {
+  let catalog = params.catalog;
+  if (!catalog && strictModelResolution && params.loadGatewayModelCatalog) {
     catalog = await params.loadGatewayModelCatalog();
   }
   return resolveAgentModelResolutionState({

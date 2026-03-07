@@ -451,6 +451,17 @@ function collectConfiguredProviderIds(cfg: OpenClawConfig): Set<string> {
       out.add(normalized);
     }
   }
+  for (const key of Object.keys(cfg.agents?.defaults?.cliBackends ?? {})) {
+    const normalized = normalizeProviderId(key);
+    if (normalized) {
+      out.add(normalized);
+    }
+  }
+  for (const provider of ["claude-cli", "codex-cli"]) {
+    if (isCliProvider(provider, cfg)) {
+      out.add(normalizeProviderId(provider));
+    }
+  }
   return out;
 }
 

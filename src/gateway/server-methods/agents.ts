@@ -479,12 +479,13 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respond(true, result, undefined);
       return;
     }
+    const catalog = await context.loadGatewayModelCatalog();
     const agents = await Promise.all(
       result.agents.map(async (agent) => {
         const state = await resolveGatewayAgentModelState({
           cfg,
           agentId: agent.id,
-          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+          catalog,
         });
         return {
           ...agent,

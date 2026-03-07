@@ -102,6 +102,8 @@ const makeContext = (): GatewayRequestContext =>
     dedupe: new Map(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
+    registerToolEventRecipient: vi.fn(),
+    chatAbortControllers: new Map(),
     logGateway: { info: vi.fn(), error: vi.fn() },
   }) as unknown as GatewayRequestContext;
 
@@ -466,6 +468,7 @@ describe("gateway agent handler", () => {
       "blocked-idem-1",
       "agent:main:main",
     );
+    expect(context.registerToolEventRecipient).not.toHaveBeenCalled();
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,

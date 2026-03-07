@@ -843,6 +843,37 @@ describe("strict model resolution", () => {
     }
   });
 
+  it("treats configured CLI backends as available providers in strict mode", () => {
+    const cfg = {
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+            },
+          },
+          model: {
+            primary: "claude-cli/sonnet",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [],
+    });
+
+    expect(state).toEqual({
+      status: "ready",
+      ref: { provider: "claude-cli", model: "sonnet" },
+    });
+  });
+
   it("keeps resolution isolated across multiple agents", () => {
     const cfg = {
       models: {
