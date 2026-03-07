@@ -136,6 +136,24 @@ describe("buildAssistantMessage", () => {
     expect(result.usage.totalTokens).toBe(15);
   });
 
+  it("preserves explicit zero usage counters from Ollama", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: { role: "assistant" as const, content: "" },
+      done: true,
+      prompt_eval_count: 0,
+      eval_count: 0,
+    };
+    const result = buildAssistantMessage(response, modelInfo, {
+      input: 11,
+      output: 4,
+    });
+    expect(result.usage.input).toBe(0);
+    expect(result.usage.output).toBe(0);
+    expect(result.usage.totalTokens).toBe(0);
+  });
+
   it("builds response with tool calls", () => {
     const response = {
       model: "qwen3:32b",

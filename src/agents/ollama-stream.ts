@@ -242,7 +242,7 @@ function estimateOllamaCompletionTokens(response: OllamaChatResponse): number {
 }
 
 function resolveUsageCount(value: number | undefined, fallback: number | undefined): number {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
     return value;
   }
   if (typeof fallback === "number" && Number.isFinite(fallback) && fallback > 0) {
@@ -558,7 +558,9 @@ export function createOllamaStreamFn(
 
         // The usage dashboard reads transcript-level assistant usage. Some
         // Ollama builds omit prompt/eval counts, so estimate enough usage here
-        // to keep local-model runs visible in the existing dashboard.
+        // to keep local-model runs visible in the existing dashboard. This
+        // must happen after accumulatedContent is copied onto the final
+        // response so reasoning-mode output is counted correctly.
         const usageFallback = {
           input: estimateOllamaPromptTokens({
             messages: ollamaMessages,
