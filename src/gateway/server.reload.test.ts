@@ -402,8 +402,8 @@ describe("gateway hot reload", () => {
       expect(hoisted.cronInstances.length).toBe(2);
       expect(hoisted.cronInstances[0].flush).toHaveBeenCalledTimes(1);
       expect(hoisted.cronInstances[0].stop).toHaveBeenCalledTimes(1);
-      expect(hoisted.cronInstances[0].flush.mock.invocationCallOrder[0]).toBeLessThan(
-        hoisted.cronInstances[0].stop.mock.invocationCallOrder[0],
+      expect(hoisted.cronInstances[0].stop.mock.invocationCallOrder[0]).toBeLessThan(
+        hoisted.cronInstances[0].flush.mock.invocationCallOrder[0],
       );
       expect(hoisted.cronInstances[1].start).toHaveBeenCalledTimes(1);
 

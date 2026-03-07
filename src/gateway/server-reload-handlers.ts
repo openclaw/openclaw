@@ -72,8 +72,8 @@ export function createGatewayReloadHandlers(params: {
     resetDirectoryCache();
 
     if (plan.restartCron) {
-      await state.cronState.cron.flush().catch(() => {});
       state.cronState.cron.stop();
+      await state.cronState.cron.flush().catch(() => {});
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
         deps: params.deps,
