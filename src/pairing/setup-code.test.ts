@@ -204,15 +204,13 @@ describe("pairing setup code", () => {
     ).rejects.toThrow(/MISSING_GW_TOKEN/i);
   });
 
-  it("uses password env in inferred mode without resolving token SecretRef", async () => {
-    const resolved = await resolvePairingSetupFromConfig(
+  async function resolveInferredModeWithPasswordEnv(token: unknown) {
+    return await resolvePairingSetupFromConfig(
       {
         gateway: {
           bind: "custom",
           customBindHost: "gateway.local",
-          auth: {
-            token: { source: "env", provider: "default", id: "MISSING_GW_TOKEN" },
-          },
+          auth: { token },
         },
         secrets: {
           providers: {
@@ -226,6 +224,14 @@ describe("pairing setup code", () => {
         },
       },
     );
+  }
+
+  it("uses password env in inferred mode without resolving token SecretRef", async () => {
+    const resolved = await resolveInferredModeWithPasswordEnv({
+      source: "env",
+      provider: "default",
+      id: "MISSING_GW_TOKEN",
+    });
 
     expect(resolved.ok).toBe(true);
     if (!resolved.ok) {
@@ -236,27 +242,7 @@ describe("pairing setup code", () => {
   });
 
   it("does not treat env-template token as plaintext in inferred mode", async () => {
-    const resolved = await resolvePairingSetupFromConfig(
-      {
-        gateway: {
-          bind: "custom",
-          customBindHost: "gateway.local",
-          auth: {
-            token: "${MISSING_GW_TOKEN}",
-          },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      },
-      {
-        env: {
-          OPENCLAW_GATEWAY_PASSWORD: "password-from-env",
-        },
-      },
-    );
+    const resolved = await resolveInferredModeWithPasswordEnv("${MISSING_GW_TOKEN}");
 
     expect(resolved.ok).toBe(true);
     if (!resolved.ok) {
