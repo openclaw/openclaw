@@ -121,7 +121,6 @@ class NodeRuntime(context: Context) {
 
   private val screenHandler: ScreenHandler = ScreenHandler(
     screenRecorder = screenRecorder,
-    setScreenRecordActive = { _screenRecordActive.value = it },
     invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
   )
 
@@ -310,6 +309,7 @@ class NodeRuntime(context: Context) {
     )
 
   init {
+    screenRecorder.attachScreenRecordActiveSetter { _screenRecordActive.value = it }
     DeviceNotificationListenerService.setNodeEventSink { event, payloadJson ->
       scope.launch {
         nodeSession.sendNodeEvent(event = event, payloadJson = payloadJson)

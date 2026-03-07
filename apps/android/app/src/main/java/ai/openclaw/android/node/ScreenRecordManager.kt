@@ -3,9 +3,12 @@ package ai.openclaw.android.node
 import android.content.Context
 import android.hardware.display.DisplayManager
 import android.media.MediaRecorder
+import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
+import ai.openclaw.android.NodeForegroundService
 import ai.openclaw.android.ScreenCaptureRequester
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -19,6 +22,7 @@ class ScreenRecordManager(private val context: Context) {
 
   @Volatile private var screenCaptureRequester: ScreenCaptureRequester? = null
   @Volatile private var permissionRequester: ai.openclaw.android.PermissionRequester? = null
+  @Volatile private var screenRecordActiveSetter: ((Boolean) -> Unit)? = null
 
   fun attachScreenCaptureRequester(requester: ScreenCaptureRequester) {
     screenCaptureRequester = requester
@@ -26,6 +30,10 @@ class ScreenRecordManager(private val context: Context) {
 
   fun attachPermissionRequester(requester: ai.openclaw.android.PermissionRequester) {
     permissionRequester = requester
+  }
+
+  fun attachScreenRecordActiveSetter(setter: (Boolean) -> Unit) {
+    screenRecordActiveSetter = setter
   }
 
   suspend fun record(paramsJson: String?): Payload =
@@ -50,15 +58,33 @@ class ScreenRecordManager(private val context: Context) {
         throw IllegalArgumentException("INVALID_REQUEST: screenIndex must be 0 on Android")
       }
 
-      val capture = requester.requestCapture()
-        ?: throw IllegalStateException(
-          "SCREEN_PERMISSION_REQUIRED: grant Screen Recording permission",
-        )
+      if (includeAudio) ensureMicPermission()
+
+      NodeForegroundService.ensureCaptureTypes(
+        context = context,
+        requiresMic = includeAudio,
+        requiresMediaProjection = true,
+      )
+
+      val capture =
+        requester.requestCapture()
+          ?: throw IllegalStateException(
+            "SCREEN_PERMISSION_REQUIRED: grant Screen Recording permission",
+          )
+      screenRecordActiveSetter?.invoke(true)
 
       val mgr =
         context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-      val projection = mgr.getMediaProjection(capture.resultCode, capture.data)
-        ?: throw IllegalStateException("UNAVAILABLE: screen capture unavailable")
+      val projection =
+        mgr.getMediaProjection(capture.resultCode, capture.data)
+          ?: throw IllegalStateException("UNAVAILABLE: screen capture unavailable")
+      val projectionCallback =
+        object : MediaProjection.Callback() {
+          override fun onStop() {
+            screenRecordActiveSetter?.invoke(false)
+          }
+        }
+      projection.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
 
       val metrics = context.resources.displayMetrics
       val width = metrics.widthPixels
@@ -66,8 +92,6 @@ class ScreenRecordManager(private val context: Context) {
       val densityDpi = metrics.densityDpi
 
       val file = File.createTempFile("openclaw-screen-", ".mp4")
-      if (includeAudio) ensureMicPermission()
-
       val recorder = createMediaRecorder()
       var virtualDisplay: android.hardware.display.VirtualDisplay? = null
       try {
@@ -113,7 +137,9 @@ class ScreenRecordManager(private val context: Context) {
         recorder.reset()
         recorder.release()
         virtualDisplay?.release()
+        projection.unregisterCallback(projectionCallback)
         projection.stop()
+        screenRecordActiveSetter?.invoke(false)
       }
 
       val bytes = withContext(Dispatchers.IO) { file.readBytes() }
