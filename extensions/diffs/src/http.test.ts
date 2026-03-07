@@ -135,6 +135,29 @@ describe("createDiffsHttpHandler", () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it("blocks loopback requests that carry proxy forwarding headers by default", async () => {
+    const artifact = await store.createArtifact({
+      html: "<html>viewer</html>",
+      title: "Demo",
+      inputKind: "before_after",
+      fileCount: 1,
+    });
+
+    const handler = createDiffsHttpHandler({ store });
+    const res = createMockServerResponse();
+    const handled = await handler(
+      localReq({
+        method: "GET",
+        url: artifact.viewerPath,
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      }),
+      res,
+    );
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(404);
+  });
+
   it("allows remote access when allowRemoteViewer is enabled", async () => {
     const artifact = await store.createArtifact({
       html: "<html>viewer</html>",
@@ -149,6 +172,30 @@ describe("createDiffsHttpHandler", () => {
       remoteReq({
         method: "GET",
         url: artifact.viewerPath,
+      }),
+      res,
+    );
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe("<html>viewer</html>");
+  });
+
+  it("allows proxied loopback requests when allowRemoteViewer is enabled", async () => {
+    const artifact = await store.createArtifact({
+      html: "<html>viewer</html>",
+      title: "Demo",
+      inputKind: "before_after",
+      fileCount: 1,
+    });
+
+    const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });
+    const res = createMockServerResponse();
+    const handled = await handler(
+      localReq({
+        method: "GET",
+        url: artifact.viewerPath,
+        headers: { "x-forwarded-for": "203.0.113.10" },
       }),
       res,
     );
@@ -185,16 +232,26 @@ describe("createDiffsHttpHandler", () => {
   });
 });
 
-function localReq(input: { method: string; url: string }): IncomingMessage {
+function localReq(input: {
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+}): IncomingMessage {
   return {
     ...input,
+    headers: input.headers ?? {},
     socket: { remoteAddress: "127.0.0.1" },
   } as unknown as IncomingMessage;
 }
 
-function remoteReq(input: { method: string; url: string }): IncomingMessage {
+function remoteReq(input: {
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+}): IncomingMessage {
   return {
     ...input,
+    headers: input.headers ?? {},
     socket: { remoteAddress: "203.0.113.10" },
   } as unknown as IncomingMessage;
 }

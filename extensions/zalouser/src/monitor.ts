@@ -8,6 +8,7 @@ import {
   createTypingCallbacks,
   createScopedPairingAccess,
   createReplyPrefixOptions,
+  issuePairingChallenge,
   resolveOutboundMediaUrls,
   mergeAllowlist,
   resolveMentionGatingWithBypass,
@@ -262,32 +263,27 @@ async function processMessage(
       const allowed = senderAllowedForCommands;
       if (!allowed) {
         if (dmPolicy === "pairing") {
-          const { code, created } = await pairing.upsertPairingRequest({
-            id: senderId,
+          await issuePairingChallenge({
+            channel: "zalouser",
+            senderId,
+            senderIdLine: `Your Zalo user id: ${senderId}`,
             meta: { name: senderName || undefined },
-          });
-
-          if (created) {
-            logVerbose(core, runtime, `zalouser pairing request sender=${senderId}`);
-            try {
-              await sendMessageZalouser(
-                chatId,
-                core.channel.pairing.buildPairingReply({
-                  channel: "zalouser",
-                  idLine: `Your Zalo user id: ${senderId}`,
-                  code,
-                }),
-                { profile: account.profile },
-              );
+            upsertPairingRequest: pairing.upsertPairingRequest,
+            onCreated: () => {
+              logVerbose(core, runtime, `zalouser pairing request sender=${senderId}`);
+            },
+            sendPairingReply: async (text) => {
+              await sendMessageZalouser(chatId, text, { profile: account.profile });
               statusSink?.({ lastOutboundAt: Date.now() });
-            } catch (err) {
+            },
+            onReplyError: (err) => {
               logVerbose(
                 core,
                 runtime,
                 `zalouser pairing reply failed for ${senderId}: ${String(err)}`,
               );
-            }
-          }
+            },
+          });
         } else {
           logVerbose(
             core,

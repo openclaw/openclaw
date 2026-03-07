@@ -69,6 +69,7 @@ type GatewayHost = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
+  serverVersion: string | null;
   sessionKey: string;
   chatRunId: string | null;
   refreshSessionsAfterChat: Set<string>;
@@ -83,6 +84,33 @@ type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
   scope?: string;
 };
+
+export function resolveControlUiClientVersion(params: {
+  gatewayUrl: string;
+  serverVersion: string | null;
+  pageUrl?: string;
+}): string | undefined {
+  const serverVersion = params.serverVersion?.trim();
+  if (!serverVersion) {
+    return undefined;
+  }
+  const pageUrl =
+    params.pageUrl ?? (typeof window === "undefined" ? undefined : window.location.href);
+  if (!pageUrl) {
+    return undefined;
+  }
+  try {
+    const page = new URL(pageUrl);
+    const gateway = new URL(params.gatewayUrl, page);
+    const allowedProtocols = new Set(["ws:", "wss:", "http:", "https:"]);
+    if (!allowedProtocols.has(gateway.protocol) || gateway.host !== page.host) {
+      return undefined;
+    }
+    return serverVersion;
+  } catch {
+    return undefined;
+  }
+}
 
 function normalizeSessionKeyForDefaults(
   value: string | undefined,
@@ -145,11 +173,16 @@ export function connectGateway(host: GatewayHost) {
   host.execApprovalError = null;
 
   const previousClient = host.client;
+  const clientVersion = resolveControlUiClientVersion({
+    gatewayUrl: host.settings.gatewayUrl,
+    serverVersion: host.serverVersion,
+  });
   const client = new GatewayBrowserClient({
     url: host.settings.gatewayUrl,
     token: host.settings.token.trim() ? host.settings.token : undefined,
     password: host.password.trim() ? host.password : undefined,
     clientName: "openclaw-control-ui",
+    clientVersion,
     mode: "webchat",
     instanceId: host.clientInstanceId,
     onHello: (hello) => {
@@ -225,22 +258,31 @@ function handleTerminalChatEvent(
   host: GatewayHost,
   payload: ChatEventPayload | undefined,
   state: ReturnType<typeof handleChatEvent>,
-) {
+): boolean {
   if (state !== "final" && state !== "error" && state !== "aborted") {
-    return;
+    return false;
   }
-  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+  // Check if tool events were seen before resetting (resetToolStream clears toolStreamOrder).
+  const toolHost = host as unknown as Parameters<typeof resetToolStream>[0];
+  const hadToolEvents = toolHost.toolStreamOrder.length > 0;
+  resetToolStream(toolHost);
   void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
   const runId = payload?.runId;
-  if (!runId || !host.refreshSessionsAfterChat.has(runId)) {
-    return;
+  if (runId && host.refreshSessionsAfterChat.has(runId)) {
+    host.refreshSessionsAfterChat.delete(runId);
+    if (state === "final") {
+      void loadSessions(host as unknown as OpenClawApp, {
+        activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+      });
+    }
   }
-  host.refreshSessionsAfterChat.delete(runId);
-  if (state === "final") {
-    void loadSessions(host as unknown as OpenClawApp, {
-      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-    });
+  // Reload history when tools were used so the persisted tool results
+  // replace the now-cleared streaming state.
+  if (hadToolEvents && state === "final") {
+    void loadChatHistory(host as unknown as OpenClawApp);
+    return true;
   }
+  return false;
 }
 
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {
@@ -251,8 +293,8 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     );
   }
   const state = handleChatEvent(host as unknown as OpenClawApp, payload);
-  handleTerminalChatEvent(host, payload, state);
-  if (state === "final" && shouldReloadHistoryForFinalEvent(payload)) {
+  const historyReloaded = handleTerminalChatEvent(host, payload, state);
+  if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
     void loadChatHistory(host as unknown as OpenClawApp);
   }
 }
@@ -274,6 +316,17 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       host as unknown as Parameters<typeof handleAgentEvent>[0],
       evt.payload as AgentEventPayload | undefined,
     );
+    // Reload history after each tool result so the persisted text + tool
+    // output replaces any truncated streaming fragments.
+    const agentPayload = evt.payload as AgentEventPayload | undefined;
+    const toolData = agentPayload?.data;
+    if (
+      agentPayload?.stream === "tool" &&
+      typeof toolData?.phase === "string" &&
+      toolData.phase === "result"
+    ) {
+      void loadChatHistory(host as unknown as OpenClawApp);
+    }
     return;
   }
 

@@ -2,7 +2,7 @@ import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
 } from "../config/group-policy.js";
-import { resolveDiscordAccount } from "../discord/accounts.js";
+import { inspectDiscordAccount } from "../discord/account-inspect.js";
 import {
   formatTrimmedAllowFromEntries,
   formatWhatsAppConfigAllowFromEntries,
@@ -14,9 +14,10 @@ import {
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
-import { resolveSlackAccount, resolveSlackReplyToMode } from "../slack/accounts.js";
+import { inspectSlackAccount } from "../slack/account-inspect.js";
+import { resolveSlackReplyToMode } from "../slack/accounts.js";
 import { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
-import { resolveTelegramAccount } from "../telegram/accounts.js";
+import { inspectTelegramAccount } from "../telegram/account-inspect.js";
 import { normalizeE164 } from "../utils.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -25,6 +26,8 @@ import {
   resolveGoogleChatGroupToolPolicy,
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
+  resolveLineGroupRequireMention,
+  resolveLineGroupToolPolicy,
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
   resolveTelegramGroupRequireMention,
@@ -246,13 +249,13 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
-        stringifyAllowFrom(resolveTelegramAccount({ cfg, accountId }).config.allowFrom ?? []),
+        stringifyAllowFrom(inspectTelegramAccount({ cfg, accountId }).config.allowFrom ?? []),
       formatAllowFrom: ({ allowFrom }) =>
         trimAllowFromEntries(allowFrom)
           .map((entry) => entry.replace(/^(telegram|tg):/i, ""))
           .map((entry) => entry.toLowerCase()),
       resolveDefaultTo: ({ cfg, accountId }) => {
-        const val = resolveTelegramAccount({ cfg, accountId }).config.defaultTo;
+        const val = inspectTelegramAccount({ cfg, accountId }).config.defaultTo;
         return val != null ? String(val) : undefined;
       },
     },
@@ -335,14 +338,14 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     config: {
       resolveAllowFrom: ({ cfg, accountId }) => {
-        const account = resolveDiscordAccount({ cfg, accountId });
+        const account = inspectDiscordAccount({ cfg, accountId });
         return (account.config.allowFrom ?? account.config.dm?.allowFrom ?? []).map((entry) =>
           String(entry),
         );
       },
       formatAllowFrom: ({ allowFrom }) => formatDiscordAllowFrom(allowFrom),
       resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveDiscordAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+        inspectDiscordAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
     },
     groups: {
       resolveRequireMention: resolveDiscordGroupRequireMention,
@@ -477,14 +480,14 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     streaming: DEFAULT_BLOCK_STREAMING_COALESCE,
     config: {
       resolveAllowFrom: ({ cfg, accountId }) => {
-        const account = resolveSlackAccount({ cfg, accountId });
+        const account = inspectSlackAccount({ cfg, accountId });
         return (account.config.allowFrom ?? account.dm?.allowFrom ?? []).map((entry) =>
           String(entry),
         );
       },
       formatAllowFrom: ({ allowFrom }) => formatLower(allowFrom),
       resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveSlackAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+        inspectSlackAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
     },
     groups: {
       resolveRequireMention: resolveSlackGroupRequireMention,
@@ -495,7 +498,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     threading: {
       resolveReplyToMode: ({ cfg, accountId, chatType }) =>
-        resolveSlackReplyToMode(resolveSlackAccount({ cfg, accountId }), chatType),
+        resolveSlackReplyToMode(inspectSlackAccount({ cfg, accountId }), chatType),
       allowExplicitReplyTagsWhenOff: false,
       buildToolContext: (params) => buildSlackThreadingToolContext(params),
     },
@@ -544,6 +547,18 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
         buildIMessageThreadToolContext({ context, hasRepliedRef }),
+    },
+  },
+  line: {
+    id: "line",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      media: true,
+    },
+    outbound: { textChunkLimit: 5000 },
+    groups: {
+      resolveRequireMention: resolveLineGroupRequireMention,
+      resolveToolPolicy: resolveLineGroupToolPolicy,
     },
   },
 };

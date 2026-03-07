@@ -1,6 +1,7 @@
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createScopedPairingAccess,
+  issuePairingChallenge,
   isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -311,27 +312,27 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
 
     if (access.decision !== "allow") {
       if (access.decision === "pairing") {
-        const { code, created } = await pairing.upsertPairingRequest({
-          id: senderId,
+        await issuePairingChallenge({
+          channel: "googlechat",
+          senderId,
+          senderIdLine: `Your Google Chat user id: ${senderId}`,
           meta: { name: senderName || undefined, email: senderEmail },
-        });
-        if (created) {
-          logVerbose(`googlechat pairing request sender=${senderId}`);
-          try {
+          upsertPairingRequest: pairing.upsertPairingRequest,
+          onCreated: () => {
+            logVerbose(`googlechat pairing request sender=${senderId}`);
+          },
+          sendPairingReply: async (text) => {
             await sendGoogleChatMessage({
               account,
               space: spaceId,
-              text: core.channel.pairing.buildPairingReply({
-                channel: "googlechat",
-                idLine: `Your Google Chat user id: ${senderId}`,
-                code,
-              }),
+              text,
             });
             statusSink?.({ lastOutboundAt: Date.now() });
-          } catch (err) {
+          },
+          onReplyError: (err) => {
             logVerbose(`pairing reply failed for ${senderId}: ${String(err)}`);
-          }
-        }
+          },
+        });
       } else {
         logVerbose(`Blocked unauthorized Google Chat sender ${senderId} (dmPolicy=${dmPolicy})`);
       }

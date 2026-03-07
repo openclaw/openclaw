@@ -61,7 +61,23 @@ const TELEGRAM_POLL_RESTART_POLICY = {
   jitter: 0.25,
 };
 
+// Polling stall detection: if no getUpdates call is seen for this long,
+// assume the runner is stuck and force-restart it.
+// Default fetch timeout is 30s, so 3x gives ample margin for slow responses.
+const POLL_STALL_THRESHOLD_MS = 90_000;
+const POLL_WATCHDOG_INTERVAL_MS = 30_000;
+
 type TelegramBot = ReturnType<typeof createTelegramBot>;
+
+function normalizePersistedUpdateId(value: number | null): number | null {
+  if (value === null) {
+    return null;
+  }
+  if (!Number.isSafeInteger(value) || value < 0) {
+    return null;
+  }
+  return value;
+}
 
 const isGetUpdatesConflict = (err: unknown) => {
   if (!err || typeof err !== "object") {
@@ -137,19 +153,30 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     const proxyFetch =
       opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
 
-    let lastUpdateId = await readTelegramUpdateOffset({
+    const persistedOffsetRaw = await readTelegramUpdateOffset({
       accountId: account.accountId,
       botToken: token,
     });
+    let lastUpdateId = normalizePersistedUpdateId(persistedOffsetRaw);
+    if (persistedOffsetRaw !== null && lastUpdateId === null) {
+      log(
+        `[telegram] Ignoring invalid persisted update offset (${String(persistedOffsetRaw)}); starting without offset confirmation.`,
+      );
+    }
     const persistUpdateId = async (updateId: number) => {
-      if (lastUpdateId !== null && updateId <= lastUpdateId) {
+      const normalizedUpdateId = normalizePersistedUpdateId(updateId);
+      if (normalizedUpdateId === null) {
+        log(`[telegram] Ignoring invalid update_id value: ${String(updateId)}`);
         return;
       }
-      lastUpdateId = updateId;
+      if (lastUpdateId !== null && normalizedUpdateId <= lastUpdateId) {
+        return;
+      }
+      lastUpdateId = normalizedUpdateId;
       try {
         await writeTelegramUpdateOffset({
           accountId: account.accountId,
-          updateId,
+          updateId: normalizedUpdateId,
           botToken: token,
         });
       } catch (err) {
@@ -258,10 +285,35 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       }
     };
 
+    const confirmPersistedOffset = async (bot: TelegramBot): Promise<void> => {
+      if (lastUpdateId === null || lastUpdateId >= Number.MAX_SAFE_INTEGER) {
+        return;
+      }
+      try {
+        await bot.api.getUpdates({ offset: lastUpdateId + 1, limit: 1, timeout: 0 });
+      } catch {
+        // Non-fatal: runner middleware still skips duplicates via shouldSkipUpdate.
+      }
+    };
+
     const runPollingCycle = async (bot: TelegramBot): Promise<"continue" | "exit"> => {
+      // Confirm the persisted offset with Telegram so the runner (which starts
+      // at offset 0) does not re-fetch already-processed updates on restart.
+      await confirmPersistedOffset(bot);
+
+      // Track getUpdates calls to detect polling stalls.
+      let lastGetUpdatesAt = Date.now();
+      bot.api.config.use((prev, method, payload, signal) => {
+        if (method === "getUpdates") {
+          lastGetUpdatesAt = Date.now();
+        }
+        return prev(method, payload, signal);
+      });
+
       const runner = run(bot, runnerOptions);
       activeRunner = runner;
       let stopPromise: Promise<void> | undefined;
+      let stalledRestart = false;
       const stopRunner = () => {
         stopPromise ??= Promise.resolve(runner.stop())
           .then(() => undefined)
@@ -282,6 +334,22 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           void stopRunner();
         }
       };
+
+      // Watchdog: detect when getUpdates calls have stalled and force-restart.
+      const watchdog = setInterval(() => {
+        if (opts.abortSignal?.aborted) {
+          return;
+        }
+        const elapsed = Date.now() - lastGetUpdatesAt;
+        if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
+          stalledRestart = true;
+          log(
+            `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
+          );
+          void stopRunner();
+        }
+      }, POLL_WATCHDOG_INTERVAL_MS);
+
       opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
       try {
         // runner.task() returns a promise that resolves when the runner stops
@@ -289,9 +357,11 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         if (opts.abortSignal?.aborted) {
           return "exit";
         }
-        const reason = forceRestarted
-          ? "unhandled network error"
-          : "runner stopped (maxRetryTime exceeded or graceful stop)";
+        const reason = stalledRestart
+          ? "polling stall detected"
+          : forceRestarted
+            ? "unhandled network error"
+            : "runner stopped (maxRetryTime exceeded or graceful stop)";
         forceRestarted = false;
         const shouldRestart = await waitBeforeRestart(
           (delay) => `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
@@ -314,6 +384,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         );
         return shouldRestart ? "continue" : "exit";
       } finally {
+        clearInterval(watchdog);
         opts.abortSignal?.removeEventListener("abort", stopOnAbort);
         await stopRunner();
         await stopBot();
