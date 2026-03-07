@@ -15,7 +15,10 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
         normalizeChannelId: resolveSlackChannelId,
         includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) =>
-          await handleSlackAction(action, cfg, toolContext as SlackActionContext | undefined),
+          await handleSlackAction(action, cfg, {
+            ...(toolContext as SlackActionContext | undefined),
+            mediaLocalRoots: ctx.mediaLocalRoots,
+          }),
       });
     },
   };

@@ -708,6 +708,45 @@ describe("deliverReplies", () => {
     expect(sendPhoto.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
   });
 
+  it("pins the first delivered text message when telegram pin is requested", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 101, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 102, chat: { id: "123" } });
+    const pinChatMessage = vi.fn().mockResolvedValue(true);
+    const bot = createBot({ sendMessage, pinChatMessage });
+
+    await deliverReplies({
+      replies: [{ text: "chunk-one\n\nchunk-two", channelData: { telegram: { pin: true } } }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 12,
+    });
+
+    expect(pinChatMessage).toHaveBeenCalledTimes(1);
+    expect(pinChatMessage).toHaveBeenCalledWith("123", 101, { disable_notification: true });
+  });
+
+  it("continues when pinning fails", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 201, chat: { id: "123" } });
+    const pinChatMessage = vi.fn().mockRejectedValue(new Error("pin failed"));
+    const bot = createBot({ sendMessage, pinChatMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello", channelData: { telegram: { pin: true } } }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(pinChatMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("rethrows VOICE_MESSAGES_FORBIDDEN when no text fallback is available", async () => {
     const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
       voiceError: createVoiceMessagesForbiddenError(),

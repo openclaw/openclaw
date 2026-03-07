@@ -4,7 +4,7 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/mattermost";
 import { z } from "zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
@@ -50,6 +50,11 @@ const MattermostAccountSchemaBase = z
       })
       .optional(),
     commands: MattermostSlashCommandsSchema,
+    interactions: z
+      .object({
+        callbackBaseUrl: z.string().optional(),
+      })
+      .optional(),
   })
   .strict();
 

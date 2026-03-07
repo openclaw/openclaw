@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  coerceFiniteScheduleNumber,
   clearCronScheduleCacheForTest,
   computeNextRunAtMs,
+  computePreviousRunAtMs,
   getCronScheduleCacheSizeForTest,
 } from "./schedule.js";
 
@@ -75,6 +77,26 @@ describe("cron schedule", () => {
     expect(next).toBe(now + 30_000);
   });
 
+  it("handles string-typed everyMs and anchorMs from legacy persisted data", () => {
+    const anchor = Date.parse("2025-12-13T00:00:00.000Z");
+    const now = anchor + 10_000;
+    const next = computeNextRunAtMs(
+      {
+        kind: "every",
+        everyMs: "30000" as unknown as number,
+        anchorMs: `${anchor}` as unknown as number,
+      },
+      now,
+    );
+    expect(next).toBe(anchor + 30_000);
+  });
+
+  it("returns undefined for non-numeric string everyMs", () => {
+    const now = Date.now();
+    const next = computeNextRunAtMs({ kind: "every", everyMs: "abc" as unknown as number }, now);
+    expect(next).toBeUndefined();
+  });
+
   it("advances when now matches anchor for every schedule", () => {
     const anchor = Date.parse("2025-12-13T00:00:00.000Z");
     const next = computeNextRunAtMs({ kind: "every", everyMs: 30_000, anchorMs: anchor }, anchor);
@@ -89,6 +111,17 @@ describe("cron schedule", () => {
     );
     expect(next).toBeDefined();
     expect(next!).toBeGreaterThan(nowMs);
+  });
+
+  it("never returns a previous run that is at-or-after now", () => {
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+    const previous = computePreviousRunAtMs(
+      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      nowMs,
+    );
+    if (previous !== undefined) {
+      expect(previous).toBeLessThan(nowMs);
+    }
   });
 
   it("reuses compiled cron evaluators for the same expression/timezone", () => {
@@ -161,5 +194,25 @@ describe("cron schedule", () => {
       const next = computeNextRunAtMs(dailyNoon, completedAtMs);
       expect(next).toBe(noonMs + 86_400_000); // next day
     });
+  });
+});
+
+describe("coerceFiniteScheduleNumber", () => {
+  it("returns finite numbers directly", () => {
+    expect(coerceFiniteScheduleNumber(60_000)).toBe(60_000);
+  });
+
+  it("parses numeric strings", () => {
+    expect(coerceFiniteScheduleNumber("60000")).toBe(60_000);
+    expect(coerceFiniteScheduleNumber(" 60000 ")).toBe(60_000);
+  });
+
+  it("returns undefined for invalid inputs", () => {
+    expect(coerceFiniteScheduleNumber("")).toBeUndefined();
+    expect(coerceFiniteScheduleNumber("abc")).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(NaN)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(Infinity)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(null)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(undefined)).toBeUndefined();
   });
 });

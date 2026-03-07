@@ -97,7 +97,7 @@ export type MessageSentHookEvent = InternalHookEvent & {
   context: MessageSentHookContext;
 };
 
-export type MessageTranscribedHookContext = {
+type MessageEnrichedBodyHookContext = {
   /** Sender identifier (e.g., phone number, user ID) */
   from?: string;
   /** Recipient identifier */
@@ -106,8 +106,6 @@ export type MessageTranscribedHookContext = {
   body?: string;
   /** Enriched body shown to the agent, including transcript */
   bodyForAgent?: string;
-  /** The transcribed text from audio */
-  transcript: string;
   /** Unix timestamp when the message was received */
   timestamp?: number;
   /** Channel identifier (e.g., "telegram", "whatsapp") */
@@ -132,45 +130,20 @@ export type MessageTranscribedHookContext = {
   mediaType?: string;
 };
 
+export type MessageTranscribedHookContext = MessageEnrichedBodyHookContext & {
+  /** The transcribed text from audio */
+  transcript: string;
+};
+
 export type MessageTranscribedHookEvent = InternalHookEvent & {
   type: "message";
   action: "transcribed";
   context: MessageTranscribedHookContext;
 };
 
-export type MessagePreprocessedHookContext = {
-  /** Sender identifier (e.g., phone number, user ID) */
-  from?: string;
-  /** Recipient identifier */
-  to?: string;
-  /** Original raw message body */
-  body?: string;
-  /** Fully enriched body shown to the agent (transcripts, image descriptions, link summaries) */
-  bodyForAgent?: string;
+export type MessagePreprocessedHookContext = MessageEnrichedBodyHookContext & {
   /** Transcribed audio text, if the message contained audio */
   transcript?: string;
-  /** Unix timestamp when the message was received */
-  timestamp?: number;
-  /** Channel identifier (e.g., "telegram", "whatsapp") */
-  channelId: string;
-  /** Conversation/chat ID */
-  conversationId?: string;
-  /** Message ID from the provider */
-  messageId?: string;
-  /** Sender user ID */
-  senderId?: string;
-  /** Sender display name */
-  senderName?: string;
-  /** Sender username */
-  senderUsername?: string;
-  /** Provider name */
-  provider?: string;
-  /** Surface name */
-  surface?: string;
-  /** Path to the media file, if present */
-  mediaPath?: string;
-  /** MIME type of the media, if present */
-  mediaType?: string;
   /** Whether this message was sent in a group/channel context */
   isGroup?: boolean;
   /** Group or channel identifier, if applicable */

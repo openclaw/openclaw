@@ -2,6 +2,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "send",
   "broadcast",
   "poll",
+  "poll-vote",
   "react",
   "reactions",
   "read",

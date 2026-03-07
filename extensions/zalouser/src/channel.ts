@@ -1,5 +1,3 @@
-import fsp from "node:fs/promises";
-import path from "node:path";
 import type {
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
@@ -9,21 +7,24 @@ import type {
   ChannelPlugin,
   OpenClawConfig,
   GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/zalouser";
 import {
   applyAccountNameToChannelSection,
+  buildChannelSendResult,
+  buildBaseAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   chunkTextForOutbound,
   deleteAccountFromConfigSection,
   formatAllowFromLowercase,
   formatPairingApproveHint,
+  isNumericTargetId,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
-  resolvePreferredOpenClawTmpDir,
   resolveChannelAccountConfigBasePath,
+  sendPayloadWithChunkedTextAndMedia,
   setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/zalouser";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -37,6 +38,7 @@ import { buildZalouserGroupCandidates, findZalouserGroupEntry } from "./group-po
 import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import { zalouserOnboardingAdapter } from "./onboarding.js";
 import { probeZalouser } from "./probe.js";
+import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 import {
@@ -69,25 +71,6 @@ function resolveZalouserQrProfile(accountId?: string | null): string {
   return normalized;
 }
 
-async function writeQrDataUrlToTempFile(
-  qrDataUrl: string,
-  profile: string,
-): Promise<string | null> {
-  const trimmed = qrDataUrl.trim();
-  const match = trimmed.match(/^data:image\/png;base64,(.+)$/i);
-  const base64 = (match?.[1] ?? "").trim();
-  if (!base64) {
-    return null;
-  }
-  const safeProfile = profile.replace(/[^a-zA-Z0-9_-]+/g, "-") || "default";
-  const filePath = path.join(
-    resolvePreferredOpenClawTmpDir(),
-    `openclaw-zalouser-qr-${safeProfile}.png`,
-  );
-  await fsp.writeFile(filePath, Buffer.from(base64, "base64"));
-  return filePath;
-}
-
 function mapUser(params: {
   id: string;
   name?: string | null;
@@ -116,39 +99,30 @@ function mapGroup(params: {
   };
 }
 
+function resolveZalouserGroupPolicyEntry(params: ChannelGroupContext) {
+  const account = resolveZalouserAccountSync({
+    cfg: params.cfg,
+    accountId: params.accountId ?? undefined,
+  });
+  const groups = account.config.groups ?? {};
+  return findZalouserGroupEntry(
+    groups,
+    buildZalouserGroupCandidates({
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      includeWildcard: true,
+    }),
+  );
+}
+
 function resolveZalouserGroupToolPolicy(
   params: ChannelGroupContext,
 ): GroupToolPolicyConfig | undefined {
-  const account = resolveZalouserAccountSync({
-    cfg: params.cfg,
-    accountId: params.accountId ?? undefined,
-  });
-  const groups = account.config.groups ?? {};
-  const entry = findZalouserGroupEntry(
-    groups,
-    buildZalouserGroupCandidates({
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      includeWildcard: true,
-    }),
-  );
-  return entry?.tools;
+  return resolveZalouserGroupPolicyEntry(params)?.tools;
 }
 
 function resolveZalouserRequireMention(params: ChannelGroupContext): boolean {
-  const account = resolveZalouserAccountSync({
-    cfg: params.cfg,
-    accountId: params.accountId ?? undefined,
-  });
-  const groups = account.config.groups ?? {};
-  const entry = findZalouserGroupEntry(
-    groups,
-    buildZalouserGroupCandidates({
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      includeWildcard: true,
-    }),
-  );
+  const entry = resolveZalouserGroupPolicyEntry(params);
   if (typeof entry?.requireMention === "boolean") {
     return entry.requireMention;
   }
@@ -395,13 +369,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
       return trimmed.replace(/^(zalouser|zlu):/i, "");
     },
     targetResolver: {
-      looksLikeId: (raw) => {
-        const trimmed = raw.trim();
-        if (!trimmed) {
-          return false;
-        }
-        return /^\d{3,}$/.test(trimmed);
-      },
+      looksLikeId: isNumericTargetId,
       hint: "<threadId>",
     },
   },
@@ -560,49 +528,19 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     chunker: chunkTextForOutbound,
     chunkerMode: "text",
     textChunkLimit: 2000,
-    sendPayload: async (ctx) => {
-      const text = ctx.payload.text ?? "";
-      const urls = ctx.payload.mediaUrls?.length
-        ? ctx.payload.mediaUrls
-        : ctx.payload.mediaUrl
-          ? [ctx.payload.mediaUrl]
-          : [];
-      if (!text && urls.length === 0) {
-        return { channel: "zalouser", messageId: "" };
-      }
-      if (urls.length > 0) {
-        let lastResult = await zalouserPlugin.outbound!.sendMedia!({
-          ...ctx,
-          text,
-          mediaUrl: urls[0],
-        });
-        for (let i = 1; i < urls.length; i++) {
-          lastResult = await zalouserPlugin.outbound!.sendMedia!({
-            ...ctx,
-            text: "",
-            mediaUrl: urls[i],
-          });
-        }
-        return lastResult;
-      }
-      const outbound = zalouserPlugin.outbound!;
-      const limit = outbound.textChunkLimit;
-      const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
-      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
-      for (const chunk of chunks) {
-        lastResult = await outbound.sendText!({ ...ctx, text: chunk });
-      }
-      return lastResult!;
-    },
+    sendPayload: async (ctx) =>
+      await sendPayloadWithChunkedTextAndMedia({
+        ctx,
+        textChunkLimit: zalouserPlugin.outbound!.textChunkLimit,
+        chunker: zalouserPlugin.outbound!.chunker,
+        sendText: (nextCtx) => zalouserPlugin.outbound!.sendText!(nextCtx),
+        sendMedia: (nextCtx) => zalouserPlugin.outbound!.sendMedia!(nextCtx),
+        emptyResult: { channel: "zalouser", messageId: "" },
+      }),
     sendText: async ({ to, text, accountId, cfg }) => {
       const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
       const result = await sendMessageZalouser(to, text, { profile: account.profile });
-      return {
-        channel: "zalouser",
-        ok: result.ok,
-        messageId: result.messageId ?? "",
-        error: result.error ? new Error(result.error) : undefined,
-      };
+      return buildChannelSendResult("zalouser", result);
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, cfg, mediaLocalRoots }) => {
       const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
@@ -611,12 +549,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
         mediaUrl,
         mediaLocalRoots,
       });
-      return {
-        channel: "zalouser",
-        ok: result.ok,
-        messageId: result.messageId ?? "",
-        error: result.error ? new Error(result.error) : undefined,
-      };
+      return buildChannelSendResult("zalouser", result);
     },
   },
   status: {
@@ -641,17 +574,19 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     buildAccountSnapshot: async ({ account, runtime }) => {
       const configured = await checkZcaAuthenticated(account.profile);
       const configError = "not authenticated";
+      const base = buildBaseAccountStatusSnapshot({
+        account: {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured,
+        },
+        runtime: configured
+          ? runtime
+          : { ...runtime, lastError: runtime?.lastError ?? configError },
+      });
       return {
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured,
-        running: runtime?.running ?? false,
-        lastStartAt: runtime?.lastStartAt ?? null,
-        lastStopAt: runtime?.lastStopAt ?? null,
-        lastError: configured ? (runtime?.lastError ?? null) : (runtime?.lastError ?? configError),
-        lastInboundAt: runtime?.lastInboundAt ?? null,
-        lastOutboundAt: runtime?.lastOutboundAt ?? null,
+        ...base,
         dmPolicy: account.config.dmPolicy ?? "pairing",
       };
     },
