@@ -71,4 +71,28 @@ describe("WizardSession", () => {
     expect(done.done).toBe(true);
     expect(done.status).toBe("cancelled");
   });
+
+  test("plain notes still flow through session note steps", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.note('{"type":"manifest"}', "Manifest (JSON)", { plain: true });
+    });
+
+    const first = await session.next();
+    expect(first.done).toBe(false);
+    expect(first.step).toMatchObject({
+      type: "note",
+      title: "Manifest (JSON)",
+      message: '{"type":"manifest"}',
+      executor: "client",
+    });
+
+    if (!first.step) {
+      throw new Error("expected manifest note step");
+    }
+    await session.answer(first.step.id, null);
+
+    const done = await session.next();
+    expect(done.done).toBe(true);
+    expect(done.status).toBe("done");
+  });
 });

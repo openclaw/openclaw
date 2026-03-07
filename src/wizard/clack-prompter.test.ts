@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { tokenizedOptionFilter } from "./clack-prompter.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createClackPrompter, tokenizedOptionFilter } from "./clack-prompter.js";
 
 describe("tokenizedOptionFilter", () => {
   it("matches tokens regardless of order", () => {
@@ -31,5 +31,23 @@ describe("tokenizedOptionFilter", () => {
 
     expect(tokenizedOptionFilter("provider openai", option)).toBe(true);
     expect(tokenizedOptionFilter("openai gpt-5.2", option)).toBe(true);
+  });
+});
+
+describe("createClackPrompter", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("prints plain notes without box decoration", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const prompter = createClackPrompter();
+    const manifest = '{\n  "display_information": {\n    "name": "OpenClaw"\n  }\n}';
+
+    await prompter.note(manifest, "Manifest (JSON)", { plain: true });
+
+    expect(logSpy).toHaveBeenCalledTimes(2);
+    expect(logSpy).toHaveBeenNthCalledWith(1, "\nManifest (JSON):");
+    expect(logSpy).toHaveBeenNthCalledWith(2, manifest);
   });
 });
