@@ -6,11 +6,16 @@ const inspectPortUsage = vi.hoisted(() => vi.fn<(port: number) => Promise<PortUs
 const classifyPortListener = vi.hoisted(() =>
   vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(() => "gateway"),
 );
+const probeGateway = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/ports.js", () => ({
   classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
   formatPortDiagnostics: vi.fn(() => []),
   inspectPortUsage: (port: number) => inspectPortUsage(port),
+}));
+
+vi.mock("../../gateway/probe.js", () => ({
+  probeGateway: (opts: unknown) => probeGateway(opts),
 }));
 
 const originalPlatform = process.platform;
@@ -41,6 +46,26 @@ async function inspectUnknownListenerFallback(params: {
   });
 }
 
+async function inspectAmbiguousOwnershipWithProbe(
+  probeResult: Awaited<ReturnType<typeof probeGateway>>,
+) {
+  const service = {
+    readRuntime: vi.fn(async () => ({ status: "running", pid: 8000 })),
+  } as unknown as GatewayService;
+
+  inspectPortUsage.mockResolvedValue({
+    port: 18789,
+    status: "busy",
+    listeners: [{ commandLine: "" }],
+    hints: [],
+  });
+  classifyPortListener.mockReturnValue("unknown");
+  probeGateway.mockResolvedValue(probeResult);
+
+  const { inspectGatewayRestart } = await import("./restart-health.js");
+  return inspectGatewayRestart({ service, port: 18789 });
+}
+
 describe("inspectGatewayRestart", () => {
   beforeEach(() => {
     inspectPortUsage.mockReset();
@@ -52,6 +77,11 @@ describe("inspectGatewayRestart", () => {
     });
     classifyPortListener.mockReset();
     classifyPortListener.mockReturnValue("gateway");
+    probeGateway.mockReset();
+    probeGateway.mockResolvedValue({
+      ok: false,
+      close: null,
+    });
   });
 
   afterEach(() => {
@@ -146,5 +176,26 @@ describe("inspectGatewayRestart", () => {
     });
 
     expect(snapshot.staleGatewayPids).toEqual([]);
+  });
+
+  it("uses a local gateway probe when ownership is ambiguous", async () => {
+    const snapshot = await inspectAmbiguousOwnershipWithProbe({
+      ok: true,
+      close: null,
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
+  });
+
+  it("treats auth-closed probe as healthy gateway reachability", async () => {
+    const snapshot = await inspectAmbiguousOwnershipWithProbe({
+      ok: false,
+      close: { code: 1008, reason: "auth required" },
+    });
+
+    expect(snapshot.healthy).toBe(true);
   });
 });

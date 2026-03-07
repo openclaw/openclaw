@@ -270,6 +270,34 @@ describe("gateway hot reload", () => {
     );
   }
 
+  async function writeGatewayTokenRefConfig() {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          gateway: {
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: "MISSING_STARTUP_GW_TOKEN" },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+
   async function writeAuthProfileEnvRefStore() {
     const stateDir = process.env.OPENCLAW_STATE_DIR;
     if (!stateDir) {
@@ -429,6 +457,21 @@ describe("gateway hot reload", () => {
     await expect(withGatewayServer(async () => {})).resolves.toBeUndefined();
   });
 
+  it("honors startup auth overrides before secret preflight gating", async () => {
+    await writeGatewayTokenRefConfig();
+    delete process.env.MISSING_STARTUP_GW_TOKEN;
+    await expect(
+      withGatewayServer(async () => {}, {
+        serverOptions: {
+          auth: {
+            mode: "password",
+            password: "override-password", // pragma: allowlist secret
+          },
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("fails startup when auth-profile secret refs are unresolved", async () => {
     await writeAuthProfileEnvRefStore();
     delete process.env.MISSING_OPENCLAW_AUTH_REF;
@@ -443,7 +486,7 @@ describe("gateway hot reload", () => {
 
   it("emits one-shot degraded and recovered system events during secret reload transitions", async () => {
     await writeEnvRefConfig();
-    process.env.OPENAI_API_KEY = "sk-startup";
+    process.env.OPENAI_API_KEY = "sk-startup"; // pragma: allowlist secret
 
     await withGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
@@ -488,7 +531,7 @@ describe("gateway hot reload", () => {
       );
       expect(drainSystemEvents(sessionKey)).toEqual([]);
 
-      process.env.OPENAI_API_KEY = "sk-recovered";
+      process.env.OPENAI_API_KEY = "sk-recovered"; // pragma: allowlist secret
       await expect(onHotReload?.(plan, nextConfig)).resolves.toBeUndefined();
       const recoveredEvents = drainSystemEvents(sessionKey);
       expect(recoveredEvents.some((event) => event.includes("[SECRETS_RELOADER_RECOVERED]"))).toBe(
@@ -499,7 +542,7 @@ describe("gateway hot reload", () => {
 
   it("serves secrets.reload immediately after startup without race failures", async () => {
     await writeEnvRefConfig();
-    process.env.OPENAI_API_KEY = "sk-startup";
+    process.env.OPENAI_API_KEY = "sk-startup"; // pragma: allowlist secret
     const { server, ws } = await startServerWithClient();
     try {
       await connectOk(ws);

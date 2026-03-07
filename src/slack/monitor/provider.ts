@@ -18,6 +18,7 @@ import {
 } from "../../config/runtime-group-policy.js";
 import type { SessionScope } from "../../config/sessions.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { createConnectedChannelStatusPatch } from "../../gateway/channel-status-patches.js";
 import { warn } from "../../globals.js";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
@@ -63,6 +64,33 @@ function parseApiAppIdFromAppToken(raw?: string) {
   }
   const match = /^xapp-\d-([a-z0-9]+)-/i.exec(token);
   return match?.[1]?.toUpperCase();
+}
+
+function publishSlackConnectedStatus(setStatus?: (next: Record<string, unknown>) => void) {
+  if (!setStatus) {
+    return;
+  }
+  const now = Date.now();
+  setStatus({
+    ...createConnectedChannelStatusPatch(now),
+    lastError: null,
+  });
+}
+
+function publishSlackDisconnectedStatus(
+  setStatus?: (next: Record<string, unknown>) => void,
+  error?: unknown,
+) {
+  if (!setStatus) {
+    return;
+  }
+  const at = Date.now();
+  const message = error ? formatUnknownError(error) : undefined;
+  setStatus({
+    connected: false,
+    lastDisconnect: message ? { at, error: message } : { at },
+    lastError: message ?? null,
+  });
 }
 
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
@@ -152,6 +180,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
+  const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
 
@@ -250,6 +279,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     slashCommand,
     textLimit,
     ackReactionScope,
+    typingReaction,
     mediaMaxBytes,
     removeAckAfterReply,
   });
@@ -388,6 +418,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         try {
           await app.start();
           reconnectAttempts = 0;
+          publishSlackConnectedStatus(opts.setStatus);
           runtime.log?.("slack socket mode connected");
         } catch (err) {
           // Auth errors (account_inactive, invalid_auth, etc.) are permanent —
@@ -425,6 +456,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         if (opts.abortSignal?.aborted) {
           break;
         }
+        publishSlackDisconnectedStatus(opts.setStatus, disconnect.error);
 
         // Bail immediately on non-recoverable auth errors during reconnect too.
         if (disconnect.error && isNonRecoverableSlackAuthError(disconnect.error)) {
@@ -479,6 +511,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 
 export const __testing = {
+  publishSlackConnectedStatus,
+  publishSlackDisconnectedStatus,
   resolveSlackRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   getSocketEmitter,

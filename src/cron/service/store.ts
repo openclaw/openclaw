@@ -6,6 +6,7 @@ import {
 } from "../legacy-delivery.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { migrateLegacyCronPayload } from "../payload-migration.js";
+import { coerceFiniteScheduleNumber } from "../schedule.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../stagger.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
@@ -411,15 +412,18 @@ export async function ensureLoaded(
       }
 
       const everyMsRaw = sched.everyMs;
-      const everyMs =
-        typeof everyMsRaw === "number" && Number.isFinite(everyMsRaw)
-          ? Math.floor(everyMsRaw)
-          : null;
+      const everyMsCoerced = coerceFiniteScheduleNumber(everyMsRaw);
+      const everyMs = everyMsCoerced !== undefined ? Math.floor(everyMsCoerced) : null;
+      if (everyMs !== null && everyMsRaw !== everyMs) {
+        sched.everyMs = everyMs;
+        mutated = true;
+      }
       if ((kind === "every" || sched.kind === "every") && everyMs !== null) {
         const anchorRaw = sched.anchorMs;
+        const anchorCoerced = coerceFiniteScheduleNumber(anchorRaw);
         const normalizedAnchor =
-          typeof anchorRaw === "number" && Number.isFinite(anchorRaw)
-            ? Math.max(0, Math.floor(anchorRaw))
+          anchorCoerced !== undefined
+            ? Math.max(0, Math.floor(anchorCoerced))
             : typeof raw.createdAtMs === "number" && Number.isFinite(raw.createdAtMs)
               ? Math.max(0, Math.floor(raw.createdAtMs))
               : typeof raw.updatedAtMs === "number" && Number.isFinite(raw.updatedAtMs)
@@ -543,7 +547,7 @@ export async function ensureLoaded(
   }
 
   if (mutated) {
-    await persist(state);
+    await persist(state, { skipBackup: true });
   }
 }
 
@@ -561,11 +565,11 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-export async function persist(state: CronServiceState) {
+export async function persist(state: CronServiceState, opts?: { skipBackup?: boolean }) {
   if (!state.store) {
     return;
   }
-  await saveCronStore(state.deps.storePath, state.store);
+  await saveCronStore(state.deps.storePath, state.store, opts);
   // Update file mtime after save to prevent immediate reload
   state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }

@@ -10,6 +10,8 @@ import {
 } from "./client.js";
 import { extractAttachmentsFromPrompt, extractTextFromPrompt } from "./event-mapper.js";
 
+const envVar = (...parts: string[]) => parts.join("_");
+
 function makePermissionRequest(
   overrides: Partial<RequestPermissionRequest> = {},
 ): RequestPermissionRequest {
@@ -59,6 +61,54 @@ describe("resolveAcpClientSpawnEnv", () => {
       OPENCLAW_SHELL: "wrong",
     });
     expect(env.OPENCLAW_SHELL).toBe("acp-client");
+  });
+
+  it("strips skill-injected env keys when stripKeys is provided", () => {
+    const openAiApiKeyEnv = envVar("OPENAI", "API", "KEY");
+    const elevenLabsApiKeyEnv = envVar("ELEVENLABS", "API", "KEY");
+    const anthropicApiKeyEnv = envVar("ANTHROPIC", "API", "KEY");
+    const stripKeys = new Set([openAiApiKeyEnv, elevenLabsApiKeyEnv]);
+    const env = resolveAcpClientSpawnEnv(
+      {
+        PATH: "/usr/bin",
+        [openAiApiKeyEnv]: "openai-test-value", // pragma: allowlist secret
+        [elevenLabsApiKeyEnv]: "elevenlabs-test-value", // pragma: allowlist secret
+        [anthropicApiKeyEnv]: "anthropic-test-value", // pragma: allowlist secret
+      },
+      { stripKeys },
+    );
+
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.OPENCLAW_SHELL).toBe("acp-client");
+    expect(env.ANTHROPIC_API_KEY).toBe("anthropic-test-value");
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.ELEVENLABS_API_KEY).toBeUndefined();
+  });
+
+  it("does not modify the original baseEnv when stripping keys", () => {
+    const openAiApiKeyEnv = envVar("OPENAI", "API", "KEY");
+    const baseEnv: NodeJS.ProcessEnv = {
+      [openAiApiKeyEnv]: "openai-original", // pragma: allowlist secret
+      PATH: "/usr/bin",
+    };
+    const stripKeys = new Set([openAiApiKeyEnv]);
+    resolveAcpClientSpawnEnv(baseEnv, { stripKeys });
+
+    expect(baseEnv.OPENAI_API_KEY).toBe("openai-original");
+  });
+
+  it("preserves OPENCLAW_SHELL even when stripKeys contains it", () => {
+    const openAiApiKeyEnv = envVar("OPENAI", "API", "KEY");
+    const env = resolveAcpClientSpawnEnv(
+      {
+        OPENCLAW_SHELL: "skill-overridden",
+        [openAiApiKeyEnv]: "openai-leaked", // pragma: allowlist secret
+      },
+      { stripKeys: new Set(["OPENCLAW_SHELL", openAiApiKeyEnv]) },
+    );
+
+    expect(env.OPENCLAW_SHELL).toBe("acp-client");
+    expect(env.OPENAI_API_KEY).toBeUndefined();
   });
 });
 

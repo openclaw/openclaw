@@ -9,7 +9,7 @@ import {
   setAccountEnabledInConfigSection,
   registerPluginHttpRoute,
   buildChannelConfigSchema,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/synology-chat";
 import { z } from "zod";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { sendMessage, sendFileUrl } from "./client.js";
@@ -282,7 +282,7 @@ export function createSynologyChatPlugin() {
               Surface: CHANNEL_ID,
               ConversationLabel: msg.senderName || msg.from,
               Timestamp: Date.now(),
-              CommandAuthorized: true,
+              CommandAuthorized: msg.commandAuthorized,
             });
 
             // Dispatch via the SDK's buffered block dispatcher

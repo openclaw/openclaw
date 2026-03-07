@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
 import * as tar from "tar";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
 import type { ArchiveSecurityError } from "./archive.js";
 import { extractArchive, resolveArchiveKind, resolvePackedRootDir } from "./archive.js";
@@ -179,6 +179,45 @@ describe("archive utils", () => {
       await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("SAFE");
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects zip extraction when a hardlink appears after atomic rename",
+    async () => {
+      await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
+        const outsideDir = path.join(workDir, "outside");
+        await fs.mkdir(outsideDir, { recursive: true });
+        const outsideAlias = path.join(outsideDir, "payload.bin");
+        const extractedPath = path.join(extractDir, "package", "payload.bin");
+
+        const zip = new JSZip();
+        zip.file("package/payload.bin", "owned");
+        await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+
+        const realRename = fs.rename.bind(fs);
+        let linked = false;
+        const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+          await realRename(...args);
+          if (!linked) {
+            linked = true;
+            await fs.link(String(args[1]), outsideAlias);
+          }
+        });
+
+        try {
+          await expect(
+            extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+          ).rejects.toMatchObject({
+            code: "destination-symlink-traversal",
+          } satisfies Partial<ArchiveSecurityError>);
+        } finally {
+          renameSpy.mockRestore();
+        }
+
+        await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("owned");
+        await expect(fs.stat(extractedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    },
+  );
 
   it("rejects tar path traversal (zip slip)", async () => {
     await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {

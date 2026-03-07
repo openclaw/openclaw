@@ -9,7 +9,7 @@ describe("kimi-coding implicit provider (#22409)", () => {
   it("should include kimi-coding when KIMI_API_KEY is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const envSnapshot = captureEnv(["KIMI_API_KEY"]);
-    process.env.KIMI_API_KEY = "test-key";
+    process.env.KIMI_API_KEY = "test-key"; // pragma: allowlist secret
 
     try {
       const providers = await resolveImplicitProviders({ agentDir });
