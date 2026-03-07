@@ -15,6 +15,7 @@ import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
   extractAssistantText,
+  formatAgentToAgentAccessError,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
@@ -87,19 +88,12 @@ export function createSessionsSendTool(opts?: {
         }
 
         if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
-          if (!a2aPolicy.enabled) {
+          const a2aDecision = a2aPolicy.evaluateAccess(requesterAgentId, requestedAgentId);
+          if (!a2aDecision.allowed) {
             return jsonResult({
               runId: crypto.randomUUID(),
               status: "forbidden",
-              error:
-                "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
-            });
-          }
-          if (!a2aPolicy.isAllowed(requesterAgentId, requestedAgentId)) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "forbidden",
-              error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
+              error: formatAgentToAgentAccessError("send", a2aDecision),
             });
           }
         }

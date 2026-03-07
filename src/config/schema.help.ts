@@ -551,6 +551,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-agent additive allowlist for tools on top of global and profile policy. Keep narrow to avoid accidental privilege expansion on specialized agents.",
   "agents.list[].tools.byProvider":
     "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
+  "agents.list[].tools.agentToAgent":
+    "Per-agent override for cross-agent outbound access. When unset, this agent falls back to tools.agentToAgent.allow; when set, the list defines which agent IDs this agent may contact.",
+  "agents.list[].tools.agentToAgent.allow":
+    'Outbound agent allowlist for this specific agent. Use "*" to allow any participating agent, explicit IDs to narrow routing, and [] to isolate the agent from cross-agent access.',
   "tools.exec.approvalRunningNoticeMs":
     "Delay in milliseconds before showing an in-progress notice after an exec approval is granted. Increase to reduce flicker for fast commands, or lower for quicker operator feedback.",
   "tools.links.enabled":

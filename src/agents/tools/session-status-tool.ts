@@ -40,6 +40,7 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
   createAgentToAgentPolicy,
+  formatAgentToAgentAccessError,
 } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
@@ -201,14 +202,9 @@ export function createSessionStatusTool(opts?: {
         if (targetAgentId === requesterAgentId) {
           return;
         }
-        // Gate cross-agent access behind tools.agentToAgent settings.
-        if (!a2aPolicy.enabled) {
-          throw new Error(
-            "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.",
-          );
-        }
-        if (!a2aPolicy.isAllowed(requesterAgentId, targetAgentId)) {
-          throw new Error("Agent-to-agent session status denied by tools.agentToAgent.allow.");
+        const a2aDecision = a2aPolicy.evaluateAccess(requesterAgentId, targetAgentId);
+        if (!a2aDecision.allowed) {
+          throw new Error(formatAgentToAgentAccessError("status", a2aDecision));
         }
       };
 

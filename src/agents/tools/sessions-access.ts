@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import {
   listSpawnedSessionKeys,
   resolveInternalSessionKey,
@@ -8,13 +9,21 @@ import {
 
 export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
 
+export type AgentToAgentDenyReason = "disabled" | "global_participation" | "per_agent_outbound";
+
+export type AgentToAgentDecision =
+  | { allowed: true }
+  | { allowed: false; reason: AgentToAgentDenyReason };
+
 export type AgentToAgentPolicy = {
   enabled: boolean;
-  matchesAllow: (agentId: string) => boolean;
+  matchesGlobalParticipation: (agentId: string) => boolean;
+  evaluateAccess: (requesterAgentId: string, targetAgentId: string) => AgentToAgentDecision;
   isAllowed: (requesterAgentId: string, targetAgentId: string) => boolean;
 };
 
 export type SessionAccessAction = "history" | "send" | "list";
+export type AgentToAgentAction = SessionAccessAction | "status";
 
 export type SessionAccessResult =
   | { allowed: true }
@@ -88,14 +97,11 @@ export function resolveSandboxedSessionToolContext(params: {
 }
 
 export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
-  const routingA2A = cfg.tools?.agentToAgent;
-  const enabled = routingA2A?.enabled === true;
-  const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
-  const matchesAllow = (agentId: string) => {
-    if (allowPatterns.length === 0) {
-      return true;
-    }
-    return allowPatterns.some((pattern) => {
+  const globalA2A = cfg.tools?.agentToAgent;
+  const enabled = globalA2A?.enabled === true;
+  const globalAllow = Array.isArray(globalA2A?.allow) ? globalA2A.allow : [];
+  const matchesPatterns = (patterns: string[], agentId: string) =>
+    patterns.some((pattern) => {
       const raw = String(pattern ?? "").trim();
       if (!raw) {
         return false;
@@ -110,17 +116,44 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
       const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
       return re.test(agentId);
     });
-  };
-  const isAllowed = (requesterAgentId: string, targetAgentId: string) => {
-    if (requesterAgentId === targetAgentId) {
+  const matchesGlobalParticipation = (agentId: string) => {
+    if (globalAllow.length === 0) {
       return true;
     }
-    if (!enabled) {
-      return false;
-    }
-    return matchesAllow(requesterAgentId) && matchesAllow(targetAgentId);
+    return matchesPatterns(globalAllow, agentId);
   };
-  return { enabled, matchesAllow, isAllowed };
+  const resolveOutboundAllow = (agentId: string): string[] | undefined => {
+    const allow = resolveAgentConfig(cfg, agentId)?.tools?.agentToAgent?.allow;
+    return Array.isArray(allow) ? allow : undefined;
+  };
+  const evaluateAccess = (
+    requesterAgentId: string,
+    targetAgentId: string,
+  ): AgentToAgentDecision => {
+    if (requesterAgentId === targetAgentId) {
+      return { allowed: true };
+    }
+    if (!enabled) {
+      return { allowed: false, reason: "disabled" };
+    }
+    if (
+      !matchesGlobalParticipation(requesterAgentId) ||
+      !matchesGlobalParticipation(targetAgentId)
+    ) {
+      return { allowed: false, reason: "global_participation" };
+    }
+    const outboundAllow = resolveOutboundAllow(requesterAgentId);
+    if (outboundAllow !== undefined) {
+      if (outboundAllow.length === 0 || !matchesPatterns(outboundAllow, targetAgentId)) {
+        return { allowed: false, reason: "per_agent_outbound" };
+      }
+    }
+    return { allowed: true };
+  };
+  const isAllowed = (requesterAgentId: string, targetAgentId: string) => {
+    return evaluateAccess(requesterAgentId, targetAgentId).allowed;
+  };
+  return { enabled, matchesGlobalParticipation, evaluateAccess, isAllowed };
 }
 
 function actionPrefix(action: SessionAccessAction): string {
@@ -133,24 +166,47 @@ function actionPrefix(action: SessionAccessAction): string {
   return "Session list";
 }
 
-function a2aDisabledMessage(action: SessionAccessAction): string {
+function a2aDisabledMessage(action: AgentToAgentAction): string {
   if (action === "history") {
     return "Agent-to-agent history is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.";
   }
   if (action === "send") {
     return "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.";
   }
+  if (action === "status") {
+    return "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.";
+  }
   return "Agent-to-agent listing is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent visibility.";
 }
 
-function a2aDeniedMessage(action: SessionAccessAction): string {
+function a2aDeniedMessage(
+  action: AgentToAgentAction,
+  reason: Exclude<AgentToAgentDenyReason, "disabled">,
+): string {
+  const configPath =
+    reason === "per_agent_outbound"
+      ? "agents.list[].tools.agentToAgent.allow for the requester agent"
+      : "tools.agentToAgent.allow";
   if (action === "history") {
-    return "Agent-to-agent history denied by tools.agentToAgent.allow.";
+    return `Agent-to-agent history denied by ${configPath}.`;
   }
   if (action === "send") {
-    return "Agent-to-agent messaging denied by tools.agentToAgent.allow.";
+    return `Agent-to-agent messaging denied by ${configPath}.`;
   }
-  return "Agent-to-agent listing denied by tools.agentToAgent.allow.";
+  if (action === "status") {
+    return `Agent-to-agent session status denied by ${configPath}.`;
+  }
+  return `Agent-to-agent listing denied by ${configPath}.`;
+}
+
+export function formatAgentToAgentAccessError(
+  action: AgentToAgentAction,
+  decision: Extract<AgentToAgentDecision, { allowed: false }>,
+): string {
+  if (decision.reason === "disabled") {
+    return a2aDisabledMessage(action);
+  }
+  return a2aDeniedMessage(action, decision.reason);
 }
 
 function crossVisibilityMessage(action: SessionAccessAction): string {
@@ -196,18 +252,12 @@ export async function createSessionVisibilityGuard(params: {
           error: crossVisibilityMessage(params.action),
         };
       }
-      if (!params.a2aPolicy.enabled) {
+      const a2aDecision = params.a2aPolicy.evaluateAccess(requesterAgentId, targetAgentId);
+      if (!a2aDecision.allowed) {
         return {
           allowed: false,
           status: "forbidden",
-          error: a2aDisabledMessage(params.action),
-        };
-      }
-      if (!params.a2aPolicy.isAllowed(requesterAgentId, targetAgentId)) {
-        return {
-          allowed: false,
-          status: "forbidden",
-          error: a2aDeniedMessage(params.action),
+          error: formatAgentToAgentAccessError(params.action, a2aDecision),
         };
       }
       return { allowed: true };

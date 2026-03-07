@@ -12,8 +12,18 @@ vi.mock("../../gateway/call.js", () => ({
 type SessionsToolTestConfig = {
   session: { scope: "per-sender"; mainKey: string };
   tools: {
-    agentToAgent: { enabled: boolean };
+    agentToAgent: { enabled: boolean; allow?: string[] };
     sessions?: { visibility: "all" | "own" };
+  };
+  agents?: {
+    list?: Array<{
+      id: string;
+      tools?: {
+        agentToAgent?: {
+          allow?: string[];
+        };
+      };
+    }>;
   };
 };
 
@@ -438,5 +448,41 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
     expect(result.details).toMatchObject({ status: "forbidden" });
+  });
+
+  it("reports per-agent outbound deny during label lookup", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true, allow: ["main", "other"] },
+        sessions: { visibility: "all" },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              agentToAgent: {
+                allow: [],
+              },
+            },
+          },
+        ],
+      },
+    });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call2", {
+      label: "ops",
+      agentId: "other",
+      message: "hi",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error:
+        "Agent-to-agent messaging denied by agents.list[].tools.agentToAgent.allow for the requester agent.",
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 });
