@@ -28,6 +28,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveGatewayRequestContext } from "./http-utils.js";
+import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -70,14 +71,6 @@ type ResolvedOpenAiChatCompletionsLimits = {
   images: InputImageLimits;
 };
 
-function normalizeHostnameAllowlist(values: string[] | undefined): string[] | undefined {
-  if (!values || values.length === 0) {
-    return undefined;
-  }
-  const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
-  return normalized.length > 0 ? normalized : undefined;
-}
-
 function resolveOpenAiChatCompletionsLimits(
   config: GatewayHttpChatCompletionsConfig | undefined,
 ): ResolvedOpenAiChatCompletionsLimits {
@@ -94,7 +87,7 @@ function resolveOpenAiChatCompletionsLimits(
         : DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
     images: {
       allowUrl: imageConfig?.allowUrl ?? DEFAULT_OPENAI_IMAGE_LIMITS.allowUrl,
-      urlAllowlist: normalizeHostnameAllowlist(imageConfig?.urlAllowlist),
+      urlAllowlist: normalizeInputHostnameAllowlist(imageConfig?.urlAllowlist),
       allowedMimes: normalizeMimeList(imageConfig?.allowedMimes, DEFAULT_INPUT_IMAGE_MIMES),
       maxBytes: imageConfig?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,
       maxRedirects: imageConfig?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
