@@ -14,17 +14,17 @@ const PERMISSION_ERROR_CODES = new Set([
   99991672, // Insufficient scope
 ]);
 
-/** Known scopes and their human-readable Chinese labels. */
+/** Known scopes and their human-readable labels. */
 export const FEISHU_SCOPE_LABELS: Record<string, string> = {
-  "contact:user.base:readonly": "获取用户基本信息",
-  "contact:user.employee_id:readonly": "获取用户 employee ID",
-  "im:chat:readonly": "获取群信息",
-  "im:message:send_as_bot": "以应用身份发消息",
-  "im:resource": "上传/下载消息中的资源文件",
-  "calendar:calendar": "创建/修改日历日程",
-  "calendar:calendar:readonly": "读取日历信息",
-  "drive:drive": "查看、管理云空间",
-  "drive:permission": "管理云文档权限",
+  "contact:user.base:readonly": "Read user basic info",
+  "contact:user.employee_id:readonly": "Read user employee ID",
+  "im:chat:readonly": "Read chat/group info",
+  "im:message:send_as_bot": "Send messages as bot",
+  "im:resource": "Upload/download message resources",
+  "calendar:calendar": "Create/modify calendar events",
+  "calendar:calendar:readonly": "Read calendar info",
+  "drive:drive": "Access cloud drive",
+  "drive:permission": "Manage document permissions",
 };
 
 /**
@@ -48,11 +48,9 @@ export function formatPermissionError(params: {
   const base = domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
 
   return [
-    `❌ 机器人缺少权限：${label}`,
-    `   Scope: ${scope}`,
-    `   开启链接：${base}/app/${appId}/security/permission`,
-    "",
-    "请到上述链接为机器人开启对应权限后重试。",
+    `Feishu bot missing permission: ${label}`,
+    `  Scope: ${scope}`,
+    `  Enable at: ${base}/app/${appId}/security/permission`,
   ].join("\n");
 }
 
