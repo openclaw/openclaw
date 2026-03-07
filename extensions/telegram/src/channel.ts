@@ -1,4 +1,5 @@
 import {
+  collectAllowlistProviderGroupPolicyWarnings,
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   createScopedAccountConfigAccessors,
@@ -27,8 +28,6 @@ import {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
   resolveDefaultTelegramAccountId,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   resolveTelegramAccount,
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
@@ -200,30 +199,30 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       });
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
-        providerConfigPresent: cfg.channels?.telegram !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
-      });
       const groupAllowlistConfigured =
         account.config.groups && Object.keys(account.config.groups).length > 0;
-      return collectOpenGroupPolicyRouteAllowlistWarnings({
-        groupPolicy,
-        routeAllowlistConfigured: groupAllowlistConfigured,
-        restrictSenders: {
-          surface: "Telegram groups",
-          openScope: "any member in allowed groups",
-          groupPolicyPath: "channels.telegram.groupPolicy",
-          groupAllowFromPath: "channels.telegram.groupAllowFrom",
-        },
-        noRouteAllowlist: {
-          surface: "Telegram groups",
-          routeAllowlistPath: "channels.telegram.groups",
-          routeScope: "group",
-          groupPolicyPath: "channels.telegram.groupPolicy",
-          groupAllowFromPath: "channels.telegram.groupAllowFrom",
-        },
+      return collectAllowlistProviderGroupPolicyWarnings({
+        cfg,
+        providerConfigPresent: cfg.channels?.telegram !== undefined,
+        configuredGroupPolicy: account.config.groupPolicy,
+        collect: (groupPolicy) =>
+          collectOpenGroupPolicyRouteAllowlistWarnings({
+            groupPolicy,
+            routeAllowlistConfigured: groupAllowlistConfigured,
+            restrictSenders: {
+              surface: "Telegram groups",
+              openScope: "any member in allowed groups",
+              groupPolicyPath: "channels.telegram.groupPolicy",
+              groupAllowFromPath: "channels.telegram.groupAllowFrom",
+            },
+            noRouteAllowlist: {
+              surface: "Telegram groups",
+              routeAllowlistPath: "channels.telegram.groups",
+              routeScope: "group",
+              groupPolicyPath: "channels.telegram.groupPolicy",
+              groupAllowFromPath: "channels.telegram.groupAllowFrom",
+            },
+          }),
       });
     },
   },

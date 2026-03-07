@@ -1,5 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
+  collectOpenProviderGroupPolicyWarnings,
   collectOpenGroupPolicyConfiguredRouteWarnings,
   createScopedAccountConfigAccessors,
   formatAllowFromLowercase,
@@ -28,8 +29,6 @@ import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
   resolveSlackReplyToMode,
-  resolveOpenProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
   buildSlackThreadingToolContext,
@@ -189,36 +188,31 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       });
     },
     collectWarnings: ({ account, cfg }) => {
-      const warnings: string[] = [];
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
-        providerConfigPresent: cfg.channels?.slack !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
-      });
       const channelAllowlistConfigured =
         Boolean(account.config.channels) && Object.keys(account.config.channels ?? {}).length > 0;
 
-      warnings.push(
-        ...collectOpenGroupPolicyConfiguredRouteWarnings({
-          groupPolicy,
-          routeAllowlistConfigured: channelAllowlistConfigured,
-          configureRouteAllowlist: {
-            surface: "Slack channels",
-            openScope: "any channel not explicitly denied",
-            groupPolicyPath: "channels.slack.groupPolicy",
-            routeAllowlistPath: "channels.slack.channels",
-          },
-          missingRouteAllowlist: {
-            surface: "Slack channels",
-            openBehavior: "with no channel allowlist; any channel can trigger (mention-gated)",
-            remediation:
-              'Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels',
-          },
-        }),
-      );
-
-      return warnings;
+      return collectOpenProviderGroupPolicyWarnings({
+        cfg,
+        providerConfigPresent: cfg.channels?.slack !== undefined,
+        configuredGroupPolicy: account.config.groupPolicy,
+        collect: (groupPolicy) =>
+          collectOpenGroupPolicyConfiguredRouteWarnings({
+            groupPolicy,
+            routeAllowlistConfigured: channelAllowlistConfigured,
+            configureRouteAllowlist: {
+              surface: "Slack channels",
+              openScope: "any channel not explicitly denied",
+              groupPolicyPath: "channels.slack.groupPolicy",
+              routeAllowlistPath: "channels.slack.channels",
+            },
+            missingRouteAllowlist: {
+              surface: "Slack channels",
+              openBehavior: "with no channel allowlist; any channel can trigger (mention-gated)",
+              remediation:
+                'Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels',
+            },
+          }),
+      });
     },
   },
   groups: {
