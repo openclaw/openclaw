@@ -246,6 +246,7 @@ Docs: https://docs.openclaw.ai
 - CLI/bootstrap Node version hint maintenance: replace hardcoded nvm `22` instructions in `openclaw.mjs` with `MIN_NODE_MAJOR` interpolation so future minimum-Node bumps keep startup guidance in sync automatically. (#39056) Thanks @onstash.
 - Discord/native slash command auth: honor `commands.allowFrom.discord` (and `commands.allowFrom["*"]`) in guild slash-command pre-dispatch authorization so allowlisted senders are no longer incorrectly rejected as unauthorized. (#38794) Thanks @jskoiz and @thewilloftheshadow.
 - Outbound/message target normalization: ignore empty legacy `to`/`channelId` fields when explicit `target` is provided so valid target-based sends no longer fail legacy-param validation; includes regression coverage. (#38944) Thanks @Narcooo.
+- Models/auth token prompts: guard cancelled manual token prompts so `Symbol(clack:cancel)` values cannot be persisted into auth profiles; adds regression coverage for cancelled `models auth paste-token`. (#38951) Thanks @MumuTW.
 
 ## 2026.3.2
 
