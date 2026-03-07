@@ -79,6 +79,7 @@ import {
 function makeResolvedDelivery(): Extract<DeliveryTargetResolution, { ok: true }> {
   return {
     ok: true,
+    mode: "explicit",
     channel: "telegram",
     to: "123456",
     accountId: undefined,
