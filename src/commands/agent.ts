@@ -750,11 +750,15 @@ async function agentCommandInternal(
       }
 
       const finalVisibleText = visibleTextAccumulator.finalize();
-      if (finalVisibleText) {
+      const normalizedFinalPayload = normalizeReplyPayload({
+        text: finalVisibleText,
+      });
+      const finalTranscriptText = normalizedFinalPayload?.text?.trim() ?? "";
+      if (finalTranscriptText) {
         await appendAssistantMessageToSessionTranscript({
           agentId: sessionAgentId,
           sessionKey: acpSessionKey,
-          text: finalVisibleText,
+          text: finalTranscriptText,
           storePath,
         });
       }
@@ -768,9 +772,6 @@ async function agentCommandInternal(
         },
       });
 
-      const normalizedFinalPayload = normalizeReplyPayload({
-        text: finalVisibleText,
-      });
       const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
       const result = {
         payloads,
