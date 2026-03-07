@@ -32,6 +32,7 @@ const entrypoints = [
   "lobster",
   "matrix",
   "mattermost",
+  "continuity",
   "memory-core",
   "memory-lancedb",
   "minimax-portal-auth",

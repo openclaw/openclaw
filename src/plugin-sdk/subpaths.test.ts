@@ -1,3 +1,5 @@
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import * as compatSdk from "openclaw/plugin-sdk/compat";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
@@ -9,44 +11,64 @@ import * as telegramSdk from "openclaw/plugin-sdk/telegram";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
 import { describe, expect, it } from "vitest";
 
+const require = createRequire(import.meta.url);
+
+async function loadBundledSubpath(specifier: string) {
+  const resolved = require.resolve(specifier);
+  return import(pathToFileURL(resolved).href);
+}
+
 const bundledExtensionSubpathLoaders = [
-  { id: "acpx", load: () => import("openclaw/plugin-sdk/acpx") },
-  { id: "bluebubbles", load: () => import("openclaw/plugin-sdk/bluebubbles") },
-  { id: "copilot-proxy", load: () => import("openclaw/plugin-sdk/copilot-proxy") },
-  { id: "device-pair", load: () => import("openclaw/plugin-sdk/device-pair") },
-  { id: "diagnostics-otel", load: () => import("openclaw/plugin-sdk/diagnostics-otel") },
-  { id: "diffs", load: () => import("openclaw/plugin-sdk/diffs") },
-  { id: "feishu", load: () => import("openclaw/plugin-sdk/feishu") },
+  { id: "acpx", load: () => loadBundledSubpath("openclaw/plugin-sdk/acpx") },
+  { id: "bluebubbles", load: () => loadBundledSubpath("openclaw/plugin-sdk/bluebubbles") },
+  { id: "copilot-proxy", load: () => loadBundledSubpath("openclaw/plugin-sdk/copilot-proxy") },
+  { id: "device-pair", load: () => loadBundledSubpath("openclaw/plugin-sdk/device-pair") },
+  {
+    id: "diagnostics-otel",
+    load: () => loadBundledSubpath("openclaw/plugin-sdk/diagnostics-otel"),
+  },
+  { id: "diffs", load: () => loadBundledSubpath("openclaw/plugin-sdk/diffs") },
+  { id: "feishu", load: () => loadBundledSubpath("openclaw/plugin-sdk/feishu") },
   {
     id: "google-gemini-cli-auth",
-    load: () => import("openclaw/plugin-sdk/google-gemini-cli-auth"),
+    load: () => loadBundledSubpath("openclaw/plugin-sdk/google-gemini-cli-auth"),
   },
-  { id: "googlechat", load: () => import("openclaw/plugin-sdk/googlechat") },
-  { id: "irc", load: () => import("openclaw/plugin-sdk/irc") },
-  { id: "llm-task", load: () => import("openclaw/plugin-sdk/llm-task") },
-  { id: "lobster", load: () => import("openclaw/plugin-sdk/lobster") },
-  { id: "matrix", load: () => import("openclaw/plugin-sdk/matrix") },
-  { id: "mattermost", load: () => import("openclaw/plugin-sdk/mattermost") },
-  { id: "memory-core", load: () => import("openclaw/plugin-sdk/memory-core") },
-  { id: "memory-lancedb", load: () => import("openclaw/plugin-sdk/memory-lancedb") },
+  { id: "googlechat", load: () => loadBundledSubpath("openclaw/plugin-sdk/googlechat") },
+  { id: "irc", load: () => loadBundledSubpath("openclaw/plugin-sdk/irc") },
+  { id: "llm-task", load: () => loadBundledSubpath("openclaw/plugin-sdk/llm-task") },
+  { id: "lobster", load: () => loadBundledSubpath("openclaw/plugin-sdk/lobster") },
+  { id: "matrix", load: () => loadBundledSubpath("openclaw/plugin-sdk/matrix") },
+  { id: "mattermost", load: () => loadBundledSubpath("openclaw/plugin-sdk/mattermost") },
+  { id: "continuity", load: () => loadBundledSubpath("openclaw/plugin-sdk/continuity") },
+  { id: "memory-core", load: () => loadBundledSubpath("openclaw/plugin-sdk/memory-core") },
+  {
+    id: "memory-lancedb",
+    load: () => loadBundledSubpath("openclaw/plugin-sdk/memory-lancedb"),
+  },
   {
     id: "minimax-portal-auth",
-    load: () => import("openclaw/plugin-sdk/minimax-portal-auth"),
+    load: () => loadBundledSubpath("openclaw/plugin-sdk/minimax-portal-auth"),
   },
-  { id: "nextcloud-talk", load: () => import("openclaw/plugin-sdk/nextcloud-talk") },
-  { id: "nostr", load: () => import("openclaw/plugin-sdk/nostr") },
-  { id: "open-prose", load: () => import("openclaw/plugin-sdk/open-prose") },
-  { id: "phone-control", load: () => import("openclaw/plugin-sdk/phone-control") },
-  { id: "qwen-portal-auth", load: () => import("openclaw/plugin-sdk/qwen-portal-auth") },
-  { id: "synology-chat", load: () => import("openclaw/plugin-sdk/synology-chat") },
-  { id: "talk-voice", load: () => import("openclaw/plugin-sdk/talk-voice") },
-  { id: "test-utils", load: () => import("openclaw/plugin-sdk/test-utils") },
-  { id: "thread-ownership", load: () => import("openclaw/plugin-sdk/thread-ownership") },
-  { id: "tlon", load: () => import("openclaw/plugin-sdk/tlon") },
-  { id: "twitch", load: () => import("openclaw/plugin-sdk/twitch") },
-  { id: "voice-call", load: () => import("openclaw/plugin-sdk/voice-call") },
-  { id: "zalo", load: () => import("openclaw/plugin-sdk/zalo") },
-  { id: "zalouser", load: () => import("openclaw/plugin-sdk/zalouser") },
+  { id: "nextcloud-talk", load: () => loadBundledSubpath("openclaw/plugin-sdk/nextcloud-talk") },
+  { id: "nostr", load: () => loadBundledSubpath("openclaw/plugin-sdk/nostr") },
+  { id: "open-prose", load: () => loadBundledSubpath("openclaw/plugin-sdk/open-prose") },
+  { id: "phone-control", load: () => loadBundledSubpath("openclaw/plugin-sdk/phone-control") },
+  {
+    id: "qwen-portal-auth",
+    load: () => loadBundledSubpath("openclaw/plugin-sdk/qwen-portal-auth"),
+  },
+  { id: "synology-chat", load: () => loadBundledSubpath("openclaw/plugin-sdk/synology-chat") },
+  { id: "talk-voice", load: () => loadBundledSubpath("openclaw/plugin-sdk/talk-voice") },
+  { id: "test-utils", load: () => loadBundledSubpath("openclaw/plugin-sdk/test-utils") },
+  {
+    id: "thread-ownership",
+    load: () => loadBundledSubpath("openclaw/plugin-sdk/thread-ownership"),
+  },
+  { id: "tlon", load: () => loadBundledSubpath("openclaw/plugin-sdk/tlon") },
+  { id: "twitch", load: () => loadBundledSubpath("openclaw/plugin-sdk/twitch") },
+  { id: "voice-call", load: () => loadBundledSubpath("openclaw/plugin-sdk/voice-call") },
+  { id: "zalo", load: () => loadBundledSubpath("openclaw/plugin-sdk/zalo") },
+  { id: "zalouser", load: () => loadBundledSubpath("openclaw/plugin-sdk/zalouser") },
 ] as const;
 
 describe("plugin-sdk subpath exports", () => {

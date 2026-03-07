@@ -1,0 +1,120 @@
+{
+  "id": "continuity",
+  "kind": "context-engine",
+  "name": "Continuity",
+  "description": "Cross-channel continuity capture, review, and recall for direct chats.",
+  "uiHints": {
+    "capture.mainDirect": {
+      "label": "Main Direct Capture",
+      "help": "How to handle durable items from the canonical main direct session."
+    },
+    "capture.pairedDirect": {
+      "label": "Paired Direct Capture",
+      "help": "How to handle durable items from other direct-message sessions."
+    },
+    "capture.group": {
+      "label": "Group Capture",
+      "help": "Groups default to off to avoid accidental cross-chat memory capture."
+    },
+    "capture.channel": {
+      "label": "Channel Capture",
+      "help": "Channel and broadcast sessions default to off."
+    },
+    "capture.minConfidence": {
+      "label": "Min Confidence",
+      "help": "Discard extracted items below this score."
+    },
+    "review.autoApproveMain": {
+      "label": "Auto-Approve Main",
+      "help": "Allow the main direct chat to auto-promote durable items when capture is auto."
+    },
+    "review.requireSource": {
+      "label": "Require Source",
+      "help": "Require a source excerpt before an item can be approved."
+    },
+    "recall.maxItems": {
+      "label": "Max Recall Items",
+      "help": "Maximum number of approved continuity items injected per prompt."
+    },
+    "recall.includeOpenLoops": {
+      "label": "Include Open Loops",
+      "help": "Include approved open loops in automatic continuity recall."
+    },
+    "recall.scope": {
+      "label": "Recall Scope",
+      "help": "Session send-policy rules controlling where continuity is recalled."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "capture": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mainDirect": {
+            "type": "string",
+            "enum": ["off", "review", "auto"],
+            "default": "auto"
+          },
+          "pairedDirect": {
+            "type": "string",
+            "enum": ["off", "review", "auto"],
+            "default": "review"
+          },
+          "group": {
+            "type": "string",
+            "enum": ["off", "review", "auto"],
+            "default": "off"
+          },
+          "channel": {
+            "type": "string",
+            "enum": ["off", "review", "auto"],
+            "default": "off"
+          },
+          "minConfidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.75
+          }
+        }
+      },
+      "review": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "autoApproveMain": {
+            "type": "boolean",
+            "default": true
+          },
+          "requireSource": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "recall": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxItems": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12,
+            "default": 4
+          },
+          "includeOpenLoops": {
+            "type": "boolean",
+            "default": true
+          },
+          "scope": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

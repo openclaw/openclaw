@@ -7,6 +7,15 @@ import type {
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
 export type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+export type ContinuityExplainResult =
+  import("../../../src/continuity/types.js").ContinuityExplainResult;
+export type ContinuityKind = import("../../../src/continuity/types.js").ContinuityKind;
+export type ContinuityRecord = import("../../../src/continuity/types.js").ContinuityRecord;
+export type ContinuityReviewState =
+  import("../../../src/continuity/types.js").ContinuityReviewState;
+export type ContinuitySourceClass =
+  import("../../../src/continuity/types.js").ContinuitySourceClass;
+export type ContinuityStatus = import("../../../src/continuity/types.js").ContinuityStatus;
 
 export type ChannelsStatusSnapshot = {
   ts: number;

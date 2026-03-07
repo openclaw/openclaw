@@ -220,6 +220,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/lobster/**"
+"extensions: continuity":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/continuity/**"
 "extensions: memory-core":
   - changed-files:
       - any-glob-to-any-file:

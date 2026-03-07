@@ -72,7 +72,11 @@ export interface ContextEngine {
   /**
    * Initialize engine state for a session, optionally importing historical context.
    */
-  bootstrap?(params: { sessionId: string; sessionFile: string }): Promise<BootstrapResult>;
+  bootstrap?(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+  }): Promise<BootstrapResult>;
 
   /**
    * Ingest a single message into the engine's store.
@@ -101,6 +105,7 @@ export interface ContextEngine {
    */
   afterTurn?(params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     messages: AgentMessage[];
     /** Number of messages that existed before the prompt was sent. */
@@ -121,6 +126,7 @@ export interface ContextEngine {
    */
   assemble(params: {
     sessionId: string;
+    sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
   }): Promise<AssembleResult>;
@@ -131,6 +137,7 @@ export interface ContextEngine {
    */
   compact(params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     tokenBudget?: number;
     /** Force compaction even below the default trigger threshold. */

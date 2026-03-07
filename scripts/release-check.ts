@@ -71,6 +71,8 @@ const requiredPathGroups = [
   "dist/plugin-sdk/matrix.d.ts",
   "dist/plugin-sdk/mattermost.js",
   "dist/plugin-sdk/mattermost.d.ts",
+  "dist/plugin-sdk/continuity.js",
+  "dist/plugin-sdk/continuity.d.ts",
   "dist/plugin-sdk/memory-core.js",
   "dist/plugin-sdk/memory-core.d.ts",
   "dist/plugin-sdk/memory-lancedb.js",

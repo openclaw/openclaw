@@ -24,6 +24,14 @@ export class LegacyContextEngine implements ContextEngine {
     version: "1.0.0",
   };
 
+  async bootstrap(_params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+  }): Promise<{ bootstrapped: boolean; reason?: string }> {
+    return { bootstrapped: false, reason: "legacy engine does not bootstrap" };
+  }
+
   async ingest(_params: {
     sessionId: string;
     message: AgentMessage;
@@ -35,6 +43,7 @@ export class LegacyContextEngine implements ContextEngine {
 
   async assemble(params: {
     sessionId: string;
+    sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
   }): Promise<AssembleResult> {
@@ -49,6 +58,7 @@ export class LegacyContextEngine implements ContextEngine {
 
   async afterTurn(_params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     messages: AgentMessage[];
     prePromptMessageCount: number;
@@ -62,6 +72,7 @@ export class LegacyContextEngine implements ContextEngine {
 
   async compact(params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     tokenBudget?: number;
     force?: boolean;

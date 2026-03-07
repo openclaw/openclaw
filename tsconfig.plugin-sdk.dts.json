@@ -38,6 +38,7 @@
     "src/plugin-sdk/lobster.ts",
     "src/plugin-sdk/matrix.ts",
     "src/plugin-sdk/mattermost.ts",
+    "src/plugin-sdk/continuity.ts",
     "src/plugin-sdk/memory-core.ts",
     "src/plugin-sdk/memory-lancedb.ts",
     "src/plugin-sdk/minimax-portal-auth.ts",
