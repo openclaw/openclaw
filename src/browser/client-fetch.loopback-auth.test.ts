@@ -122,9 +122,12 @@ describe("fetchBrowserJson loopback auth", () => {
   it("preserves dispatcher error context while keeping no-retry hint", async () => {
     mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
 
-    const thrown = await fetchBrowserJson<{ ok: boolean }>("/tabs").catch((err) => err as Error);
+    const thrown = await fetchBrowserJson<{ ok: boolean }>("/tabs").catch((err: unknown) => err);
 
     expect(thrown).toBeInstanceOf(Error);
+    if (!(thrown instanceof Error)) {
+      throw new Error(`Expected Error, got ${String(thrown)}`);
+    }
     expect(thrown.message).toContain("Chrome CDP handshake timeout");
     expect(thrown.message).toContain("Do NOT retry the browser tool");
     expect(thrown.message).not.toContain("Can't reach the OpenClaw browser control service");
@@ -139,10 +142,13 @@ describe("fetchBrowserJson loopback auth", () => {
     );
 
     const thrown = await fetchBrowserJson<{ ok: boolean }>("http://example.com/").catch(
-      (err) => err as Error,
+      (err: unknown) => err,
     );
 
     expect(thrown).toBeInstanceOf(Error);
+    if (!(thrown instanceof Error)) {
+      throw new Error(`Expected Error, got ${String(thrown)}`);
+    }
     expect(thrown.message).toContain("Can't reach the OpenClaw browser control service");
     expect(thrown.message).toContain("Do NOT retry the browser tool");
   });
