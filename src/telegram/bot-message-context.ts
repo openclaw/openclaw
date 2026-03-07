@@ -29,7 +29,6 @@ import {
   type StatusReactionController,
 } from "../channels/status-reactions.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import type {
   DmPolicy,
@@ -39,7 +38,20 @@ import type {
 } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
+import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+import { transcribeFirstAudio } from "../media-understanding/audio-preflight.js";
+import {
+  buildAgentSessionKey,
+  pickFirstExistingAgentId,
+  resolveAgentRoute,
+  type ResolvedAgentRoute,
+} from "../routing/resolve-route.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  buildAgentMainSessionKey,
+  resolveAgentIdFromSessionKey,
+  resolveThreadSessionKeys,
+} from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
@@ -193,9 +205,13 @@ export const buildTelegramMessageContext = async ({
     !isGroup && groupConfig && "dmPolicy" in groupConfig
       ? (groupConfig.dmPolicy ?? dmPolicy)
       : dmPolicy;
-  // Fresh config for bindings lookup; other routing inputs are payload-derived.
-  const freshCfg = loadConfig();
-  let { route, configuredBinding, configuredBindingSessionKey } = resolveTelegramConversationRoute({
+  const peerId = isGroup
+    ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
+    : resolveTelegramDirectPeerId({ chatId, senderId });
+  const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+  // Reuse the cfg passed from bot.ts; the config cache already handles staleness.
+  const freshCfg = cfg;
+  let route: ResolvedAgentRoute = resolveAgentRoute({
     cfg: freshCfg,
     accountId: account.accountId,
     chatId,
@@ -437,7 +453,6 @@ export const buildTelegramMessageContext = async ({
 
   if (needsPreflightTranscription) {
     try {
-      const { transcribeFirstAudio } = await import("../media-understanding/audio-preflight.js");
       // Build a minimal context for transcription
       const tempCtx: MsgContext = {
         MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
