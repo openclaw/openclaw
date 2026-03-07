@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import chalk from "chalk";
 import type { Command } from "commander";
+import {
+  getAllSuppressedUsers,
+  removeSuppressedUser,
+} from "../../auto-reply/contextual-activation.js";
 import { gatewayStatusCommand } from "../../commands/gateway-status.js";
 import { formatHealthChannelLines, type HealthSummary } from "../../commands/health.js";
 import { loadConfig } from "../../config/config.js";
@@ -471,4 +475,47 @@ export function registerGatewayCli(program: Command) {
         return new Promise<void>(() => {});
       },
     );
+
+  gateway
+    .command("suppressed")
+    .description("Manage suppressed users (contextual activation feedback)")
+    .option("--group <key>", "Filter by group key")
+    .option("--remove <userId>", "Remove a user from the suppressed list (requires --group)")
+    .action(async (opts: { group?: string; remove?: string }) => {
+      if (opts.remove) {
+        if (!opts.group) {
+          defaultRuntime.error("--remove requires --group");
+          defaultRuntime.exit(1);
+          return;
+        }
+        const removed = removeSuppressedUser(opts.group, opts.remove);
+        if (removed) {
+          defaultRuntime.log(`Removed user ${opts.remove} from ${opts.group}`);
+        } else {
+          defaultRuntime.error(`User ${opts.remove} not found in ${opts.group}`);
+          defaultRuntime.exit(1);
+        }
+        return;
+      }
+
+      const data = getAllSuppressedUsers(opts.group);
+      const groups = Object.keys(data);
+      if (groups.length === 0) {
+        defaultRuntime.log("No suppressed users.");
+        return;
+      }
+
+      const rich = isRich();
+      for (const groupKey of groups) {
+        defaultRuntime.log(colorize(rich, theme.heading, `\n${groupKey}`));
+        const users = data[groupKey];
+        for (const [userId, entry] of Object.entries(users)) {
+          const daysSince = Math.floor((Date.now() - entry.detectedAt) / (1000 * 60 * 60 * 24));
+          const daysLabel = daysSince === 0 ? "today" : `${daysSince}d ago`;
+          defaultRuntime.log(
+            `  ${colorize(rich, theme.warn, `id:${userId}`)}  ×${entry.count}  first: ${daysLabel}  reason: ${colorize(rich, theme.muted, entry.reason)}`,
+          );
+        }
+      }
+    });
 }

@@ -114,6 +114,111 @@ export type GroupHistoryMessage = {
 };
 
 // ---------------------------------------------------------------------------
+// Suppressed users — persistent per-group registry of users who expressed annoyance
+// ---------------------------------------------------------------------------
+
+export type SuppressedUserEntry = {
+  userId: string;
+  reason: string;
+  detectedAt: number;
+  lastSeenAt: number;
+  count: number;
+};
+
+type SuppressedUsersData = Record<string, Record<string, SuppressedUserEntry>>;
+
+let suppressedUsersCache: SuppressedUsersData | null = null;
+
+function getSuppressedUsersPath(): string {
+  const home = resolveHomeDir() ?? "";
+  return path.join(home, ".openclaw", "data", "contextual-activation", "suppressed-users.json");
+}
+
+function loadSuppressedUsers(): SuppressedUsersData {
+  if (suppressedUsersCache) {
+    return suppressedUsersCache;
+  }
+  try {
+    const data = fs.readFileSync(getSuppressedUsersPath(), "utf-8");
+    suppressedUsersCache = JSON.parse(data) as SuppressedUsersData;
+    return suppressedUsersCache;
+  } catch {
+    suppressedUsersCache = {};
+    return suppressedUsersCache;
+  }
+}
+
+function saveSuppressedUsers(data: SuppressedUsersData) {
+  suppressedUsersCache = data;
+  const filePath = getSuppressedUsersPath();
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+  } catch {
+    // Best-effort persistence
+  }
+}
+
+function recordSuppressedUser(groupKey: string, userId: string, reason: string) {
+  const data = loadSuppressedUsers();
+  if (!data[groupKey]) {
+    data[groupKey] = {};
+  }
+  const existing = data[groupKey][userId];
+  if (existing) {
+    existing.count++;
+    existing.lastSeenAt = Date.now();
+    existing.reason = reason;
+  } else {
+    data[groupKey][userId] = {
+      userId,
+      reason,
+      detectedAt: Date.now(),
+      lastSeenAt: Date.now(),
+      count: 1,
+    };
+  }
+  saveSuppressedUsers(data);
+  logVerbose(
+    `[contextual-activation] ${groupKey}: recorded negative feedback for user ${userId} — ${reason}`,
+  );
+}
+
+function getSuppressedEntry(groupKey: string, userId: string): SuppressedUserEntry | undefined {
+  const data = loadSuppressedUsers();
+  return data[groupKey]?.[userId];
+}
+
+/** Extract userId from sender label like "Name (@user) id:12345". */
+function extractSenderId(sender: string): string | undefined {
+  const match = /id:(\d+)/.exec(sender);
+  return match?.[1];
+}
+
+/** Get all suppressed users, optionally filtered by group. */
+export function getAllSuppressedUsers(groupKey?: string): SuppressedUsersData {
+  const data = loadSuppressedUsers();
+  if (groupKey) {
+    return data[groupKey] ? { [groupKey]: data[groupKey] } : {};
+  }
+  return data;
+}
+
+/** Remove a suppressed user from a group. Returns true if found and removed. */
+export function removeSuppressedUser(groupKey: string, userId: string): boolean {
+  const data = loadSuppressedUsers();
+  if (data[groupKey]?.[userId]) {
+    delete data[groupKey][userId];
+    if (Object.keys(data[groupKey]).length === 0) {
+      delete data[groupKey];
+    }
+    saveSuppressedUsers(data);
+    return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Decision history — per-group record of recent decisions fed back into prompt
 // ---------------------------------------------------------------------------
 
@@ -266,7 +371,10 @@ You are monitoring a group chat. The assistant is currently SILENT (just observi
 Respond with a JSON object (no markdown fencing):
 {"decision":"YES","reason":"brief reason"}
 or
-{"decision":"NO","reason":"brief reason"}`;
+{"decision":"NO","reason":"brief reason"}
+
+If you notice someone in the conversation expressing annoyance, frustration, or hostility toward the assistant (e.g. "你好烦", "shut up bot", "别说话了", "要被我过滤了"), add a negativeFeedback field with their userId (from the sender label, e.g. "Name id:12345" → userId is "12345"):
+{"decision":"NO","reason":"...","negativeFeedback":{"userId":"12345","reason":"what they expressed"}}`;
 
 const DEFAULT_DISENGAGE_PROMPT = `You are a group chat participation advisor for an AI assistant named {botName}.
 
@@ -284,7 +392,10 @@ The assistant is currently PARTICIPATING in this conversation. Your job is to de
 Respond with a JSON object (no markdown fencing):
 {"decision":"CONTINUE","reason":"brief reason"}
 or
-{"decision":"DISENGAGE","reason":"brief reason"}`;
+{"decision":"DISENGAGE","reason":"brief reason"}
+
+If you notice someone expressing annoyance or hostility toward the assistant, add a negativeFeedback field:
+{"decision":"DISENGAGE","reason":"...","negativeFeedback":{"userId":"12345","reason":"what they expressed"}}`;
 
 const DEFAULT_MENTION_FILTER_PROMPT = `You are {botName}. Someone just mentioned you or replied to your message in a group chat. Decide whether you should RESPOND or IGNORE this message.
 
@@ -644,7 +755,11 @@ async function callDecisionModel(params: {
 // Parse structured decision response
 // ---------------------------------------------------------------------------
 
-type ParsedDecision = { decision: string; reason: string };
+type ParsedDecision = {
+  decision: string;
+  reason: string;
+  negativeFeedback?: { userId: string; reason: string };
+};
 
 function parseDecisionResponse(raw: string): ParsedDecision {
   // Try JSON parse first
@@ -653,12 +768,23 @@ function parseDecisionResponse(raw: string): ParsedDecision {
       .replace(/```json\s*/g, "")
       .replace(/```\s*/g, "")
       .trim();
-    const parsed = JSON.parse(cleaned) as { decision?: string; reason?: string };
+    const parsed = JSON.parse(cleaned) as {
+      decision?: string;
+      reason?: string;
+      negativeFeedback?: { userId?: string; reason?: string };
+    };
     if (parsed.decision) {
-      return {
+      const result: ParsedDecision = {
         decision: parsed.decision.toUpperCase(),
         reason: parsed.reason ?? "",
       };
+      if (parsed.negativeFeedback?.userId) {
+        result.negativeFeedback = {
+          userId: parsed.negativeFeedback.userId,
+          reason: parsed.negativeFeedback.reason ?? "",
+        };
+      }
+      return result;
     }
   } catch {
     // Fall through to text parsing
@@ -911,6 +1037,15 @@ async function shouldParticipateInGroupImpl(params: {
 
     const parsed = parseDecisionResponse(result.content);
 
+    // Handle negative feedback detection in engaged mode too
+    if (parsed.negativeFeedback) {
+      recordSuppressedUser(
+        groupKey,
+        parsed.negativeFeedback.userId,
+        parsed.negativeFeedback.reason,
+      );
+    }
+
     if (parsed.decision === "DISENGAGE") {
       const reason = parsed.reason || "model decided to disengage";
       logVerbose(
@@ -976,15 +1111,31 @@ async function shouldParticipateInGroupImpl(params: {
     ? `${identityContext}\n\n---\n\n${basePeeking}`
     : basePeeking;
   const systemPrompt = peekingWithIdentity.replace(/\{botName\}/g, botLabel);
-  const userPrompt = [
+
+  // Check if the current sender is suppressed (previously expressed annoyance)
+  const senderId = extractSenderId(currentMessage.sender);
+  const suppressedEntry = senderId ? getSuppressedEntry(groupKey, senderId) : undefined;
+
+  const userPromptParts = [
     "**Recent group chat messages:**",
     chatContent,
     "",
     "**Your previous decisions in this group:**",
     historyBlock,
-    "",
-    "Should the assistant participate?",
-  ].join("\n");
+  ];
+
+  if (suppressedEntry) {
+    const daysSince = Math.floor((Date.now() - suppressedEntry.detectedAt) / (1000 * 60 * 60 * 24));
+    const daysLabel = daysSince === 0 ? "today" : `${daysSince} day(s) ago`;
+    userPromptParts.push(
+      "",
+      `**⚠️ Sender suppression note:**`,
+      `The current message sender (id:${senderId}) has previously expressed annoyance at the assistant (${suppressedEntry.count} time(s), first detected ${daysLabel}, reason: "${suppressedEntry.reason}"). Exercise extreme caution — only join if the topic is genuinely compelling AND the sender's current tone suggests they've warmed up or are clearly inviting interaction. If in doubt, skip.`,
+    );
+  }
+
+  userPromptParts.push("", "Should the assistant participate?");
+  const userPrompt = userPromptParts.join("\n");
 
   const result = await callDecisionModel({ cfg, config, systemPrompt, userPrompt });
   if (result.error) {
@@ -995,6 +1146,11 @@ async function shouldParticipateInGroupImpl(params: {
   }
 
   const parsed = parseDecisionResponse(result.content);
+
+  // Handle negative feedback detection
+  if (parsed.negativeFeedback) {
+    recordSuppressedUser(groupKey, parsed.negativeFeedback.userId, parsed.negativeFeedback.reason);
+  }
 
   if (parsed.decision === "YES") {
     const reason = parsed.reason || "model decided to join";
