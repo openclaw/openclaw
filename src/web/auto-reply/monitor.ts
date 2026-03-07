@@ -211,10 +211,7 @@ export async function monitorWebChannel(
       },
     });
 
-    const connectedStatus = createConnectedChannelStatusPatch();
-    status.connected = connectedStatus.connected;
-    status.lastConnectedAt = connectedStatus.lastConnectedAt;
-    status.lastEventAt = connectedStatus.lastEventAt;
+    Object.assign(status, createConnectedChannelStatusPatch());
     status.lastError = null;
     emitStatus();
 
