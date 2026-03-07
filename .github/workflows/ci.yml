@@ -320,7 +320,7 @@ jobs:
           fetch-ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Detect secrets
-        run: |
+        run: | # pragma: allowlist secret
           set -euo pipefail
 
           if [ "${{ github.ref }}" = "refs/heads/main" ]; then
