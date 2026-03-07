@@ -79,7 +79,6 @@ function normalizeSchemaNode(
     normalized.properties = normalizedProps;
 
     if (schema.additionalProperties === true) {
-      // Treat `true` as an untyped map schema so dynamic object keys can still be edited.
       normalized.additionalProperties = {};
     } else if (schema.additionalProperties === false) {
       normalized.additionalProperties = false;

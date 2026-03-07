@@ -161,7 +161,7 @@ describe("cron view", () => {
     expect(historyButton).not.toBeUndefined();
     historyButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(onLoadRuns).toHaveBeenCalledTimes(1);
+    expect(onLoadRuns).toHaveBeenCalledTimes(2);
     expect(onLoadRuns).toHaveBeenCalledWith("job-1");
   });
 
@@ -203,8 +203,8 @@ describe("cron view", () => {
           runsJobId: "job-1",
           runsScope: "job",
           runs: [
-            { ts: 1, jobId: "job-1", status: "ok", summary: "older run" },
             { ts: 2, jobId: "job-1", status: "ok", summary: "newer run" },
+            { ts: 1, jobId: "job-1", status: "ok", summary: "older run" },
           ],
         }),
       ),

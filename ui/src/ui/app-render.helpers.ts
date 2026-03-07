@@ -17,16 +17,23 @@ type SessionDefaultsSnapshot = {
   mainKey?: string;
 };
 
+/** Returns true for session keys that identify a heartbeat system session. */
+function isHeartbeatSession(key: string): boolean {
+  const norm = key.toLowerCase();
+  return norm === "heartbeat" || norm.endsWith(":heartbeat");
+}
+
 function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
     | undefined;
   const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
-  if (mainSessionKey) {
+  // Exclude heartbeat system sessions to keep parity with resolveMainSessionKey
+  if (mainSessionKey && !isHeartbeatSession(mainSessionKey)) {
     return mainSessionKey;
   }
   const mainKey = snapshot?.sessionDefaults?.mainKey?.trim();
-  if (mainKey) {
+  if (mainKey && !isHeartbeatSession(mainKey)) {
     return mainKey;
   }
   return "main";
@@ -297,11 +304,12 @@ function resolveMainSessionKey(
 ): string | null {
   const snapshot = hello?.snapshot as { sessionDefaults?: SessionDefaultsSnapshot } | undefined;
   const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
-  if (mainSessionKey) {
+  // Ignore Heartbeat as main session - it's a system session, not a user session
+  if (mainSessionKey && !isHeartbeatSession(mainSessionKey)) {
     return mainSessionKey;
   }
   const mainKey = snapshot?.sessionDefaults?.mainKey?.trim();
-  if (mainKey) {
+  if (mainKey && !isHeartbeatSession(mainKey)) {
     return mainKey;
   }
   if (sessions?.sessions?.some((row) => row.key === "main")) {

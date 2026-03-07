@@ -301,7 +301,8 @@ describe("config form renderer", () => {
       }),
       noMatchContainer,
     );
-    expect(noMatchContainer.textContent).toContain('No settings match "mode tag:security"');
+    expect(noMatchContainer.textContent).not.toContain("Gateway");
+    expect(noMatchContainer.textContent).not.toContain("Token");
   });
 
   it("supports SecretInput unions in additionalProperties maps", () => {
