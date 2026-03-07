@@ -219,8 +219,8 @@ import Testing
     @Test func dashboardURLUsesFragmentTokenAndOmitsPassword() throws {
         let config: GatewayConnection.Config = try (
             url: #require(URL(string: "ws://127.0.0.1:18789")),
-            token: "abc123",
-            password: "sekret")
+            token: "abc123", // pragma: allowlist secret
+            password: "sekret") // pragma: allowlist secret
 
         let url = try GatewayEndpointStore.dashboardURL(
             for: config,

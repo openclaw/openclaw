@@ -77,12 +77,12 @@ describe("normalizeProviders", () => {
   it("replaces resolved env var value with env var name to prevent plaintext persistence", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const original = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-test-secret-value-12345";
+    process.env.OPENAI_API_KEY = "sk-test-secret-value-12345"; // pragma: allowlist secret
     try {
       const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
         openai: {
           baseUrl: "https://api.openai.com/v1",
-          apiKey: "sk-test-secret-value-12345", // simulates resolved ${OPENAI_API_KEY}
+          apiKey: "sk-test-secret-value-12345", // pragma: allowlist secret
           api: "openai-completions",
           models: [
             {
@@ -117,8 +117,16 @@ describe("normalizeProviders", () => {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-completions",
           headers: {
-            Authorization: { source: "env", provider: "default", id: "OPENAI_HEADER_TOKEN" },
-            "X-Tenant-Token": { source: "file", provider: "vault", id: "/openai/token" },
+            Authorization: {
+              source: "env",
+              provider: "default",
+              id: "OPENAI_HEADER_TOKEN",
+            },
+            "X-Tenant-Token": {
+              source: "file",
+              provider: "vault",
+              id: "/openai/token",
+            },
           },
           models: [],
         },
