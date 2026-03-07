@@ -591,6 +591,44 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(api.getUpdates).not.toHaveBeenCalled();
   });
 
+  it("resets webhookCleared latch on 409 conflict so deleteWebhook re-runs", async () => {
+    const abort = new AbortController();
+    api.deleteWebhook.mockReset();
+    api.deleteWebhook.mockResolvedValue(true);
+
+    const conflictError = Object.assign(
+      new Error("Conflict: terminated by other getUpdates request"),
+      {
+        error_code: 409,
+        method: "getUpdates",
+      },
+    );
+
+    let pollingCycle = 0;
+    runSpy
+      // First cycle: throw 409 conflict
+      .mockImplementationOnce(() =>
+        makeRunnerStub({
+          task: () => {
+            pollingCycle++;
+            return Promise.reject(conflictError);
+          },
+        }),
+      )
+      // Second cycle: succeed then abort
+      .mockImplementationOnce(() => {
+        pollingCycle++;
+        return makeAbortRunner(abort);
+      });
+
+    await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+    // deleteWebhook should be called twice: once on initial cleanup, once after 409 reset
+    expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
+    expect(pollingCycle).toBe(2);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+  });
+
   it("falls back to configured webhookSecret when not passed explicitly", async () => {
     await monitorTelegramProvider({
       token: "tok",
