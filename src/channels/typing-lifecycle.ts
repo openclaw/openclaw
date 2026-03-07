@@ -20,16 +20,13 @@ export function createTypingKeepaliveLoop(params: {
     if (tickInFlight) {
       return;
     }
-    const currentGeneration = generation;
     tickInFlight = true;
     try {
       await params.onTick();
     } finally {
-      // Only clear tickInFlight if we're still in the same generation
-      // This prevents stale ticks from causing issues after stop/start
-      if (generation === currentGeneration) {
-        tickInFlight = false;
-      }
+      // Always reset tickInFlight so future ticks can run
+      // Generation check in scheduleNext prevents stale ticks from scheduling
+      tickInFlight = false;
     }
   };
 
