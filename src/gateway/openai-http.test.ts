@@ -577,6 +577,38 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(msg.content).toBe("No response from OpenClaw.");
       }
 
+      // usage should reflect agentMeta when available
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "hi back" }],
+          meta: { agentMeta: { usage: { input: 42, output: 17 } } },
+        } as never);
+        const json = await postSyncUserMessage("hi");
+        const usage = json.usage as
+          | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+          | undefined;
+        expect(usage?.prompt_tokens).toBe(42);
+        expect(usage?.completion_tokens).toBe(17);
+        expect(usage?.total_tokens).toBe(59);
+      }
+
+      // usage defaults to zeros when agentMeta has no usage
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "hi back" }],
+          meta: {},
+        } as never);
+        const json = await postSyncUserMessage("hi");
+        const usage = json.usage as
+          | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+          | undefined;
+        expect(usage?.prompt_tokens).toBe(0);
+        expect(usage?.completion_tokens).toBe(0);
+        expect(usage?.total_tokens).toBe(0);
+      }
+
       {
         const res = await postChatCompletions(port, {
           model: "openclaw",
