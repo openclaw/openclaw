@@ -284,4 +284,38 @@ describe("export html security hardening", () => {
     expect(messages?.textContent).toContain("exfil");
     expect(messages?.querySelector(`img[src="${dataImage}"]`)).toBeTruthy();
   });
+
+  it("escapes markdown data-image attributes", () => {
+    const dataImage = "data:image/png;base64,AAAA";
+    const session: SessionData = {
+      header: { id: "session-5", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: `![x" onerror="alert(1)](${dataImage})`,
+              },
+            ],
+          },
+        },
+      ],
+      leafId: "1",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = renderTemplate(session);
+    const img = document.querySelector("#messages img");
+    expect(img).toBeTruthy();
+    expect(img?.getAttribute("onerror")).toBeNull();
+    expect(img?.getAttribute("alt")).toBe('x" onerror="alert(1)');
+    expect(img?.getAttribute("src")).toBe(dataImage);
+  });
 });
