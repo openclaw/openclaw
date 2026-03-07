@@ -425,16 +425,12 @@ export type PluginHookBeforePromptBuildResult = {
   prependContext?: string;
   /**
    * Generic key-value bag for plugins to attach metadata to the persisted user message.
-   * The core hook system transparently merges and injects these under `message.pluginMeta`
-   * so plugins don't need special-cased fields and cannot collide with core message fields
-   * like `role` or `content`.
+   * The hook system **automatically namespaces** each plugin's metadata under its plugin ID:
+   * `message.pluginMeta = { [pluginId]: messageMeta }`. This means plugins cannot
+   * interfere with each other's metadata or with core message fields.
    *
-   * Array values (e.g. `displayStripPatterns`) are automatically **concatenated** across
-   * multiple plugins rather than overwritten, so multi-plugin scenarios work correctly.
-   *
-   * Reserved standard key:
-   * - `displayStripPatterns`: `Array<{ regex: string; flags?: string }>` — regex patterns
-   *   the UI should strip from user message display.
+   * The UI reads plugin-specific metadata by checking known plugin IDs, e.g.
+   * `message.pluginMeta["memory-lancedb"]`.
    */
   messageMeta?: Record<string, unknown>;
   /**

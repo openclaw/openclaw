@@ -2,37 +2,26 @@ import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inb
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { stripThinkingTags } from "../format.ts";
 
-interface DisplayStripPattern {
-  regex: string;
-  flags?: string;
-}
-
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
 /**
- * Strip plugin-injected content from user messages using the generic
- * `displayStripPatterns` convention. Any plugin can declare patterns
- * via the `messageMeta.displayStripPatterns` hook result field.
- * At runtime these are stored under `message.pluginMeta.displayStripPatterns`.
+ * Strip memory-lancedb plugin context tags from user messages.
+ * Reads plugin-specific metadata from `message.pluginMeta["memory-lancedb"]`
+ * which is namespaced by the hook system and cannot be spoofed by other plugins.
  */
-function stripDisplayPatterns(text: string, message: Record<string, unknown>): string {
-  const meta = message.pluginMeta as Record<string, unknown> | undefined;
-  const patterns = meta?.displayStripPatterns as DisplayStripPattern[] | undefined;
-  if (!Array.isArray(patterns) || patterns.length === 0) {
+function stripMemoryLancedbContext(text: string, message: Record<string, unknown>): string {
+  const pluginMeta = message.pluginMeta as Record<string, unknown> | undefined;
+  const lancedbMeta = pluginMeta?.["memory-lancedb"] as Record<string, unknown> | undefined;
+  if (!lancedbMeta?.stripTagRegex) {
     return text;
   }
-
-  let result = text;
-  for (const p of patterns) {
-    try {
-      const regex = new RegExp(p.regex, p.flags ?? "i");
-      result = result.replace(regex, "").trim();
-    } catch {
-      // Invalid regex, skip
-    }
+  try {
+    const { regex, flags } = lancedbMeta.stripTagRegex as { regex: string; flags?: string };
+    return text.replace(new RegExp(regex, flags ?? "i"), "").trim();
+  } catch {
+    return text;
   }
-  return result;
 }
 
 function processMessageText(text: string, role: string, message: Record<string, unknown>): string {
@@ -48,8 +37,8 @@ function processMessageText(text: string, role: string, message: Record<string, 
   // Strip inbound metadata (channel info, etc.)
   let result = stripInboundMetadata(stripEnvelope(text));
 
-  // Strip any plugin-injected display patterns
-  result = stripDisplayPatterns(result, message);
+  // Strip memory-lancedb plugin context tags
+  result = stripMemoryLancedbContext(result, message);
 
   return result;
 }

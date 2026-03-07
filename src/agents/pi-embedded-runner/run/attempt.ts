@@ -530,29 +530,6 @@ function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   };
 }
 
-/** Deep-merge messageMeta: concatenate array values (e.g. displayStripPatterns), shallow-merge the rest. */
-function mergeMessageMeta(
-  a: Record<string, unknown> | undefined,
-  b: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  if (!a) {
-    return b;
-  }
-  if (!b) {
-    return a;
-  }
-  const merged: Record<string, unknown> = { ...a };
-  for (const [key, val] of Object.entries(b)) {
-    const existing = merged[key];
-    if (Array.isArray(existing) && Array.isArray(val)) {
-      merged[key] = [...existing, ...val];
-    } else {
-      merged[key] = val;
-    }
-  }
-  return merged;
-}
-
 export async function resolvePromptBuildHookResult(params: {
   prompt: string;
   messages: unknown[];
@@ -606,7 +583,8 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.appendSystemContext,
       legacyResult?.appendSystemContext,
     ]),
-    messageMeta: mergeMessageMeta(promptBuildResult?.messageMeta, legacyResult?.messageMeta),
+    // Both results are already namespaced by pluginId from hooks.ts, so shallow merge is safe
+    messageMeta: { ...promptBuildResult?.messageMeta, ...legacyResult?.messageMeta },
   };
 }
 

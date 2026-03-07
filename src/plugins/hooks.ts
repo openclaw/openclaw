@@ -130,45 +130,28 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
     next: PluginHookBeforeModelResolveResult,
+    _pluginId: string,
   ): PluginHookBeforeModelResolveResult => ({
     // Keep the first defined override so higher-priority hooks win.
     modelOverride: acc?.modelOverride ?? next.modelOverride,
     providerOverride: acc?.providerOverride ?? next.providerOverride,
   });
 
-  /** Deep-merge messageMeta: concatenate array values (e.g. displayStripPatterns), shallow-merge the rest. */
-  const mergeMessageMeta = (
-    a: Record<string, unknown> | undefined,
-    b: Record<string, unknown> | undefined,
-  ): Record<string, unknown> | undefined => {
-    if (!a) {
-      return b;
-    }
-    if (!b) {
-      return a;
-    }
-    const merged: Record<string, unknown> = { ...a };
-    for (const [key, val] of Object.entries(b)) {
-      const existing = merged[key];
-      if (Array.isArray(existing) && Array.isArray(val)) {
-        merged[key] = [...existing, ...val];
-      } else {
-        merged[key] = val;
-      }
-    }
-    return merged;
-  };
-
   const mergeBeforePromptBuild = (
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
+    pluginId: string,
   ): PluginHookBeforePromptBuildResult => ({
     systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
     prependContext: concatOptionalTextSegments({
       left: acc?.prependContext,
       right: next.prependContext,
     }),
-    messageMeta: mergeMessageMeta(acc?.messageMeta, next.messageMeta),
+    // Namespace each plugin's messageMeta under its pluginId so plugins
+    // cannot interfere with each other's metadata.
+    messageMeta: next.messageMeta
+      ? { ...acc?.messageMeta, [pluginId]: next.messageMeta }
+      : acc?.messageMeta,
     prependSystemContext: concatOptionalTextSegments({
       left: acc?.prependSystemContext,
       right: next.prependSystemContext,
@@ -182,6 +165,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   const mergeSubagentSpawningResult = (
     acc: PluginHookSubagentSpawningResult | undefined,
     next: PluginHookSubagentSpawningResult,
+    _pluginId: string,
   ): PluginHookSubagentSpawningResult => {
     if (acc?.status === "error") {
       return acc;
@@ -198,6 +182,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   const mergeSubagentDeliveryTargetResult = (
     acc: PluginHookSubagentDeliveryTargetResult | undefined,
     next: PluginHookSubagentDeliveryTargetResult,
+    _pluginId: string,
   ): PluginHookSubagentDeliveryTargetResult => {
     if (acc?.origin) {
       return acc;
@@ -255,7 +240,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     hookName: K,
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
-    mergeResults?: (accumulated: TResult | undefined, next: TResult) => TResult,
+    mergeResults?: (accumulated: TResult | undefined, next: TResult, pluginId: string) => TResult,
   ): Promise<TResult | undefined> {
     const hooks = getHooksForName(registry, hookName);
     if (hooks.length === 0) {
@@ -273,8 +258,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         )(event, ctx);
 
         if (handlerResult !== undefined && handlerResult !== null) {
-          if (mergeResults && result !== undefined) {
-            result = mergeResults(result, handlerResult);
+          if (mergeResults) {
+            result = mergeResults(result, handlerResult, hook.pluginId);
           } else {
             result = handlerResult;
           }
@@ -335,9 +320,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "before_agent_start",
       event,
       ctx,
-      (acc, next) => ({
-        ...mergeBeforePromptBuild(acc, next),
-        ...mergeBeforeModelResolve(acc, next),
+      (acc, next, pluginId) => ({
+        ...mergeBeforePromptBuild(acc, next, pluginId),
+        ...mergeBeforeModelResolve(acc, next, pluginId),
       }),
     );
   }
@@ -432,7 +417,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "message_sending",
       event,
       ctx,
-      (acc, next) => ({
+      (acc, next, _pluginId) => ({
         content: next.content ?? acc?.content,
         cancel: next.cancel ?? acc?.cancel,
       }),
@@ -467,7 +452,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "before_tool_call",
       event,
       ctx,
-      (acc, next) => ({
+      (acc, next, _pluginId) => ({
         params: next.params ?? acc?.params,
         block: next.block ?? acc?.block,
         blockReason: next.blockReason ?? acc?.blockReason,

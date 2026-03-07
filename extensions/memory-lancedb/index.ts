@@ -569,7 +569,7 @@ const memoryPlugin = {
               results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
             ),
             messageMeta: {
-              displayStripPatterns: [{ regex: MEMORY_TAG_REGEX }],
+              stripTagRegex: { regex: MEMORY_TAG_REGEX },
             },
           };
         } catch (err) {
