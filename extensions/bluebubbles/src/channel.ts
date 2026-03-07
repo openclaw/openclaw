@@ -1,3 +1,4 @@
+import { buildOpenGroupPolicyRestrictSendersWarning } from "openclaw/plugin-sdk";
 import type {
   ChannelAccountSnapshot,
   ChannelPlugin,
@@ -144,7 +145,13 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
         return [];
       }
       return [
-        `- BlueBubbles groups: groupPolicy="open" allows any member to trigger the bot. Set channels.bluebubbles.groupPolicy="allowlist" + channels.bluebubbles.groupAllowFrom to restrict senders.`,
+        buildOpenGroupPolicyRestrictSendersWarning({
+          surface: "BlueBubbles groups",
+          openScope: "any member",
+          groupPolicyPath: "channels.bluebubbles.groupPolicy",
+          groupAllowFromPath: "channels.bluebubbles.groupAllowFrom",
+          mentionGated: false,
+        }),
       ];
     },
   },

@@ -1,3 +1,4 @@
+import { buildOpenGroupPolicyWarning } from "openclaw/plugin-sdk";
 import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
@@ -146,7 +147,11 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
       });
       if (groupPolicy === "open") {
         warnings.push(
-          '- IRC channels: groupPolicy="open" allows all channels and senders (mention-gated). Prefer channels.irc.groupPolicy="allowlist" with channels.irc.groups.',
+          buildOpenGroupPolicyWarning({
+            surface: "IRC channels",
+            openBehavior: "allows all channels and senders (mention-gated)",
+            remediation: 'Prefer channels.irc.groupPolicy="allowlist" with channels.irc.groups',
+          }),
         );
       }
       if (!account.config.tls) {
