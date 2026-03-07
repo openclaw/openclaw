@@ -387,8 +387,9 @@ export function resolveMemorySearchConfig(
   if (!resolved.enabled) {
     return null;
   }
-  if (!isBuiltinMemorySearchProvider(resolved.provider)) {
+  const provider = resolved.provider;
+  if (!isBuiltinMemorySearchProvider(provider)) {
     return null;
   }
-  return resolved;
+  return { ...resolved, provider };
 }

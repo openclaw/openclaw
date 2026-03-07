@@ -5,7 +5,9 @@ import type { OpenClawConfig } from "../config/config.js";
 const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
 const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
-const resolveAgentConfig = vi.hoisted(() => vi.fn(() => undefined));
+const resolveAgentConfig = vi.hoisted(() =>
+  vi.fn<() => { memorySearch?: { provider?: string } } | undefined>(() => undefined),
+);
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const resolveMemoryBackendConfig = vi.hoisted(() => vi.fn());
