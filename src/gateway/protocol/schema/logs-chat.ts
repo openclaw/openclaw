@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { NonEmptyString } from "./primitives.js";
+import { ChatSendSessionKeyString, NonEmptyString } from "./primitives.js";
 
 export const LogsTailParamsSchema = Type.Object(
   {
@@ -33,7 +33,7 @@ export const ChatHistoryParamsSchema = Type.Object(
 
 export const ChatSendParamsSchema = Type.Object(
   {
-    sessionKey: NonEmptyString,
+    sessionKey: ChatSendSessionKeyString,
     message: Type.String(),
     thinking: Type.Optional(Type.String()),
     deliver: Type.Optional(Type.Boolean()),
