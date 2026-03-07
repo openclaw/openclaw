@@ -131,9 +131,10 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
       sessionId: abortTarget.sessionId,
       commandSource: params.command.surface,
       senderId: params.command.senderId,
+      cfg: params.cfg,
     },
   );
-  await triggerInternalHook(hookEvent);
+  await triggerInternalHook(hookEvent, { config: params.cfg });
 
   const { stopped } = stopSubagentsForRequester({
     cfg: params.cfg,

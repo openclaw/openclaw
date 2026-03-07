@@ -201,7 +201,9 @@ export async function dispatchReplyFromConfig(params: {
         createInternalHookEvent("message", "received", sessionKey, {
           ...toInternalMessageReceivedContext(hookContext),
           timestamp,
+          cfg,
         }),
+        { config: cfg },
       ),
       "dispatch-from-config: message_received internal hook failed",
     );

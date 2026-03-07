@@ -993,6 +993,30 @@ Periodic heartbeat runs.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
+### `agents.defaults.hooks`
+
+Optional internal-hook policy overlay applied after `hooks.internal` and before `agents.list[].hooks`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      hooks: {
+        enabled: true,
+        events: ["command:new", "message:received"],
+        entries: {
+          "command-logger": { enabled: false },
+        },
+      },
+    },
+  },
+}
+```
+
+- `enabled: false` disables all internal hooks for that agent scope.
+- `events`: allowlist of internal hook registration keys (`command:new`, `message`, `session:compact:after`, etc.).
+- `entries.<hookName>.enabled: false` disables a specific discovered hook.
+
 ### `agents.defaults.compaction`
 
 ```json5
@@ -1280,6 +1304,12 @@ scripts/sandbox-browser-setup.sh   # optional browser image
           avatar: "avatars/samantha.png",
         },
         groupChat: { mentionPatterns: ["@openclaw"] },
+        hooks: {
+          events: ["command:new"],
+          entries: {
+            "command-logger": { enabled: false },
+          },
+        },
         sandbox: { mode: "off" },
         runtime: {
           type: "acp",
@@ -1308,6 +1338,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
+- `hooks`: optional internal-hook policy overlay for that agent. Precedence is `hooks.internal` → `agents.defaults.hooks` → `agents.list[].hooks`.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).

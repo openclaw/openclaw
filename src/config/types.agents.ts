@@ -2,6 +2,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
+import type { InternalHookPolicyConfig } from "./types.hooks.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
@@ -72,6 +73,8 @@ export type AgentConfig = {
   humanDelay?: HumanDelayConfig;
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  /** Optional per-agent internal hook policy overrides. */
+  hooks?: InternalHookPolicyConfig;
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
   subagents?: {

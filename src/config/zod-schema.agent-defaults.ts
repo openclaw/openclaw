@@ -13,6 +13,7 @@ import {
   HumanDelaySchema,
   TypingModeSchema,
 } from "./zod-schema.core.js";
+import { InternalHookPolicySchema } from "./zod-schema.hooks.js";
 
 export const AgentDefaultsSchema = z
   .object({
@@ -158,6 +159,7 @@ export const AgentDefaultsSchema = z
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     heartbeat: HeartbeatSchema,
+    hooks: InternalHookPolicySchema,
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({

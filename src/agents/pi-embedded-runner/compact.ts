@@ -703,8 +703,13 @@ export async function compactEmbeddedPiSessionDirect(
             tokenCount: tokenCountBefore,
             messageCountOriginal,
             tokenCountOriginal,
+            cfg: params.config,
+            agentId: sessionAgentId,
           });
-          await triggerInternalHook(hookEvent);
+          await triggerInternalHook(hookEvent, {
+            config: params.config,
+            agentId: sessionAgentId,
+          });
         } catch (err) {
           log.warn("session:compact:before hook failed", {
             errorMessage: err instanceof Error ? err.message : String(err),
@@ -811,8 +816,13 @@ export async function compactEmbeddedPiSessionDirect(
             tokensBefore: result.tokensBefore,
             tokensAfter,
             firstKeptEntryId: result.firstKeptEntryId,
+            cfg: params.config,
+            agentId: sessionAgentId,
           });
-          await triggerInternalHook(hookEvent);
+          await triggerInternalHook(hookEvent, {
+            config: params.config,
+            agentId: sessionAgentId,
+          });
         } catch (err) {
           log.warn("session:compact:after hook failed", {
             errorMessage: err instanceof Error ? err.message : String(err),

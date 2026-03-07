@@ -488,7 +488,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         cfg,
       },
     );
-    await triggerInternalHook(hookEvent);
+    await triggerInternalHook(hookEvent, { config: cfg });
     const mutationCleanupError = await cleanupSessionBeforeMutation({
       cfg,
       key,

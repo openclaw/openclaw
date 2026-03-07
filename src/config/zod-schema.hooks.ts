@@ -95,6 +95,21 @@ const HookConfigSchema = z
   // whole config invalid (which triggers doctor/best-effort loads).
   .passthrough();
 
+export const InternalHookEntryPolicySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
+export const InternalHookPolicySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    events: z.array(z.string()).optional(),
+    entries: z.record(z.string(), InternalHookEntryPolicySchema).optional(),
+  })
+  .strict()
+  .optional();
+
 const HookInstallRecordSchema = z
   .object({
     ...InstallRecordShape,
@@ -105,6 +120,7 @@ const HookInstallRecordSchema = z
 export const InternalHooksSchema = z
   .object({
     enabled: z.boolean().optional(),
+    events: z.array(z.string()).optional(),
     handlers: z.array(InternalHookHandlerSchema).optional(),
     entries: z.record(z.string(), HookConfigSchema).optional(),
     load: z

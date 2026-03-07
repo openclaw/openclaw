@@ -5,9 +5,15 @@
  * like command processing, session lifecycle, etc.
  */
 
+import { resolveAgentConfig, resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type {
+  HookConfig,
+  InternalHookEntryPolicyConfig,
+  InternalHookPolicyConfig,
+} from "../config/types.hooks.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
@@ -173,6 +179,14 @@ export interface InternalHookEvent {
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
 
+type InternalHookRegistration = {
+  handler: InternalHookHandler;
+  eventKey: string;
+  hookName?: string;
+};
+
+type InternalHookRegistryEntry = InternalHookHandler | InternalHookRegistration;
+
 /**
  * Registry of hook handlers by event key.
  *
@@ -184,11 +198,11 @@ export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | 
  * to silently fire with zero handlers.
  */
 const _g = globalThis as typeof globalThis & {
-  __openclaw_internal_hook_handlers__?: Map<string, InternalHookHandler[]>;
+  __openclaw_internal_hook_handlers__?: Map<string, InternalHookRegistryEntry[]>;
 };
 const handlers = (_g.__openclaw_internal_hook_handlers__ ??= new Map<
   string,
-  InternalHookHandler[]
+  InternalHookRegistryEntry[]
 >());
 const log = createSubsystemLogger("internal-hooks");
 
@@ -211,11 +225,21 @@ const log = createSubsystemLogger("internal-hooks");
  * });
  * ```
  */
-export function registerInternalHook(eventKey: string, handler: InternalHookHandler): void {
+export function registerInternalHook(
+  eventKey: string,
+  handler: InternalHookHandler,
+  opts?: {
+    hookName?: string;
+  },
+): void {
   if (!handlers.has(eventKey)) {
     handlers.set(eventKey, []);
   }
-  handlers.get(eventKey)!.push(handler);
+  handlers.get(eventKey)!.push({
+    handler,
+    eventKey,
+    hookName: opts?.hookName,
+  });
 }
 
 /**
@@ -230,7 +254,7 @@ export function unregisterInternalHook(eventKey: string, handler: InternalHookHa
     return;
   }
 
-  const index = eventHandlers.indexOf(handler);
+  const index = eventHandlers.findIndex((entry) => getRegisteredHandler(entry) === handler);
   if (index !== -1) {
     eventHandlers.splice(index, 1);
   }
@@ -267,9 +291,57 @@ export function getRegisteredEventKeys(): string[] {
  *
  * @param event - The event to trigger
  */
-export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
-  const typeHandlers = handlers.get(event.type) ?? [];
-  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+export function resolveEffectiveInternalHookPolicy(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+}): InternalHookPolicyConfig | undefined {
+  const cfg = params.config;
+  if (!cfg) {
+    return undefined;
+  }
+  const defaultsPolicy = cfg.agents?.defaults?.hooks;
+  const agentPolicy = params.agentId ? resolveAgentConfig(cfg, params.agentId)?.hooks : undefined;
+
+  const enabled = pickLastDefined(
+    cfg.hooks?.internal?.enabled,
+    defaultsPolicy?.enabled,
+    agentPolicy?.enabled,
+  );
+  const events = pickLastDefined(
+    cfg.hooks?.internal?.events,
+    defaultsPolicy?.events,
+    agentPolicy?.events,
+  );
+  const entries = mergeInternalHookPolicyEntries(
+    toInternalHookPolicyEntries(cfg.hooks?.internal?.entries),
+    defaultsPolicy?.entries,
+    agentPolicy?.entries,
+  );
+
+  if (enabled === undefined && events === undefined && entries === undefined) {
+    return undefined;
+  }
+
+  return {
+    ...(enabled === undefined ? {} : { enabled }),
+    ...(events === undefined ? {} : { events }),
+    ...(entries === undefined ? {} : { entries }),
+  };
+}
+
+export async function triggerInternalHook(
+  event: InternalHookEvent,
+  opts?: {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+): Promise<void> {
+  const typeHandlers = normalizeRegistrations(event.type, handlers.get(event.type) ?? []);
+  const specificEventKey = `${event.type}:${event.action}`;
+  const specificHandlers = normalizeRegistrations(
+    specificEventKey,
+    handlers.get(specificEventKey) ?? [],
+  );
 
   const allHandlers = [...typeHandlers, ...specificHandlers];
 
@@ -277,9 +349,19 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
     return;
   }
 
-  for (const handler of allHandlers) {
+  const config = opts?.config ?? getConfigFromEvent(event);
+  const agentId = opts?.agentId ?? getAgentIdForEvent(event, config);
+  const policy = resolveEffectiveInternalHookPolicy({ config, agentId });
+  if (policy?.enabled === false) {
+    return;
+  }
+
+  for (const registration of allHandlers) {
+    if (!shouldRunRegistration(registration, policy)) {
+      continue;
+    }
     try {
-      await handler(event);
+      await registration.handler(event);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
@@ -418,4 +500,92 @@ export function isMessagePreprocessedEvent(
     return false;
   }
   return hasStringContextField(context, "channelId");
+}
+
+function getRegisteredHandler(entry: InternalHookRegistryEntry): InternalHookHandler {
+  return typeof entry === "function" ? entry : entry.handler;
+}
+
+function normalizeRegistrations(
+  eventKey: string,
+  entries: InternalHookRegistryEntry[],
+): InternalHookRegistration[] {
+  return entries.map((entry) =>
+    typeof entry === "function" ? { handler: entry, eventKey } : entry,
+  );
+}
+
+function getConfigFromEvent(event: InternalHookEvent): OpenClawConfig | undefined {
+  const context = event.context as { cfg?: OpenClawConfig } | undefined;
+  return context?.cfg;
+}
+
+function getAgentIdForEvent(event: InternalHookEvent, config?: OpenClawConfig): string | undefined {
+  const context = event.context as { agentId?: string } | undefined;
+  if (typeof context?.agentId === "string" && context.agentId.trim()) {
+    return context.agentId;
+  }
+  if (!config || !event.sessionKey?.trim()) {
+    return undefined;
+  }
+  return resolveSessionAgentId({ config, sessionKey: event.sessionKey });
+}
+
+function pickLastDefined<T>(...values: Array<T | undefined>): T | undefined {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    if (values[index] !== undefined) {
+      return values[index];
+    }
+  }
+  return undefined;
+}
+
+function toInternalHookPolicyEntries(
+  entries: Record<string, HookConfig> | undefined,
+): Record<string, InternalHookEntryPolicyConfig> | undefined {
+  if (!entries) {
+    return undefined;
+  }
+  const normalized: Record<string, InternalHookEntryPolicyConfig> = {};
+  for (const [hookName, entry] of Object.entries(entries)) {
+    normalized[hookName] = {
+      enabled: typeof entry?.enabled === "boolean" ? entry.enabled : undefined,
+    };
+  }
+  return normalized;
+}
+
+function mergeInternalHookPolicyEntries(
+  ...sources: Array<Record<string, InternalHookEntryPolicyConfig> | undefined>
+): Record<string, InternalHookEntryPolicyConfig> | undefined {
+  let merged: Record<string, InternalHookEntryPolicyConfig> | undefined;
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    merged ??= {};
+    for (const [hookName, entry] of Object.entries(source)) {
+      merged[hookName] = {
+        ...merged[hookName],
+        ...entry,
+      };
+    }
+  }
+  return merged;
+}
+
+function shouldRunRegistration(
+  registration: InternalHookRegistration,
+  policy: InternalHookPolicyConfig | undefined,
+): boolean {
+  if (!policy) {
+    return true;
+  }
+  if (policy.events && !policy.events.includes(registration.eventKey)) {
+    return false;
+  }
+  if (registration.hookName && policy.entries?.[registration.hookName]?.enabled === false) {
+    return false;
+  }
+  return true;
 }

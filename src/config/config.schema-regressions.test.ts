@@ -184,4 +184,51 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts agent-scoped internal hook policy overrides", () => {
+    const res = validateConfigObject({
+      hooks: {
+        internal: {
+          enabled: true,
+          events: ["command:new"],
+          entries: {
+            "command-logger": {
+              enabled: true,
+              env: {
+                LOG_PATH: "/tmp/openclaw-hooks.log",
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          hooks: {
+            events: ["message:received"],
+            entries: {
+              "command-logger": {
+                enabled: false,
+              },
+            },
+          },
+        },
+        list: [
+          {
+            id: "work",
+            hooks: {
+              enabled: true,
+              events: ["session:compact:after"],
+              entries: {
+                "session-memory": {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
