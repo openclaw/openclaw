@@ -273,6 +273,7 @@ Docs: https://docs.openclaw.ai
 - Daemon/Windows schtasks runtime detection: use locale-invariant `Last Run Result` running codes (`0x41301`/`267009`) as the primary running signal so `openclaw node status` no longer misreports active tasks as stopped on non-English Windows locales. (#39076) Thanks @ademczuk.
 - Usage/token count formatting: round near-million token counts to millions (`1.0m`) instead of `1000k`, with explicit boundary coverage for `999_499` and `999_500`. (#39129) Thanks @CurryMessi.
 - Gateway/session bootstrap cache invalidation ordering: clear bootstrap snapshots only after active embedded-run shutdown wait completes, preventing dying runs from repopulating stale cache between `/new`/`sessions.reset` turns. (#38873) Thanks @MumuTW.
+- Browser/dispatcher error clarity: preserve dispatcher-side failure context in browser fetch errors while still appending operator guidance and explicit no-retry model hints, preventing misleading `"Can't reach service"` wrapping and avoiding LLM retry loops. (#39090) Thanks @NewdlDewdl.
 
 ## 2026.3.2
 
