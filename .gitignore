@@ -138,3 +138,4 @@ data/datasets/*/motion/renders/
 *.mp4
 *.mov
 *.gif
+*.egg-info/
