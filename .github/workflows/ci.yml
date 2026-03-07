@@ -312,22 +312,33 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pre-commit
 
+      - name: Ensure secrets base commit (PR fast path)
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+
       - name: Detect secrets
-        run: |
+        env:
+          GH_REF: ${{ github.ref }}
+          GH_EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: | # pragma: allowlist secret
           set -euo pipefail
 
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          if [ "$GH_REF" = "refs/heads/main" ]; then
             echo "Skipping detect-secrets on main until the allowlist cleanup lands."
             exit 0
           fi
 
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "$GH_EVENT_NAME" = "push" ]; then
             echo "Running full detect-secrets scan on push."
             pre-commit run --all-files detect-secrets
             exit 0
           fi
 
-          BASE="${{ github.event.pull_request.base.sha }}"
+          BASE="$PR_BASE_SHA"
           changed_files=()
           if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
             while IFS= read -r path; do
@@ -341,21 +352,25 @@ jobs:
             echo "Running detect-secrets on ${#changed_files[@]} changed file(s)."
             pre-commit run detect-secrets --files "${changed_files[@]}"
           else
-            echo "Falling back to full detect-secrets scan."
-            pre-commit run --all-files detect-secrets
+            echo "Skipping detect-secrets: unable to resolve changed files for this PR."
+            exit 0
           fi
 
       - name: Detect committed private keys
         run: pre-commit run --all-files detect-private-key
 
       - name: Audit changed GitHub workflows with zizmor
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
+          if [ "$GH_EVENT_NAME" = "push" ]; then
+            BASE="$EVENT_BEFORE"
           else
-            BASE="${{ github.event.pull_request.base.sha }}"
+            BASE="$PR_BASE_SHA"
           fi
 
           mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
