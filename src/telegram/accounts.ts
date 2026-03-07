@@ -97,7 +97,7 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
-function resolveAccountConfig(
+export function resolveTelegramAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): TelegramAccountConfig | undefined {
@@ -105,7 +105,10 @@ function resolveAccountConfig(
   return resolveAccountEntry(cfg.channels?.telegram?.accounts, normalized);
 }
 
-function mergeTelegramAccountConfig(cfg: OpenClawConfig, accountId: string): TelegramAccountConfig {
+export function mergeTelegramAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): TelegramAccountConfig {
   const {
     accounts: _ignored,
     defaultAccount: _ignoredDefaultAccount,
@@ -115,7 +118,7 @@ function mergeTelegramAccountConfig(cfg: OpenClawConfig, accountId: string): Tel
     accounts?: unknown;
     defaultAccount?: unknown;
   };
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
+  const account = resolveTelegramAccountConfig(cfg, accountId) ?? {};
 
   // In multi-account setups, channel-level `groups` must NOT be inherited by
   // accounts that don't have their own `groups` config.  A bot that is not a
@@ -138,7 +141,7 @@ export function createTelegramActionGate(params: {
   const accountId = normalizeAccountId(params.accountId);
   return createAccountActionGate({
     baseActions: params.cfg.channels?.telegram?.actions,
-    accountActions: resolveAccountConfig(params.cfg, accountId)?.actions,
+    accountActions: resolveTelegramAccountConfig(params.cfg, accountId)?.actions,
   });
 }
 
