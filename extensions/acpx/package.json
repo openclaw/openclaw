@@ -3,7 +3,9 @@
   "version": "2026.3.3",
   "description": "OpenClaw ACP runtime backend via acpx",
   "type": "module",
-  "dependencies": {},
+  "dependencies": {
+    "acpx": "0.1.15"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
