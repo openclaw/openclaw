@@ -229,6 +229,36 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
+      // Different physical paths but same plugin id.
+      // If the incoming candidate has strictly higher precedence than the
+      // already-registered one, it is intentionally shadowing the lower-
+      // precedence copy (e.g. a user-installed global extension overriding
+      // the bundled built-in of the same name).  Silently keep the higher-
+      // precedence entry — no warning needed.
+      const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
+      const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      if (candidateRank < existingRank) {
+        // Candidate has strictly higher precedence: replace the existing entry.
+        records[existing.recordIndex] = buildRecord({
+          manifest,
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+          schemaCacheKey,
+          configSchema,
+        });
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        continue;
+      }
+      if (candidateRank > existingRank) {
+        // Candidate has strictly lower precedence than the already-registered
+        // entry: it is intentionally shadowed by the higher-precedence copy
+        // (e.g. the bundled built-in is superseded by the user's global
+        // extension).  Silently skip — no warning needed.
+        continue;
+      }
+      // Same precedence level, different physical paths: this is a genuine
+      // unexpected duplicate (two separate same-priority sources both provide
+      // the same plugin id).  Emit a warning so the user can investigate.
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
