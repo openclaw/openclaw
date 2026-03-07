@@ -35,12 +35,14 @@ function isLightBackground(): boolean {
         return bg >= 244;
       }
       const cubeIndex = bg - 16;
-      const b = cubeIndex % 6;
-      const g = Math.floor(cubeIndex / 6) % 6;
-      const r = Math.floor(cubeIndex / 36);
-      // Rough perceived luminance (BT.601 weights, 0-5 scale).
-      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-      return lum >= 2.5;
+      // xterm 6x6x6 cube maps indices 0-5 to these RGB channel values.
+      const xtermLevels = [0, 95, 135, 175, 215, 255];
+      const bVal = xtermLevels[cubeIndex % 6]!;
+      const gVal = xtermLevels[Math.floor(cubeIndex / 6) % 6]!;
+      const rVal = xtermLevels[Math.floor(cubeIndex / 36)]!;
+      // BT.601 perceived luminance on actual RGB values (0-255 scale).
+      const lum = 0.299 * rVal + 0.587 * gVal + 0.114 * bVal;
+      return lum >= 128;
     }
   }
   return false;
