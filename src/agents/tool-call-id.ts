@@ -6,6 +6,19 @@ export type ToolCallIdMode = "strict" | "strict9";
 const STRICT9_LEN = 9;
 const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 
+/**
+ * Normalize mangled tool call IDs from OpenAI-compatible providers (e.g. Kimi).
+ * Some providers send "functions exec:0" (space) instead of "functions.exec:0" (dot),
+ * causing tool result matching to fail. Replace "functions " with "functions." so
+ * IDs match regardless of the mangling.
+ */
+export function normalizeMangledToolCallId(id: string): string {
+  if (typeof id !== "string" || !id) {
+    return id;
+  }
+  return id.replace(/functions\s+/g, "functions.");
+}
+
 export type ToolCallLike = {
   id: string;
   name?: string;
@@ -73,11 +86,11 @@ export function extractToolResultId(
 ): string | null {
   const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
   if (typeof toolCallId === "string" && toolCallId) {
-    return toolCallId;
+    return normalizeMangledToolCallId(toolCallId);
   }
   const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
   if (typeof toolUseId === "string" && toolUseId) {
-    return toolUseId;
+    return normalizeMangledToolCallId(toolUseId);
   }
   return null;
 }
@@ -225,12 +238,13 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
   const used = new Set<string>();
 
   const resolve = (id: string) => {
-    const existing = map.get(id);
+    const normalizedId = normalizeMangledToolCallId(id);
+    const existing = map.get(normalizedId);
     if (existing) {
       return existing;
     }
-    const next = makeUniqueToolId({ id, used, mode });
-    map.set(id, next);
+    const next = makeUniqueToolId({ id: normalizedId, used, mode });
+    map.set(normalizedId, next);
     used.add(next);
     return next;
   };
