@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const piCodingAgentMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(async () => "summary"),
@@ -21,23 +22,12 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
 import { isOversizedForSummary, summarizeWithFallback } from "./compaction.js";
 
 function makeAssistantToolCall(timestamp: number): AssistantMessage {
-  return {
-    role: "assistant",
+  return makeAgentAssistantMessage({
     content: [{ type: "toolCall", id: "call_1", name: "browser", arguments: { action: "tabs" } }],
-    api: "openai-responses",
-    provider: "openai",
     model: "gpt-5.2",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
     stopReason: "toolUse",
     timestamp,
-  };
+  });
 }
 
 function makeToolResultWithDetails(timestamp: number): ToolResultMessage<{ raw: string }> {
