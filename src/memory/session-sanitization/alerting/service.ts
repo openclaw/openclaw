@@ -80,8 +80,6 @@ export function notifyAlerting(params: {
     // Deduplication check
     const dedupKey = buildDedupKey(alert.ruleId, params.agentId, params.sessionId);
     if (isDeduped(dedupKey, alertingCfg.suppression.windowMs, params.now)) {
-      const existingEntry = alert.metadata as { suppressedCount?: number };
-      existingEntry.suppressedCount = (existingEntry.suppressedCount ?? 0) + 1;
       continue;
     }
 

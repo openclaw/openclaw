@@ -382,11 +382,11 @@ describe("evaluateFrequencyEscalation", () => {
     expect(evaluateFrequencyEscalation({ entry, cfg, recentContext: [], now: NOW })).toBeNull();
   });
 
-  it("returns medium severity alert for tier2 escalation", () => {
+  it("returns high severity alert for tier2 escalation", () => {
     const entry = makeEvent("frequency_escalation_tier2", { currentScore: 35 });
     const alert = evaluateFrequencyEscalation({ entry, cfg, recentContext: [], now: NOW });
     expect(alert?.ruleId).toBe("frequencyEscalation");
-    expect(alert?.severity).toBe("medium");
+    expect(alert?.severity).toBe("high");
     expect(alert?.details.sessionSuspicionScore).toBe(35);
   });
 

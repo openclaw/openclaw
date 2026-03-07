@@ -254,6 +254,7 @@ export function syntacticPreFilter(input: unknown, config: SyntacticConfig): Syn
 
   // --- Size check (operates on raw bytes before any string extraction) ---
   const { text: rawText, rawBytes } = serializeForPatternCheck(input);
+  const normalizedRawText = normalizeHomoglyphs(rawText);
   if (rawBytes > config.maxPayloadBytes) {
     addFlag(
       "structural.oversized-payload",
@@ -321,7 +322,7 @@ export function syntacticPreFilter(input: unknown, config: SyntacticConfig): Syn
     );
     if (hasRoleSwitch) {
       const hasCapGrant = CAPABILITY_GRANTS.some(
-        (re) => re.test(rawText) || (homoglyphsFound && re.test(normalizeHomoglyphs(rawText))),
+        (re) => re.test(rawText) || re.test(normalizedRawText),
       );
       if (hasCapGrant) {
         addFlag(

@@ -123,7 +123,7 @@ export const evaluateFrequencyEscalation: RuleEvaluator = ({ entry, cfg, recentC
   }
 
   const isTier3 = entry.event === "frequency_escalation_tier3";
-  const severity: AlertSeverity = isTier3 ? "critical" : "medium";
+  const severity: AlertSeverity = isTier3 ? "critical" : "high";
   const tierLabel = isTier3 ? "3" : "2";
 
   return {
