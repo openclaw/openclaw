@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { formatConfigWriteFailureForCli } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 
 export { formatErrorMessage };
@@ -43,7 +44,8 @@ export async function runCommandWithRuntime(
       onError(err);
       return;
     }
-    runtime.error(String(err));
+    const configWriteFailure = formatConfigWriteFailureForCli(err);
+    runtime.error(configWriteFailure ?? String(err));
     runtime.exit(1);
   }
 }

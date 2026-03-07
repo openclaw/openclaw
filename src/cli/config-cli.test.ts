@@ -12,11 +12,13 @@ const mockReadConfigFileSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
 const mockWriteConfigFile = vi.fn<
   (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) => Promise<void>
 >(async () => {});
+const mockFormatConfigWriteFailureForCli = vi.fn<(error: unknown) => string | null>(() => null);
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
   writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
     mockWriteConfigFile(cfg, options),
+  formatConfigWriteFailureForCli: (error: unknown) => mockFormatConfigWriteFailureForCli(error),
 }));
 
 const mockLog = vi.fn();
@@ -123,6 +125,7 @@ describe("config cli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFormatConfigWriteFailureForCli.mockReturnValue(null);
   });
 
   describe("config set - issue #6070", () => {
@@ -199,6 +202,30 @@ describe("config cli", () => {
         models: [],
         apiKey: "ollama-local",
       });
+    });
+  });
+
+  describe("transaction failure messaging", () => {
+    it("renders a clear retry hint when transactional config writes fail", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+      const writeError = new Error(
+        "writeConfigFile transaction failed; stage=verify; rollback=ok; committed config failed verification",
+      );
+      mockWriteConfigFile.mockRejectedValueOnce(writeError);
+      mockFormatConfigWriteFailureForCli.mockReturnValueOnce(
+        "Last config update failed and was rolled back to the previous version. Error: committed config failed verification. Retry the command.",
+      );
+
+      await expect(
+        runConfigCommand(["config", "set", "gateway.auth.mode", "token"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockFormatConfigWriteFailureForCli).toHaveBeenCalledWith(writeError);
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Last config update failed"));
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Retry the command"));
     });
   });
 

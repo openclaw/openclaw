@@ -3,6 +3,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
+const recoverConfigFromBackupsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/doctor-config-flow.js", () => ({
   loadAndMaybeMigrateDoctorConfig: loadAndMaybeMigrateDoctorConfigMock,
@@ -10,14 +11,15 @@ vi.mock("../../commands/doctor-config-flow.js", () => ({
 
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
+  recoverConfigFromBackups: recoverConfigFromBackupsMock,
 }));
 
 function makeSnapshot() {
   return {
     exists: false,
     valid: true,
-    issues: [],
-    legacyIssues: [],
+    issues: [] as Array<{ path: string; message: string }>,
+    legacyIssues: [] as Array<{ path: string; message: string }>,
     path: "/tmp/openclaw.json",
   };
 }
@@ -78,6 +80,11 @@ describe("ensureConfigReady", () => {
     vi.clearAllMocks();
     resetConfigGuardStateForTests();
     readConfigFileSnapshotMock.mockResolvedValue(makeSnapshot());
+    recoverConfigFromBackupsMock.mockResolvedValue({
+      recovered: false,
+      configPath: "/tmp/openclaw.json",
+      sourceBackupPath: null,
+    });
   });
 
   it.each([
@@ -112,6 +119,73 @@ describe("ensureConfigReady", () => {
 
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("proceeds when invalid config is recovered from backup", async () => {
+    readConfigFileSnapshotMock
+      .mockResolvedValueOnce({
+        ...makeSnapshot(),
+        exists: true,
+        valid: false,
+        issues: [{ path: "gateway.mode", message: "invalid mode" }],
+      })
+      .mockResolvedValueOnce(makeSnapshot());
+    recoverConfigFromBackupsMock.mockResolvedValue({
+      recovered: true,
+      configPath: "/tmp/openclaw.json",
+      sourceBackupPath: "/tmp/openclaw.json.bak.1",
+    });
+
+    const runtime = await runEnsureConfigReady(["message"]);
+
+    expect(recoverConfigFromBackupsMock).toHaveBeenCalledTimes(1);
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("Config invalid"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Last config update failed validation"),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Recovered from backup"));
+  });
+
+  it("reports recovery failure details for invalid config", async () => {
+    setInvalidSnapshot();
+    recoverConfigFromBackupsMock.mockResolvedValue({
+      recovered: false,
+      configPath: "/tmp/openclaw.json",
+      sourceBackupPath: null,
+      error: "no valid backup",
+    });
+
+    const runtime = await runEnsureConfigReady(["message"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Automatic backup recovery failed."),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("no valid backup"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Fix the issue, then retry your config command."),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("does not attempt backup recovery for env-var resolution failures", async () => {
+    setInvalidSnapshot({
+      issues: [
+        {
+          path: "",
+          message:
+            'Missing env var "OPENCLAW_GATEWAY_TOKEN" referenced at config path: gateway.token',
+        },
+      ],
+    });
+
+    const runtime = await runEnsureConfigReady(["message"]);
+
+    expect(recoverConfigFromBackupsMock).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("Automatic backup recovery failed."),
+    );
   });
 
   it("runs doctor migration flow only once per module instance", async () => {

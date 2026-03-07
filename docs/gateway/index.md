@@ -105,6 +105,12 @@ openclaw logs --follow
 openclaw doctor
 ```
 
+Restart safety note:
+
+- `openclaw gateway restart` performs config preflight.
+- If config is invalid, OpenClaw attempts backup recovery before restart.
+- If recovery fails, restart is blocked instead of restarting into a known-bad state.
+
 ## Remote access
 
 Preferred: Tailscale/VPN.

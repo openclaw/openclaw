@@ -5,10 +5,15 @@ const silentConfigIoLogger = {
   warn: () => {},
 } as const;
 
-export function createSecretsConfigIO(params: { env: NodeJS.ProcessEnv }) {
+export function createSecretsConfigIO(params: {
+  env: NodeJS.ProcessEnv;
+  configPath?: string;
+  logger?: { error: (message: string) => void; warn: (message: string) => void };
+}) {
   // Secrets command output is owned by the CLI command so --json stays machine-parseable.
   return createConfigIO({
     env: params.env,
-    logger: silentConfigIoLogger,
+    configPath: params.configPath,
+    logger: params.logger ?? silentConfigIoLogger,
   });
 }
