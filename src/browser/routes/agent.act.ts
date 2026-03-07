@@ -1,5 +1,8 @@
 import type { BrowserFormField } from "../client-actions-core.js";
+import { normalizeBrowserFormField } from "../form-fields.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
+import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import {
   type ActKind,
   isActKind,
@@ -12,39 +15,8 @@ import {
   withPlaywrightRouteContext,
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
-import {
-  DEFAULT_DOWNLOAD_DIR,
-  DEFAULT_UPLOAD_DIR,
-  resolvePathWithinRoot,
-  resolvePathsWithinRoot,
-} from "./path-output.js";
-import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
+import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
-
-function resolveDownloadPathOrRespond(res: BrowserResponse, requestedPath: string): string | null {
-  const downloadPathResult = resolvePathWithinRoot({
-    rootDir: DEFAULT_DOWNLOAD_DIR,
-    requestedPath,
-    scopeLabel: "downloads directory",
-  });
-  if (!downloadPathResult.ok) {
-    res.status(400).json({ error: downloadPathResult.error });
-    return null;
-  }
-  return downloadPathResult.path;
-}
-
-function buildDownloadRequestBase(cdpUrl: string, targetId: string, timeoutMs: number | undefined) {
-  return {
-    cdpUrl,
-    targetId,
-    timeoutMs: timeoutMs ?? undefined,
-  };
-}
-
-function respondWithDownloadResult(res: BrowserResponse, targetId: string, result: unknown) {
-  res.json({ ok: true, targetId, download: result });
-}
 
 export function registerBrowserAgentActRoutes(
   app: BrowserRouteRegistrar,
@@ -219,21 +191,7 @@ export function registerBrowserAgentActRoutes(
                 if (!field || typeof field !== "object") {
                   return null;
                 }
-                const rec = field as Record<string, unknown>;
-                const ref = toStringOrEmpty(rec.ref);
-                const type = toStringOrEmpty(rec.type);
-                if (!ref || !type) {
-                  return null;
-                }
-                const value =
-                  typeof rec.value === "string" ||
-                  typeof rec.value === "number" ||
-                  typeof rec.value === "boolean"
-                    ? rec.value
-                    : undefined;
-                const parsed: BrowserFormField =
-                  value === undefined ? { ref, type } : { ref, type, value };
-                return parsed;
+                return normalizeBrowserFormField(field as Record<string, unknown>);
               })
               .filter((field): field is BrowserFormField => field !== null);
             if (!fields.length) {
@@ -363,161 +321,8 @@ export function registerBrowserAgentActRoutes(
     });
   });
 
-  app.post("/hooks/file-chooser", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
-    const ref = toStringOrEmpty(body.ref) || undefined;
-    const inputRef = toStringOrEmpty(body.inputRef) || undefined;
-    const element = toStringOrEmpty(body.element) || undefined;
-    const paths = toStringArray(body.paths) ?? [];
-    const timeoutMs = toNumber(body.timeoutMs);
-    if (!paths.length) {
-      return jsonError(res, 400, "paths are required");
-    }
-
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "file chooser hook",
-      run: async ({ cdpUrl, tab, pw }) => {
-        const uploadPathsResult = resolvePathsWithinRoot({
-          rootDir: DEFAULT_UPLOAD_DIR,
-          requestedPaths: paths,
-          scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-        });
-        if (!uploadPathsResult.ok) {
-          res.status(400).json({ error: uploadPathsResult.error });
-          return;
-        }
-        const resolvedPaths = uploadPathsResult.paths;
-
-        if (inputRef || element) {
-          if (ref) {
-            return jsonError(res, 400, "ref cannot be combined with inputRef/element");
-          }
-          await pw.setInputFilesViaPlaywright({
-            cdpUrl,
-            targetId: tab.targetId,
-            inputRef,
-            element,
-            paths: resolvedPaths,
-          });
-        } else {
-          await pw.armFileUploadViaPlaywright({
-            cdpUrl,
-            targetId: tab.targetId,
-            paths: resolvedPaths,
-            timeoutMs: timeoutMs ?? undefined,
-          });
-          if (ref) {
-            await pw.clickViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              ref,
-            });
-          }
-        }
-        res.json({ ok: true });
-      },
-    });
-  });
-
-  app.post("/hooks/dialog", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
-    const accept = toBoolean(body.accept);
-    const promptText = toStringOrEmpty(body.promptText) || undefined;
-    const timeoutMs = toNumber(body.timeoutMs);
-    if (accept === undefined) {
-      return jsonError(res, 400, "accept is required");
-    }
-
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "dialog hook",
-      run: async ({ cdpUrl, tab, pw }) => {
-        await pw.armDialogViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          accept,
-          promptText,
-          timeoutMs: timeoutMs ?? undefined,
-        });
-        res.json({ ok: true });
-      },
-    });
-  });
-
-  app.post("/wait/download", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
-    const out = toStringOrEmpty(body.path) || "";
-    const timeoutMs = toNumber(body.timeoutMs);
-
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "wait for download",
-      run: async ({ cdpUrl, tab, pw }) => {
-        let downloadPath: string | undefined;
-        if (out.trim()) {
-          const resolvedDownloadPath = resolveDownloadPathOrRespond(res, out);
-          if (!resolvedDownloadPath) {
-            return;
-          }
-          downloadPath = resolvedDownloadPath;
-        }
-        const requestBase = buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs);
-        const result = await pw.waitForDownloadViaPlaywright({
-          ...requestBase,
-          path: downloadPath,
-        });
-        respondWithDownloadResult(res, tab.targetId, result);
-      },
-    });
-  });
-
-  app.post("/download", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
-    const ref = toStringOrEmpty(body.ref);
-    const out = toStringOrEmpty(body.path);
-    const timeoutMs = toNumber(body.timeoutMs);
-    if (!ref) {
-      return jsonError(res, 400, "ref is required");
-    }
-    if (!out) {
-      return jsonError(res, 400, "path is required");
-    }
-
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "download",
-      run: async ({ cdpUrl, tab, pw }) => {
-        const downloadPath = resolveDownloadPathOrRespond(res, out);
-        if (!downloadPath) {
-          return;
-        }
-        const requestBase = buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs);
-        const result = await pw.downloadViaPlaywright({
-          ...requestBase,
-          ref,
-          path: downloadPath,
-        });
-        respondWithDownloadResult(res, tab.targetId, result);
-      },
-    });
-  });
+  registerBrowserAgentActHookRoutes(app, ctx);
+  registerBrowserAgentActDownloadRoutes(app, ctx);
 
   app.post("/response/body", async (req, res) => {
     const body = readBody(req);

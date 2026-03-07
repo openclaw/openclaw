@@ -102,6 +102,31 @@ export async function applyInlineDirectiveOverrides(params: {
   let { directives } = params;
   let { provider, model } = params;
   let { contextTokens } = params;
+  const directiveModelState = {
+    allowedModelKeys: modelState.allowedModelKeys,
+    allowedModelCatalog: modelState.allowedModelCatalog,
+    resetModelOverride: modelState.resetModelOverride,
+  };
+  const createDirectiveHandlingBase = () => ({
+    cfg,
+    directives,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    elevatedEnabled,
+    elevatedAllowed,
+    elevatedFailures,
+    messageProviderKey,
+    defaultProvider,
+    defaultModel,
+    aliasIndex,
+    ...directiveModelState,
+    provider,
+    model,
+    initialModelLabel,
+    formatModelSwitchEvent,
+  });
 
   let directiveAck: ReplyPayload | undefined;
 
@@ -135,26 +160,7 @@ export async function applyInlineDirectiveOverrides(params: {
     });
     const currentThinkLevel = resolvedDefaultThinkLevel;
     const directiveReply = await handleDirectiveOnly({
-      cfg,
-      directives,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      elevatedEnabled,
-      elevatedAllowed,
-      elevatedFailures,
-      messageProviderKey,
-      defaultProvider,
-      defaultModel,
-      aliasIndex,
-      allowedModelKeys: modelState.allowedModelKeys,
-      allowedModelCatalog: modelState.allowedModelCatalog,
-      resetModelOverride: modelState.resetModelOverride,
-      provider,
-      model,
-      initialModelLabel,
-      formatModelSwitchEvent,
+      ...createDirectiveHandlingBase(),
       currentThinkLevel,
       currentVerboseLevel,
       currentReasoningLevel,
@@ -168,6 +174,7 @@ export async function applyInlineDirectiveOverrides(params: {
         command,
         sessionEntry,
         sessionKey,
+        parentSessionKey: ctx.ParentSessionKey,
         sessionScope,
         provider,
         model,
@@ -221,9 +228,7 @@ export async function applyInlineDirectiveOverrides(params: {
       defaultProvider,
       defaultModel,
       aliasIndex,
-      allowedModelKeys: modelState.allowedModelKeys,
-      allowedModelCatalog: modelState.allowedModelCatalog,
-      resetModelOverride: modelState.resetModelOverride,
+      ...directiveModelState,
       provider,
       model,
       initialModelLabel,
@@ -231,9 +236,7 @@ export async function applyInlineDirectiveOverrides(params: {
       agentCfg,
       modelState: {
         resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
-        allowedModelKeys: modelState.allowedModelKeys,
-        allowedModelCatalog: modelState.allowedModelCatalog,
-        resetModelOverride: modelState.resetModelOverride,
+        ...directiveModelState,
       },
     });
     directiveAck = fastLane.directiveAck;

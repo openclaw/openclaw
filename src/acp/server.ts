@@ -3,8 +3,10 @@ import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
 import { loadConfig } from "../config/config.js";
-import { resolveGatewayAuth } from "../gateway/auth.js";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import {
+  buildGatewayConnectionDetails,
+  resolveGatewayCredentialsWithSecretInputs,
+} from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { isMainModule } from "../infra/is-main.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -12,27 +14,20 @@ import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import type { AcpServerOptions } from "./types.js";
 
-export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
+export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   const cfg = loadConfig();
   const connection = buildGatewayConnectionDetails({
     config: cfg,
     url: opts.gatewayUrl,
   });
-
-  const isRemoteMode = cfg.gateway?.mode === "remote";
-  const remote = isRemoteMode ? cfg.gateway?.remote : undefined;
-  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
-
-  const token =
-    opts.gatewayToken ??
-    (isRemoteMode ? remote?.token?.trim() : undefined) ??
-    process.env.OPENCLAW_GATEWAY_TOKEN ??
-    auth.token;
-  const password =
-    opts.gatewayPassword ??
-    (isRemoteMode ? remote?.password?.trim() : undefined) ??
-    process.env.OPENCLAW_GATEWAY_PASSWORD ??
-    auth.password;
+  const creds = await resolveGatewayCredentialsWithSecretInputs({
+    config: cfg,
+    explicitAuth: {
+      token: opts.gatewayToken,
+      password: opts.gatewayPassword,
+    },
+    env: process.env,
+  });
 
   let agent: AcpGatewayAgent | null = null;
   let onClosed!: () => void;
@@ -40,11 +35,32 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
     onClosed = resolve;
   });
   let stopped = false;
+  let onGatewayReadyResolve!: () => void;
+  let onGatewayReadyReject!: (err: Error) => void;
+  let gatewayReadySettled = false;
+  const gatewayReady = new Promise<void>((resolve, reject) => {
+    onGatewayReadyResolve = resolve;
+    onGatewayReadyReject = reject;
+  });
+  const resolveGatewayReady = () => {
+    if (gatewayReadySettled) {
+      return;
+    }
+    gatewayReadySettled = true;
+    onGatewayReadyResolve();
+  };
+  const rejectGatewayReady = (err: unknown) => {
+    if (gatewayReadySettled) {
+      return;
+    }
+    gatewayReadySettled = true;
+    onGatewayReadyReject(err instanceof Error ? err : new Error(String(err)));
+  };
 
   const gateway = new GatewayClient({
     url: connection.url,
-    token: token || undefined,
-    password: password || undefined,
+    token: creds.token,
+    password: creds.password,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     clientDisplayName: "ACP",
     clientVersion: "acp",
@@ -53,9 +69,16 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
       void agent?.handleGatewayEvent(evt);
     },
     onHelloOk: () => {
+      resolveGatewayReady();
       agent?.handleGatewayReconnect();
     },
+    onConnectError: (err) => {
+      rejectGatewayReady(err);
+    },
     onClose: (code, reason) => {
+      if (!stopped) {
+        rejectGatewayReady(new Error(`gateway closed before ready (${code}): ${reason}`));
+      }
       agent?.handleGatewayDisconnect(`${code}: ${reason}`);
       // Resolve only on intentional shutdown (gateway.stop() sets closed
       // which skips scheduleReconnect, then fires onClose).  Transient
@@ -71,6 +94,7 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
       return;
     }
     stopped = true;
+    resolveGatewayReady();
     gateway.stop();
     // If no WebSocket is active (e.g. between reconnect attempts),
     // gateway.stop() won't trigger onClose, so resolve directly.
@@ -79,6 +103,16 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
 
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
+
+  // Start gateway first and wait for hello before accepting ACP requests.
+  gateway.start();
+  await gatewayReady.catch((err) => {
+    shutdown();
+    throw err;
+  });
+  if (stopped) {
+    return closed;
+  }
 
   const input = Writable.toWeb(process.stdout);
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
@@ -90,7 +124,6 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
     return agent;
   }, stream);
 
-  gateway.start();
   return closed;
 }
 

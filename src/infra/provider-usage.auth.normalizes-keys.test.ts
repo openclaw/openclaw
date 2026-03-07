@@ -174,7 +174,9 @@ describe("resolveProviderAuths key normalization", () => {
     );
   });
 
-  it("falls back to legacy .pi auth file for zai keys", async () => {
+  it("falls back to legacy .pi auth file for zai keys even after os.homedir() is primed", async () => {
+    // Prime os.homedir() to simulate long-lived workers that may have touched it before HOME changes.
+    os.homedir();
     await withSuiteHome(
       async (home) => {
         await writeLegacyPiAuth(
@@ -214,17 +216,17 @@ describe("resolveProviderAuths key normalization", () => {
   it("keeps raw google token when token payload is not JSON", async () => {
     await withSuiteHome(async (home) => {
       await writeAuthProfiles(home, {
-        "google-antigravity:default": {
+        "google-gemini-cli:default": {
           type: "token",
-          provider: "google-antigravity",
+          provider: "google-gemini-cli",
           token: "plain-google-token",
         },
       });
 
       const auths = await resolveProviderAuths({
-        providers: ["google-antigravity"],
+        providers: ["google-gemini-cli"],
       });
-      expect(auths).toEqual([{ provider: "google-antigravity", token: "plain-google-token" }]);
+      expect(auths).toEqual([{ provider: "google-gemini-cli", token: "plain-google-token" }]);
     }, {});
   });
 
@@ -246,17 +248,17 @@ describe("resolveProviderAuths key normalization", () => {
               zai: {
                 baseUrl: "https://api.z.ai",
                 models: [modelDef],
-                apiKey: "cfg-zai-key",
+                apiKey: "cfg-zai-key", // pragma: allowlist secret
               },
               minimax: {
                 baseUrl: "https://api.minimaxi.com",
                 models: [modelDef],
-                apiKey: "cfg-minimax-key",
+                apiKey: "cfg-minimax-key", // pragma: allowlist secret
               },
               xiaomi: {
                 baseUrl: "https://api.xiaomi.example",
                 models: [modelDef],
-                apiKey: "cfg-xiaomi-key",
+                apiKey: "cfg-xiaomi-key", // pragma: allowlist secret
               },
             },
           },

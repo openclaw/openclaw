@@ -29,8 +29,6 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
 
-  ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
-
   if (isError && lastAssistant) {
     const friendlyError = formatAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,
@@ -38,12 +36,16 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       provider: lastAssistant.provider,
       model: lastAssistant.model,
     });
+    const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
+    ctx.log.warn(
+      `embedded run agent end: runId=${ctx.params.runId} isError=true error=${errorText}`,
+    );
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: friendlyError || lastAssistant.errorMessage || "LLM request failed.",
+        error: errorText,
         endedAt: Date.now(),
       },
     });
@@ -51,10 +53,11 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: friendlyError || lastAssistant.errorMessage || "LLM request failed.",
+        error: errorText,
       },
     });
   } else {
+    ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
@@ -70,6 +73,11 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   }
 
   ctx.flushBlockReplyBuffer();
+  // Flush the reply pipeline so the response reaches the channel before
+  // compaction wait blocks the run.  This mirrors the pattern used by
+  // handleToolExecutionStart and ensures delivery is not held hostage to
+  // long-running compaction (#35074).
+  void ctx.params.onBlockReplyFlush?.();
 
   ctx.state.blockState.thinking = false;
   ctx.state.blockState.final = false;

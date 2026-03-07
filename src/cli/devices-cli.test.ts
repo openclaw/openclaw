@@ -2,6 +2,14 @@ import { Command } from "commander";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const callGateway = vi.fn();
+const buildGatewayConnectionDetails = vi.fn(() => ({
+  url: "ws://127.0.0.1:18789",
+  urlSource: "local loopback",
+  message: "",
+}));
+const listDevicePairing = vi.fn();
+const approveDevicePairing = vi.fn();
+const summarizeDeviceTokens = vi.fn();
 const withProgress = vi.fn(async (_opts: unknown, fn: () => Promise<unknown>) => await fn());
 const runtime = {
   log: vi.fn(),
@@ -11,10 +19,17 @@ const runtime = {
 
 vi.mock("../gateway/call.js", () => ({
   callGateway,
+  buildGatewayConnectionDetails,
 }));
 
 vi.mock("./progress.js", () => ({
   withProgress,
+}));
+
+vi.mock("../infra/device-pairing.js", () => ({
+  listDevicePairing,
+  approveDevicePairing,
+  summarizeDeviceTokens,
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -216,10 +231,78 @@ describe("devices cli tokens", () => {
   });
 });
 
+describe("devices cli local fallback", () => {
+  const fallbackNotice = "Direct scope access failed; using local fallback.";
+
+  it("falls back to local pairing list when gateway returns pairing required on loopback", async () => {
+    callGateway.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    listDevicePairing.mockResolvedValueOnce({
+      pending: [{ requestId: "req-1", deviceId: "device-1", publicKey: "pk", ts: 1 }],
+      paired: [],
+    });
+    summarizeDeviceTokens.mockReturnValue(undefined);
+
+    await runDevicesCommand(["list"]);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.list" }),
+    );
+    expect(listDevicePairing).toHaveBeenCalledTimes(1);
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+  });
+
+  it("falls back to local approve when gateway returns pairing required on loopback", async () => {
+    callGateway
+      .mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"))
+      .mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    listDevicePairing.mockResolvedValueOnce({
+      pending: [{ requestId: "req-latest", deviceId: "device-1", publicKey: "pk", ts: 2 }],
+      paired: [],
+    });
+    approveDevicePairing.mockResolvedValueOnce({
+      requestId: "req-latest",
+      device: {
+        deviceId: "device-1",
+        publicKey: "pk",
+        approvedAtMs: 1,
+        createdAtMs: 1,
+      },
+    });
+    summarizeDeviceTokens.mockReturnValue(undefined);
+
+    await runDevicesApprove(["--latest"]);
+
+    expect(approveDevicePairing).toHaveBeenCalledWith("req-latest");
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+  });
+
+  it("does not use local fallback when an explicit --url is provided", async () => {
+    callGateway.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+
+    await expect(
+      runDevicesCommand(["list", "--json", "--url", "ws://127.0.0.1:18789"]),
+    ).rejects.toThrow("pairing required");
+    expect(listDevicePairing).not.toHaveBeenCalled();
+  });
+});
+
 afterEach(() => {
-  callGateway.mockReset();
+  callGateway.mockClear();
+  buildGatewayConnectionDetails.mockClear();
+  buildGatewayConnectionDetails.mockReturnValue({
+    url: "ws://127.0.0.1:18789",
+    urlSource: "local loopback",
+    message: "",
+  });
+  listDevicePairing.mockClear();
+  listDevicePairing.mockResolvedValue({ pending: [], paired: [] });
+  approveDevicePairing.mockClear();
+  approveDevicePairing.mockResolvedValue(undefined);
+  summarizeDeviceTokens.mockClear();
+  summarizeDeviceTokens.mockReturnValue(undefined);
   withProgress.mockClear();
-  runtime.log.mockReset();
-  runtime.error.mockReset();
-  runtime.exit.mockReset();
+  runtime.log.mockClear();
+  runtime.error.mockClear();
+  runtime.exit.mockClear();
 });

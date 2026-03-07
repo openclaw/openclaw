@@ -2,14 +2,22 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   GatewayIntents,
+  baseRegisterClientSpy,
   GatewayPlugin,
   HttpsProxyAgent,
   getLastAgent,
-  proxyAgentSpy,
+  restProxyAgentSpy,
+  undiciFetchMock,
+  undiciProxyAgentSpy,
   resetLastAgent,
   webSocketSpy,
+  wsProxyAgentSpy,
 } = vi.hoisted(() => {
-  const proxyAgentSpy = vi.fn();
+  const wsProxyAgentSpy = vi.fn();
+  const undiciProxyAgentSpy = vi.fn();
+  const restProxyAgentSpy = vi.fn();
+  const undiciFetchMock = vi.fn();
+  const baseRegisterClientSpy = vi.fn();
   const webSocketSpy = vi.fn();
 
   const GatewayIntents = {
@@ -23,7 +31,17 @@ const {
     GuildMembers: 1 << 7,
   } as const;
 
-  class GatewayPlugin {}
+  class GatewayPlugin {
+    options: unknown;
+    gatewayInfo: unknown;
+    constructor(options?: unknown, gatewayInfo?: unknown) {
+      this.options = options;
+      this.gatewayInfo = gatewayInfo;
+    }
+    async registerClient(client: unknown) {
+      baseRegisterClientSpy(client);
+    }
+  }
 
   class HttpsProxyAgent {
     static lastCreated: HttpsProxyAgent | undefined;
@@ -34,20 +52,24 @@ const {
       }
       this.proxyUrl = proxyUrl;
       HttpsProxyAgent.lastCreated = this;
-      proxyAgentSpy(proxyUrl);
+      wsProxyAgentSpy(proxyUrl);
     }
   }
 
   return {
+    baseRegisterClientSpy,
     GatewayIntents,
     GatewayPlugin,
     HttpsProxyAgent,
     getLastAgent: () => HttpsProxyAgent.lastCreated,
-    proxyAgentSpy,
+    restProxyAgentSpy,
+    undiciFetchMock,
+    undiciProxyAgentSpy,
     resetLastAgent: () => {
       HttpsProxyAgent.lastCreated = undefined;
     },
     webSocketSpy,
+    wsProxyAgentSpy,
   };
 });
 
@@ -59,6 +81,18 @@ vi.mock("@buape/carbon/gateway", () => ({
 
 vi.mock("https-proxy-agent", () => ({
   HttpsProxyAgent,
+}));
+
+vi.mock("undici", () => ({
+  ProxyAgent: class {
+    proxyUrl: string;
+    constructor(proxyUrl: string) {
+      this.proxyUrl = proxyUrl;
+      undiciProxyAgentSpy(proxyUrl);
+      restProxyAgentSpy(proxyUrl);
+    }
+  },
+  fetch: undiciFetchMock,
 }));
 
 vi.mock("ws", () => ({
@@ -87,8 +121,12 @@ describe("createDiscordGatewayPlugin", () => {
   }
 
   beforeEach(() => {
-    proxyAgentSpy.mockReset();
-    webSocketSpy.mockReset();
+    baseRegisterClientSpy.mockClear();
+    restProxyAgentSpy.mockClear();
+    undiciFetchMock.mockClear();
+    undiciProxyAgentSpy.mockClear();
+    wsProxyAgentSpy.mockClear();
+    webSocketSpy.mockClear();
     resetLastAgent();
   });
 
@@ -106,7 +144,7 @@ describe("createDiscordGatewayPlugin", () => {
       .createWebSocket;
     createWebSocket("wss://gateway.discord.gg");
 
-    expect(proxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
     expect(webSocketSpy).toHaveBeenCalledWith(
       "wss://gateway.discord.gg",
       expect.objectContaining({ agent: getLastAgent() }),
@@ -126,5 +164,34 @@ describe("createDiscordGatewayPlugin", () => {
     expect(Object.getPrototypeOf(plugin)).toBe(GatewayPlugin.prototype);
     expect(runtime.error).toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("uses proxy fetch for gateway metadata lookup before registering", async () => {
+    const runtime = createRuntime();
+    undiciFetchMock.mockResolvedValue({
+      json: async () => ({ url: "wss://gateway.discord.gg" }),
+    } as Response);
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: { proxy: "http://proxy.test:8080" },
+      runtime,
+    });
+
+    await (
+      plugin as unknown as {
+        registerClient: (client: { options: { token: string } }) => Promise<void>;
+      }
+    ).registerClient({
+      options: { token: "token-123" },
+    });
+
+    expect(restProxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(undiciFetchMock).toHaveBeenCalledWith(
+      "https://discord.com/api/v10/gateway/bot",
+      expect.objectContaining({
+        headers: { Authorization: "Bot token-123" },
+        dispatcher: expect.objectContaining({ proxyUrl: "http://proxy.test:8080" }),
+      }),
+    );
+    expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
 });

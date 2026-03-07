@@ -8,7 +8,7 @@ title: "acp"
 
 # acp
 
-Run the ACP (Agent Client Protocol) bridge that talks to a OpenClaw Gateway.
+Run the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) bridge that talks to a OpenClaw Gateway.
 
 This command speaks ACP over stdio for IDEs and forwards prompts to the Gateway
 over WebSocket. It keeps ACP sessions mapped to Gateway session keys.
@@ -48,6 +48,13 @@ openclaw acp client --server-args --url wss://gateway-host:18789 --token-file ~/
 # Override the server command (default: openclaw)
 openclaw acp client --server "node" --server-args openclaw.mjs acp --url ws://127.0.0.1:19001
 ```
+
+Permission model (client debug mode):
+
+- Auto-approval is allowlist-based and only applies to trusted core tool IDs.
+- `read` auto-approval is scoped to the current working directory (`--cwd` when set).
+- Unknown/non-core tool names, out-of-scope reads, and dangerous tools always require explicit prompt approval.
+- Server-provided `toolCall.kind` is treated as untrusted metadata (not an authorization source).
 
 ## How to use this
 
@@ -172,6 +179,8 @@ Security note:
 
 - `--token` and `--password` can be visible in local process listings on some systems.
 - Prefer `--token-file`/`--password-file` or environment variables (`OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_PASSWORD`).
+- ACP runtime backend child processes receive `OPENCLAW_SHELL=acp`, which can be used for context-specific shell/profile rules.
+- `openclaw acp client` sets `OPENCLAW_SHELL=acp-client` on the spawned bridge process.
 
 ### `acp client` options
 

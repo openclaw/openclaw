@@ -1,0 +1,554 @@
+import { describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
+
+const loadConfig = vi.fn(() => ({
+  gateway: {
+    mode: "remote",
+    remote: { url: "wss://remote.example:18789", token: "rtok" },
+    auth: { token: "ltok" },
+  },
+}));
+const resolveGatewayPort = vi.fn((_cfg?: unknown) => 18789);
+const discoverGatewayBeacons = vi.fn(
+  async (_opts?: unknown): Promise<Array<{ tailnetDns: string }>> => [],
+);
+const pickPrimaryTailnetIPv4 = vi.fn(() => "100.64.0.10");
+const sshStop = vi.fn(async () => {});
+const resolveSshConfig = vi.fn(
+  async (
+    _opts?: unknown,
+  ): Promise<{
+    user: string;
+    host: string;
+    port: number;
+    identityFiles: string[];
+  } | null> => null,
+);
+const startSshPortForward = vi.fn(async (_opts?: unknown) => ({
+  parsedTarget: { user: "me", host: "studio", port: 22 },
+  localPort: 18789,
+  remotePort: 18789,
+  pid: 123,
+  stderr: [],
+  stop: sshStop,
+}));
+const probeGateway = vi.fn(async (opts: { url: string }) => {
+  const { url } = opts;
+  if (url.includes("127.0.0.1")) {
+    return {
+      ok: true,
+      url,
+      connectLatencyMs: 12,
+      error: null,
+      close: null,
+      health: { ok: true },
+      status: {
+        linkChannel: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          linked: false,
+          authAgeMs: null,
+        },
+        sessions: { count: 0 },
+      },
+      presence: [{ mode: "gateway", reason: "self", host: "local", ip: "127.0.0.1" }],
+      configSnapshot: {
+        path: "/tmp/cfg.json",
+        exists: true,
+        valid: true,
+        config: {
+          gateway: { mode: "local" },
+        },
+        issues: [],
+        legacyIssues: [],
+      },
+    };
+  }
+  return {
+    ok: true,
+    url,
+    connectLatencyMs: 34,
+    error: null,
+    close: null,
+    health: { ok: true },
+    status: {
+      linkChannel: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        linked: true,
+        authAgeMs: 5_000,
+      },
+      sessions: { count: 2 },
+    },
+    presence: [{ mode: "gateway", reason: "self", host: "remote", ip: "100.64.0.2" }],
+    configSnapshot: {
+      path: "/tmp/remote.json",
+      exists: true,
+      valid: true,
+      config: { gateway: { mode: "remote" } },
+      issues: [],
+      legacyIssues: [],
+    },
+  };
+});
+
+vi.mock("../config/config.js", () => ({
+  loadConfig,
+  resolveGatewayPort,
+}));
+
+vi.mock("../infra/bonjour-discovery.js", () => ({
+  discoverGatewayBeacons,
+}));
+
+vi.mock("../infra/tailnet.js", () => ({
+  pickPrimaryTailnetIPv4,
+}));
+
+vi.mock("../infra/ssh-tunnel.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/ssh-tunnel.js")>();
+  return {
+    ...actual,
+    startSshPortForward,
+  };
+});
+
+vi.mock("../infra/ssh-config.js", () => ({
+  resolveSshConfig,
+}));
+
+vi.mock("../gateway/probe.js", () => ({
+  probeGateway,
+}));
+
+function createRuntimeCapture() {
+  const runtimeLogs: string[] = [];
+  const runtimeErrors: string[] = [];
+  const runtime = {
+    log: (msg: string) => runtimeLogs.push(msg),
+    error: (msg: string) => runtimeErrors.push(msg),
+    exit: (code: number) => {
+      throw new Error(`__exit__:${code}`);
+    },
+  };
+  return { runtime, runtimeLogs, runtimeErrors };
+}
+
+function asRuntimeEnv(runtime: ReturnType<typeof createRuntimeCapture>["runtime"]): RuntimeEnv {
+  return runtime as unknown as RuntimeEnv;
+}
+
+function makeRemoteGatewayConfig(url: string, token = "rtok", localToken = "ltok") {
+  return {
+    gateway: {
+      mode: "remote",
+      remote: { url, token },
+      auth: { token: localToken },
+    },
+  };
+}
+
+async function runGatewayStatus(
+  runtime: ReturnType<typeof createRuntimeCapture>["runtime"],
+  opts: { timeout: string; json?: boolean; ssh?: string; sshAuto?: boolean; sshIdentity?: string },
+) {
+  const { gatewayStatusCommand } = await import("./gateway-status.js");
+  await gatewayStatusCommand(opts, asRuntimeEnv(runtime));
+}
+
+describe("gateway-status command", () => {
+  it("prints human output by default", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+
+    await runGatewayStatus(runtime, { timeout: "1000" });
+
+    expect(runtimeErrors).toHaveLength(0);
+    expect(runtimeLogs.join("\n")).toContain("Gateway Status");
+    expect(runtimeLogs.join("\n")).toContain("Discovery (this machine)");
+    expect(runtimeLogs.join("\n")).toContain("Targets");
+  });
+
+  it("prints a structured JSON envelope when --json is set", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+
+    await runGatewayStatus(runtime, { timeout: "1000", json: true });
+
+    expect(runtimeErrors).toHaveLength(0);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
+    expect(parsed.ok).toBe(true);
+    expect(parsed.targets).toBeTruthy();
+    const targets = parsed.targets as Array<Record<string, unknown>>;
+    expect(targets.length).toBeGreaterThanOrEqual(2);
+    expect(targets[0]?.health).toBeTruthy();
+    expect(targets[0]?.summary).toBeTruthy();
+  });
+
+  it("surfaces unresolved SecretRef auth diagnostics in warnings", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    await withEnvAsync({ MISSING_GATEWAY_TOKEN: undefined }, async () => {
+      loadConfig.mockReturnValueOnce({
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+          },
+        },
+      } as unknown as ReturnType<typeof loadConfig>);
+
+      await runGatewayStatus(runtime, { timeout: "1000", json: true });
+    });
+
+    expect(runtimeErrors).toHaveLength(0);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
+    };
+    const unresolvedWarning = parsed.warnings?.find(
+      (warning) =>
+        warning.code === "auth_secretref_unresolved" &&
+        warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
+    );
+    expect(unresolvedWarning).toBeTruthy();
+    expect(unresolvedWarning?.targetIds).toContain("localLoopback");
+    expect(unresolvedWarning?.message).toContain("env:default:MISSING_GATEWAY_TOKEN");
+    expect(unresolvedWarning?.message).not.toContain("missing or empty");
+  });
+
+  it("does not resolve local token SecretRef when OPENCLAW_GATEWAY_TOKEN is set", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        MISSING_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        loadConfig.mockReturnValueOnce({
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+            },
+          },
+        } as unknown as ReturnType<typeof loadConfig>);
+
+        await runGatewayStatus(runtime, { timeout: "1000", json: true });
+      },
+    );
+
+    expect(runtimeErrors).toHaveLength(0);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          token: "env-token",
+        }),
+      }),
+    );
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings?: Array<{ code?: string; message?: string }>;
+    };
+    const unresolvedWarning = parsed.warnings?.find(
+      (warning) =>
+        warning.code === "auth_secretref_unresolved" &&
+        warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
+    );
+    expect(unresolvedWarning).toBeUndefined();
+  });
+
+  it("does not resolve local password SecretRef in token mode", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        MISSING_GATEWAY_PASSWORD: undefined,
+      },
+      async () => {
+        loadConfig.mockReturnValueOnce({
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: "config-token",
+              password: { source: "env", provider: "default", id: "MISSING_GATEWAY_PASSWORD" },
+            },
+          },
+        } as unknown as ReturnType<typeof loadConfig>);
+
+        await runGatewayStatus(runtime, { timeout: "1000", json: true });
+      },
+    );
+
+    expect(runtimeErrors).toHaveLength(0);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings?: Array<{ code?: string; message?: string }>;
+    };
+    const unresolvedPasswordWarning = parsed.warnings?.find(
+      (warning) =>
+        warning.code === "auth_secretref_unresolved" &&
+        warning.message?.includes("gateway.auth.password SecretRef is unresolved"),
+    );
+    expect(unresolvedPasswordWarning).toBeUndefined();
+  });
+
+  it("resolves env-template gateway.auth.token before probing targets", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    await withEnvAsync(
+      {
+        CUSTOM_GATEWAY_TOKEN: "resolved-gateway-token",
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        CLAWDBOT_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        loadConfig.mockReturnValueOnce({
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: "${CUSTOM_GATEWAY_TOKEN}",
+            },
+          },
+        } as unknown as ReturnType<typeof loadConfig>);
+
+        await runGatewayStatus(runtime, { timeout: "1000", json: true });
+      },
+    );
+
+    expect(runtimeErrors).toHaveLength(0);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          token: "resolved-gateway-token",
+        }),
+      }),
+    );
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings?: Array<{ code?: string }>;
+    };
+    const unresolvedWarning = parsed.warnings?.find(
+      (warning) => warning.code === "auth_secretref_unresolved",
+    );
+    expect(unresolvedWarning).toBeUndefined();
+  });
+
+  it("emits stable SecretRef auth configuration booleans in --json output", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    const previousProbeImpl = probeGateway.getMockImplementation();
+    probeGateway.mockImplementation(async (opts: { url: string }) => ({
+      ok: true,
+      url: opts.url,
+      connectLatencyMs: 20,
+      error: null,
+      close: null,
+      health: { ok: true },
+      status: {
+        linkChannel: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          linked: true,
+          authAgeMs: 1_000,
+        },
+        sessions: { count: 1 },
+      },
+      presence: [{ mode: "gateway", reason: "self", host: "remote", ip: "100.64.0.2" }],
+      configSnapshot: {
+        path: "/tmp/secretref-config.json",
+        exists: true,
+        valid: true,
+        config: {
+          secrets: {
+            defaults: {
+              env: "default",
+            },
+          },
+          gateway: {
+            mode: "remote",
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+              password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+            },
+            remote: {
+              url: "wss://remote.example:18789",
+              token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
+              password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
+            },
+          },
+          discovery: {
+            wideArea: { enabled: true },
+          },
+        },
+        issues: [],
+        legacyIssues: [],
+      },
+    }));
+
+    try {
+      await runGatewayStatus(runtime, { timeout: "1000", json: true });
+    } finally {
+      if (previousProbeImpl) {
+        probeGateway.mockImplementation(previousProbeImpl);
+      } else {
+        probeGateway.mockReset();
+      }
+    }
+
+    expect(runtimeErrors).toHaveLength(0);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      targets?: Array<Record<string, unknown>>;
+    };
+    const configRemoteTarget = parsed.targets?.find((target) => target.kind === "configRemote");
+    expect(configRemoteTarget?.config).toMatchInlineSnapshot(`
+      {
+        "discovery": {
+          "wideAreaEnabled": true,
+        },
+        "exists": true,
+        "gateway": {
+          "authMode": "token",
+          "authPasswordConfigured": true,
+          "authTokenConfigured": true,
+          "bind": null,
+          "controlUiBasePath": null,
+          "controlUiEnabled": null,
+          "mode": "remote",
+          "port": null,
+          "remotePasswordConfigured": true,
+          "remoteTokenConfigured": true,
+          "remoteUrl": "wss://remote.example:18789",
+          "tailscaleMode": null,
+        },
+        "issues": [],
+        "legacyIssues": [],
+        "path": "/tmp/secretref-config.json",
+        "valid": true,
+      }
+    `);
+  });
+
+  it("supports SSH tunnel targets", async () => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+
+    startSshPortForward.mockClear();
+    sshStop.mockClear();
+    probeGateway.mockClear();
+
+    await runGatewayStatus(runtime, { timeout: "1000", json: true, ssh: "me@studio" });
+
+    expect(startSshPortForward).toHaveBeenCalledTimes(1);
+    expect(probeGateway).toHaveBeenCalled();
+    const tunnelCall = probeGateway.mock.calls.find(
+      (call) => typeof call?.[0]?.url === "string" && call[0].url.startsWith("ws://127.0.0.1:"),
+    )?.[0] as { auth?: { token?: string } } | undefined;
+    expect(tunnelCall?.auth?.token).toBe("rtok");
+    expect(sshStop).toHaveBeenCalledTimes(1);
+
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
+    const targets = parsed.targets as Array<Record<string, unknown>>;
+    expect(targets.some((t) => t.kind === "sshTunnel")).toBe(true);
+  });
+
+  it("skips invalid ssh-auto discovery targets", async () => {
+    const { runtime } = createRuntimeCapture();
+    await withEnvAsync({ USER: "steipete" }, async () => {
+      loadConfig.mockReturnValueOnce(makeRemoteGatewayConfig("", "", "ltok"));
+      discoverGatewayBeacons.mockResolvedValueOnce([
+        { tailnetDns: "-V" },
+        { tailnetDns: "goodhost" },
+      ]);
+
+      startSshPortForward.mockClear();
+      await runGatewayStatus(runtime, { timeout: "1000", json: true, sshAuto: true });
+
+      expect(startSshPortForward).toHaveBeenCalledTimes(1);
+      const call = startSshPortForward.mock.calls[0]?.[0] as { target: string };
+      expect(call.target).toBe("steipete@goodhost");
+    });
+  });
+
+  it("infers SSH target from gateway.remote.url and ssh config", async () => {
+    const { runtime } = createRuntimeCapture();
+    await withEnvAsync({ USER: "steipete" }, async () => {
+      loadConfig.mockReturnValueOnce(
+        makeRemoteGatewayConfig("ws://peters-mac-studio-1.sheep-coho.ts.net:18789"),
+      );
+      resolveSshConfig.mockResolvedValueOnce({
+        user: "steipete",
+        host: "peters-mac-studio-1.sheep-coho.ts.net",
+        port: 2222,
+        identityFiles: ["/tmp/id_ed25519"],
+      });
+
+      startSshPortForward.mockClear();
+      await runGatewayStatus(runtime, { timeout: "1000", json: true });
+
+      expect(startSshPortForward).toHaveBeenCalledTimes(1);
+      const call = startSshPortForward.mock.calls[0]?.[0] as {
+        target: string;
+        identity?: string;
+      };
+      expect(call.target).toBe("steipete@peters-mac-studio-1.sheep-coho.ts.net:2222");
+      expect(call.identity).toBe("/tmp/id_ed25519");
+    });
+  });
+
+  it("falls back to host-only when USER is missing and ssh config is unavailable", async () => {
+    const { runtime } = createRuntimeCapture();
+    await withEnvAsync({ USER: "" }, async () => {
+      loadConfig.mockReturnValueOnce(makeRemoteGatewayConfig("wss://studio.example:18789"));
+      resolveSshConfig.mockResolvedValueOnce(null);
+
+      startSshPortForward.mockClear();
+      await runGatewayStatus(runtime, { timeout: "1000", json: true });
+
+      const call = startSshPortForward.mock.calls[0]?.[0] as {
+        target: string;
+      };
+      expect(call.target).toBe("studio.example");
+    });
+  });
+
+  it("keeps explicit SSH identity even when ssh config provides one", async () => {
+    const { runtime } = createRuntimeCapture();
+
+    loadConfig.mockReturnValueOnce(makeRemoteGatewayConfig("wss://studio.example:18789"));
+    resolveSshConfig.mockResolvedValueOnce({
+      user: "me",
+      host: "studio.example",
+      port: 22,
+      identityFiles: ["/tmp/id_from_config"],
+    });
+
+    startSshPortForward.mockClear();
+    await runGatewayStatus(runtime, {
+      timeout: "1000",
+      json: true,
+      sshIdentity: "/tmp/explicit_id",
+    });
+
+    const call = startSshPortForward.mock.calls[0]?.[0] as {
+      identity?: string;
+    };
+    expect(call.identity).toBe("/tmp/explicit_id");
+  });
+});

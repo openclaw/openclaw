@@ -18,6 +18,10 @@ const chokidarMockState = vi.hoisted(() => ({
   }>,
 }));
 
+const CANVAS_WS_OPEN_TIMEOUT_MS = 2_000;
+const CANVAS_RELOAD_TIMEOUT_MS = 4_000;
+const CANVAS_RELOAD_TEST_TIMEOUT_MS = 12_000;
+
 // Tests: avoid chokidar polling/fsevents; trigger "all" events manually.
 vi.mock("chokidar", () => {
   const createWatcher = () => {
@@ -61,6 +65,25 @@ describe("canvas host", () => {
     return dir;
   };
 
+  const startFixtureCanvasHost = async (
+    rootDir: string,
+    overrides: Partial<Parameters<typeof startCanvasHost>[0]> = {},
+  ) =>
+    await startCanvasHost({
+      runtime: quietRuntime,
+      rootDir,
+      port: 0,
+      listenHost: "127.0.0.1",
+      allowInTests: true,
+      ...overrides,
+    });
+
+  const fetchCanvasHtml = async (port: number) => {
+    const res = await fetch(`http://127.0.0.1:${port}${CANVAS_HOST_PATH}/`);
+    const html = await res.text();
+    return { res, html };
+  };
+
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
   });
@@ -80,17 +103,10 @@ describe("canvas host", () => {
   it("creates a default index.html when missing", async () => {
     const dir = await createCaseDir();
 
-    const server = await startCanvasHost({
-      runtime: quietRuntime,
-      rootDir: dir,
-      port: 0,
-      listenHost: "127.0.0.1",
-      allowInTests: true,
-    });
+    const server = await startFixtureCanvasHost(dir);
 
     try {
-      const res = await fetch(`http://127.0.0.1:${server.port}${CANVAS_HOST_PATH}/`);
-      const html = await res.text();
+      const { res, html } = await fetchCanvasHtml(server.port);
       expect(res.status).toBe(200);
       expect(html).toContain("Interactive test page");
       expect(html).toContain("openclawSendUserAction");
@@ -104,18 +120,10 @@ describe("canvas host", () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>no-reload</body></html>", "utf8");
 
-    const server = await startCanvasHost({
-      runtime: quietRuntime,
-      rootDir: dir,
-      port: 0,
-      listenHost: "127.0.0.1",
-      allowInTests: true,
-      liveReload: false,
-    });
+    const server = await startFixtureCanvasHost(dir, { liveReload: false });
 
     try {
-      const res = await fetch(`http://127.0.0.1:${server.port}${CANVAS_HOST_PATH}/`);
-      const html = await res.text();
+      const { res, html } = await fetchCanvasHtml(server.port);
       expect(res.status).toBe(200);
       expect(html).toContain("no-reload");
       expect(html).not.toContain(CANVAS_WS_PATH);
@@ -194,59 +202,62 @@ describe("canvas host", () => {
     }
   });
 
-  it("serves HTML with injection and broadcasts reload on file changes", async () => {
-    const dir = await createCaseDir();
-    const index = path.join(dir, "index.html");
-    await fs.writeFile(index, "<html><body>v1</body></html>", "utf8");
+  it(
+    "serves HTML with injection and broadcasts reload on file changes",
+    async () => {
+      const dir = await createCaseDir();
+      const index = path.join(dir, "index.html");
+      await fs.writeFile(index, "<html><body>v1</body></html>", "utf8");
 
-    const watcherStart = chokidarMockState.watchers.length;
-    const server = await startCanvasHost({
-      runtime: quietRuntime,
-      rootDir: dir,
-      port: 0,
-      listenHost: "127.0.0.1",
-      allowInTests: true,
-    });
+      const watcherStart = chokidarMockState.watchers.length;
+      const server = await startFixtureCanvasHost(dir);
 
-    try {
-      const watcher = chokidarMockState.watchers[watcherStart];
-      expect(watcher).toBeTruthy();
+      try {
+        const watcher = chokidarMockState.watchers[watcherStart];
+        expect(watcher).toBeTruthy();
 
-      const res = await fetch(`http://127.0.0.1:${server.port}${CANVAS_HOST_PATH}/`);
-      const html = await res.text();
-      expect(res.status).toBe(200);
-      expect(html).toContain("v1");
-      expect(html).toContain(CANVAS_WS_PATH);
+        const { res, html } = await fetchCanvasHtml(server.port);
+        expect(res.status).toBe(200);
+        expect(html).toContain("v1");
+        expect(html).toContain(CANVAS_WS_PATH);
 
-      const ws = new WebSocket(`ws://127.0.0.1:${server.port}${CANVAS_WS_PATH}`);
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("ws open timeout")), 5000);
-        ws.on("open", () => {
-          clearTimeout(timer);
-          resolve();
+        const ws = new WebSocket(`ws://127.0.0.1:${server.port}${CANVAS_WS_PATH}`);
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error("ws open timeout")),
+            CANVAS_WS_OPEN_TIMEOUT_MS,
+          );
+          ws.on("open", () => {
+            clearTimeout(timer);
+            resolve();
+          });
+          ws.on("error", (err) => {
+            clearTimeout(timer);
+            reject(err);
+          });
         });
-        ws.on("error", (err) => {
-          clearTimeout(timer);
-          reject(err);
-        });
-      });
 
-      const msg = new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("reload timeout")), 10_000);
-        ws.on("message", (data) => {
-          clearTimeout(timer);
-          resolve(rawDataToString(data));
+        const msg = new Promise<string>((resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error("reload timeout")),
+            CANVAS_RELOAD_TIMEOUT_MS,
+          );
+          ws.on("message", (data) => {
+            clearTimeout(timer);
+            resolve(rawDataToString(data));
+          });
         });
-      });
 
-      await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
-      watcher.__emit("all", "change", index);
-      expect(await msg).toBe("reload");
-      ws.close();
-    } finally {
-      await server.close();
-    }
-  }, 20_000);
+        await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
+        watcher.__emit("all", "change", index);
+        expect(await msg).toBe("reload");
+        ws.close();
+      } finally {
+        await server.close();
+      }
+    },
+    CANVAS_RELOAD_TEST_TIMEOUT_MS,
+  );
 
   it("serves A2UI scaffold and blocks traversal/symlink escapes", async () => {
     const dir = await createCaseDir();
@@ -267,13 +278,7 @@ describe("canvas host", () => {
     await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
     createdLink = true;
 
-    const server = await startCanvasHost({
-      runtime: quietRuntime,
-      rootDir: dir,
-      port: 0,
-      listenHost: "127.0.0.1",
-      allowInTests: true,
-    });
+    const server = await startFixtureCanvasHost(dir);
 
     try {
       const res = await fetch(`http://127.0.0.1:${server.port}/__openclaw__/a2ui/`);
