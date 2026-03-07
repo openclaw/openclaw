@@ -1,71 +1,80 @@
 ---
 name: feishu-send
 description: |
-  飞书代发消息：文本、文件、@全体。找人→确认→发送→审计。
-  当用户提到给某人发消息、通知某人、转发、发文件等意图时激活。
+  Send messages to Feishu users or groups. Activate when user asks to send a message, notify someone, forward content, or send files via Feishu.
 ---
 
-# 飞书代发消息
+# Feishu Send Tool
 
-## 执行流程
+Tool `feishu_send` sends messages to users or groups. Supports text, file upload, and @all mentions.
 
-### 1. 解析目标
+**Important:** You must resolve the recipient's ID first:
+- **Person** → Use `feishu_contacts` to search by name and get `open_id`
+- **Group** → Use `feishu_groups` to search by name and get `chat_id`
 
-- **发给个人**：用 `feishu-contacts` skill 把人名解析为 `open_id`
-- **发到群聊**：用 `feishu-groups` skill 列出群，确认 `chat_id`
+## Actions
 
-多人匹配时列出候选让用户确认。
+### Send Text Message
 
-### 2. 发送消息
-
-#### 文本消息
-
-```typescript
-import { sendTextMessage } from "./src/proactive-send.js";
-const result = await sendTextMessage({
-  cfg,
-  receiveId: "ou_xxx",
-  receiveIdType: "open_id",
-  text: "你好",
-});
+```json
+{
+  "action": "text",
+  "receive_id": "ou_xxx",
+  "receive_id_type": "open_id",
+  "text": "Hello, this is a message from the bot"
+}
 ```
 
-#### 文件消息
+- `receive_id_type`: `"open_id"` for users, `"chat_id"` for groups
 
-```typescript
-import { sendFileMessage } from "./src/proactive-send.js";
-const result = await sendFileMessage({
-  cfg,
-  receiveId: "ou_xxx",
-  receiveIdType: "open_id",
-  filePath: "/path/to/file.pdf",
-});
+### Send File
+
+```json
+{
+  "action": "file",
+  "receive_id": "ou_xxx",
+  "receive_id_type": "open_id",
+  "file_path": "/path/to/document.pdf"
+}
 ```
 
-#### @全体消息（仅群聊）
+Uploads the local file via API then sends it as a file message.
 
-```typescript
-import { sendMentionAll } from "./src/proactive-send.js";
-const result = await sendMentionAll({
-  cfg,
-  chatId: "oc_xxx",
-  text: "重要通知内容",
-});
+### Send @All in Group
+
+```json
+{
+  "action": "mention_all",
+  "receive_id": "oc_xxx",
+  "receive_id_type": "chat_id",
+  "text": "Important announcement for everyone"
+}
 ```
 
-### 3. 结果确认
+Only works in group chats (`chat_id`).
 
-返回 `{ messageId }` 或 `{ error }` — 错误信息包含权限开启链接。
+## Complete Workflow Example
 
-## 安全规则
+User says: "给梅晓华发信息：明天10点开会"
 
-1. 发送前确认目标人和内容
-2. 23:00-08:00 非紧急消息需二次确认
-3. 文件发送前确认文件路径和接收者
+```
+Step 1: feishu_contacts → { "action": "search", "keyword": "梅晓华" }
+        → { "results": [{ "open_id": "ou_abc123", "name": "梅晓华" }] }
 
-## 权限要求
+Step 2: feishu_send → { "action": "text", "receive_id": "ou_abc123",
+                        "receive_id_type": "open_id", "text": "明天10点开会" }
+        → { "messageId": "om_xxx" }
+```
 
-| Scope                    | 说明                      |
-| ------------------------ | ------------------------- |
-| `im:message:send_as_bot` | 以应用身份发消息          |
-| `im:resource`            | 上传/下载消息中的资源文件 |
+## Safety Rules
+
+1. Confirm recipient and content before sending
+2. Non-urgent messages between 23:00–08:00 require double confirmation
+3. For file sending, verify the file path exists
+
+## Permissions
+
+| Scope | Description |
+|---|---|
+| `im:message:send_as_bot` | Send messages as bot |
+| `im:resource` | Upload/download message resources |
