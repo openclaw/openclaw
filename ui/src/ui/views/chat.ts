@@ -179,7 +179,7 @@ function readFileAsDataUrl(file: File): Promise<ChatAttachment> {
   });
 }
 
-const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_FILE_BYTES = 5_000_000; // 5 MB — must match gateway parseMessageWithAttachments maxBytes
 
 function addAttachments(files: File[], props: ChatProps) {
   const imageFiles = files.filter((f) => f.type.startsWith("image/") && f.size <= MAX_FILE_BYTES);
