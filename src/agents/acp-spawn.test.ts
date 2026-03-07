@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 
@@ -401,6 +402,63 @@ describe("spawnAcpDirect", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toContain("set `acp.defaultAgent`");
+  });
+
+  it("adds actionable diagnostics when ACP backend is missing", async () => {
+    hoisted.initializeSessionMock.mockRejectedValueOnce(
+      new AcpRuntimeError(
+        "ACP_BACKEND_MISSING",
+        "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
+      ),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "hello",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("ACP diagnostics:");
+    expect(result.error).toContain("openclaw plugins list");
+    expect(result.error).toContain("/acp doctor");
+  });
+
+  it("adds backend-enabled hint when ACP backend is unavailable", async () => {
+    hoisted.state.cfg = {
+      ...hoisted.state.cfg,
+      plugins: {
+        entries: {
+          acpx: {
+            enabled: true,
+          },
+        },
+      },
+    };
+    hoisted.initializeSessionMock.mockRejectedValueOnce(
+      new AcpRuntimeError(
+        "ACP_BACKEND_UNAVAILABLE",
+        "ACP runtime backend is currently unavailable.",
+      ),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "hello",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("configured backend=acpx");
+    expect(result.error).toContain("runtime startup/health failure");
   });
 
   it("fails fast when Discord ACP thread spawn is disabled", async () => {

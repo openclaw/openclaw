@@ -5,6 +5,7 @@ import {
   type AcpSpawnRuntimeCloseHandle,
 } from "../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../acp/policy.js";
+import { isAcpRuntimeError } from "../acp/runtime/errors.js";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
@@ -160,6 +161,33 @@ function summarizeError(err: unknown): string {
     return err;
   }
   return "error";
+}
+
+function formatAcpBackendAvailabilityError(params: {
+  error: unknown;
+  cfg: OpenClawConfig;
+}): string | null {
+  if (!isAcpRuntimeError(params.error)) {
+    return null;
+  }
+  if (
+    params.error.code !== "ACP_BACKEND_MISSING" &&
+    params.error.code !== "ACP_BACKEND_UNAVAILABLE"
+  ) {
+    return null;
+  }
+
+  const configuredBackend = params.cfg.acp?.backend?.trim() || "acpx";
+  const backendPluginEnabled = params.cfg.plugins?.entries?.[configuredBackend]?.enabled === true;
+  const backendHint = backendPluginEnabled
+    ? `backend "${configuredBackend}" is enabled in config, so this likely indicates runtime startup/health failure.`
+    : `backend "${configuredBackend}" is not enabled under plugins.entries.${configuredBackend}.enabled.`;
+
+  return [
+    params.error.message,
+    `ACP diagnostics: configured backend=${configuredBackend}; ${backendHint}`,
+    "Try: 1) ensure acp.enabled=true and acp.backend matches a loaded runtime plugin, 2) run `openclaw plugins list`, 3) run `/acp doctor`.",
+  ].join(" ");
 }
 
 function resolveConversationIdForThreadBinding(params: {
@@ -417,9 +445,15 @@ export async function spawnAcpDirect(
       deleteTranscript: true,
       runtimeCloseHandle: initializedRuntime,
     });
+    const backendAvailabilityError = formatAcpBackendAvailabilityError({
+      error: err,
+      cfg,
+    });
     return {
       status: "error",
-      error: isSessionBindingError(err) ? err.message : summarizeError(err),
+      error: isSessionBindingError(err)
+        ? err.message
+        : backendAvailabilityError || summarizeError(err),
     };
   }
 
