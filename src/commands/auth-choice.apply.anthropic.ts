@@ -29,17 +29,24 @@ export async function applyAuthChoiceAnthropic(
     const isRemote = isRemoteEnvironment();
     let nextConfig = params.config;
 
-    const creds = await loginAnthropicOAuth({
-      prompter: params.prompter,
-      runtime: params.runtime,
-      isRemote,
-      openUrl: async (url) => {
-        await openUrl(url);
-      },
-    });
+    let creds;
+    try {
+      creds = await loginAnthropicOAuth({
+        prompter: params.prompter,
+        runtime: params.runtime,
+        isRemote,
+        openUrl: async (url) => {
+          await openUrl(url);
+        },
+      });
+    } catch {
+      // The helper already surfaces the error to the user.
+      // Keep onboarding flow alive and return unchanged config.
+      return { config: nextConfig };
+    }
 
     if (!creds) {
-      throw new Error("Anthropic OAuth failed to return credentials");
+      return { config: nextConfig };
     }
 
     const profileId = await writeOAuthCredentials("anthropic", creds, params.agentDir);

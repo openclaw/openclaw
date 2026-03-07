@@ -8,18 +8,11 @@ import {
   readAuthProfilesForAgent,
   setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
+import { loginAnthropicOAuth } from "./anthropic-oauth.js";
 
-vi.mock("./anthropic-oauth.js", async () => {
-  const { vi } = await import("vitest");
-  return {
-    loginAnthropicOAuth: vi.fn().mockResolvedValue({
-      access: "sk-ant-test-access",
-      refresh: "sk-ant-test-refresh",
-      expires: Date.now() + 8 * 60 * 60 * 1000,
-      email: "test@example.com",
-    }),
-  };
-});
+vi.mock("./anthropic-oauth.js", () => ({
+  loginAnthropicOAuth: vi.fn(),
+}));
 
 describe("applyAuthChoiceAnthropic", () => {
   const lifecycle = createAuthTestLifecycle([
@@ -72,6 +65,13 @@ describe("applyAuthChoiceAnthropic", () => {
   });
 
   it("stores OAuth credentials with refresh token and correct type", async () => {
+    vi.mocked(loginAnthropicOAuth).mockResolvedValue({
+      access: "sk-ant-test-access",
+      refresh: "sk-ant-test-refresh",
+      expires: Date.now() + 8 * 60 * 60 * 1000,
+      email: "test@example.com",
+    });
+
     const agentDir = await setupTempState();
     const prompter = createWizardPrompter({});
     const runtime = createExitThrowingRuntime();
@@ -104,6 +104,13 @@ describe("applyAuthChoiceAnthropic", () => {
   });
 
   it("preserves auth.order when adding OAuth credentials", async () => {
+    vi.mocked(loginAnthropicOAuth).mockResolvedValue({
+      access: "sk-ant-test-access",
+      refresh: "sk-ant-test-refresh",
+      expires: Date.now() + 8 * 60 * 60 * 1000,
+      email: "test@example.com",
+    });
+
     const agentDir = await setupTempState();
     const prompter = createWizardPrompter({});
     const runtime = createExitThrowingRuntime();
@@ -126,5 +133,61 @@ describe("applyAuthChoiceAnthropic", () => {
 
     expect(result).not.toBeNull();
     expect(result?.config.auth?.order?.anthropic).toContain("anthropic:default");
+  });
+
+  it("returns unchanged config when OAuth fails", async () => {
+    vi.mocked(loginAnthropicOAuth).mockRejectedValue(new Error("OAuth failed"));
+
+    const agentDir = await setupTempState();
+    const prompter = createWizardPrompter({});
+    const runtime = createExitThrowingRuntime();
+
+    const initialConfig = {
+      auth: {
+        profiles: {
+          "anthropic:default": { provider: "anthropic", mode: "api_key" as const },
+        },
+        order: { anthropic: ["anthropic:default"] },
+      },
+    };
+
+    const result = await applyAuthChoiceAnthropic({
+      authChoice: "oauth",
+      config: initialConfig,
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.config).toEqual(initialConfig);
+  });
+
+  it("returns unchanged config when OAuth returns null", async () => {
+    vi.mocked(loginAnthropicOAuth).mockResolvedValue(null);
+
+    const agentDir = await setupTempState();
+    const prompter = createWizardPrompter({});
+    const runtime = createExitThrowingRuntime();
+
+    const initialConfig = {
+      auth: {
+        profiles: {
+          "anthropic:default": { provider: "anthropic", mode: "api_key" as const },
+        },
+        order: { anthropic: ["anthropic:default"] },
+      },
+    };
+
+    const result = await applyAuthChoiceAnthropic({
+      authChoice: "oauth",
+      config: initialConfig,
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.config).toEqual(initialConfig);
   });
 });
