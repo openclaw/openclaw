@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createModelSelectionState } from "./model-selection.js";
+import {
+  createModelSelectionState,
+  resolveContextTokens,
+  resolveContextTokensWithDefault,
+} from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
@@ -10,6 +14,17 @@ vi.mock("../../agents/model-catalog.js", () => ({
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
     { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
   ]),
+}));
+
+const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
+  "claude-sonnet-4-20250514": 200_000,
+};
+
+vi.mock("../../agents/context.js", () => ({
+  lookupContextTokens: vi.fn((modelId?: string) =>
+    modelId ? KNOWN_CONTEXT_WINDOWS[modelId] : undefined,
+  ),
+  resolveContextTokensForModel: vi.fn(() => undefined),
 }));
 
 const makeEntry = (overrides: Record<string, unknown> = {}) => ({
@@ -294,5 +309,54 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
       hasModelDirective: false,
     });
     await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("off");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveContextTokens / resolveContextTokensWithDefault
+// ---------------------------------------------------------------------------
+describe("resolveContextTokens", () => {
+  it("returns undefined for uncatalogued model with no config", () => {
+    const result = resolveContextTokens({
+      agentCfg: undefined,
+      model: "totally-unknown-model-xyz",
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns catalogued value for known model", () => {
+    const result = resolveContextTokens({
+      agentCfg: undefined,
+      model: "claude-sonnet-4-20250514",
+    });
+    expect(result).toBe(200_000);
+  });
+
+  it("returns agentCfg.contextTokens when set", () => {
+    const result = resolveContextTokens({
+      agentCfg: { contextTokens: 1_000_000 } as NonNullable<
+        NonNullable<OpenClawConfig["agents"]>["defaults"]
+      >,
+      model: "claude-sonnet-4-20250514",
+    });
+    expect(result).toBe(1_000_000);
+  });
+});
+
+describe("resolveContextTokensWithDefault", () => {
+  it("returns DEFAULT_CONTEXT_TOKENS for uncatalogued model", () => {
+    const result = resolveContextTokensWithDefault({
+      agentCfg: undefined,
+      model: "totally-unknown-model-xyz",
+    });
+    expect(result).toBe(200_000); // DEFAULT_CONTEXT_TOKENS
+  });
+
+  it("returns catalogued value for known model", () => {
+    const result = resolveContextTokensWithDefault({
+      agentCfg: undefined,
+      model: "claude-sonnet-4-20250514",
+    });
+    expect(result).toBe(200_000);
   });
 });

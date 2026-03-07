@@ -9,9 +9,8 @@ import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/se
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
-import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
@@ -31,6 +30,7 @@ import {
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
+import { resolveContextTokensWithDefault } from "../../auto-reply/reply/model-selection.js";
 import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
@@ -695,8 +695,12 @@ export async function runCronIsolatedAgentTurn(params: {
     const promptTokens = finalRunResult.meta?.agentMeta?.promptTokens;
     const modelUsed = finalRunResult.meta?.agentMeta?.model ?? fallbackModel ?? model;
     const providerUsed = finalRunResult.meta?.agentMeta?.provider ?? fallbackProvider ?? provider;
-    const contextTokens =
-      agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
+    const contextTokens = resolveContextTokensWithDefault({
+      agentCfg,
+      cfg: cfgWithAgentDefaults,
+      provider: providerUsed,
+      model: modelUsed,
+    });
 
     setSessionRuntimeModel(cronSession.sessionEntry, {
       provider: providerUsed,
