@@ -5,7 +5,12 @@ import path from "node:path";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
-const CHUNK_LIMIT = 8 * 1024;
+/**
+ * Maximum chunk size for bash output aggregation.
+ * Increased from 8KB to preserve more output from commands like
+ * git diff, test runners, and build logs that often exceed 8KB.
+ */
+const CHUNK_LIMIT = 32 * 1024;
 
 export type BashSandboxConfig = {
   containerName: string;
