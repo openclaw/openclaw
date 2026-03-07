@@ -5,6 +5,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
 import {
   MINIMAX_CN_API_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
@@ -219,9 +220,9 @@ describe("applyAuthChoice", () => {
     });
 
     expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
-      "openai-codex/gpt-5.3-codex",
+      OPENAI_CODEX_DEFAULT_MODEL,
     );
-    expect(result.config.agents?.defaults?.models?.["openai-codex/gpt-5.3-codex"]).toBeUndefined();
+    expect(result.config.agents?.defaults?.models?.[OPENAI_CODEX_DEFAULT_MODEL]).toBeUndefined();
   });
 
   it("prompts and writes provider API key for common providers", async () => {
