@@ -217,3 +217,5 @@ Merge mode precedence for matching provider IDs:
 - SecretRef-managed provider `apiKey` values are refreshed from source markers (`ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs) instead of persisting resolved secrets.
 - Empty or missing agent `apiKey`/`baseUrl` fall back to config `models.providers`.
 - Other provider fields are refreshed from config and normalized catalog data.
+
+This marker-based persistence applies whenever OpenClaw regenerates `models.json`, including command-driven paths like `openclaw agent`.

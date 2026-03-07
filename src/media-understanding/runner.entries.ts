@@ -51,6 +51,10 @@ function sanitizeProviderHeaders(
     if (typeof value !== "string") {
       continue;
     }
+    // Intentionally preserve marker-shaped values here. This path handles
+    // explicit config/runtime provider headers, where literal values may
+    // legitimately match marker patterns; discovered models.json entries are
+    // sanitized separately in the model registry path.
     next[key] = value;
   }
   return Object.keys(next).length > 0 ? next : undefined;
