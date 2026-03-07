@@ -1,0 +1,13 @@
+[Unit]
+Description=Chrome Headless Remote Debugging
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=jpow
+ExecStart=/usr/local/bin/chrome-debug-wrapper.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
