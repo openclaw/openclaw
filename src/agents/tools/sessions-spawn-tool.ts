@@ -141,6 +141,7 @@ export function createSessionsSpawnTool(
             label: label || undefined,
             agentId: requestedAgentId,
             cwd,
+            runTimeoutSeconds,
             mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
             thread,
             sandbox,

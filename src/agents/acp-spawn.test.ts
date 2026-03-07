@@ -300,6 +300,7 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.sessionKey).toMatch(/^agent:codex:acp:/);
     expect(agentCall?.params?.to).toBe("channel:child-thread");
     expect(agentCall?.params?.threadId).toBe("child-thread");
+    expect(agentCall?.params?.timeout).toBe(0);
     expect(agentCall?.params?.deliver).toBe(true);
     expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -362,6 +363,61 @@ describe("spawnAcpDirect", () => {
         }),
       }),
     );
+  });
+
+  it("uses acp.defaultRunTimeoutSeconds when ACP spawn omits runTimeoutSeconds", async () => {
+    hoisted.state.cfg = {
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        defaultRunTimeoutSeconds: 900,
+      },
+    };
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.timeout).toBe(900);
+  });
+
+  it("prefers explicit ACP runTimeoutSeconds over config default", async () => {
+    hoisted.state.cfg = {
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        defaultRunTimeoutSeconds: 900,
+      },
+    };
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        runTimeoutSeconds: 120,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.timeout).toBe(120);
   });
 
   it("rejects disallowed ACP agents", async () => {

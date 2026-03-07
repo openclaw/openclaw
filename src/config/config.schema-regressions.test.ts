@@ -75,6 +75,16 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts acp.defaultRunTimeoutSeconds", () => {
+    const res = validateConfigObject({
+      acp: {
+        defaultRunTimeoutSeconds: 900,
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects unsafe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {

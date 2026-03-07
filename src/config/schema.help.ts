@@ -172,6 +172,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default ACP runtime backend id (for example: acpx). Must match a registered ACP runtime plugin backend.",
   "acp.defaultAgent":
     "Fallback ACP target agent id used when ACP spawns do not specify an explicit target.",
+  "acp.defaultRunTimeoutSeconds":
+    "Default run timeout in seconds for sessions_spawn(runtime=acp) when runTimeoutSeconds is omitted. Set 0 to disable timeout.",
   "acp.allowedAgents":
     "Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.",
   "acp.maxConcurrentSessions":
