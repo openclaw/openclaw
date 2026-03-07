@@ -1,8 +1,8 @@
 node_modules
 **/node_modules/
+dev-mode/rejects/
 .env
 docker-compose.extra.yml
-dist
 pnpm-lock.yaml
 bun.lock
 bun.lockb
@@ -121,3 +121,4 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+dist/

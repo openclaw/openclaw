@@ -46,6 +46,10 @@ export function isYes() {
   return globalYes;
 }
 
+export function isDevMode() {
+  return process.env.OPENCLAW_DEV_MODE === "1";
+}
+
 export const success = theme.success;
 export const warn = theme.warn;
 export const info = theme.info;

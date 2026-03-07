@@ -2,6 +2,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isDevMode } from "../globals.js";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -381,6 +382,12 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+
+  // In dev-mode, bootstrap MEMORY.md for new agents
+  if (isDevMode()) {
+    const memoryPath = path.join(dir, DEFAULT_MEMORY_FILENAME);
+    await writeFileIfMissing(memoryPath, "# Memory\n");
+  }
 
   let state = await readWorkspaceOnboardingState(statePath);
   let stateDirty = false;

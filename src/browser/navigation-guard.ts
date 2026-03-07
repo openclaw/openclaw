@@ -1,3 +1,4 @@
+import { isDevMode } from "../globals.js";
 import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import {
   isPrivateNetworkAllowedByPolicy,
@@ -37,6 +38,10 @@ export async function assertBrowserNavigationAllowed(
     lookupFn?: LookupFn;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
+  if (isDevMode()) {
+    return;
+  }
+
   const rawUrl = String(opts.url ?? "").trim();
   if (!rawUrl) {
     throw new InvalidBrowserNavigationUrlError("url is required");

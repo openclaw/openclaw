@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { setVerbose } from "../../globals.js";
+import { isDevMode, setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -116,6 +116,30 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     }
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     setVerbose(verbose);
+
+    // Register hub plugin if dev mode is active (OPENCLAW_DEV_MODE=1 env var)
+    if (isDevMode()) {
+      try {
+        const { loadConfig } = await import("../../config/config.js");
+        const cfg = loadConfig();
+        // Hub is presented as a plugin. If management agrees, we'd like it to be
+        // a built-in tool for agents — enabling in-session alert and response
+        // without requiring a separate server process.
+        const { setConfigOverride } = await import("../../config/runtime-overrides.js");
+        const path = await import("node:path");
+        const { fileURLToPath } = await import("node:url");
+        const thisDir = path.dirname(fileURLToPath(import.meta.url));
+        const hubPluginPath = path.resolve(thisDir, "../../../dev-mode/hub");
+        const currentPaths: string[] = (cfg.plugins?.load?.paths as string[]) ?? [];
+        if (!currentPaths.includes(hubPluginPath)) {
+          setConfigOverride("plugins.load.paths", [...currentPaths, hubPluginPath]);
+        }
+      } catch (err) {
+        console.error(
+          `[dev-mode] Failed to register hub plugin: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     const cliLogLevel = getCliLogLevel(actionCommand);
     if (cliLogLevel) {
       process.env.OPENCLAW_LOG_LEVEL = cliLogLevel;

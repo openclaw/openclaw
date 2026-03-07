@@ -1,0 +1,29 @@
+{
+  "id": "hub",
+  "name": "Notification Hub",
+  "description": "Send and manage notifications via the Hub. Agents, crons, and apps can notify the user through the configured channel.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "host": {
+        "type": "string",
+        "default": "127.0.0.1"
+      },
+      "port": {
+        "type": "number",
+        "default": 10020
+      }
+    }
+  },
+  "uiHints": {
+    "host": {
+      "label": "Hub Host",
+      "help": "Hub server hostname (default: 127.0.0.1)"
+    },
+    "port": {
+      "label": "Hub Port",
+      "help": "Hub server port (default: 10020)"
+    }
+  }
+}

@@ -14,6 +14,7 @@ const runtimeMock = {
 
 vi.mock("../../globals.js", () => ({
   setVerbose: setVerboseMock,
+  isDevMode: () => false,
 }));
 
 vi.mock("../../runtime.js", () => ({

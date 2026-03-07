@@ -6,6 +6,7 @@ import type {
 } from "../config/config.js";
 import { writeConfigFile } from "../config/config.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
+import { isDevMode } from "../globals.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveSecretRefValues } from "../secrets/resolve.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "./auth-mode-policy.js";
@@ -319,6 +320,9 @@ export function assertHooksTokenSeparateFromGatewayAuth(params: {
   cfg: OpenClawConfig;
   auth: ResolvedGatewayAuth;
 }): void {
+  if (isDevMode()) {
+    return;
+  }
   if (params.cfg.hooks?.enabled !== true) {
     return;
   }
