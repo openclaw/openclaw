@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, type Mock, vi } from "vitest";
+import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { saveExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
@@ -235,6 +236,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     runViaResponse?: ExecHostResponse | null;
     command?: string[];
     rawCommand?: string | null;
+    systemRunPlan?: SystemRunApprovalPlan | null;
     cwd?: string;
     security?: "full" | "allowlist";
     ask?: "off" | "on-miss" | "always";
@@ -289,6 +291,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       params: {
         command: params.command ?? ["echo", "ok"],
         rawCommand: params.rawCommand,
+        systemRunPlan: params.systemRunPlan,
         cwd: params.cwd,
         approved: params.approved ?? false,
         sessionKey: "agent:main:main",
@@ -684,6 +687,76 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(fallback, { recursive: true, force: true });
+    }
+  });
+
+  it("denies approval-based execution when a script operand changes after approval", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-drift-"));
+    const script = path.join(tmp, "run.sh");
+    fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(script, 0o755);
+    try {
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "./run.sh"],
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+
+      fs.writeFileSync(script, "#!/bin/sh\necho PWNED\n");
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: prepared.plan.argv,
+        rawCommand: prepared.plan.rawCommand,
+        systemRunPlan: prepared.plan,
+        cwd: prepared.plan.cwd ?? tmp,
+        approved: true,
+        security: "full",
+        ask: "off",
+      });
+
+      expect(runCommand).not.toHaveBeenCalled();
+      expectInvokeErrorMessage(sendInvokeResult, {
+        message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+        exact: true,
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps approved shell script execution working when the script is unchanged", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-stable-"));
+    const script = path.join(tmp, "run.sh");
+    fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(script, 0o755);
+    try {
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "./run.sh"],
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: prepared.plan.argv,
+        rawCommand: prepared.plan.rawCommand,
+        systemRunPlan: prepared.plan,
+        cwd: prepared.plan.cwd ?? tmp,
+        approved: true,
+        security: "full",
+        ask: "off",
+      });
+
+      expect(runCommand).toHaveBeenCalledTimes(1);
+      expectInvokeOk(sendInvokeResult);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
