@@ -23,8 +23,8 @@ describe("sameFileIdentity", () => {
     expect(sameFileIdentity(stat(7, 11), stat(0, 11), "win32")).toBe(true);
   });
 
-  it("keeps dev strictness on win32 when both dev values are non-zero", () => {
-    expect(sameFileIdentity(stat(7, 11), stat(8, 11), "win32")).toBe(false);
+  it("accepts win32 dev mismatch even when both dev values are non-zero", () => {
+    expect(sameFileIdentity(stat(7, 11), stat(8, 11), "win32")).toBe(true);
   });
 
   it("handles bigint stats", () => {

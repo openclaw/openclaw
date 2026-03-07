@@ -108,6 +108,7 @@ const pluginSdkScopedAliasEntries = [
     distFile: "copilot-proxy.js",
   },
   { subpath: "device-pair", srcFile: "device-pair.ts", distFile: "device-pair.js" },
+  { subpath: "dingtalk", srcFile: "dingtalk.ts", distFile: "dingtalk.js" },
   {
     subpath: "diagnostics-otel",
     srcFile: "diagnostics-otel.ts",
