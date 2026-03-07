@@ -853,6 +853,7 @@ export const buildTelegramMessageContext = async ({
     : null;
 
   // Fire-and-forget: session recording doesn't need to block response.
+  // Add .catch() to handle rejections from updateLastRoute path (not covered by onRecordError)
   void recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? sessionKey,
@@ -882,6 +883,9 @@ export const buildTelegramMessageContext = async ({
     onRecordError: (err) => {
       logVerbose(`telegram: failed updating session meta: ${String(err)}`);
     },
+  }).catch((err) => {
+    // Catch rejections from updateLastRoute path (onRecordError only covers recordSessionMetaFromInbound)
+    logVerbose(`telegram: session recording failed: ${String(err)}`);
   });
 
   if (replyTarget && shouldLogVerbose()) {
