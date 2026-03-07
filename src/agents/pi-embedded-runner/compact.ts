@@ -275,7 +275,7 @@ export async function compactEmbeddedPiSessionDirect(
   const runId = params.runId ?? params.sessionId;
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
-  const sessionKey = params.sessionKey ?? params.sessionId;
+  const sessionKey = params.sessionKey?.trim() || params.sessionId;
 
   // Circuit breaker: skip compaction if too many recent consecutive failures
   if (isCompactionCircuitOpen(sessionKey)) {
