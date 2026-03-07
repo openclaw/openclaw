@@ -107,6 +107,27 @@ describe("gateway tool defaults", () => {
     expect(opts.token).toBeUndefined();
   });
 
+  it("ignores unresolved local token SecretRef for strict remote overrides", () => {
+    configState.value = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
+        },
+        remote: {
+          url: "wss://gateway.example",
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+    const opts = resolveGatewayOptions({ gatewayUrl: "wss://gateway.example" });
+    expect(opts.token).toBeUndefined();
+  });
+
   it("explicit gatewayToken overrides fallback token resolution", () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "local-env-token";
     configState.value = {

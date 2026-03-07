@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   truncateToolResultText,
   truncateToolResultMessage,
@@ -35,23 +36,12 @@ function makeUserMessage(text: string): UserMessage {
 }
 
 function makeAssistantMessage(text: string): AssistantMessage {
-  return {
-    role: "assistant",
+  return makeAgentAssistantMessage({
     content: [{ type: "text", text }],
-    api: "openai-responses",
-    provider: "openai",
     model: "gpt-5.2",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
     stopReason: "stop",
     timestamp: nextTimestamp(),
-  };
+  });
 }
 
 describe("truncateToolResultText", () => {
@@ -287,5 +277,27 @@ describe("sessionLikelyHasOversizedToolResults", () => {
         contextWindowTokens: 200_000,
       }),
     ).toBe(false);
+  });
+});
+
+describe("truncateToolResultText head+tail strategy", () => {
+  it("preserves error content at the tail when present", () => {
+    const head = "Line 1\n".repeat(500);
+    const middle = "data data data\n".repeat(500);
+    const tail = "\nError: something failed\nStack trace: at foo.ts:42\n";
+    const text = head + middle + tail;
+    const result = truncateToolResultText(text, 5000);
+    // Should contain both the beginning and the error at the end
+    expect(result).toContain("Line 1");
+    expect(result).toContain("Error: something failed");
+    expect(result).toContain("middle content omitted");
+  });
+
+  it("uses simple head truncation when tail has no important content", () => {
+    const text = "normal line\n".repeat(1000);
+    const result = truncateToolResultText(text, 5000);
+    expect(result).toContain("normal line");
+    expect(result).not.toContain("middle content omitted");
+    expect(result).toContain("truncated");
   });
 });

@@ -89,6 +89,48 @@ function isSilentReplyLeadFragment(text: string): boolean {
   return SILENT_REPLY_TOKEN.startsWith(normalized);
 }
 
+function appendUniqueSuffix(base: string, suffix: string): string {
+  if (!suffix) {
+    return base;
+  }
+  if (!base) {
+    return suffix;
+  }
+  if (base.endsWith(suffix)) {
+    return base;
+  }
+  const maxOverlap = Math.min(base.length, suffix.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
+      return base + suffix.slice(overlap);
+    }
+  }
+  return base + suffix;
+}
+
+function resolveMergedAssistantText(params: {
+  previousText: string;
+  nextText: string;
+  nextDelta: string;
+}) {
+  const { previousText, nextText, nextDelta } = params;
+  if (nextText && previousText) {
+    if (nextText.startsWith(previousText)) {
+      return nextText;
+    }
+    if (previousText.startsWith(nextText) && !nextDelta) {
+      return previousText;
+    }
+  }
+  if (nextDelta) {
+    return appendUniqueSuffix(previousText, nextDelta);
+  }
+  if (nextText) {
+    return nextText;
+  }
+  return previousText;
+}
+
 export type ChatRunEntry = {
   sessionKey: string;
   clientRunId: string;
@@ -302,16 +344,25 @@ export function createAgentEventHandler({
     sourceRunId: string,
     seq: number,
     text: string,
+    delta?: unknown,
   ) => {
-    const cleaned = stripInlineDirectiveTagsForDisplay(text).text;
-    if (!cleaned) {
+    const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
+    const cleanedDelta =
+      typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
+    const previousText = chatRunState.buffers.get(clientRunId) ?? "";
+    const mergedText = resolveMergedAssistantText({
+      previousText,
+      nextText: cleanedText,
+      nextDelta: cleanedDelta,
+    });
+    if (!mergedText) {
       return;
     }
-    chatRunState.buffers.set(clientRunId, cleaned);
-    if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
+    chatRunState.buffers.set(clientRunId, mergedText);
+    if (isSilentReplyText(mergedText, SILENT_REPLY_TOKEN)) {
       return;
     }
-    if (isSilentReplyLeadFragment(cleaned)) {
+    if (isSilentReplyLeadFragment(mergedText)) {
       return;
     }
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
@@ -323,7 +374,7 @@ export function createAgentEventHandler({
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
-    chatRunState.deltaLastBroadcastLen.set(clientRunId, cleaned.length);
+    chatRunState.deltaLastBroadcastLen.set(clientRunId, mergedText.length);
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -331,7 +382,7 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text: cleaned }],
+        content: [{ type: "text", text: mergedText }],
         timestamp: now,
       },
     };
@@ -451,6 +502,7 @@ export function createAgentEventHandler({
     const chatLink = chatRunState.registry.peek(evt.runId);
     const eventSessionKey =
       typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
+    const isControlUiVisible = getAgentRunContext(evt.runId)?.isControlUiVisible ?? true;
     const sessionKey =
       chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
@@ -505,14 +557,14 @@ export function createAgentEventHandler({
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
 
-    if (sessionKey) {
+    if (isControlUiVisible && sessionKey) {
       // Send tool events to node/channel subscribers only when verbose is enabled;
       // WS clients already received the event above via broadcastToConnIds.
       if (!isToolEvent || toolVerbose !== "off") {
         nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
-        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text);
+        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         const evtStopReason =
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;

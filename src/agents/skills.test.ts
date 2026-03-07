@@ -12,6 +12,7 @@ import {
   buildWorkspaceSkillSnapshot,
   loadWorkspaceSkillEntries,
 } from "./skills.js";
+import { getActiveSkillEnvKeys } from "./skills/env-overrides.js";
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
 let tempHome: TempHomeEnv | null = null;
@@ -256,9 +257,43 @@ describe("applySkillEnvOverrides", () => {
 
       try {
         expect(process.env.ENV_KEY).toBe("injected");
+        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
       } finally {
         restore();
         expect(process.env.ENV_KEY).toBeUndefined();
+        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(false);
+      }
+    });
+  });
+
+  it("keeps env keys tracked until all overlapping overrides restore", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "env-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "env-skill",
+      description: "Needs env",
+      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["ENV_KEY"], () => {
+      const config = { skills: { entries: { "env-skill": { apiKey: "injected" } } } };
+      const restoreFirst = applySkillEnvOverrides({ skills: entries, config });
+      const restoreSecond = applySkillEnvOverrides({ skills: entries, config });
+
+      try {
+        expect(process.env.ENV_KEY).toBe("injected");
+        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
+
+        restoreFirst();
+        expect(process.env.ENV_KEY).toBe("injected");
+        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
+      } finally {
+        restoreSecond();
+        expect(process.env.ENV_KEY).toBeUndefined();
+        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(false);
       }
     });
   });

@@ -71,6 +71,15 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
   <Step title="Gateway">
     - Port, bind, auth mode, tailscale exposure.
     - Auth recommendation: keep **Token** even for loopback so local WS clients must authenticate.
+    - In token mode, interactive onboarding offers:
+      - **Generate/store plaintext token** (default)
+      - **Use SecretRef** (opt-in)
+      - Quickstart reuses existing `gateway.auth.token` SecretRefs across `env`, `file`, and `exec` providers for onboarding probe/dashboard bootstrap.
+      - If that SecretRef is configured but cannot be resolved, onboarding fails early with a clear fix message instead of silently degrading runtime auth.
+    - In password mode, interactive onboarding also supports plaintext or SecretRef storage.
+    - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
+      - Requires a non-empty env var in the onboarding process environment.
+      - Cannot be combined with `--gateway-token`.
     - Disable auth only if you fully trust every local process.
     - Non‑loopback binds still require auth.
   </Step>
@@ -85,6 +94,12 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - [iMessage](/channels/imessage): legacy `imsg` CLI path + DB access.
     - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
   </Step>
+  <Step title="Web search">
+    - Pick a provider: Perplexity, Brave, Gemini, Grok, or Kimi (or skip).
+    - Paste your API key (QuickStart auto-detects keys from env vars or existing config).
+    - Skip with `--skip-search`.
+    - Configure later: `openclaw configure --section web`.
+  </Step>
   <Step title="Daemon install">
     - macOS: LaunchAgent
       - Requires a logged-in user session; for headless, use a custom LaunchDaemon (not shipped).
@@ -92,6 +107,9 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
       - Wizard attempts to enable lingering via `loginctl enable-linger <user>` so the Gateway stays up after logout.
       - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
     - **Runtime selection:** Node (recommended; required for WhatsApp/Telegram). Bun is **not recommended**.
+    - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, daemon install validates it but does not persist resolved plaintext token values into supervisor service environment metadata.
+    - If token auth requires a token and the configured token SecretRef is unresolved, daemon install is blocked with actionable guidance.
+    - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, daemon install is blocked until mode is set explicitly.
   </Step>
   <Step title="Health check">
     - Starts the Gateway (if needed) and runs `openclaw health`.
@@ -129,6 +147,19 @@ openclaw onboard --non-interactive \
 ```
 
 Add `--json` for a machine‑readable summary.
+
+Gateway token SecretRef in non-interactive mode:
+
+```bash
+export OPENCLAW_GATEWAY_TOKEN="your-token"
+openclaw onboard --non-interactive \
+  --mode local \
+  --auth-choice skip \
+  --gateway-auth token \
+  --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN
+```
+
+`--gateway-token` and `--gateway-token-ref-env` are mutually exclusive.
 
 <Note>
 `--json` does **not** imply non-interactive mode. Use `--non-interactive` (and `--workspace`) for scripts.

@@ -1,10 +1,10 @@
-import { isSecretRef } from "openclaw/plugin-sdk";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
+import { isSecretRef } from "openclaw/plugin-sdk/googlechat";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
 import type { GoogleChatAccountConfig } from "./types.config.js";
 
 export type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
@@ -71,8 +71,22 @@ function mergeGoogleChatAccountConfig(
 ): GoogleChatAccountConfig {
   const raw = cfg.channels?.["googlechat"] ?? {};
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
+  const defaultAccountConfig = resolveAccountConfig(cfg, DEFAULT_ACCOUNT_ID) ?? {};
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account } as GoogleChatAccountConfig;
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return { ...base, ...defaultAccountConfig } as GoogleChatAccountConfig;
+  }
+  const {
+    enabled: _ignoredEnabled,
+    dangerouslyAllowNameMatching: _ignoredDangerouslyAllowNameMatching,
+    serviceAccount: _ignoredServiceAccount,
+    serviceAccountRef: _ignoredServiceAccountRef,
+    serviceAccountFile: _ignoredServiceAccountFile,
+    ...defaultAccountShared
+  } = defaultAccountConfig;
+  // In multi-account setups, allow accounts.default to provide shared defaults
+  // (for example webhook/audience fields) while preserving top-level and account overrides.
+  return { ...defaultAccountShared, ...base, ...account } as GoogleChatAccountConfig;
 }
 
 function parseServiceAccount(value: unknown): Record<string, unknown> | null {
