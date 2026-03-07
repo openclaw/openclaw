@@ -49,8 +49,16 @@ export function limitHistoryTurns(
           }
         }
         if (hasOrphanedToolResult) {
-          while (cutIndex > 0 && messages[cutIndex - 1].role !== "user") {
+          // Walk back past user and toolResult messages until we reach an
+          // assistant message (the one containing the matching tool_use).
+          // Multiple user interruptions can appear between tool_use and
+          // toolResult, so we must not stop at intermediate user messages.
+          while (cutIndex > 0) {
+            const prevRole = messages[cutIndex - 1].role;
             cutIndex--;
+            if (prevRole === "assistant") {
+              break;
+            }
           }
         }
         return messages.slice(cutIndex);

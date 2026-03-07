@@ -213,4 +213,39 @@ describe("limitHistoryTurns", () => {
     expect(firstText(limited[0])).toBe("next");
     expect(firstText(limited[1])).toBe("done");
   });
+
+  it("walks back past multiple user interruptions to reach assistant tool_use", () => {
+    const toolResultMessage = (toolCallId: string): AgentMessage =>
+      ({
+        role: "toolResult",
+        toolCallId,
+        content: [{ type: "text", text: "result" }],
+        timestamp: Date.now(),
+      }) as AgentMessage;
+
+    // assistant [tool_use] → user → user → toolResult → assistant
+    // Multiple user messages between tool_use and toolResult.
+    const messages: AgentMessage[] = [
+      userMessage("start"),
+      assistantToolCallMessage("t1"),
+      userMessage("interrupt1"),
+      userMessage("interrupt2"),
+      toolResultMessage("t1"),
+      assistantTextMessage("based on tool"),
+      userMessage("last"),
+      assistantTextMessage("done"),
+    ];
+
+    const limited = limitHistoryTurns(messages, 2);
+    // Naive cut would be at index 2 (user "interrupt1"), orphaning toolResult
+    // at index 4. Walk-back must continue past user "interrupt1" to reach
+    // the assistant at index 1.
+    expect(limited.length).toBe(7);
+    expect(limited[0].role).toBe("assistant");
+    expect(firstText(limited[1])).toBe("interrupt1");
+    expect(firstText(limited[2])).toBe("interrupt2");
+    expect(limited[3].role).toBe("toolResult");
+    expect(firstText(limited[5])).toBe("last");
+    expect(firstText(limited[6])).toBe("done");
+  });
 });
