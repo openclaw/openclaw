@@ -196,6 +196,31 @@ function extractConfigAllowlist(account: {
   };
 }
 
+async function updatePairingStoreAllowlist(params: {
+  action: "add" | "remove";
+  channelId: ChannelId;
+  accountId?: string;
+  entry: string;
+}) {
+  const storeEntry = {
+    channel: params.channelId,
+    entry: params.entry,
+    accountId: params.accountId,
+  };
+  if (params.action === "add") {
+    await addChannelAllowFromStoreEntry(storeEntry);
+    return;
+  }
+
+  await removeChannelAllowFromStoreEntry(storeEntry);
+  if (params.accountId === DEFAULT_ACCOUNT_ID) {
+    await removeChannelAllowFromStoreEntry({
+      channel: params.channelId,
+      entry: params.entry,
+    });
+  }
+}
+
 function resolveAccountTarget(
   parsed: Record<string, unknown>,
   channelId: ChannelId,
@@ -695,11 +720,12 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     }
 
     if (shouldTouchStore) {
-      if (parsed.action === "add") {
-        await addChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
-      } else if (parsed.action === "remove") {
-        await removeChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
-      }
+      await updatePairingStoreAllowlist({
+        action: parsed.action,
+        channelId,
+        accountId,
+        entry: parsed.entry,
+      });
     }
 
     const actionLabel = parsed.action === "add" ? "added" : "removed";
@@ -727,11 +753,12 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     };
   }
 
-  if (parsed.action === "add") {
-    await addChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
-  } else if (parsed.action === "remove") {
-    await removeChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
-  }
+  await updatePairingStoreAllowlist({
+    action: parsed.action,
+    channelId,
+    accountId,
+    entry: parsed.entry,
+  });
 
   const actionLabel = parsed.action === "add" ? "added" : "removed";
   const scopeLabel = scope === "dm" ? "DM" : "group";
