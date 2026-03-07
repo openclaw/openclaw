@@ -152,8 +152,8 @@ describe("skills-cli", () => {
     it("resolves skill info case-insensitively", () => {
       const report = createMockReport([
         createMockSkill({
-          name: "Excel-XLSX",
-          skillKey: "excel-xlsx",
+          name: "Excel XLSX",
+          skillKey: "Excel-XLSX",
           description: "Spreadsheet helpers",
         }),
       ]);
