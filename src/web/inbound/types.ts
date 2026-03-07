@@ -36,7 +36,7 @@ export type RawInboundMessage = {
   messageId?: string;
   /** Whether message was from the bot itself */
   fromMe: boolean;
-  /** Whether this message passed access control (was it allowed through?) */
+  /** Always `false` in the current implementation — this hook fires before access control runs. Reserved for future use. */
   accessAllowed: boolean;
 };
 

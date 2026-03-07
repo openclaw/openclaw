@@ -436,7 +436,7 @@ export async function monitorWebInbox(options: {
               chatId: remoteJid,
               group: isGroup,
               groupSubject,
-              senderJid: participantJid,
+              senderJid: isGroup ? participantJid : remoteJid,
               senderE164: senderE164 ?? undefined,
               senderName: msg.pushName ?? undefined,
               body: rawBody,

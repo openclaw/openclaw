@@ -110,6 +110,8 @@ export const WhatsAppAccountSchema = WhatsAppSharedSchema.extend({
   /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
   authDir: z.string().optional(),
   mediaMaxMb: z.number().int().positive().optional(),
+  /** Path to append raw inbound message feed (JSONL format). */
+  rawInboundFeedPath: z.string().optional(),
 }).strict();
 
 export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({

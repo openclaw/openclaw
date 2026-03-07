@@ -211,14 +211,13 @@ export async function monitorWebChannel(
       },
       onRawInbound: account.rawInboundFeedPath
         ? (msg) => {
+            const feedPath = account.rawInboundFeedPath;
             try {
               const line = JSON.stringify(msg) + "\n";
               import("node:fs/promises")
-                .then((fs) => fs.appendFile(account.rawInboundFeedPath, line, "utf-8"))
+                .then((fs) => fs.appendFile(feedPath, line, "utf-8"))
                 .catch((err) => {
-                  logVerbose(
-                    `Failed to write raw inbound to ${account.rawInboundFeedPath}: ${String(err)}`,
-                  );
+                  logVerbose(`Failed to write raw inbound to ${feedPath}: ${String(err)}`);
                 });
             } catch (err) {
               logVerbose(`onRawInbound handler error: ${String(err)}`);

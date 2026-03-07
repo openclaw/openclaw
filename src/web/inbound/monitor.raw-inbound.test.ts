@@ -287,4 +287,61 @@ describe("monitorWebInbox - onRawInbound hook", () => {
 
     await listener.close();
   });
+
+  it("should set senderJid to remoteJid for DM messages", async () => {
+    const onRawInbound = vi.fn();
+    const onMessage = vi.fn();
+
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          allowFrom: ["+111"],
+        },
+      },
+      messages: {
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+      },
+    });
+
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: DEFAULT_ACCOUNT_ID,
+      authDir: getAuthDir(),
+      onMessage,
+      onRawInbound,
+    });
+
+    const sock = getSock();
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            remoteJid: "111@s.whatsapp.net",
+            id: "dm-msg-1",
+            fromMe: false,
+            // DM messages don't have participant field
+          },
+          message: {
+            conversation: "Hello from DM",
+          },
+          pushName: "DM Sender",
+          messageTimestamp: 1234567890,
+        },
+      ],
+    });
+
+    await tick();
+
+    expect(onRawInbound).toHaveBeenCalledTimes(1);
+    const rawMsg: RawInboundMessage = onRawInbound.mock.calls[0][0];
+    expect(rawMsg.group).toBe(false);
+    expect(rawMsg.chatId).toBe("111@s.whatsapp.net");
+    // For DM messages, senderJid should be set to remoteJid
+    expect(rawMsg.senderJid).toBe("111@s.whatsapp.net");
+    expect(rawMsg.senderE164).toBe("+111");
+
+    await listener.close();
+  });
 });
