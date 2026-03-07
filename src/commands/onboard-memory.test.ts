@@ -262,7 +262,9 @@ describe("onboard-memory", () => {
       const result = await setupMemoryOptimization(cfg, runtime, prompter);
 
       expect(result.agents?.defaults?.workspace).toBe("/existing-workspace");
-      expect(result.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
+      expect((result.agents?.defaults?.model as { primary?: string })?.primary).toBe(
+        "anthropic/claude-opus-4-5",
+      );
       expect(result.gateway?.mode).toBe("local");
       expect(result.gateway?.port).toBe(3000);
       // And the new config should still be applied
@@ -428,7 +430,9 @@ describe("onboard-memory", () => {
       const result = applyNonInteractiveMemoryDefaults(cfg);
 
       expect(result.agents?.defaults?.workspace).toBe("/existing");
-      expect(result.agents?.defaults?.model?.primary).toBe("openai/gpt-4o");
+      expect((result.agents?.defaults?.model as { primary?: string })?.primary).toBe(
+        "openai/gpt-4o",
+      );
       expect(result.gateway?.port).toBe(4000);
     });
   });
