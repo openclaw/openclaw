@@ -17,7 +17,7 @@ $ErrorActionPreference = "Stop"
 # Only pauses in interactive windows (not CI, not piped output).
 function Wait-BeforeExit {
     if ([Environment]::UserInteractive -and !$env:CI) {
-        Microsoft.PowerShell.Host\Write-Host ""
+        Microsoft.PowerShell.Utility\Write-Host ""
         Read-Host "Press Enter to close this window"
     }
 }
@@ -38,7 +38,7 @@ function Write-Host {
         "error" { "$ERROR✗$NC $Message" }
         default { "$MUTED·$NC $Message" }
     }
-    Microsoft.PowerShell.Host\Write-Host $msg
+    Microsoft.PowerShell.Utility\Write-Host $msg
 }
 
 function Write-Banner {
@@ -370,8 +370,8 @@ function Main {
 try {
     Main
 } catch {
-    Microsoft.PowerShell.Host\Write-Host ""
-    Microsoft.PowerShell.Host\Write-Host "$ERROR✗$NC Installation failed: $_"
+    Microsoft.PowerShell.Utility\Write-Host ""
+    Microsoft.PowerShell.Utility\Write-Host "$ERROR✗$NC Installation failed: $_"
     Wait-BeforeExit
     exit 1
 }
