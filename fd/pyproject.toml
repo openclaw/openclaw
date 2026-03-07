@@ -27,7 +27,7 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["packages*", "services*"]
+include = ["packages*", "services*", "workspace*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

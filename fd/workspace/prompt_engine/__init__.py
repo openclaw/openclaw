@@ -9,5 +9,5 @@ Public API:
     UserPrompt            — inbound prompt envelope
 """
 
-from openclaw.prompt_engine.engine import OpenClawPromptEngine  # noqa: F401
-from openclaw.prompt_engine.types import UserPrompt  # noqa: F401
+from workspace.prompt_engine.engine import OpenClawPromptEngine  # noqa: F401
+from workspace.prompt_engine.types import UserPrompt  # noqa: F401

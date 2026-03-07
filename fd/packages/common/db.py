@@ -1501,6 +1501,20 @@ def init_schema(conn: sqlite3.Connection) -> None:
         """
     )
 
+    # Attribution events (table created by AttributionLedger; ensure it exists for index)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS attribution_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chain_id TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            source TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        )
+        """
+    )
+
     # VSL view events index
     conn.execute(
         """CREATE INDEX IF NOT EXISTS ix_attribution_events_vsl

@@ -7,8 +7,8 @@ or approval dialogs.
 
 from __future__ import annotations
 
-from openclaw.prompt_engine.engine import OpenClawPromptEngine
-from openclaw.prompt_engine.types import EngineResponse, UserPrompt
+from workspace.prompt_engine.engine import OpenClawPromptEngine
+from workspace.prompt_engine.types import EngineResponse, UserPrompt
 
 
 class UIPromptAdapter:

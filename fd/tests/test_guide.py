@@ -2,32 +2,32 @@
 
 from __future__ import annotations
 
-from openclaw.guide.capabilities import (
+from workspace.guide.capabilities import (
     CAPABILITIES,
     get_section,
     list_sections,
     search_capabilities,
 )
-from openclaw.guide.contextual_help import ContextualHelpProvider, HELP_SECTIONS
-from openclaw.guide.engine import OpenClawGuideEngine
-from openclaw.guide.explain import explain_action
-from openclaw.guide.howto import HowToPlanner
-from openclaw.guide.prompts import (
+from workspace.guide.contextual_help import ContextualHelpProvider, HELP_SECTIONS
+from workspace.guide.engine import OpenClawGuideEngine
+from workspace.guide.explain import explain_action
+from workspace.guide.howto import HowToPlanner
+from workspace.guide.prompts import (
     format_contextual_help,
     format_howto,
     format_possibility,
     format_section_description,
     format_walkthrough_step,
 )
-from openclaw.guide.walkthrough import WalkthroughEngine
-from openclaw.guide.adapters.telegram import handle_help, handle_guide, route_command
-from openclaw.guide.adapters.ui import (
+from workspace.guide.walkthrough import WalkthroughEngine
+from workspace.guide.adapters.telegram import handle_help, handle_guide, route_command
+from workspace.guide.adapters.ui import (
     get_panel_info,
     get_all_panel_info,
     get_prompt_bar_config,
     get_walkthrough,
 )
-from openclaw.guide.adapters.notion import generate_guide_blocks, generate_guide_markdown
+from workspace.guide.adapters.notion import generate_guide_blocks, generate_guide_markdown
 
 
 # ── Capabilities ──────────────────────────────────────────────────────
