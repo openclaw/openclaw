@@ -90,6 +90,69 @@ describe("sent-message-cache", () => {
   });
 });
 
+describe("sendMessageTelegram NO_REPLY guard", () => {
+  it("suppresses NO_REPLY before any Telegram API call", async () => {
+    const result = await sendMessageTelegram("123", "NO_REPLY");
+
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("suppressed");
+  });
+
+  it("suppresses NO_REPLY with surrounding whitespace", async () => {
+    const result = await sendMessageTelegram("123", "  NO_REPLY  ");
+
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("suppressed");
+  });
+
+  it("does not suppress substantive text containing NO_REPLY", async () => {
+    botApi.sendMessage.mockResolvedValue({
+      message_id: 42,
+      chat: { id: 123 },
+      date: 0,
+    });
+
+    await sendMessageTelegram("123", "This is not a NO_REPLY situation", { token: "tok" });
+
+    expect(botApi.sendMessage).toHaveBeenCalled();
+  });
+
+  it("does not suppress NO_REPLY when media is attached", async () => {
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("img"),
+      contentType: "image/png",
+    });
+    botApi.sendPhoto.mockResolvedValue({
+      message_id: 43,
+      chat: { id: 123 },
+      date: 0,
+    });
+
+    const result = await sendMessageTelegram("123", "NO_REPLY", {
+      token: "tok",
+      mediaUrl: "https://example.com/img.png",
+    });
+
+    expect(result.messageId).not.toBe("suppressed");
+  });
+
+  it("does not suppress NO_REPLY when buttons are attached", async () => {
+    botApi.sendMessage.mockResolvedValue({
+      message_id: 44,
+      chat: { id: 123 },
+      date: 0,
+    });
+
+    const result = await sendMessageTelegram("123", "NO_REPLY", {
+      token: "tok",
+      buttons: [[{ text: "Click", callback_data: "cb" }]],
+    });
+
+    expect(botApi.sendMessage).toHaveBeenCalled();
+    expect(result.messageId).not.toBe("suppressed");
+  });
+});
+
 describe("buildInlineKeyboard", () => {
   it("normalizes keyboard inputs", () => {
     const cases: Array<{
