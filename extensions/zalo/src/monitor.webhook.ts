@@ -11,8 +11,8 @@ import {
   type RegisterWebhookTargetOptions,
   type RegisterWebhookPluginRouteOptions,
   registerWebhookTarget,
-  resolveSingleWebhookTarget,
-  resolveWebhookTargets,
+  resolveWebhookTargetWithAuthOrRejectSync,
+  withResolvedWebhookRequestPipeline,
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "openclaw/plugin-sdk/zalo";
@@ -134,95 +134,80 @@ export async function handleZaloWebhookRequest(
   res: ServerResponse,
   processUpdate: ZaloWebhookProcessUpdate,
 ): Promise<boolean> {
-  const resolved = resolveWebhookTargets(req, webhookTargets);
-  if (!resolved) {
-    return false;
-  }
-  const { targets, path } = resolved;
-
-  if (
-    !applyBasicWebhookRequestGuards({
-      req,
-      res,
-      allowMethods: ["POST"],
-    })
-  ) {
-    return true;
-  }
-
-  const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
-  const matchedTarget = resolveSingleWebhookTarget(targets, (entry) =>
-    timingSafeEquals(entry.secret, headerToken),
-  );
-  if (matchedTarget.kind === "none") {
-    res.statusCode = 401;
-    res.end("unauthorized");
-    recordWebhookStatus(targets[0]?.runtime, path, res.statusCode);
-    return true;
-  }
-  if (matchedTarget.kind === "ambiguous") {
-    res.statusCode = 401;
-    res.end("ambiguous webhook target");
-    recordWebhookStatus(targets[0]?.runtime, path, res.statusCode);
-    return true;
-  }
-  const target = matchedTarget.target;
-  const rateLimitKey = `${path}:${req.socket.remoteAddress ?? "unknown"}`;
-  const nowMs = Date.now();
-
-  if (
-    !applyBasicWebhookRequestGuards({
-      req,
-      res,
-      rateLimiter: webhookRateLimiter,
-      rateLimitKey,
-      nowMs,
-      requireJsonContentType: true,
-    })
-  ) {
-    recordWebhookStatus(target.runtime, path, res.statusCode);
-    return true;
-  }
-  const body = await readJsonWebhookBodyOrReject({
+  return await withResolvedWebhookRequestPipeline({
     req,
     res,
-    maxBytes: 1024 * 1024,
-    timeoutMs: 30_000,
-    emptyObjectOnEmpty: false,
-    invalidJsonMessage: "Bad Request",
+    targetsByPath: webhookTargets,
+    allowMethods: ["POST"],
+    handle: async ({ targets, path }) => {
+      const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
+      const target = resolveWebhookTargetWithAuthOrRejectSync({
+        targets,
+        res,
+        isMatch: (entry) => timingSafeEquals(entry.secret, headerToken),
+      });
+      if (!target) {
+        recordWebhookStatus(targets[0]?.runtime, path, res.statusCode);
+        return true;
+      }
+      const rateLimitKey = `${path}:${req.socket.remoteAddress ?? "unknown"}`;
+      const nowMs = Date.now();
+
+      if (
+        !applyBasicWebhookRequestGuards({
+          req,
+          res,
+          rateLimiter: webhookRateLimiter,
+          rateLimitKey,
+          nowMs,
+          requireJsonContentType: true,
+        })
+      ) {
+        recordWebhookStatus(target.runtime, path, res.statusCode);
+        return true;
+      }
+      const body = await readJsonWebhookBodyOrReject({
+        req,
+        res,
+        maxBytes: 1024 * 1024,
+        timeoutMs: 30_000,
+        emptyObjectOnEmpty: false,
+        invalidJsonMessage: "Bad Request",
+      });
+      if (!body.ok) {
+        recordWebhookStatus(target.runtime, path, res.statusCode);
+        return true;
+      }
+      const raw = body.value;
+
+      // Zalo sends updates directly as { event_name, message, ... }, not wrapped in { ok, result }.
+      const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+      const update: ZaloUpdate | undefined =
+        record && record.ok === true && record.result
+          ? (record.result as ZaloUpdate)
+          : ((record as ZaloUpdate | null) ?? undefined);
+
+      if (!update?.event_name) {
+        res.statusCode = 400;
+        res.end("Bad Request");
+        recordWebhookStatus(target.runtime, path, res.statusCode);
+        return true;
+      }
+
+      if (isReplayEvent(update, nowMs)) {
+        res.statusCode = 200;
+        res.end("ok");
+        return true;
+      }
+
+      target.statusSink?.({ lastInboundAt: Date.now() });
+      processUpdate({ update, target }).catch((err) => {
+        target.runtime.error?.(`[${target.account.accountId}] Zalo webhook failed: ${String(err)}`);
+      });
+
+      res.statusCode = 200;
+      res.end("ok");
+      return true;
+    },
   });
-  if (!body.ok) {
-    recordWebhookStatus(target.runtime, path, res.statusCode);
-    return true;
-  }
-  const raw = body.value;
-
-  // Zalo sends updates directly as { event_name, message, ... }, not wrapped in { ok, result }.
-  const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
-  const update: ZaloUpdate | undefined =
-    record && record.ok === true && record.result
-      ? (record.result as ZaloUpdate)
-      : ((record as ZaloUpdate | null) ?? undefined);
-
-  if (!update?.event_name) {
-    res.statusCode = 400;
-    res.end("Bad Request");
-    recordWebhookStatus(target.runtime, path, res.statusCode);
-    return true;
-  }
-
-  if (isReplayEvent(update, nowMs)) {
-    res.statusCode = 200;
-    res.end("ok");
-    return true;
-  }
-
-  target.statusSink?.({ lastInboundAt: Date.now() });
-  processUpdate({ update, target }).catch((err) => {
-    target.runtime.error?.(`[${target.account.accountId}] Zalo webhook failed: ${String(err)}`);
-  });
-
-  res.statusCode = 200;
-  res.end("ok");
-  return true;
 }

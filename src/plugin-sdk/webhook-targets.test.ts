@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createWebhookInFlightLimiter } from "./webhook-request-guards.js";
 import {
   registerWebhookTarget,
   registerWebhookTargetWithPluginRoute,
@@ -12,6 +13,7 @@ import {
   resolveWebhookTargetWithAuthOrReject,
   resolveWebhookTargetWithAuthOrRejectSync,
   resolveWebhookTargets,
+  withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";
 
 function createRequest(method: string, url: string): IncomingMessage {
@@ -152,6 +154,78 @@ describe("resolveWebhookTargets", () => {
   it("returns null when path has no targets", () => {
     const targets = new Map<string, Array<{ id: string }>>();
     expect(resolveWebhookTargets(createRequest("POST", "/missing"), targets)).toBeNull();
+  });
+});
+
+describe("withResolvedWebhookRequestPipeline", () => {
+  it("returns false when request path has no registered targets", async () => {
+    const req = createRequest("POST", "/missing");
+    req.headers = {};
+    const res = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: vi.fn(),
+    } as unknown as ServerResponse;
+    const handled = await withResolvedWebhookRequestPipeline({
+      req,
+      res,
+      targetsByPath: new Map<string, Array<{ id: string }>>(),
+      allowMethods: ["POST"],
+      handle: vi.fn(),
+    });
+    expect(handled).toBe(false);
+  });
+
+  it("runs handler when targets resolve and method passes", async () => {
+    const req = createRequest("POST", "/hook");
+    req.headers = {};
+    (req as unknown as { socket: { remoteAddress: string } }).socket = {
+      remoteAddress: "127.0.0.1",
+    };
+    const res = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: vi.fn(),
+    } as unknown as ServerResponse;
+    const handle = vi.fn(async () => {});
+    const handled = await withResolvedWebhookRequestPipeline({
+      req,
+      res,
+      targetsByPath: new Map([["/hook", [{ id: "A" }]]]),
+      allowMethods: ["POST"],
+      handle,
+    });
+    expect(handled).toBe(true);
+    expect(handle).toHaveBeenCalledWith({ path: "/hook", targets: [{ id: "A" }] });
+  });
+
+  it("releases in-flight slot when handler throws", async () => {
+    const req = createRequest("POST", "/hook");
+    req.headers = {};
+    (req as unknown as { socket: { remoteAddress: string } }).socket = {
+      remoteAddress: "127.0.0.1",
+    };
+    const res = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: vi.fn(),
+    } as unknown as ServerResponse;
+    const limiter = createWebhookInFlightLimiter();
+
+    await expect(
+      withResolvedWebhookRequestPipeline({
+        req,
+        res,
+        targetsByPath: new Map([["/hook", [{ id: "A" }]]]),
+        allowMethods: ["POST"],
+        inFlightLimiter: limiter,
+        handle: async () => {
+          throw new Error("boom");
+        },
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(limiter.size()).toBe(0);
   });
 });
 

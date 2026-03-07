@@ -106,6 +106,8 @@ export type {
 export {
   registerWebhookTarget,
   registerWebhookTargetWithPluginRoute,
+  resolveWebhookTargetWithAuthOrRejectSync,
   resolveSingleWebhookTarget,
   resolveWebhookTargets,
+  withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";

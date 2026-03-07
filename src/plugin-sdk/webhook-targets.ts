@@ -1,6 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import { normalizeWebhookPath } from "./webhook-path.js";
+import {
+  beginWebhookRequestPipelineOrReject,
+  type WebhookInFlightLimiter,
+} from "./webhook-request-guards.js";
 
 export type RegisteredWebhookTarget<T> = {
   target: T;
@@ -105,6 +110,55 @@ export function resolveWebhookTargets<T>(
     return null;
   }
   return { path, targets };
+}
+
+export async function withResolvedWebhookRequestPipeline<T>(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  targetsByPath: Map<string, T[]>;
+  allowMethods?: readonly string[];
+  rateLimiter?: FixedWindowRateLimiter;
+  rateLimitKey?: string;
+  nowMs?: number;
+  requireJsonContentType?: boolean;
+  inFlightLimiter?: WebhookInFlightLimiter;
+  inFlightKey?: string | ((args: { req: IncomingMessage; path: string; targets: T[] }) => string);
+  inFlightLimitStatusCode?: number;
+  inFlightLimitMessage?: string;
+  handle: (args: { path: string; targets: T[] }) => Promise<boolean | void> | boolean | void;
+}): Promise<boolean> {
+  const resolved = resolveWebhookTargets(params.req, params.targetsByPath);
+  if (!resolved) {
+    return false;
+  }
+
+  const inFlightKey =
+    typeof params.inFlightKey === "function"
+      ? params.inFlightKey({ req: params.req, path: resolved.path, targets: resolved.targets })
+      : (params.inFlightKey ?? `${resolved.path}:${params.req.socket?.remoteAddress ?? "unknown"}`);
+  const requestLifecycle = beginWebhookRequestPipelineOrReject({
+    req: params.req,
+    res: params.res,
+    allowMethods: params.allowMethods,
+    rateLimiter: params.rateLimiter,
+    rateLimitKey: params.rateLimitKey,
+    nowMs: params.nowMs,
+    requireJsonContentType: params.requireJsonContentType,
+    inFlightLimiter: params.inFlightLimiter,
+    inFlightKey,
+    inFlightLimitStatusCode: params.inFlightLimitStatusCode,
+    inFlightLimitMessage: params.inFlightLimitMessage,
+  });
+  if (!requestLifecycle.ok) {
+    return true;
+  }
+
+  try {
+    await params.handle(resolved);
+    return true;
+  } finally {
+    requestLifecycle.release();
+  }
 }
 
 export type WebhookTargetMatchResult<T> =
