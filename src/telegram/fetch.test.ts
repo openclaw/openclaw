@@ -274,6 +274,65 @@ describe("resolveTelegramFetch", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  it("recovers via safe fallback path when dispatcher retries still fail", async () => {
+    const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
+      code: "ETIMEDOUT",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: timeoutErr,
+    });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(fetchError)
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    getGlobalDispatcherState.value = { id: "baseline-dispatcher" };
+
+    const resolved = resolveTelegramFetchOrThrow();
+    const response = await resolved("https://api.telegram.org/file/botx/photos/file_4.jpg");
+
+    expect(response).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "https://api.telegram.org/file/botx/photos/file_4.jpg",
+      expect.objectContaining({
+        dispatcher: getGlobalDispatcherState.value,
+      }),
+    );
+  });
+
+  it("keeps global dispatcher stable during safe retry and reapplies on next resolve", async () => {
+    const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
+      code: "ETIMEDOUT",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: timeoutErr,
+    });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(fetchError)
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    getGlobalDispatcherState.value = { id: "baseline-dispatcher" };
+
+    const resolved1 = resolveTelegramFetchOrThrow();
+    await resolved1("https://api.telegram.org/file/botx/photos/file_5.jpg");
+
+    const resolved2 = resolveTelegramFetchOrThrow();
+    await resolved2("https://api.telegram.org/file/botx/photos/file_6.jpg");
+
+    // setGlobalDispatcher calls:
+    // 1) initial autoSelectFamily apply
+    // 2) ipv4 fallback apply
+    // 3) next resolve reapplies configured dispatcher decision
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(3);
+  });
+
   it("does not retry when fetch fails without fallback network error codes", async () => {
     const fetchError = Object.assign(new TypeError("fetch failed"), {
       cause: Object.assign(new Error("connect ECONNRESET"), {

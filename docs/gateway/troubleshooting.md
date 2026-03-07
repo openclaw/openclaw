@@ -197,6 +197,48 @@ Related:
 - [/channels/telegram](/channels/telegram)
 - [/channels/discord](/channels/discord)
 
+## Telegram TUN VPN fetch failures
+
+Use this when Telegram polling or sends intermittently fail on TUN or VPN hosts with messages like:
+`TypeError: fetch failed` or `Network request for 'getUpdates' failed!`.
+
+```bash
+openclaw channels status --probe
+openclaw logs --follow
+openclaw config get channels.telegram
+```
+
+Look for:
+
+- Telegram channel connects but polling/send fails on first network attempt.
+- IPv6 first resolution with broken egress on the host tunnel.
+- Failures that disappear when using an explicit proxy.
+
+Fix options:
+
+1. Upgrade to `2026.3.3+` for dispatcher-safe Telegram fetch fallback on TUN or VPN networks.
+2. Configure `channels.telegram.proxy` for unstable host egress:
+
+```yaml
+channels:
+  telegram:
+    proxy: socks5://user:pass@proxy-host:1080
+```
+
+3. Force IPv4-first Telegram behavior when needed:
+
+```yaml
+channels:
+  telegram:
+    network:
+      autoSelectFamily: false
+```
+
+Related:
+
+- [/channels/telegram](/channels/telegram)
+- [/channels/troubleshooting](/channels/troubleshooting)
+
 ## Cron and heartbeat delivery
 
 If cron or heartbeat did not run or did not deliver, verify scheduler state first, then delivery target.

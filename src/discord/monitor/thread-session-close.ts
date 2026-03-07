@@ -1,3 +1,4 @@
+import { listAgentIds } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStorePath, updateSessionStore } from "../../config/sessions.js";
 
@@ -36,24 +37,30 @@ export async function closeDiscordThreadSessions(params: {
     return segmentRe.test(key);
   }
 
-  // Resolve the store file. We pass `accountId` as `agentId` here to mirror
-  // how other Discord subsystems resolve their per-account sessions stores.
-  const storePath = resolveStorePath(cfg.session?.store, { agentId: accountId });
-
   let resetCount = 0;
+  const candidateAgentIds = new Set<string>([...listAgentIds(cfg), accountId]);
+  const seenStorePaths = new Set<string>();
 
-  await updateSessionStore(storePath, (store) => {
-    for (const [key, entry] of Object.entries(store)) {
-      if (!entry || !sessionKeyContainsThreadId(key)) {
-        continue;
-      }
-      // Setting updatedAt to 0 signals that this session is stale.
-      // evaluateSessionFreshness will create a new session on the next message.
-      entry.updatedAt = 0;
-      resetCount += 1;
+  for (const agentId of candidateAgentIds) {
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    if (seenStorePaths.has(storePath)) {
+      continue;
     }
-    return resetCount;
-  });
+    seenStorePaths.add(storePath);
+
+    await updateSessionStore(storePath, (store) => {
+      for (const [key, entry] of Object.entries(store)) {
+        if (!entry || !sessionKeyContainsThreadId(key)) {
+          continue;
+        }
+        // Setting updatedAt to 0 signals that this session is stale.
+        // evaluateSessionFreshness will create a new session on the next message.
+        entry.updatedAt = 0;
+        resetCount += 1;
+      }
+      return resetCount;
+    });
+  }
 
   return resetCount;
 }
