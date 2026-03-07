@@ -1,4 +1,7 @@
-import { buildOpenGroupPolicyWarning } from "openclaw/plugin-sdk";
+import {
+  buildAccountScopedDmSecurityPolicy,
+  buildOpenGroupPolicyWarning,
+} from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
@@ -6,7 +9,6 @@ import {
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
-  formatPairingApproveHint,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -159,20 +161,17 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     formatAllowFrom: ({ allowFrom }) => normalizeMatrixAllowList(allowFrom),
   },
   security: {
-    resolveDmPolicy: ({ account }) => {
-      const accountId = account.accountId;
-      const prefix =
-        accountId && accountId !== "default"
-          ? `channels.matrix.accounts.${accountId}.dm`
-          : "channels.matrix.dm";
-      return {
-        policy: account.config.dm?.policy ?? "pairing",
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      return buildAccountScopedDmSecurityPolicy({
+        cfg: cfg as CoreConfig,
+        channelKey: "matrix",
+        accountId,
+        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
+        policy: account.config.dm?.policy,
         allowFrom: account.config.dm?.allowFrom ?? [],
-        policyPath: `${prefix}.policy`,
-        allowFromPath: `${prefix}.allowFrom`,
-        approveHint: formatPairingApproveHint("matrix"),
+        allowFromPathSuffix: "dm.",
         normalizeEntry: (raw) => normalizeMatrixUserId(raw),
-      };
+      });
     },
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg as CoreConfig);
