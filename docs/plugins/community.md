@@ -54,4 +54,4 @@ Use this format when adding entries:
   npm: `openclawdreams`
   repo: `https://github.com/RogueCtrl/OpenClawDreams`
   install: `openclaw plugins install openclawdreams`
-  version: `1.0.0`
+  version: `1.1.0`
