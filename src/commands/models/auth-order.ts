@@ -6,6 +6,7 @@ import {
 } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
 import { resolveKnownAgentId } from "./shared.js";
@@ -104,7 +105,7 @@ export async function modelsAuthOrderSetCommand(
     allowKeychainPrompt: false,
   });
   const providerKey = provider;
-  const requested = (opts.order ?? []).map((entry) => String(entry).trim()).filter(Boolean);
+  const requested = normalizeStringEntries(opts.order ?? []);
   if (requested.length === 0) {
     throw new Error("Missing profile ids. Provide one or more profile ids.");
   }
