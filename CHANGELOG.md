@@ -219,6 +219,7 @@ Docs: https://docs.openclaw.ai
 - Agents/usage normalization: normalize missing or partial assistant usage snapshots before compaction accounting so `openclaw agent --json` no longer crashes when provider payloads omit `totalTokens` or related usage fields. (#34977) thanks @sp-hk2ldn.
 - Venice/default model refresh: switch the built-in Venice default to `kimi-k2-5`, update onboarding aliasing, and refresh Venice provider docs/recommendations to match the current private and anonymized catalog. (from #12964) Fixes #20156. Thanks @sabrinaaquino and @vincentkoc.
 - Agents/skill API write pacing: add a global prompt guardrail that treats skill-driven external API writes as rate-limited by default, so runners prefer batched writes, avoid tight request loops, and respect `429`/`Retry-After`. Thanks @vincentkoc.
+- Google Chat/multi-account webhook auth fallback: when `channels.googlechat.accounts.default` carries shared webhook audience/path settings (for example after config normalization), inherit those defaults for named accounts while preserving top-level and per-account overrides, so inbound webhook verification no longer fails silently for named accounts missing duplicated audience fields. Fixes #38369.
 
 ## 2026.3.2
 
