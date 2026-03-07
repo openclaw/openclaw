@@ -17,7 +17,7 @@ import {
   findSessionsForChatId,
   registerSessionMapping,
   loadSessionIndex,
-} from "../config/sessions/session-index.js";
+} from "../../config/sessions/session-index.js";
 
 interface ConsolidateOptions {
   chatId: string;

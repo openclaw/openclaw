@@ -14,7 +14,7 @@ import {
   lookupSessionByChatId,
   loadSessionIndex,
   scanSessionsForChatId,
-} from "../config/sessions/session-index.js";
+} from "../../config/sessions/session-index.js";
 import { loadCombinedSessionStoreForGateway } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.js";
 

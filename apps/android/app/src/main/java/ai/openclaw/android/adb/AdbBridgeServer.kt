@@ -30,6 +30,10 @@ class AdbBridgeServer(
     
     private val json = Json { prettyPrint = true }
     
+    // API Key authentication (from BuildConfig or environment)
+    private val apiKey = BuildConfig.ADB_BRIDGE_API_KEY.takeIf { it.isNotEmpty() } 
+        ?: "adb-bridge-secure-key-${System.currentTimeMillis() % 10000}"
+    
     @Serializable
     data class ShellCommandRequest(
         val command: String
@@ -78,6 +82,26 @@ class AdbBridgeServer(
     override fun serve(session: IHTTPSession): Response {
         val uri = session.uri
         val method = session.method
+        
+        // Skip auth for status, screen info, and OPTIONS
+        val requiresAuth = when {
+            uri == "/adb/status" && method == Method.GET -> false
+            uri == "/adb/screen" && method == Method.GET -> false
+            method == Method.OPTIONS -> false
+            else -> true
+        }
+        
+        // Check authentication for protected endpoints
+        if (requiresAuth) {
+            val apiKeyHeader = session.headers["x-api-key"] ?: session.headers["X-API-Key"]
+            if (apiKeyHeader != apiKey) {
+                return newFixedLengthResponse(
+                    Response.Status.UNAUTHORIZED,
+                    MIME_PLAINTEXT,
+                    "{\"error\":\"Unauthorized: Invalid or missing API key\"}"
+                )
+            }
+        }
         
         return try {
             when {

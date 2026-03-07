@@ -14,7 +14,7 @@ import path from "node:path";
 import {
   rebuildIndex,
   loadSessionIndex,
-} from "../config/sessions/session-index.js";
+} from "../../config/sessions/session-index.js";
 
 interface IndexOptions {
   rebuild?: boolean;
