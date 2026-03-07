@@ -90,6 +90,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["byteplus-api-key"],
   },
   {
+    value: "dashscope",
+    label: "Dashscope",
+    hint: "Aliyun Dashscope API key",
+    choices: ["dashscope-api-key"],
+  },
+  {
     value: "openrouter",
     label: "OpenRouter",
     hint: "API key",
@@ -298,6 +304,7 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     hint: "Official fast tier (legacy: Lightning)",
   },
   { value: "custom-api-key", label: "Custom Provider" },
+  { value: "dashscope-api-key", label: "Dashscope API key" },
 ];
 
 export function formatAuthChoiceChoicesForCli(params?: {

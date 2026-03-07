@@ -29,7 +29,7 @@ import {
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelApi } from "../config/types.models.js";
+import type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
@@ -79,6 +79,12 @@ import {
   resolveZaiBaseUrl,
   XAI_BASE_URL,
   XAI_DEFAULT_MODEL_ID,
+  DASHSCOPE_REGION_BASE_URL,
+  DASHSCOPE_DEFAULT_MODEL_ID,
+  DASHSCOPE_DEFAULT_MODEL_REF,
+  buildDashscopeModelDefinition,
+  buildDashscopeModelDefinitionById,
+  DashscopeRegion,
 } from "./onboard-auth.models.js";
 
 export function applyZaiProviderConfig(
@@ -572,4 +578,64 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+}
+
+export function applyDashscopeProviderConfigWithModelId(
+  cfg: OpenClawConfig,
+  modelId: string,
+  opts?: { region?: DashscopeRegion },
+): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  const modelRef = `dashscope/${modelId}`;
+  models[modelRef] = {
+    ...models[modelRef],
+    alias:
+      models[modelRef]?.alias ?? (modelId === DASHSCOPE_DEFAULT_MODEL_ID ? "Qwen3 Max" : modelId),
+  };
+
+  const defaultModel =
+    modelId === DASHSCOPE_DEFAULT_MODEL_ID
+      ? buildDashscopeModelDefinition()
+      : buildDashscopeModelDefinitionById(modelId);
+
+  const providers = { ...(cfg.models?.providers as Record<string, ModelProviderConfig>) };
+  const existingProvider = providers.dashscope;
+  const region: DashscopeRegion = opts?.region ?? "cn";
+  // Honor an explicit region override first; otherwise preserve any existing
+  // configured URL; then fall back to the CN default.
+  const baseUrl =
+    existingProvider?.baseUrl && !opts?.region
+      ? existingProvider.baseUrl
+      : DASHSCOPE_REGION_BASE_URL[region];
+
+  providers.dashscope = {
+    ...existingProvider,
+    baseUrl,
+    api: "openai-completions",
+    models: existingProvider?.models ?? [],
+  };
+
+  return applyProviderConfigWithDefaultModel(
+    {
+      ...cfg,
+      models: { mode: cfg.models?.mode ?? "merge", providers },
+    },
+    {
+      agentModels: models,
+      providerId: "dashscope",
+      api: "openai-completions",
+      baseUrl,
+      defaultModel,
+      defaultModelId: modelId,
+    },
+  );
+}
+
+export function applyDashscopeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return applyDashscopeProviderConfigWithModelId(cfg, DASHSCOPE_DEFAULT_MODEL_ID, { region: "cn" });
+}
+
+export function applyDashscopeConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyDashscopeProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, DASHSCOPE_DEFAULT_MODEL_REF);
 }

@@ -190,6 +190,19 @@ export function buildZaiModelDefinition(params: {
   };
 }
 
+export {
+  type DashscopeRegion,
+  DASHSCOPE_REGION_BASE_URL,
+  DASHSCOPE_BASE_URL,
+  DASHSCOPE_DEFAULT_MODEL_ID,
+  DASHSCOPE_DEFAULT_MODEL_REF,
+  DASHSCOPE_DEFAULT_CONTEXT_WINDOW,
+  DASHSCOPE_DEFAULT_MAX_TOKENS,
+  DASHSCOPE_DEFAULT_COST,
+  buildDashscopeModelDefinition,
+  buildDashscopeModelDefinitionById,
+} from "../agents/dashscope-models.js";
+
 export const XAI_BASE_URL = "https://api.x.ai/v1";
 export const XAI_DEFAULT_MODEL_ID = "grok-4";
 export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
