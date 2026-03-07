@@ -3,25 +3,21 @@ import { collectConfigServiceEnvVars } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
-import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
-  emitNodeRuntimeWarning,
-  type DaemonInstallWarnFn,
-} from "./daemon-install-runtime-warning.js";
+  emitDaemonInstallRuntimeWarning,
+  resolveDaemonInstallRuntimeInputs,
+} from "./daemon-install-plan.shared.js";
+import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
+
+export { resolveGatewayDevMode } from "./daemon-install-plan.shared.js";
 
 export type GatewayInstallPlan = {
   programArguments: string[];
   workingDirectory?: string;
   environment: Record<string, string | undefined>;
 };
-
-export function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
-  const entry = argv[1];
-  const normalizedEntry = entry?.replaceAll("\\", "/");
-  return Boolean(normalizedEntry?.includes("/src/") && normalizedEntry.endsWith(".ts"));
-}
 
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
@@ -34,23 +30,22 @@ export async function buildGatewayInstallPlan(params: {
   /** Full config to extract env vars from (env vars + inline env keys). */
   config?: OpenClawConfig;
 }): Promise<GatewayInstallPlan> {
-  const devMode = params.devMode ?? resolveGatewayDevMode();
-  const nodePath =
-    params.nodePath ??
-    (await resolvePreferredNodePath({
-      env: params.env,
-      runtime: params.runtime,
-    }));
+  const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
+    env: params.env,
+    runtime: params.runtime,
+    devMode: params.devMode,
+    nodePath: params.nodePath,
+  });
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     dev: devMode,
     runtime: params.runtime,
     nodePath,
   });
-  await emitNodeRuntimeWarning({
+  await emitDaemonInstallRuntimeWarning({
     env: params.env,
     runtime: params.runtime,
-    nodeProgram: programArguments[0],
+    programArguments,
     warn: params.warn,
     title: "Gateway runtime",
   });
