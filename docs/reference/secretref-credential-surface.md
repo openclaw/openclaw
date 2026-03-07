@@ -99,6 +99,7 @@ Notes:
 - Auth-profile plan targets require `agentId`.
 - Plan entries target `profiles.*.key` / `profiles.*.token` and write sibling refs (`keyRef` / `tokenRef`).
 - Auth-profile refs are included in runtime resolution and audit coverage.
+- For SecretRef-managed model providers, generated `agents/*/agent/models.json` entries persist non-secret markers (not resolved secret values) for `apiKey`/header surfaces.
 - For web search:
   - In explicit provider mode (`tools.web.search.provider` set), only the selected provider key is active.
   - In auto mode (`tools.web.search.provider` unset), `tools.web.search.apiKey` and provider-specific keys are active.

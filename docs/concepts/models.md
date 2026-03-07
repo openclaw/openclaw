@@ -212,6 +212,8 @@ is merged by default unless `models.mode` is set to `replace`.
 
 Merge mode precedence for matching provider IDs:
 
-- Non-empty `apiKey`/`baseUrl` already present in the agent `models.json` win.
+- Non-empty `baseUrl` already present in the agent `models.json` wins.
+- Non-empty `apiKey` in the agent `models.json` wins only when that provider is not SecretRef-managed in current config/auth-profile context.
+- SecretRef-managed provider `apiKey` values are refreshed from source markers (`ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs) instead of persisting resolved secrets.
 - Empty or missing agent `apiKey`/`baseUrl` fall back to config `models.providers`.
 - Other provider fields are refreshed from config and normalized catalog data.

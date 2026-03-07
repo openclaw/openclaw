@@ -372,7 +372,8 @@ openclaw secrets audit --check
 
 Findings include:
 
-- plaintext values at rest (`openclaw.json`, `auth-profiles.json`, `.env`)
+- plaintext values at rest (`openclaw.json`, `auth-profiles.json`, `.env`, and generated `agents/*/agent/models.json`)
+- plaintext sensitive provider header residues in generated `models.json` entries
 - unresolved refs
 - precedence shadowing (`auth-profiles.json` taking priority over `openclaw.json` refs)
 - legacy residues (`auth.json`, OAuth reminders)

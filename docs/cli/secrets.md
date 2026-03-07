@@ -14,7 +14,7 @@ Use `openclaw secrets` to manage SecretRefs and keep the active runtime snapshot
 Command roles:
 
 - `reload`: gateway RPC (`secrets.reload`) that re-resolves refs and swaps runtime snapshot only on full success (no config writes).
-- `audit`: read-only scan of configuration/auth stores and legacy residues for plaintext, unresolved refs, and precedence drift.
+- `audit`: read-only scan of configuration/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift.
 - `configure`: interactive planner for provider setup, target mapping, and preflight (TTY required).
 - `apply`: execute a saved plan (`--dry-run` for validation only), then scrub targeted plaintext residues.
 
@@ -62,6 +62,7 @@ Scan OpenClaw state for:
 - plaintext secret storage
 - unresolved refs
 - precedence drift (`auth-profiles.json` credentials shadowing `openclaw.json` refs)
+- generated `agents/*/agent/models.json` residues (provider `apiKey` values and sensitive provider headers)
 - legacy residues (legacy auth store entries, OAuth reminders)
 
 ```bash
