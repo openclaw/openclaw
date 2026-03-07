@@ -5,6 +5,19 @@ import type { OpenClawConfig } from "../config/config.js";
 const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
 const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
+const resolveAgentConfig = vi.hoisted(() =>
+  vi.fn<() => { memorySearch?: { provider?: string; enabled?: boolean } } | undefined>(
+    () => undefined,
+  ),
+);
+const normalizeMemorySearchProvider = vi.hoisted(() =>
+  vi.fn((provider: unknown) => (typeof provider === "string" ? provider.trim() : "")),
+);
+const isBuiltinMemorySearchProvider = vi.hoisted(() =>
+  vi.fn((provider: string) =>
+    new Set(["openai", "local", "gemini", "voyage", "mistral", "ollama", "auto"]).has(provider),
+  ),
+);
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const resolveMemoryBackendConfig = vi.hoisted(() => vi.fn());
@@ -14,11 +27,14 @@ vi.mock("../terminal/note.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentConfig,
   resolveDefaultAgentId,
   resolveAgentDir,
 }));
 
 vi.mock("../agents/memory-search.js", () => ({
+  normalizeMemorySearchProvider,
+  isBuiltinMemorySearchProvider,
   resolveMemorySearchConfig,
 }));
 
@@ -53,6 +69,8 @@ describe("noteMemorySearchHealth", () => {
     note.mockClear();
     resolveDefaultAgentId.mockClear();
     resolveAgentDir.mockClear();
+    resolveAgentConfig.mockReset();
+    resolveAgentConfig.mockReturnValue(undefined);
     resolveMemorySearchConfig.mockReset();
     resolveApiKeyForProvider.mockReset();
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
@@ -275,7 +293,7 @@ describe("noteMemorySearchHealth", () => {
     resolveApiKeyForProvider.mockImplementation(async ({ provider }: { provider: string }) => {
       if (provider === "ollama") {
         return {
-          apiKey: "ollama-local",
+          apiKey: "ollama-local", // pragma: allowlist secret
           source: "env: OLLAMA_API_KEY",
           mode: "api-key",
         };
@@ -289,6 +307,39 @@ describe("noteMemorySearchHealth", () => {
     const providerCalls = resolveApiKeyForProvider.mock.calls as Array<[{ provider: string }]>;
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
     expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
+  });
+
+  it("notes plugin-managed providers and skips built-in checks", async () => {
+    resolveMemorySearchConfig.mockReturnValue(null);
+    resolveAgentConfig.mockReturnValue({
+      memorySearch: {
+        provider: "memory-openviking",
+      },
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('provider "memory-openviking" is delegated');
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("prefers disabled note over plugin-provider note when memory search is disabled", async () => {
+    resolveMemorySearchConfig.mockReturnValue(null);
+    resolveAgentConfig.mockReturnValue({
+      memorySearch: {
+        enabled: false,
+        provider: "memory-openviking",
+      },
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("explicitly disabled");
+    expect(message).not.toContain("delegated to the memory plugin slot");
   });
 });
 

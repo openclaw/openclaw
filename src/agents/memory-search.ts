@@ -79,6 +79,45 @@ export type ResolvedMemorySearchConfig = {
   };
 };
 
+export const BUILTIN_MEMORY_SEARCH_PROVIDERS = new Set([
+  "openai",
+  "local",
+  "gemini",
+  "voyage",
+  "mistral",
+  "ollama",
+  "auto",
+] as const);
+
+export type BuiltinMemorySearchProvider =
+  | "openai"
+  | "local"
+  | "gemini"
+  | "voyage"
+  | "mistral"
+  | "ollama"
+  | "auto";
+
+export function normalizeMemorySearchProvider(provider: unknown): string {
+  if (typeof provider !== "string") {
+    return "";
+  }
+  return provider.trim();
+}
+
+export function resolveBuiltinMemorySearchProvider(
+  provider: unknown,
+): BuiltinMemorySearchProvider | null {
+  const normalized = normalizeMemorySearchProvider(provider).toLowerCase();
+  return isBuiltinMemorySearchProvider(normalized) ? normalized : null;
+}
+
+export function isBuiltinMemorySearchProvider(
+  provider: string,
+): provider is BuiltinMemorySearchProvider {
+  return BUILTIN_MEMORY_SEARCH_PROVIDERS.has(provider as BuiltinMemorySearchProvider);
+}
+
 const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
 const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
 const DEFAULT_VOYAGE_MODEL = "voyage-4-large";
@@ -136,11 +175,14 @@ function mergeConfig(
   defaults: MemorySearchConfig | undefined,
   overrides: MemorySearchConfig | undefined,
   agentId: string,
-): ResolvedMemorySearchConfig {
+): Omit<ResolvedMemorySearchConfig, "provider"> & { provider: string } {
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const sessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
-  const provider = overrides?.provider ?? defaults?.provider ?? "auto";
+  const rawProvider = overrides?.provider ?? defaults?.provider;
+  const builtinProvider = resolveBuiltinMemorySearchProvider(rawProvider);
+  const pluginProvider = normalizeMemorySearchProvider(rawProvider);
+  const provider = builtinProvider ?? (pluginProvider || "auto");
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
   const hasRemoteConfig = Boolean(
@@ -362,5 +404,9 @@ export function resolveMemorySearchConfig(
   if (!resolved.enabled) {
     return null;
   }
-  return resolved;
+  const provider = resolved.provider;
+  if (!isBuiltinMemorySearchProvider(provider)) {
+    return null;
+  }
+  return { ...resolved, provider };
 }

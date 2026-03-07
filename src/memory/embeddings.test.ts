@@ -369,6 +369,19 @@ describe("embedding provider auto selection", () => {
   });
 });
 
+describe("embedding provider validation", () => {
+  it("throws for unknown provider ids", async () => {
+    await expect(
+      createEmbeddingProvider({
+        config: {} as never,
+        provider: "openviking" as never,
+        model: "text-embedding-3-small",
+        fallback: "none",
+      }),
+    ).rejects.toThrow("Unknown memory embedding provider: openviking");
+  });
+});
+
 describe("embedding provider local fallback", () => {
   it("falls back to openai when node-llama-cpp is missing", async () => {
     mockMissingLocalEmbeddingDependency();

@@ -1,6 +1,14 @@
 import fsSync from "node:fs";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
+import {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import {
+  isBuiltinMemorySearchProvider,
+  normalizeMemorySearchProvider,
+  resolveMemorySearchConfig,
+} from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -26,11 +34,34 @@ export async function noteMemorySearchHealth(
 ): Promise<void> {
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
+  const enabledOverride = resolveAgentConfig(cfg, agentId)?.memorySearch?.enabled;
+  const enabledDefault = cfg.agents?.defaults?.memorySearch?.enabled;
+  const memorySearchEnabled = enabledOverride ?? enabledDefault ?? true;
+  const rawProvider =
+    normalizeMemorySearchProvider(
+      resolveAgentConfig(cfg, agentId)?.memorySearch?.provider ??
+        cfg.agents?.defaults?.memorySearch?.provider ??
+        "auto",
+    ).toLowerCase() || "auto";
   const resolved = resolveMemorySearchConfig(cfg, agentId);
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved?.remote?.apiKey);
 
   if (!resolved) {
-    note("Memory search is explicitly disabled (enabled: false).", "Memory search");
+    if (!memorySearchEnabled) {
+      note("Memory search is explicitly disabled (enabled: false).", "Memory search");
+      return;
+    }
+    if (rawProvider && !isBuiltinMemorySearchProvider(rawProvider)) {
+      note(
+        [
+          `Memory search provider "${rawProvider}" is delegated to the memory plugin slot (plugins.slots.memory).`,
+          "Built-in memory embeddings health checks are skipped for plugin providers.",
+        ].join("\n"),
+        "Memory search",
+      );
+      return;
+    }
+    note("Memory search is unavailable for the configured provider.", "Memory search");
     return;
   }
 
