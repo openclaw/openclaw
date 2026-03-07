@@ -138,6 +138,25 @@ describe("ContinuityService", () => {
     expect(removedMarkdown).not.toContain("America/Chicago");
   });
 
+  it("does not materialize continuity markdown files for pending-only captures", async () => {
+    const service = createContinuityService(makeConfig());
+
+    const created = await service.captureTurn({
+      sessionId: "session-pending-only",
+      sessionKey: "telegram:direct:alice",
+      messages: [makeMessage("Remember this: my timezone is America/Chicago.")],
+    });
+
+    expect(created).toHaveLength(1);
+    expect(created[0]?.reviewState).toBe("pending");
+
+    const continuityDir = path.join(workspaceDir, "memory", "continuity");
+    await expect(fs.access(path.join(continuityDir, "facts.md"))).rejects.toThrow();
+    await expect(fs.access(path.join(continuityDir, "preferences.md"))).rejects.toThrow();
+    await expect(fs.access(path.join(continuityDir, "decisions.md"))).rejects.toThrow();
+    await expect(fs.access(path.join(continuityDir, "open-loops.md"))).rejects.toThrow();
+  });
+
   it("does not capture groups by default", async () => {
     const service = createContinuityService(makeConfig());
 
@@ -166,6 +185,13 @@ describe("ContinuityService", () => {
       service.captureTurn({
         sessionId: "session-channel",
         sessionKey: "discord:channel:release-feed",
+        messages: [makeMessage("Remember this: my timezone is America/Chicago.")],
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      service.captureTurn({
+        sessionId: "session-subagent",
+        sessionKey: "agent:main:subagent:task-123",
         messages: [makeMessage("Remember this: my timezone is America/Chicago.")],
       }),
     ).resolves.toEqual([]);

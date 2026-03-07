@@ -18,7 +18,11 @@ import {
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { CONTINUITY_FILE_BY_KIND, resolveContinuityConfig } from "./config.js";
 import { extractContinuityMatches } from "./extractor.js";
-import { classifyContinuitySource, isContinuityScopeAllowed } from "./scope.js";
+import {
+  classifyContinuitySource,
+  isContinuityScopeAllowed,
+  isContinuitySubagentSession,
+} from "./scope.js";
 import type {
   ContinuityCaptureInput,
   ContinuityExplainResult,
@@ -180,6 +184,15 @@ function mergeManagedSection(existing: string | null, rendered: string): string 
   return `${existing.trimEnd()}\n\n${rendered}`;
 }
 
+function hasManagedSection(existing: string | null): boolean {
+  if (!existing) {
+    return false;
+  }
+  const begin = existing.indexOf(MANAGED_BEGIN);
+  const end = existing.indexOf(MANAGED_END);
+  return begin !== -1 && end !== -1 && end > begin;
+}
+
 function toApprovedRecord(record: ContinuityRecord, approvedAt: number): ContinuityItem {
   return {
     id: record.id,
@@ -243,6 +256,14 @@ export class ContinuityService {
 
   private async materializeApproved(agentId: string, records: ContinuityRecord[]): Promise<void> {
     const workspaceDir = resolveAgentWorkspaceDir(this.rootConfig, agentId);
+    const approvedKinds = new Set(
+      records
+        .filter(
+          (record): record is Extract<ContinuityRecord, { reviewState: "approved" }> =>
+            record.reviewState === "approved",
+        )
+        .map((record) => record.kind),
+    );
     await Promise.all(
       (Object.keys(CONTINUITY_FILE_BY_KIND) as ContinuityKind[]).map(async (kind) => {
         const relPath = filePathForKind(kind);
@@ -252,6 +273,9 @@ export class ContinuityService {
           existing = await fs.readFile(absPath, "utf8");
         } catch {
           existing = null;
+        }
+        if (!approvedKinds.has(kind) && !hasManagedSection(existing)) {
+          return;
         }
         const rendered = renderManagedSection(kind, records);
         await writeTextAtomic(absPath, mergeManagedSection(existing, rendered), {
@@ -290,6 +314,9 @@ export class ContinuityService {
     params: ContinuityCaptureInput & { agentId?: string },
   ): Promise<ContinuityRecord[]> {
     if (!params.sessionKey?.trim()) {
+      return [];
+    }
+    if (isContinuitySubagentSession(params.sessionKey)) {
       return [];
     }
     const agentId = resolveAgentId(this.rootConfig, params.agentId, params.sessionKey);

@@ -8,7 +8,17 @@ type ParsedContinuityScope = {
   normalizedKey?: string;
 };
 
+export function isContinuitySubagentSession(sessionKey?: string): boolean {
+  const normalized = normalizeSessionRest(sessionKey);
+  return Boolean(normalized?.startsWith("subagent:"));
+}
+
 export function classifyContinuitySource(sessionKey?: string): ContinuitySourceClass {
+  const rest = normalizeSessionRest(sessionKey) ?? "";
+  if (rest.startsWith("subagent:")) {
+    // Treat internal subagent runs as non-direct so continuity capture stays disabled.
+    return "channel";
+  }
   const parsed = parseContinuitySessionScope(sessionKey);
   if (parsed.chatType === "group") {
     return "group";
@@ -16,9 +26,6 @@ export function classifyContinuitySource(sessionKey?: string): ContinuitySourceC
   if (parsed.chatType === "channel") {
     return "channel";
   }
-  const raw = sessionKey?.trim().toLowerCase() ?? "";
-  const session = parseAgentSessionKey(raw);
-  const rest = (session?.rest ?? raw).toLowerCase();
   if (!rest || rest === "main") {
     return "main_direct";
   }
@@ -74,32 +81,37 @@ function parseContinuitySessionScope(key?: string): ParsedContinuityScope {
     return {};
   }
   const parts = normalized.split(":").filter(Boolean);
-  let chatType: ParsedContinuityScope["chatType"];
-  if (
-    parts.length >= 2 &&
-    (parts[1] === "group" || parts[1] === "channel" || parts[1] === "direct" || parts[1] === "dm")
-  ) {
-    if (parts.includes("group")) {
-      chatType = "group";
-    } else if (parts.includes("channel")) {
-      chatType = "channel";
-    }
+  const chatTypeIndex = parts.findIndex(
+    (part) => part === "group" || part === "channel" || part === "direct" || part === "dm",
+  );
+  const channel = resolveChannel(parts);
+  if (chatTypeIndex > 0) {
+    const marker = parts[chatTypeIndex];
+    const chatType = marker === "group" ? "group" : marker === "channel" ? "channel" : "direct";
     return {
       normalizedKey: normalized,
-      channel: parts[0]?.toLowerCase(),
-      chatType: chatType ?? "direct",
+      channel,
+      chatType,
     };
   }
   if (normalized.includes(":group:")) {
-    return { normalizedKey: normalized, chatType: "group" };
+    return { normalizedKey: normalized, channel, chatType: "group" };
   }
   if (normalized.includes(":channel:")) {
-    return { normalizedKey: normalized, chatType: "channel" };
+    return { normalizedKey: normalized, channel, chatType: "channel" };
   }
-  return { normalizedKey: normalized, chatType: "direct" };
+  return { normalizedKey: normalized, channel, chatType: "direct" };
 }
 
 function normalizeSessionKey(key?: string): string | undefined {
+  const normalized = normalizeSessionRest(key);
+  if (!normalized || normalized.startsWith("subagent:")) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function normalizeSessionRest(key?: string): string | undefined {
   if (!key) {
     return undefined;
   }
@@ -109,8 +121,16 @@ function normalizeSessionKey(key?: string): string | undefined {
   }
   const parsed = parseAgentSessionKey(trimmed);
   const normalized = (parsed?.rest ?? trimmed).toLowerCase();
-  if (normalized.startsWith("subagent:")) {
+  if (!normalized) {
     return undefined;
   }
   return normalized;
+}
+
+function resolveChannel(parts: string[]): string | undefined {
+  const channel = parts[0]?.toLowerCase();
+  if (!channel || channel === "main") {
+    return undefined;
+  }
+  return channel;
 }
