@@ -434,6 +434,27 @@ describe("gateway auth", () => {
     ).toThrow(/provider reference object/);
   });
 
+  it("accepts password mode when env provides OPENCLAW_GATEWAY_PASSWORD", () => {
+    const rawPasswordRef = { source: "exec", provider: "op", id: "pw" } as never;
+    const auth = resolveGatewayAuth({
+      authConfig: {
+        mode: "password",
+        password: rawPasswordRef,
+      },
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: "env-password",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(auth.password).toBe("env-password");
+    expect(() =>
+      assertGatewayAuthConfigured(auth, {
+        mode: "password",
+        password: rawPasswordRef,
+      }),
+    ).not.toThrow();
+  });
+
   it("throws generic error when password mode has no password at all", () => {
     const auth = resolveGatewayAuth({ authConfig: { mode: "password" } });
     expect(() => assertGatewayAuthConfigured(auth, { mode: "password" })).toThrow(
