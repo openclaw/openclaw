@@ -20,6 +20,31 @@ import {
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 
+function hasPayloadMedia(payload: ReplyPayload): boolean {
+  return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+}
+
+async function normalizeReplyPayloadMedia(params: {
+  payload: ReplyPayload;
+  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
+}): Promise<ReplyPayload> {
+  if (!params.normalizeMediaPaths || !hasPayloadMedia(params.payload)) {
+    return params.payload;
+  }
+
+  try {
+    return await params.normalizeMediaPaths(params.payload);
+  } catch (err) {
+    logVerbose(`reply payload media normalization failed: ${String(err)}`);
+    return {
+      ...params.payload,
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      audioAsVoice: false,
+    };
+  }
+}
+
 async function normalizeSentMediaUrlsForDedupe(params: {
   sentMediaUrls: string[];
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
@@ -126,7 +151,10 @@ export async function buildReplyPayloads(params: {
           silentToken: SILENT_REPLY_TOKEN,
           parseMode: "always",
         }).payload;
-        return params.normalizeMediaPaths ? await params.normalizeMediaPaths(parsed) : parsed;
+        return await normalizeReplyPayloadMedia({
+          payload: parsed,
+          normalizeMediaPaths: params.normalizeMediaPaths,
+        });
       }),
     )
   ).filter(isRenderablePayload);
