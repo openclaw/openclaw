@@ -593,6 +593,33 @@ describe("resolveModel", () => {
     });
   });
 
+  it("does not rewrite openai baseUrl when openai-codex api stays non-codex", () => {
+    mockOpenAICodexTemplateModel();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      cfg,
+      expectedModel: {
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+        id: "gpt-5.4",
+        provider: "openai-codex",
+      },
+    });
+  });
+
   it("includes auth hint for unknown ollama models (#17328)", () => {
     // resetMockDiscoverModels() in beforeEach already sets find → null
     const result = resolveModel("ollama", "gemma3:4b", "/tmp/agent");
