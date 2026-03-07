@@ -73,6 +73,22 @@ describe("resolveGroupSessionKey", () => {
     });
   });
 
+  it("ignores bare discord user-shaped To values when no channel prefix is present", () => {
+    const ctx = {
+      Provider: "discord",
+      ChatType: "channel",
+      From: "discord:657229412030480397",
+      To: "discord:1476858065914695741",
+    } as MsgContext;
+
+    expect(resolveGroupSessionKey(ctx)).toEqual({
+      key: "discord:channel:657229412030480397",
+      channel: "discord",
+      id: "657229412030480397",
+      chatType: "channel",
+    });
+  });
+
   it("keeps legacy behavior when no Discord channel hint is available", () => {
     const ctx = {
       Provider: "discord",

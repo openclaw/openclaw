@@ -1,7 +1,7 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
+import type { GroupKeyResolution } from "./types.js";
 import { normalizeHyphenSlug } from "../../shared/string-normalization.js";
 import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
-import type { GroupKeyResolution } from "./types.js";
 
 const getGroupSurfaces = () => new Set<string>([...listDeliverableMessageChannels(), "webchat"]);
 
@@ -20,13 +20,19 @@ function shortenGroupId(value?: string) {
   return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
 }
 
-function resolveDiscordChannelIdFromTarget(raw?: string): string | undefined {
+function resolveDiscordChannelIdFromTarget(
+  raw?: string,
+  opts: { requireChannelPrefix?: boolean } = {},
+): string | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
   }
   const withoutProvider = trimmed.replace(/^discord:/i, "").trim();
   if (!withoutProvider) {
+    return undefined;
+  }
+  if (opts.requireChannelPrefix && !/^channel:/i.test(withoutProvider)) {
     return undefined;
   }
   const withoutChannelPrefix = withoutProvider.replace(/^channel:/i, "").trim();
@@ -44,8 +50,8 @@ function resolveGroupIdHintFromTargets(ctx: MsgContext, provider?: string): stri
   return (
     resolveDiscordChannelIdFromTarget(ctx.ThreadParentId) ??
     resolveDiscordChannelIdFromTarget(ctx.NativeChannelId) ??
-    resolveDiscordChannelIdFromTarget(ctx.OriginatingTo) ??
-    resolveDiscordChannelIdFromTarget(ctx.To)
+    resolveDiscordChannelIdFromTarget(ctx.OriginatingTo, { requireChannelPrefix: true }) ??
+    resolveDiscordChannelIdFromTarget(ctx.To, { requireChannelPrefix: true })
   );
 }
 
