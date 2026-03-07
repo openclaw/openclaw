@@ -172,7 +172,7 @@ x-i18n:
 
 - 使用 `deliver: false` 启动新的 `agent:<agentId>:subagent:<uuid>` 会话。
 - 子智能体默认使用完整工具集**减去会话工具**（可通过 `tools.subagents.tools` 配置）。
-- 子智能体不允许调用 `sessions_spawn`（无子智能体 → 子智能体生成）。
+- 默认情况下（`maxSpawnDepth: 1`），子智能体不能调用 `sessions_spawn`。当 `maxSpawnDepth >= 2` 时，深度 1 的编排者子智能体可以访问 `sessions_spawn`、`subagents`、`sessions_list` 和 `sessions_history`，以管理自己的子代。深度 2（及更深层）的子智能体始终为叶节点，不能再生成子代。详见 [子智能体：嵌套子智能体](/tools/subagents#nested-sub-agents)。
 - 始终非阻塞：立即返回 `{ status: "accepted", runId, childSessionKey }`。
 - 完成后，OpenClaw 运行子智能体**通告步骤**并将结果发布到请求者聊天渠道。
 - 在通告步骤中精确回复 `ANNOUNCE_SKIP` 以保持静默。
