@@ -132,6 +132,13 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 
 ENV NODE_ENV=production
 
+# Copy Homebrew from brew stage (must happen before USER node to preserve ownership)
+COPY --from=homebrew/brew:4.6.20 /home/linuxbrew/.linuxbrew /home/linuxbrew/.linuxbrew
+RUN chown -R node:node /home/linuxbrew
+
+# Add Homebrew to PATH
+ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
+
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
