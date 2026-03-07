@@ -7,7 +7,12 @@ import {
   installRequestBodyLimitGuard,
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
-import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
+import {
+  extractMentionedOpenIds,
+  handleFeishuMessage,
+  type FeishuMessageEvent,
+  type FeishuBotAddedEvent,
+} from "./bot.js";
 import { createFeishuWSClient, createEventDispatcher } from "./client.js";
 import { probeFeishu } from "./probe.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -30,6 +35,7 @@ const FEISHU_WEBHOOK_RATE_LIMIT_MAX_REQUESTS = 120;
 const FEISHU_WEBHOOK_COUNTER_LOG_EVERY = 25;
 const feishuWebhookRateLimits = new Map<string, { count: number; windowStartMs: number }>();
 const feishuWebhookStatusCounters = new Map<string, number>();
+const PRIMARY_FEISHU_ACCOUNT_ID = "main";
 
 function isJsonContentType(value: string | string[] | undefined): boolean {
   const first = Array.isArray(value) ? value[0] : value;
@@ -81,6 +87,43 @@ async function fetchBotOpenId(account: ResolvedFeishuAccount): Promise<string | 
   }
 }
 
+export function shouldSkipDispatchForMentionPolicy(params: {
+  accountId: string;
+  event: FeishuMessageEvent;
+  currentBotOpenId?: string;
+  botOpenIdMap?: ReadonlyMap<string, string>;
+}): boolean {
+  const { accountId, event, currentBotOpenId, botOpenIdMap = botOpenIds } = params;
+  if (event.message.chat_type !== "group") {
+    return false;
+  }
+  const mentionedOpenIds = extractMentionedOpenIds(event);
+  if (mentionedOpenIds.length === 0) {
+    return false;
+  }
+  const currentMentioned = currentBotOpenId ? mentionedOpenIds.includes(currentBotOpenId) : false;
+  const mainBotOpenId = botOpenIdMap.get(PRIMARY_FEISHU_ACCOUNT_ID)?.trim();
+  const mainMentioned = Boolean(mainBotOpenId && mentionedOpenIds.includes(mainBotOpenId));
+  const siblingBotOpenIds = new Set(
+    [...botOpenIdMap.entries()]
+      .filter(([id, openId]) => id !== accountId && Boolean(openId?.trim()))
+      .map(([, openId]) => openId.trim()),
+  );
+  const siblingMentioned = mentionedOpenIds.some((openId) => siblingBotOpenIds.has(openId));
+  if (accountId === PRIMARY_FEISHU_ACCOUNT_ID) {
+    return !currentMentioned && siblingMentioned;
+  }
+  return currentMentioned && mainMentioned;
+}
+
+export function setFeishuBotOpenIdForTesting(accountId: string, openId: string): void {
+  botOpenIds.set(accountId, openId);
+}
+
+export function clearFeishuBotOpenIdsForTesting(): void {
+  botOpenIds.clear();
+}
+
 /**
  * Register common event handlers on an EventDispatcher.
  * When fireAndForget is true (webhook mode), message handling is not awaited
@@ -104,10 +147,23 @@ function registerEventHandlers(
     "im.message.receive_v1": async (data) => {
       try {
         const event = data as unknown as FeishuMessageEvent;
+        const botOpenId = botOpenIds.get(accountId);
+        if (
+          shouldSkipDispatchForMentionPolicy({
+            accountId,
+            event,
+            currentBotOpenId: botOpenId,
+          })
+        ) {
+          log(
+            `feishu[${accountId}]: skipping dispatch due to mention arbitration in group ${event.message.chat_id}`,
+          );
+          return;
+        }
         const promise = handleFeishuMessage({
           cfg,
           event,
-          botOpenId: botOpenIds.get(accountId),
+          botOpenId,
           runtime,
           chatHistories,
           accountId,

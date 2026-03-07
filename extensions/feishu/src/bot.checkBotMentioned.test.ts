@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseFeishuMessageEvent } from "./bot.js";
+import { extractMentionedOpenIds, parseFeishuMessageEvent } from "./bot.js";
 
 // Helper to build a minimal FeishuMessageEvent for testing
 function makeEvent(
@@ -126,5 +126,26 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     });
     const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
     expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("extracts mentioned open ids from top-level mentions and post content without duplicates", () => {
+    const event = {
+      sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
+      message: {
+        message_id: "msg_1",
+        chat_id: "oc_chat1",
+        chat_type: "group",
+        message_type: "post",
+        content: JSON.stringify({
+          content: [
+            [{ tag: "at", user_id: "ou_other", user_name: "other" }],
+            [{ tag: "text", text: "hello" }],
+          ],
+        }),
+        mentions: [{ key: "@_user_1", name: "Other", id: { open_id: "ou_other" } }],
+      },
+    };
+
+    expect(extractMentionedOpenIds(event as any)).toEqual(["ou_other"]);
   });
 });

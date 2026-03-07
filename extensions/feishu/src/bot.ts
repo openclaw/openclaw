@@ -194,18 +194,69 @@ function parseMessageContent(content: string, messageType: string): string {
   }
 }
 
+export function extractMentionedOpenIds(event: FeishuMessageEvent): string[] {
+  const mentionedOpenIds = new Set(
+    (event.message.mentions ?? [])
+      .map((mention) => mention.id.open_id?.trim())
+      .filter((openId): openId is string => Boolean(openId)),
+  );
+  if (event.message.message_type === "post") {
+    for (const openId of parsePostContent(event.message.content).mentionedOpenIds) {
+      const normalized = openId.trim();
+      if (normalized) {
+        mentionedOpenIds.add(normalized);
+      }
+    }
+  }
+  return [...mentionedOpenIds];
+}
+
 function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
   if (!botOpenId) return false;
-  const mentions = event.message.mentions ?? [];
-  if (mentions.length > 0) {
-    return mentions.some((m) => m.id.open_id === botOpenId);
+  return extractMentionedOpenIds(event).some((id) => id === botOpenId);
+}
+
+function resolveTextMentionPatterns(cfg: ClawdbotConfig, accountId: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const pushPattern = (value?: string) => {
+    const normalized = value?.trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    out.push(normalized);
+  };
+  const pushPatterns = (value: unknown) => {
+    if (!Array.isArray(value)) return;
+    for (const item of value) {
+      if (typeof item === "string") {
+        pushPattern(item);
+      }
+    }
+  };
+
+  const bindings = Array.isArray((cfg as any).bindings) ? ((cfg as any).bindings as any[]) : [];
+  const binding = bindings.find(
+    (entry) => entry?.match?.channel === "feishu" && entry?.match?.accountId === accountId,
+  );
+  const boundAgentId = typeof binding?.agentId === "string" ? binding.agentId : undefined;
+
+  const agentList = Array.isArray((cfg as any).agents?.list)
+    ? ((cfg as any).agents.list as any[])
+    : [];
+  if (boundAgentId) {
+    const boundAgent = agentList.find((entry) => entry?.id === boundAgentId);
+    pushPatterns(boundAgent?.groupChat?.mentionPatterns);
   }
-  // Post (rich text) messages may have empty message.mentions when they contain docs/paste
-  if (event.message.message_type === "post") {
-    const { mentionedOpenIds } = parsePostContent(event.message.content);
-    return mentionedOpenIds.some((id) => id === botOpenId);
-  }
-  return false;
+
+  pushPatterns((cfg as any).messages?.groupChat?.mentionPatterns);
+  pushPattern(`@${accountId}`);
+  return out;
+}
+
+function hasImplicitTextMention(text: string, mentionPatterns: string[]): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized || mentionPatterns.length === 0) return false;
+  return mentionPatterns.some((pattern) => pattern && normalized.includes(pattern));
 }
 
 export function stripBotMention(
@@ -558,6 +609,14 @@ export async function handleFeishuMessage(params: {
   let ctx = parseFeishuMessageEvent(event, botOpenId);
   const isGroup = ctx.chatType === "group";
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
+
+  if (isGroup && !ctx.mentionedBot) {
+    const mentionPatterns = resolveTextMentionPatterns(cfg, account.accountId);
+    if (hasImplicitTextMention(ctx.content, mentionPatterns)) {
+      ctx = { ...ctx, mentionedBot: true };
+      log(`feishu[${account.accountId}]: inferred mention from text pattern fallback`);
+    }
+  }
 
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   const senderResult = await resolveFeishuSenderName({
