@@ -601,6 +601,7 @@ export async function runEmbeddedAttempt(
       ? resolvedWorkspace
       : sandbox.workspaceDir
     : resolvedWorkspace;
+  const preferWorkspaceSkillsPrompt = !!sandbox?.enabled && sandbox.workspaceAccess !== "rw";
   await fs.mkdir(effectiveWorkspace, { recursive: true });
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
@@ -624,16 +625,18 @@ export async function runEmbeddedAttempt(
       config: params.config,
       agentId: sessionAgentId,
       skillsSnapshot: params.skillsSnapshot,
+      forceLoadEntries: preferWorkspaceSkillsPrompt,
     });
-    restoreSkillEnv = params.skillsSnapshot
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: params.skillsSnapshot,
-          config: params.config,
-        })
-      : applySkillEnvOverrides({
-          skills: skillEntries ?? [],
-          config: params.config,
-        });
+    restoreSkillEnv =
+      params.skillsSnapshot && !preferWorkspaceSkillsPrompt
+        ? applySkillEnvOverridesFromSnapshot({
+            snapshot: params.skillsSnapshot,
+            config: params.config,
+          })
+        : applySkillEnvOverrides({
+            skills: skillEntries ?? [],
+            config: params.config,
+          });
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
@@ -641,6 +644,7 @@ export async function runEmbeddedAttempt(
       config: params.config,
       workspaceDir: effectiveWorkspace,
       agentId: sessionAgentId,
+      preferEntries: preferWorkspaceSkillsPrompt,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

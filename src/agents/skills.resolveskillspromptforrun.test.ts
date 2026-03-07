@@ -130,6 +130,76 @@ describe("resolveSkillsPromptForRun", () => {
     expect(prompt).not.toContain("/app/skills/weather/SKILL.md");
     expect(prompt).toContain("/app/skills/docs-search/SKILL.md");
   });
+
+  it("can prefer live entries over a snapshot prompt", () => {
+    const entry: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "demo-skill",
+        description: "Demo",
+        filePath: "/workspace/skills/demo-skill/SKILL.md",
+        baseDir: "/workspace/skills/demo-skill",
+        source: "workspace",
+        disableModelInvocation: false,
+      }),
+      frontmatter: {},
+    };
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: { prompt: "HOST-SNAPSHOT", skills: [] },
+      entries: [entry],
+      workspaceDir: "/workspace",
+      preferEntries: true,
+    });
+    expect(prompt).not.toContain("HOST-SNAPSHOT");
+    expect(prompt).toContain("/workspace/skills/demo-skill/SKILL.md");
+  });
+
+  it("does not fall back to snapshot prompt when preferred live entries are empty", () => {
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: { prompt: "HOST-SNAPSHOT", skills: [] },
+      entries: [],
+      workspaceDir: "/workspace",
+      preferEntries: true,
+    });
+
+    expect(prompt).toBe("");
+  });
+
+  it("preserves snapshot skill filter when rebuilding a preferred live prompt", () => {
+    const visible: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "github",
+        description: "GitHub",
+        filePath: "/workspace/skills/github/SKILL.md",
+        baseDir: "/workspace/skills/github",
+        source: "openclaw-workspace",
+      }),
+      frontmatter: {},
+    };
+    const hidden: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "weather",
+        description: "Weather",
+        filePath: "/workspace/skills/weather/SKILL.md",
+        baseDir: "/workspace/skills/weather",
+        source: "openclaw-workspace",
+      }),
+      frontmatter: {},
+    };
+
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: {
+        prompt: "HOST-SNAPSHOT",
+        skills: [],
+        skillFilter: ["github"],
+      },
+      entries: [visible, hidden],
+      workspaceDir: "/workspace",
+      preferEntries: true,
+    });
+
+    expect(prompt).toContain("/workspace/skills/github/SKILL.md");
+    expect(prompt).not.toContain("/workspace/skills/weather/SKILL.md");
+  });
 });
 
 function createFixtureSkill(params: {

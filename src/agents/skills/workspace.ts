@@ -817,7 +817,18 @@ export function resolveSkillsPromptForRun(params: {
   config?: OpenClawConfig;
   workspaceDir: string;
   agentId?: string;
+  preferEntries?: boolean;
 }): string {
+  const skillFilter = params.skillsSnapshot?.skillFilter;
+  if (params.preferEntries) {
+    const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
+      entries: params.entries ?? [],
+      config: params.config,
+      agentId: params.agentId,
+      ...(skillFilter === undefined ? {} : { skillFilter }),
+    });
+    return prompt.trim() ? prompt : "";
+  }
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
     return snapshotPrompt;
@@ -827,6 +838,7 @@ export function resolveSkillsPromptForRun(params: {
       entries: params.entries,
       config: params.config,
       agentId: params.agentId,
+      ...(skillFilter === undefined ? {} : { skillFilter }),
     });
     return prompt.trim() ? prompt : "";
   }

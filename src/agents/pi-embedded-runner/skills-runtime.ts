@@ -7,16 +7,23 @@ export function resolveEmbeddedRunSkillEntries(params: {
   config?: OpenClawConfig;
   agentId?: string;
   skillsSnapshot?: SkillSnapshot;
+  forceLoadEntries?: boolean;
 }): {
   shouldLoadSkillEntries: boolean;
   skillEntries: SkillEntry[];
 } {
-  const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
+  const shouldLoadSkillEntries =
+    !!params.forceLoadEntries || !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
   const config = resolveSkillRuntimeConfig(params.config);
+  const skillFilter = params.skillsSnapshot?.skillFilter;
   return {
     shouldLoadSkillEntries,
     skillEntries: shouldLoadSkillEntries
-      ? loadWorkspaceSkillEntries(params.workspaceDir, { config, agentId: params.agentId })
+      ? loadWorkspaceSkillEntries(params.workspaceDir, {
+          config,
+          ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+          ...(skillFilter === undefined ? {} : { skillFilter }),
+        })
       : [],
   };
 }

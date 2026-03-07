@@ -447,6 +447,7 @@ export async function compactEmbeddedPiSessionDirect(
       ? resolvedWorkspace
       : sandbox.workspaceDir
     : resolvedWorkspace;
+  const preferWorkspaceSkillsPrompt = !!sandbox?.enabled && sandbox.workspaceAccess !== "rw";
   await fs.mkdir(effectiveWorkspace, { recursive: true });
   await ensureSessionHeader({
     sessionFile: params.sessionFile,
@@ -468,22 +469,25 @@ export async function compactEmbeddedPiSessionDirect(
       config: params.config,
       agentId: effectiveSkillAgentId,
       skillsSnapshot: params.skillsSnapshot,
+      forceLoadEntries: preferWorkspaceSkillsPrompt,
     });
-    restoreSkillEnv = params.skillsSnapshot
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: params.skillsSnapshot,
-          config: params.config,
-        })
-      : applySkillEnvOverrides({
-          skills: skillEntries ?? [],
-          config: params.config,
-        });
+    restoreSkillEnv =
+      params.skillsSnapshot && !preferWorkspaceSkillsPrompt
+        ? applySkillEnvOverridesFromSnapshot({
+            snapshot: params.skillsSnapshot,
+            config: params.config,
+          })
+        : applySkillEnvOverrides({
+            skills: skillEntries ?? [],
+            config: params.config,
+          });
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
       agentId: effectiveSkillAgentId,
+      preferEntries: preferWorkspaceSkillsPrompt,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

@@ -156,4 +156,47 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     });
     expect(loadWorkspaceSkillEntriesSpy).not.toHaveBeenCalled();
   });
+
+  it("can force loading skill entries even when snapshot skills are present", () => {
+    const snapshot: SkillSnapshot = {
+      prompt: "host prompt",
+      skills: [{ name: "demo" }],
+      resolvedSkills: [],
+    };
+
+    const result = resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/workspace",
+      config: {},
+      skillsSnapshot: snapshot,
+      forceLoadEntries: true,
+    });
+
+    expect(result.shouldLoadSkillEntries).toBe(true);
+    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledTimes(1);
+    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/workspace", { config: {} });
+  });
+
+  it("preserves snapshot skill filter when force loading entries", () => {
+    const snapshot: SkillSnapshot = {
+      prompt: "host prompt",
+      skills: [{ name: "github" }],
+      skillFilter: ["github"],
+      resolvedSkills: [],
+    };
+
+    const result = resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/workspace",
+      config: {},
+      agentId: "writer",
+      skillsSnapshot: snapshot,
+      forceLoadEntries: true,
+    });
+
+    expect(result.shouldLoadSkillEntries).toBe(true);
+    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/workspace", {
+      config: {},
+      agentId: "writer",
+      skillFilter: ["github"],
+    });
+  });
 });
