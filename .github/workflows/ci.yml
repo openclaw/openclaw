@@ -329,10 +329,6 @@ jobs:
 
           BASE="${{ github.event.pull_request.base.sha }}"
           changed_files=()
-          if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
-            # actions/checkout uses fetch-depth=1 on PR merge refs, which can omit BASE.
-            git fetch --no-tags --depth=1 origin "$BASE" || true
-          fi
           if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
             while IFS= read -r path; do
               [ -n "$path" ] || continue
