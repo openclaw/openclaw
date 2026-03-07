@@ -481,4 +481,26 @@ describe("resolveGatewayCredentialsFromValues", () => {
       password: "env-password",
     });
   });
+
+  it("rejects unresolved env var placeholders in config credentials", () => {
+    const resolved = resolveGatewayCredentialsFromValues({
+      configToken: "${OPENCLAW_GATEWAY_TOKEN}",
+      configPassword: "${OPENCLAW_GATEWAY_PASSWORD}",
+      env: {} as NodeJS.ProcessEnv,
+      tokenPrecedence: "config-first",
+      passwordPrecedence: "config-first",
+    });
+    expect(resolved).toEqual({ token: undefined, password: undefined });
+  });
+
+  it("accepts config credentials that do not contain env var references", () => {
+    const resolved = resolveGatewayCredentialsFromValues({
+      configToken: "real-token-value",
+      configPassword: "real-password",
+      env: {} as NodeJS.ProcessEnv,
+      tokenPrecedence: "config-first",
+      passwordPrecedence: "config-first",
+    });
+    expect(resolved).toEqual({ token: "real-token-value", password: "real-password" });
+  });
 });

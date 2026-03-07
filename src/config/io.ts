@@ -630,7 +630,7 @@ export function parseConfigJson5(
 type ConfigReadResolution = {
   resolvedConfigRaw: unknown;
   envSnapshotForRestore: Record<string, string | undefined>;
-  envWarnings: Array<{ varName: string; configPath: string }>;
+  envWarnings: EnvSubstitutionWarning[];
 };
 
 function resolveConfigIncludesForRead(

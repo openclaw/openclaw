@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { containsEnvVarReference } from "../config/env-substitution.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 
 export type ExplicitGatewayAuth = {
@@ -56,6 +57,15 @@ export function trimToUndefined(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/** Like trimToUndefined but also rejects unresolved env var placeholders (e.g. `${VAR}`). */
+function trimCredentialToUndefined(value: unknown): string | undefined {
+  const trimmed = trimToUndefined(value);
+  if (trimmed && containsEnvVarReference(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 function firstDefined(values: Array<string | undefined>): string | undefined {
   for (const value of values) {
     if (value) {
@@ -109,8 +119,8 @@ export function resolveGatewayCredentialsFromValues(params: {
   const includeLegacyEnv = params.includeLegacyEnv ?? true;
   const envToken = readGatewayTokenEnv(env, includeLegacyEnv);
   const envPassword = readGatewayPasswordEnv(env, includeLegacyEnv);
-  const configToken = trimToUndefined(params.configToken);
-  const configPassword = trimToUndefined(params.configPassword);
+  const configToken = trimCredentialToUndefined(params.configToken);
+  const configPassword = trimCredentialToUndefined(params.configPassword);
   const tokenPrecedence = params.tokenPrecedence ?? "env-first";
   const passwordPrecedence = params.passwordPrecedence ?? "env-first";
 
