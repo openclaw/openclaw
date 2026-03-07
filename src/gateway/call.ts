@@ -18,7 +18,12 @@ import {
 } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { GatewayClient } from "./client.js";
-import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
+import {
+  readGatewayPasswordEnv,
+  readGatewayTokenEnv,
+  resolveGatewayCredentialsFromConfig,
+  trimToUndefined,
+} from "./credentials.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   resolveLeastPrivilegeOperatorScopesForMethod,
@@ -234,24 +239,6 @@ type ResolvedGatewayCallContext = {
   remoteUrl?: string;
   explicitAuth: ExplicitGatewayAuth;
 };
-
-function trimToUndefined(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function readGatewayTokenEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN) ?? trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
-}
-
-function readGatewayPasswordEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return (
-    trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD) ?? trimToUndefined(env.CLAWDBOT_GATEWAY_PASSWORD)
-  );
-}
 
 function resolveGatewayCallTimeout(timeoutValue: unknown): {
   timeoutMs: number;

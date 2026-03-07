@@ -29,7 +29,11 @@ describe("resolveGatewayAuthTokenForService", () => {
       {
         gateway: {
           auth: {
-            token: { source: "env", provider: "default", id: "CUSTOM_GATEWAY_TOKEN" },
+            token: {
+              source: "env",
+              provider: "default",
+              id: "CUSTOM_GATEWAY_TOKEN",
+            },
           },
         },
         secrets: {
@@ -73,7 +77,11 @@ describe("resolveGatewayAuthTokenForService", () => {
       {
         gateway: {
           auth: {
-            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+            token: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_GATEWAY_TOKEN",
+            },
           },
         },
         secrets: {
@@ -95,7 +103,11 @@ describe("resolveGatewayAuthTokenForService", () => {
       {
         gateway: {
           auth: {
-            token: { source: "env", provider: "default", id: "CUSTOM_GATEWAY_TOKEN" },
+            token: {
+              source: "env",
+              provider: "default",
+              id: "CUSTOM_GATEWAY_TOKEN",
+            },
           },
         },
         secrets: {
@@ -118,7 +130,11 @@ describe("resolveGatewayAuthTokenForService", () => {
       {
         gateway: {
           auth: {
-            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+            token: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_GATEWAY_TOKEN",
+            },
           },
         },
         secrets: {
@@ -165,18 +181,21 @@ describe("shouldRequireGatewayTokenForInstall", () => {
   });
 
   it("requires token in inferred mode when password env exists only in shell", async () => {
-    await withEnvAsync({ [envVar("OPENCLAW", "GATEWAY", "PASSWORD")]: "password-from-env" }, async () => {
-      // pragma: allowlist secret
-      const required = shouldRequireGatewayTokenForInstall(
-        {
-          gateway: {
-            auth: {},
-          },
-        } as OpenClawConfig,
-        process.env,
-      );
-      expect(required).toBe(true);
-    });
+    await withEnvAsync(
+      { [envVar("OPENCLAW", "GATEWAY", "PASSWORD")]: "password-from-env" },
+      async () => {
+        // pragma: allowlist secret
+        const required = shouldRequireGatewayTokenForInstall(
+          {
+            gateway: {
+              auth: {},
+            },
+          } as OpenClawConfig,
+          process.env,
+        );
+        expect(required).toBe(true);
+      },
+    );
   });
 
   it("does not require token in inferred mode when password is configured", () => {
@@ -184,7 +203,11 @@ describe("shouldRequireGatewayTokenForInstall", () => {
       {
         gateway: {
           auth: {
-            password: { source: "env", provider: "default", id: "CUSTOM_GATEWAY_PASSWORD" },
+            password: {
+              source: "env",
+              provider: "default",
+              id: "CUSTOM_GATEWAY_PASSWORD",
+            },
           },
         },
         secrets: {

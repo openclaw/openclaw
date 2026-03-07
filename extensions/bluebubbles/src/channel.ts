@@ -256,18 +256,6 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
               channelKey: "bluebubbles",
             })
           : namedConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return applyBlueBubblesConnectionConfig({
-          cfg: next,
-          accountId,
-          patch: {
-            serverUrl: input.httpUrl,
-            password: input.password,
-            webhookPath: input.webhookPath,
-          },
-          onlyDefinedFields: true,
-        });
-      }
       return applyBlueBubblesConnectionConfig({
         cfg: next,
         accountId,

@@ -359,7 +359,7 @@ export const registerTelegramNativeCommands = ({
     runtime.error?.(danger(issue.message));
   }
   const customCommands = customResolution.commands;
-  const pluginCommandSpecs = getPluginCommandSpecs();
+  const pluginCommandSpecs = getPluginCommandSpecs("telegram");
   const existingCommands = new Set(
     [
       ...nativeCommands.map((command) => normalizeTelegramCommandName(command.name)),

@@ -149,8 +149,10 @@ function mergeWithExistingProviderSecrets(params: {
   nextProviders: Record<string, ProviderConfig>;
   existingProviders: Record<string, NonNullable<ModelsConfig["providers"]>[string]>;
   secretRefManagedProviders: ReadonlySet<string>;
+  explicitBaseUrlProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
-  const { nextProviders, existingProviders, secretRefManagedProviders } = params;
+  const { nextProviders, existingProviders, secretRefManagedProviders, explicitBaseUrlProviders } =
+    params;
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(existingProviders)) {
     mergedProviders[key] = entry;
@@ -175,7 +177,11 @@ function mergeWithExistingProviderSecrets(params: {
     ) {
       preserved.apiKey = existing.apiKey;
     }
-    if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+    if (
+      !explicitBaseUrlProviders.has(key) &&
+      typeof existing.baseUrl === "string" &&
+      existing.baseUrl
+    ) {
       preserved.baseUrl = existing.baseUrl;
     }
     mergedProviders[key] = { ...newEntry, ...preserved };
@@ -188,6 +194,7 @@ async function resolveProvidersForMode(params: {
   targetPath: string;
   providers: Record<string, ProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
+  explicitBaseUrlProviders: ReadonlySet<string>;
 }): Promise<Record<string, ProviderConfig>> {
   if (params.mode !== "merge") {
     return params.providers;
@@ -204,6 +211,7 @@ async function resolveProvidersForMode(params: {
     nextProviders: params.providers,
     existingProviders,
     secretRefManagedProviders: params.secretRefManagedProviders,
+    explicitBaseUrlProviders: params.explicitBaseUrlProviders,
   });
 }
 
@@ -278,6 +286,15 @@ export async function ensureOpenClawModelsJson(
 
     const mode = cfg.models?.mode ?? DEFAULT_MODE;
     const secretRefManagedProviders = new Set<string>();
+    const explicitBaseUrlProviders = new Set(
+      Object.entries(cfg.models?.providers ?? {})
+        .map(([key, provider]) => [key.trim(), provider] as const)
+        .filter(
+          ([key, provider]) =>
+            Boolean(key) && typeof provider?.baseUrl === "string" && provider.baseUrl.trim(),
+        )
+        .map(([key]) => key),
+    );
 
     const normalizedProviders =
       normalizeProviders({
@@ -291,6 +308,7 @@ export async function ensureOpenClawModelsJson(
       targetPath,
       providers: normalizedProviders,
       secretRefManagedProviders,
+      explicitBaseUrlProviders,
     });
     const next = `${JSON.stringify({ providers: mergedProviders }, null, 2)}\n`;
     const existingRaw = await readRawFile(targetPath);

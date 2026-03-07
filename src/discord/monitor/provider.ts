@@ -135,7 +135,7 @@ function appendPluginCommandSpecs(params: {
   const existingNames = new Set(
     merged.map((spec) => spec.name.trim().toLowerCase()).filter(Boolean),
   );
-  for (const pluginCommand of getPluginCommandSpecs()) {
+  for (const pluginCommand of getPluginCommandSpecs("discord")) {
     const normalizedName = pluginCommand.name.trim().toLowerCase();
     if (!normalizedName) {
       continue;
