@@ -135,6 +135,55 @@ Hello from Telegram`,
       expect(result.senderLabel).toBe("Iris");
       expect(result.content).toEqual([{ type: "text", text: "Hello from Telegram" }]);
     });
+
+    it("extracts sender labels from text items inside content arrays", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "sender": "Iris"
+}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "Iris"
+}
+\`\`\`
+
+Hello from Telegram`,
+          },
+          { type: "image", url: "https://example.com/image.png" },
+        ],
+      });
+
+      expect(result.senderLabel).toBe("Iris");
+      expect(result.content).toEqual([
+        { type: "text", text: "Hello from Telegram", name: undefined, args: undefined },
+        { type: "image", text: undefined, name: undefined, args: undefined },
+      ]);
+    });
+
+    it("does not derive sender labels for non-user roles", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: `Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "Iris"
+}
+\`\`\`
+
+Hello from Telegram`,
+      });
+
+      expect(result.senderLabel).toBeNull();
+    });
   });
 
   describe("normalizeRoleForGrouping", () => {

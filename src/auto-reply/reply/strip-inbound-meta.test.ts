@@ -134,4 +134,14 @@ describe("extractInboundSenderLabel", () => {
   it("returns null when no inbound sender metadata exists", () => {
     expect(extractInboundSenderLabel("Hello from user")).toBeNull();
   });
+
+  it("continues searching after a malformed sentinel match", () => {
+    const input = `Sender (untrusted metadata):
+not actually a metadata block
+
+${SENDER_BLOCK}
+
+Hello from user`;
+    expect(extractInboundSenderLabel(input)).toBe("Alice");
+  });
 });

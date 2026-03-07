@@ -135,6 +135,7 @@ export function renderMessageGroup(
       ${renderAvatar(group.role, {
         name: assistantName,
         avatar: opts.assistantAvatar ?? null,
+        userLabel,
       })}
       <div class="chat-group-messages">
         ${group.messages.map((item, index) =>
@@ -156,13 +157,17 @@ export function renderMessageGroup(
   `;
 }
 
-function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" | "avatar">) {
+function renderAvatar(
+  role: string,
+  assistant?: Pick<AssistantIdentity, "name" | "avatar"> & { userLabel?: string | null },
+) {
   const normalized = normalizeRoleForGrouping(role);
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
+  const userLabel = assistant?.userLabel?.trim() || "";
   const initial =
     normalized === "user"
-      ? "U"
+      ? userLabel.charAt(0).toUpperCase() || "U"
       : normalized === "assistant"
         ? assistantName.charAt(0).toUpperCase() || "A"
         : normalized === "tool"

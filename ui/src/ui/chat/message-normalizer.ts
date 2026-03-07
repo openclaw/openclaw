@@ -8,6 +8,28 @@ import {
 } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
+function collectTextSources(message: Record<string, unknown>): string[] {
+  const sources: string[] = [];
+  if (typeof message.content === "string") {
+    sources.push(message.content);
+  }
+  if (typeof message.text === "string") {
+    sources.push(message.text);
+  }
+  if (Array.isArray(message.content)) {
+    for (const item of message.content) {
+      if (typeof item !== "object" || item === null) {
+        continue;
+      }
+      const text = (item as Record<string, unknown>).text;
+      if (typeof text === "string") {
+        sources.push(text);
+      }
+    }
+  }
+  return sources;
+}
+
 /**
  * Normalize a raw message object into a consistent structure.
  */
@@ -54,17 +76,16 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : Date.now();
   const id = typeof m.id === "string" ? m.id : undefined;
   const senderLabel = (() => {
+    if (role !== "user" && role !== "User") {
+      return null;
+    }
     if (typeof m.senderLabel === "string" && m.senderLabel.trim()) {
       return m.senderLabel.trim();
     }
     if (typeof m.sender === "string" && m.sender.trim()) {
       return m.sender.trim();
     }
-    const textSources = [
-      typeof m.content === "string" ? m.content : null,
-      typeof m.text === "string" ? m.text : null,
-    ].filter((value): value is string => typeof value === "string");
-    for (const text of textSources) {
+    for (const text of collectTextSources(m)) {
       const extracted = extractInboundSenderLabel(text);
       if (extracted) {
         return extracted;

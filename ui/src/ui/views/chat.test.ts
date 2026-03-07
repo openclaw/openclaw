@@ -262,6 +262,8 @@ hello from topic`,
     );
     expect(senderLabels).toContain("Iris");
     expect(senderLabels).not.toContain("You");
+    const userAvatar = container.querySelector(".chat-avatar.user");
+    expect(userAvatar?.textContent?.trim()).toBe("I");
   });
 
   it("keeps consecutive Telegram messages from different senders in separate groups", () => {
