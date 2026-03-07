@@ -38,6 +38,38 @@ describe("slack socket reconnect helpers", () => {
     );
   });
 
+  it("clears connected state when socket mode disconnects", () => {
+    const setStatus = vi.fn();
+    const err = new Error("dns down");
+
+    __testing.publishSlackDisconnectedStatus(setStatus, err);
+
+    expect(setStatus).toHaveBeenCalledTimes(1);
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: false,
+      lastDisconnect: {
+        at: expect.any(Number),
+        error: "dns down",
+      },
+      lastError: "dns down",
+    });
+  });
+
+  it("clears connected state without error when socket mode disconnects cleanly", () => {
+    const setStatus = vi.fn();
+
+    __testing.publishSlackDisconnectedStatus(setStatus);
+
+    expect(setStatus).toHaveBeenCalledTimes(1);
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: false,
+      lastDisconnect: {
+        at: expect.any(Number),
+      },
+      lastError: null,
+    });
+  });
+
   it("resolves disconnect waiter on socket disconnect event", async () => {
     const client = new FakeEmitter();
     const app = { receiver: { client } };
