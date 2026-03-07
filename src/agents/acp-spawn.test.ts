@@ -593,4 +593,84 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
+
+  it("applies defaultRunTimeoutSeconds from ACP config", async () => {
+    hoisted.state.cfg = {
+      ...createDefaultSpawnConfig(),
+      acp: {
+        ...createDefaultSpawnConfig().acp,
+        defaultRunTimeoutSeconds: 900,
+      },
+    };
+
+    hoisted.callGatewayMock.mockResolvedValueOnce({ runId: "test-run-123" });
+    hoisted.initializeSessionMock.mockResolvedValueOnce({
+      runtime: { pid: 12345 },
+      handle: { close: vi.fn() },
+      meta: {},
+    });
+    hoisted.sessionBindingBindMock.mockResolvedValueOnce({
+      conversation: { conversationId: "thread-123" },
+    } as SessionBindingRecord);
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Run tests",
+        agentId: "codex",
+      },
+      {
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:test-channel",
+        agentThreadId: "thread-456",
+        sandboxed: false,
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.timeout).toBe(900);
+  });
+
+  it("omits timeout when defaultRunTimeoutSeconds is not configured", async () => {
+    hoisted.state.cfg = {
+      ...createDefaultSpawnConfig(),
+      acp: {
+        ...createDefaultSpawnConfig().acp,
+        defaultRunTimeoutSeconds: undefined,
+      },
+    };
+
+    hoisted.callGatewayMock.mockResolvedValueOnce({ runId: "test-run-456" });
+    hoisted.initializeSessionMock.mockResolvedValueOnce({
+      runtime: { pid: 12345 },
+      handle: { close: vi.fn() },
+      meta: {},
+    });
+    hoisted.sessionBindingBindMock.mockResolvedValueOnce({
+      conversation: { conversationId: "thread-456" },
+    } as SessionBindingRecord);
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Run tests",
+        agentId: "codex",
+      },
+      {
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:test-channel",
+        agentThreadId: "thread-789",
+        sandboxed: false,
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.timeout).toBeUndefined();
+  });
 });

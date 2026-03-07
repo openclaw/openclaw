@@ -45,4 +45,6 @@ export type AcpConfig = {
   maxConcurrentSessions?: number;
   stream?: AcpStreamConfig;
   runtime?: AcpRuntimeConfig;
+  /** Default timeout in seconds for spawned ACP sessions (0 = no timeout). */
+  defaultRunTimeoutSeconds?: number;
 };

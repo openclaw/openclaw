@@ -116,6 +116,8 @@ export type CronJobState = {
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   lastDurationMs?: number;
+  /** Model that actually executed the last run (useful for detecting fallbacks). */
+  lastModel?: string;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
   /** Last failure alert timestamp (ms since epoch) for cooldown gating. */

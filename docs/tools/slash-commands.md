@@ -98,6 +98,7 @@ Text + native (when enabled):
 - `/dock-telegram` (alias: `/dock_telegram`) (switch replies to Telegram)
 - `/dock-discord` (alias: `/dock_discord`) (switch replies to Discord)
 - `/dock-slack` (alias: `/dock_slack`) (switch replies to Slack)
+- `/getpinned` (Telegram only: fetch pinned message from current chat)
 - `/activation mention|always` (groups only)
 - `/send on|off|inherit` (owner-only)
 - `/reset` or `/new [model]` (optional model hint; remainder is passed through)
